@@ -1,0 +1,89 @@
+#!/bin/bash
+# Run Claude Code with shell redirection to a custom shell
+#
+# Usage:
+#   claude_shell /path/to/your/shell [claude args...]
+#
+# Example:
+#   claude_shell /usr/local/bin/myshell
+#   claude_shell ./target/release/brush --resume
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LIB="$SCRIPT_DIR/libshell_redirect.dylib"
+
+# Check for Linux
+if [[ "$(uname)" != "Darwin" ]]; then
+    LIB="$SCRIPT_DIR/libshell_redirect.so"
+fi
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 /path/to/shell [claude args...]" >&2
+    echo "" >&2
+    echo "Runs Claude Code with all shell calls redirected to your shell." >&2
+    echo "" >&2
+    echo "Example:" >&2
+    echo "  $0 /usr/local/bin/myshell" >&2
+    echo "  $0 ./my-shell --print 'hello'" >&2
+    exit 1
+fi
+
+TARGET="$1"
+shift
+
+# Convert to absolute path
+if [[ "$TARGET" != /* ]]; then
+    TARGET="$(cd "$(dirname "$TARGET")" && pwd)/$(basename "$TARGET")"
+fi
+
+if [[ ! -x "$TARGET" ]]; then
+    echo "Error: Shell not executable: $TARGET" >&2
+    exit 1
+fi
+
+if [[ ! -f "$LIB" ]]; then
+    echo "Error: Library not found: $LIB" >&2
+    echo "Run ./build.sh first" >&2
+    exit 1
+fi
+
+# Find claude
+CLAUDE_BIN="$(which claude 2>/dev/null || true)"
+if [[ -z "$CLAUDE_BIN" ]]; then
+    echo "Error: claude not found in PATH" >&2
+    exit 1
+fi
+
+# Resolve symlink to get the actual script
+CLAUDE_SCRIPT="$(readlink -f "$CLAUDE_BIN" 2>/dev/null || readlink "$CLAUDE_BIN" 2>/dev/null || echo "$CLAUDE_BIN")"
+
+# If it's a symlink to a .js file, we need to run it with node
+if [[ "$CLAUDE_SCRIPT" == *.js ]]; then
+    NODE_BIN="$(which node)"
+    if [[ -z "$NODE_BIN" ]]; then
+        echo "Error: node not found in PATH" >&2
+        exit 1
+    fi
+
+    export SHELL_REDIRECT_TARGET="$TARGET"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        export DYLD_INSERT_LIBRARIES="$LIB"
+    else
+        export LD_PRELOAD="$LIB"
+    fi
+
+    echo "[claude_shell] Redirecting /bin/{bash,sh,zsh} -> $TARGET" >&2
+    exec "$NODE_BIN" "$CLAUDE_SCRIPT" "$@"
+else
+    # It's a binary or wrapper script
+    export SHELL_REDIRECT_TARGET="$TARGET"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        export DYLD_INSERT_LIBRARIES="$LIB"
+    else
+        export LD_PRELOAD="$LIB"
+    fi
+
+    echo "[claude_shell] Redirecting /bin/{bash,sh,zsh} -> $TARGET" >&2
+    exec "$CLAUDE_BIN" "$@"
+fi

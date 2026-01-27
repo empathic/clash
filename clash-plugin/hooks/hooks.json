@@ -1,0 +1,13 @@
+{
+  "hooks": [
+    {
+      "matcher": "PreToolUse",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "$PLUGIN_DIR/bin/clash hook can-run"
+        }
+      ]
+    }
+  ]
+}
