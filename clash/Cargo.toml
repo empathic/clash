@@ -11,6 +11,7 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 dirs = { workspace = true }
 figment = { workspace = true }
+mac-notification-sys = { workspace = true }
 
 # Linux only
 [target.'cfg(target_os = "linux")']

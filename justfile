@@ -12,4 +12,4 @@ build-plugin-in target_dir:
     echo $plugin
 build-plugin: (build-plugin-in "/tmp/clash-dev")
 dev:
-    claude --plugin-dir $(just build-plugin ) --allow-dangerously-skip-permissions
+    claude --plugin-dir $(just build-plugin ) --debug-file /tmp/clash-debug --allow-dangerously-skip-permissions

@@ -2,26 +2,42 @@
   "hooks": {
     "PreToolUse": [
       {
-        "type": "command",
-        "command": "clash hook pre-tool-use"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook pre-tool-use"
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
-        "type": "command",
-        "command": "clash hook post-tool-use"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook post-tool-use"
+          }
+        ]
       }
     ],
     "PermissionRequest": [
       {
-        "type": "command",
-        "command": "clash hook permission-request"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook permission-request"
+          }
+        ]
       }
     ],
     "Notification": [
       {
-        "type": "command",
-        "command": "clash hook notification"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook notification"
+          }
+        ]
       }
     ]
   }

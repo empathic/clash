@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use claude_settings::SettingsLevel;
 
 mod hooks;
+mod notifications;
 mod permissions;
 mod settings;
 
