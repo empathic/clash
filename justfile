@@ -1,10 +1,10 @@
 default:
     @just -l
 
-build-plugin:
+build-plugin target_dir:
     #!/usr/bin/env bash
     cargo build --bins 
-    base=/tmp/clash-dev
+    base={{target_dir}}
     plugin="$base/clash-plugin"
     cp -r clash-plugin $base
     mkdir -p "$plugin/bin"
@@ -12,4 +12,4 @@ build-plugin:
     echo $plugin
 
 dev:
-    claude --plugin-dir $(just build-plugin)
+    claude --plugin-dir $(just build-plugin /tmp/clash-dev)
