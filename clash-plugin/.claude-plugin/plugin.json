@@ -5,6 +5,5 @@
   "author": {
     "name": "Empathic"
   },
-  "keywords": ["permissions", "security", "hooks", "policy"],
-  "hooks": "./hooks/hooks.json"
+  "keywords": ["permissions", "security", "hooks", "policy"]
 }

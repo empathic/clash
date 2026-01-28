@@ -2,8 +2,12 @@
   "hooks": {
     "PreToolUse": [
       {
-        "type": "command",
-        "command": "$PLUGIN_DIR/bin/clash hook can-run"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$PLUGIN_DIR/bin/clash hook can-run"
+          }
+        ]
       }
     ]
   }
