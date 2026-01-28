@@ -1,49 +1,46 @@
-#!/bin/sh
-# Wrapper script that selects the correct clash binary for the current platform
-# For local development, use: ./scripts/setup-dev.sh
+#!/usr/bin/env bash
+set -euo pipefail
 
-set -e
+# Determine the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-# Check for local development binary first (symlink to cargo build output)
-DEV_BINARY="$SCRIPT_DIR/clash-dev"
-if [ -x "$DEV_BINARY" ]; then
-    exec "$DEV_BINARY" "$@"
-fi
-
-# Fall back to platform-specific pre-built binary
+# Detect OS
 OS="$(uname -s)"
 case "$OS" in
-    Darwin) OS_NAME="darwin" ;;
-    Linux)  OS_NAME="linux" ;;
+    Darwin)
+        OS_PART="apple-darwin"
+        ;;
+    Linux)
+        OS_PART="unknown-linux-gnu"
+        ;;
     *)
-        echo "Error: Unsupported operating system: $OS" >&2
+        echo "Unsupported OS: $OS" >&2
         exit 1
         ;;
 esac
 
+# Detect architecture
 ARCH="$(uname -m)"
 case "$ARCH" in
-    arm64|aarch64) ARCH_NAME="arm64" ;;
-    x86_64|amd64)  ARCH_NAME="x86_64" ;;
+    x86_64)
+        ARCH_PART="x86_64"
+        ;;
+    arm64|aarch64)
+        ARCH_PART="aarch64"
+        ;;
     *)
-        echo "Error: Unsupported architecture: $ARCH" >&2
+        echo "Unsupported architecture: $ARCH" >&2
         exit 1
         ;;
 esac
 
-BINARY="$SCRIPT_DIR/clash-${OS_NAME}-${ARCH_NAME}"
+# Construct binary name and path
+BINARY_NAME="clash.${ARCH_PART}-${OS_PART}"
+BINARY_PATH="${SCRIPT_DIR}/${BINARY_NAME}"
 
-if [ ! -x "$BINARY" ]; then
-    echo "Error: Binary not found for platform ${OS_NAME}-${ARCH_NAME}" >&2
-    echo "Expected: $BINARY" >&2
-    echo "" >&2
-    echo "For local development, run: ./scripts/setup-dev.sh" >&2
-    echo "" >&2
-    echo "Available binaries:" >&2
-    ls -la "$SCRIPT_DIR"/clash-* 2>/dev/null || echo "  (none found)" >&2
+if [[ ! -x "$BINARY_PATH" ]]; then
+    echo "Binary not found or not executable: $BINARY_PATH" >&2
     exit 1
 fi
 
-exec "$BINARY" "$@"
+exec "$BINARY_PATH" "$@"
