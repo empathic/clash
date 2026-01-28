@@ -1,7 +1,7 @@
 default:
     @just -l
 
-build-plugin target_dir:
+build-plugin-in target_dir:
     #!/usr/bin/env bash
     cargo build --bins 
     base={{target_dir}}
@@ -10,6 +10,6 @@ build-plugin target_dir:
     mkdir -p "$plugin/bin"
     cp target/debug/clash "$plugin/bin/clash"
     echo $plugin
-
+build-plugin: (build-plugin-in "/tmp/clash-dev")
 dev:
-    claude --plugin-dir $(just build-plugin /tmp/clash-dev)
+    claude --plugin-dir $(just build-plugin ) --allow-dangerously-skip-permissions

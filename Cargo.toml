@@ -5,11 +5,12 @@ resolver = "2"
 [workspace.dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-figment = { version = "0.10", features = ["json", "toml"] }
+figment = { version = "0.10", features = ["json", "toml", "yaml"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+dirs = "6.0.0"
 
 # Workspace crates
 claude_settings = { path = "claude_settings" }

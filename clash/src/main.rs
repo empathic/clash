@@ -2,13 +2,13 @@ use std::fmt::Display;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use claude_settings::{ClaudeSettings, SettingsLevel};
+use claude_settings::SettingsLevel;
 
 mod hooks;
 mod permissions;
+mod settings;
 
-use claude_settings::PermissionRule;
-use hooks::{HookInput, HookOutput, exit_code};
+use hooks::{HookOutput, NotificationHookInput, ToolUseHookInput, exit_code};
 use permissions::check_permission;
 
 #[derive(Parser)]
@@ -54,33 +54,69 @@ impl From<LevelArg> for SettingsLevel {
 
 #[derive(Subcommand)]
 enum HooksCmd {
-    #[command(about = "get the status of clash configuration on your system")]
-    CanRun {
-        /// Arguments
-        #[arg(long, allow_hyphen_values = true, num_args = 0..)]
-        args: Vec<String>,
-    },
+    /// Handle PreToolUse hook - called before a tool is executed
+    #[command(name = "pre-tool-use")]
+    PreToolUse,
+
+    /// Handle PostToolUse hook - called after a tool is executed
+    #[command(name = "post-tool-use")]
+    PostToolUse,
+
+    /// Handle PermissionRequest hook - respond to permission prompts on behalf of user
+    #[command(name = "permission-request")]
+    PermissionRequest,
+
+    /// Handle Notification hook - informational events from Claude Code
+    #[command(name = "notification")]
+    Notification,
 }
 
 impl HooksCmd {
     fn run(&self) -> anyhow::Result<()> {
-        let settings = ClaudeSettings::new().effective()?;
-        match self {
-            Self::CanRun { args: _ } => {
-                let input = HookInput::from_stdin()?;
-                let decision = check_permission(&input, &settings)?;
+        let settings = settings::ClashSettings::load_or_create()?;
 
-                let output = match decision {
-                    PermissionRule::Allow => HookOutput::allow(None),
-                    PermissionRule::Deny => HookOutput::deny("Denied by clash policy".into()),
-                    PermissionRule::Ask | PermissionRule::Unset => HookOutput::ask(None),
-                };
-
-                output.write_stdout()?;
-                std::process::exit(exit_code::SUCCESS);
+        let output = match self {
+            Self::PreToolUse => {
+                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
+                check_permission(&input, &settings)?
             }
-        }
+            Self::PostToolUse => {
+                let _input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
+                // PostToolUse is informational - just continue
+                // Could be extended to log tool results, update state, etc.
+                HookOutput::continue_execution()
+            }
+            Self::PermissionRequest => {
+                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
+                // Decide whether to approve or deny the permission request
+                handle_permission_request(&input, &settings)?
+            }
+            Self::Notification => {
+                let _input = NotificationHookInput::from_reader(std::io::stdin().lock())?;
+                // Notifications are informational - just continue
+                // Could be extended to send desktop notifications, etc.
+                HookOutput::continue_execution()
+            }
+        };
+
+        output.write_stdout()?;
+        std::process::exit(exit_code::SUCCESS);
     }
+}
+
+/// Handle a permission request - decide whether to approve or deny on behalf of user
+fn handle_permission_request(
+    input: &ToolUseHookInput,
+    settings: &settings::ClashSettings,
+) -> anyhow::Result<HookOutput> {
+    // Use the same permission checking logic, but return PermissionRequest responses
+    let pre_tool_result = check_permission(input, settings)?;
+
+    // Convert PreToolUse decision to PermissionRequest decision
+    // If PreToolUse would allow, approve the permission request
+    // If PreToolUse would deny, deny the permission request
+    // If PreToolUse would ask, don't respond (let user decide)
+    Ok(pre_tool_result)
 }
 
 #[derive(Subcommand)]

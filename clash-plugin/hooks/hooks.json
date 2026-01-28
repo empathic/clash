@@ -2,12 +2,26 @@
   "hooks": {
     "PreToolUse": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook can-run"
-          }
-        ]
+        "type": "command",
+        "command": "clash hook pre-tool-use"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "clash hook post-tool-use"
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "type": "command",
+        "command": "clash hook permission-request"
+      }
+    ],
+    "Notification": [
+      {
+        "type": "command",
+        "command": "clash hook notification"
       }
     ]
   }
