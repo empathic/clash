@@ -23,26 +23,26 @@ pub struct ToolUseHookInput {
     pub hook_event_name: String,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
-    pub tool_use_id: String,
+    pub tool_use_id: Option<String>,
     /// Present in PostToolUse events
     #[serde(default)]
     pub tool_response: Option<serde_json::Value>,
 }
 
 /// Hook input for Notification events
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct NotificationHookInput {
     pub session_id: String,
     pub transcript_path: String,
     pub cwd: String,
-    pub permission_mode: String,
+    pub permission_mode: Option<String>,
     pub hook_event_name: String,
     pub message: String,
     pub notification_type: NotificationType,
 }
 
 /// Types of notifications that Claude Code can send
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationType {
     /// Permission requests from Claude Code
@@ -55,6 +55,7 @@ pub enum NotificationType {
     ElicitationDialog,
     /// Unknown notification type
     #[serde(other)]
+    #[default]
     Unknown,
 }
 

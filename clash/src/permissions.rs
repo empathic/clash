@@ -13,7 +13,9 @@ pub fn check_permission(
     // TODO(eliot): re-enable mac notifications
     match &settings.from_claude {
         Some(claude) => Ok(check_permission_claude(input, claude)),
-        None => Ok(HookOutput::ask(Some("clash currently not configured".into()))),
+        None => Ok(HookOutput::ask(Some(
+            "clash currently not configured".into(),
+        ))),
     }
 }
 

@@ -4,7 +4,7 @@ use std::fs::OpenOptions;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use claude_settings::SettingsLevel;
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 
@@ -161,7 +161,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Hook(hook_cmd) => {
             if let Err(e) = hook_cmd.run() {
-                eprintln!("Hook error: {}", e);
+                error!(cmd=?hook_cmd, "Hook error: {}", e);
                 std::process::exit(exit_code::BLOCKING_ERROR);
             }
         }
