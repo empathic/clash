@@ -2,14 +2,11 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use claude_settings::ClaudeSettings;
-use dirs::{config_dir, home_dir};
-use figment::Figment;
-use figment::providers::{Format, Json};
+use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ClashSettings {
-    #[serde(skip)]
     pub(crate) from_claude: Option<claude_settings::Settings>,
 }
 
@@ -39,8 +36,9 @@ impl ClashSettings {
     }
 
     pub fn create() -> Result<Self> {
-        let mut this = Self::default();
-        this.from_claude = Some(ClaudeSettings::new().effective()?);
+        let this = Self {
+            from_claude: Some(ClaudeSettings::new().effective()?),
+        };
         this.save()?;
         Ok(this)
     }

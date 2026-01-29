@@ -12,6 +12,8 @@ serde = { workspace = true }
 dirs = { workspace = true }
 figment = { workspace = true }
 mac-notification-sys = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 # Linux only
 [target.'cfg(target_os = "linux")']

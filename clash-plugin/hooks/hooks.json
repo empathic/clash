@@ -5,7 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook pre-tool-use"
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook pre-tool-use",
+            "matcher": "*"
           }
         ]
       }
@@ -15,7 +16,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook post-tool-use"
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook post-tool-use",
+            "matcher": "*"
           }
         ]
       }
@@ -25,7 +27,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook permission-request"
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook permission-request",
+            "matcher": "*"
           }
         ]
       }
@@ -35,7 +38,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook notification"
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook notification",
+            "matcher": "*"
           }
         ]
       }

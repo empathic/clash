@@ -1,8 +1,12 @@
 use std::fmt::Display;
+use std::fs::OpenOptions;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use claude_settings::SettingsLevel;
+use tracing::info;
+use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::prelude::*;
 
 mod hooks;
 mod notifications;
@@ -12,7 +16,7 @@ mod settings;
 use hooks::{HookOutput, NotificationHookInput, ToolUseHookInput, exit_code};
 use permissions::check_permission;
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(name = "clash")]
 #[command(about = "Claude shell")]
 struct Cli {
@@ -53,7 +57,7 @@ impl From<LevelArg> for SettingsLevel {
     }
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum HooksCmd {
     /// Handle PreToolUse hook - called before a tool is executed
     #[command(name = "pre-tool-use")]
@@ -120,18 +124,39 @@ fn handle_permission_request(
     Ok(pre_tool_result)
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Commands {
     #[command(subcommand, about = "commands for agents to call back into clash")]
     Hook(HooksCmd),
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
+fn init_tracing() {
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/clash.log")
+        .expect("failed to open /tmp/clash.log");
 
-    if cli.verbose {
-        eprintln!("Verbose mode enabled");
-    }
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_level(true)
+                .with_writer(log_file)
+                .with_file(true)
+                .with_line_number(true)
+                .with_thread_ids(true)
+                .with_target(false)
+                .with_span_events(FmtSpan::CLOSE)
+                .with_ansi(true)
+                .compact(),
+        )
+        .init();
+}
+
+fn main() -> Result<()> {
+    init_tracing();
+    let cli = Cli::parse();
+    info!(args = ?std::env::args(), "clash started");
 
     match cli.command {
         Commands::Hook(hook_cmd) => {

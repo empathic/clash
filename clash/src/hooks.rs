@@ -14,7 +14,7 @@ pub enum HookInput {
 }
 
 /// Hook input for tool-related events (PreToolUse, PostToolUse, PermissionRequest)
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct ToolUseHookInput {
     pub session_id: String,
     pub transcript_path: String,
@@ -191,7 +191,7 @@ pub struct ReadInput {
 }
 
 /// Hook-specific output for PreToolUse
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PreToolUseOutput {
     pub hook_event_name: &'static str,
@@ -206,7 +206,7 @@ pub struct PreToolUseOutput {
 }
 
 /// Decision behavior for PermissionRequest responses
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionBehavior {
     Allow,
@@ -214,7 +214,7 @@ pub enum PermissionBehavior {
 }
 
 /// Decision structure for PermissionRequest responses
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionDecision {
     pub behavior: PermissionBehavior,
@@ -227,7 +227,7 @@ pub struct PermissionDecision {
 }
 
 /// Hook-specific output for PermissionRequest
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionRequestOutput {
     pub hook_event_name: &'static str,
@@ -235,7 +235,7 @@ pub struct PermissionRequestOutput {
 }
 
 /// Hook-specific output variants
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum HookSpecificOutput {
     PreToolUse(PreToolUseOutput),
@@ -243,7 +243,7 @@ pub enum HookSpecificOutput {
 }
 
 /// The complete hook output sent to Claude Code via stdout
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HookOutput {
     #[serde(rename = "continue")]
@@ -405,9 +405,17 @@ mod tests {
         assert_eq!(input.session_id(), "test-session");
         assert_eq!(input.hook_event_name(), "Notification");
 
-        let notification = input.as_notification().expect("Should be Notification variant");
-        assert_eq!(notification.message, "Claude needs your permission to use Bash");
-        assert_eq!(notification.notification_type, NotificationType::PermissionPrompt);
+        let notification = input
+            .as_notification()
+            .expect("Should be Notification variant");
+        assert_eq!(
+            notification.message,
+            "Claude needs your permission to use Bash"
+        );
+        assert_eq!(
+            notification.notification_type,
+            NotificationType::PermissionPrompt
+        );
         assert!(notification.is_permission_prompt());
     }
 
@@ -469,7 +477,11 @@ mod tests {
                 type_str
             );
             let input = NotificationHookInput::from_reader(json.as_bytes()).unwrap();
-            assert_eq!(input.notification_type, expected, "Failed for type: {}", type_str);
+            assert_eq!(
+                input.notification_type, expected,
+                "Failed for type: {}",
+                type_str
+            );
         }
     }
 
@@ -519,7 +531,10 @@ mod tests {
         output.write_to(&mut buf).unwrap();
 
         let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
-        assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PermissionRequest");
+        assert_eq!(
+            json["hookSpecificOutput"]["hookEventName"],
+            "PermissionRequest"
+        );
         assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "allow");
         assert!(json["hookSpecificOutput"]["decision"]["updatedInput"].is_null());
     }
@@ -532,9 +547,15 @@ mod tests {
         output.write_to(&mut buf).unwrap();
 
         let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
-        assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PermissionRequest");
+        assert_eq!(
+            json["hookSpecificOutput"]["hookEventName"],
+            "PermissionRequest"
+        );
         assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "allow");
-        assert_eq!(json["hookSpecificOutput"]["decision"]["updatedInput"], updated);
+        assert_eq!(
+            json["hookSpecificOutput"]["decision"]["updatedInput"],
+            updated
+        );
     }
 
     #[test]
@@ -544,9 +565,15 @@ mod tests {
         output.write_to(&mut buf).unwrap();
 
         let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
-        assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PermissionRequest");
+        assert_eq!(
+            json["hookSpecificOutput"]["hookEventName"],
+            "PermissionRequest"
+        );
         assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "deny");
-        assert_eq!(json["hookSpecificOutput"]["decision"]["message"], "Not allowed");
+        assert_eq!(
+            json["hookSpecificOutput"]["decision"]["message"],
+            "Not allowed"
+        );
         assert_eq!(json["hookSpecificOutput"]["decision"]["interrupt"], true);
     }
 

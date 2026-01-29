@@ -5,3 +5,6 @@
 ## Platforms
 * OS: linux + macos
 * ARCH: amd64 + arm64 
+
+## Testing
+* `just check` for automated testing
