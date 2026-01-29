@@ -4,50 +4,72 @@ Clash (Claude Shell) is a permission enforcement plugin for Claude Code. It inte
 
 ## Installation
 
-### Using the plugin
+### Build and run
 
-1. Build the binaries for your platform:
-   ```bash
-   ./scripts/build.sh
-   ```
+Requires Rust toolchain.
 
-2. Use the plugin with Claude Code:
-   ```bash
-   claude --plugin-dir /path/to/clash-plugin
-   ```
+```bash
+# Build the plugin (outputs to /tmp/clash-dev/clash-plugin/)
+just build-plugin
 
-### Pre-built binaries
+# Build and launch Claude Code with the plugin
+just dev
+```
 
-The plugin supports pre-built binaries for:
-- `darwin-arm64` (macOS Apple Silicon)
-- `darwin-x86_64` (macOS Intel)
-- `linux-x86_64` (Linux x86_64)
+### Manual build
 
-The wrapper script at `bin/clash` automatically selects the correct binary for your platform.
+```bash
+# Build the binary
+cargo build --release -p clash
+
+# Use the plugin with Claude Code
+claude --plugin-dir /path/to/clash-plugin
+```
+
+When using `just build-plugin`, the build copies the plugin directory and compiled binary into a staging directory that Claude Code can load.
 
 ## Configuration
 
-Clash reads permission rules from your Claude Code settings. Configure permissions in your settings files:
+Clash reads permission rules from your Claude Code settings. Configure permissions in your settings files (highest to lowest priority):
 
-- User level: `~/.claude/settings.json`
-- Project local: `.claude/settings.local.json`
-- Project: `.claude/settings.json`
+- **System**: `/etc/claude-code/managed-settings.json` (read-only)
+- **Project local**: `.claude/settings.local.json` (not version controlled)
+- **Project**: `.claude/settings.json` (version controlled)
+- **User**: `~/.claude/settings.json`
 
 Example permission configuration:
 ```json
 {
   "permissions": {
     "allow": [
-      "Bash(git status:*)",
-      "Bash(cargo build:*)",
+      "Bash(git:*)",
+      "Bash(cargo:*)",
       "Read"
     ],
     "deny": [
-      "Bash(rm -rf:*)"
+      "Bash(rm -rf:*)",
+      "Read(.env)"
     ]
   }
 }
 ```
+
+### Permission patterns
+
+- `Tool` - Match any usage of a tool
+- `Tool(prefix:*)` - Match tool usage where the argument starts with a prefix
+- `Tool(exact)` - Match an exact argument
+
+## Hooks
+
+The plugin registers four hook types via `hooks/hooks.json`:
+
+| Hook | Purpose |
+|------|---------|
+| **PreToolUse** | Checks permissions before tool execution; returns Allow, Deny, or Ask |
+| **PostToolUse** | Runs after tool execution (informational) |
+| **PermissionRequest** | Responds to permission prompts on behalf of the user |
+| **Notification** | Handles notification events (permission prompts, idle prompts, auth, etc.) |
 
 ## Skills
 
@@ -55,46 +77,7 @@ Example permission configuration:
 
 Shows the current clash installation status and configured permissions across all settings levels.
 
-## How it works
-
-The plugin installs a `PreToolUse` hook that runs before every tool invocation in Claude Code. The hook:
-
-1. Receives tool invocation details (tool name, arguments, etc.)
-2. Checks the tool against your configured permission rules
-3. Returns one of:
-   - `allow` - Tool execution proceeds
-   - `deny` - Tool execution is blocked
-   - `ask` - User is prompted for confirmation
-
-## Development
-
-### Local development setup
-
-For local development, use symlinks to your cargo build output:
-
-```bash
-# Set up the symlink (builds if needed)
-./scripts/setup-dev.sh
-
-# Rebuild after changes
-cargo build --release -p clash
-```
-
-The wrapper script at `bin/clash` automatically uses `bin/clash-dev` if it exists.
-
-### Building release binaries
-
-Requires Rust toolchain.
-
-```bash
-# Build for current platform
-cargo build --release -p clash
-
-# Cross-compile (requires cross or cargo-zigbuild)
-./scripts/build.sh
-```
-
-### Project structure
+## Project structure
 
 ```
 clash-plugin/
@@ -105,23 +88,19 @@ clash-plugin/
 ├── skills/
 │   └── status/
 │       └── SKILL.md      # /clash:status skill
-├── bin/
-│   ├── clash             # Platform selector script
-│   └── clash-*           # Pre-built binaries
-└── scripts/
-    └── build.sh          # Build script
+└── scripts/              # Build scripts
 ```
 
-## Migration from standalone CLI
+The compiled `clash` binary is placed in `bin/` by the build process (`just build-plugin`).
 
-If you were using `clash install`/`clash uninstall`, these commands are now deprecated. Simply use the plugin instead:
+## Development
 
 ```bash
-# Old way (deprecated)
-clash install
+# Build plugin and launch Claude Code with it
+just dev
 
-# New way
-claude --plugin-dir /path/to/clash-plugin
+# Run checks (fmt, test, clippy)
+just check
 ```
 
-The `clash enter` command (subshell mode) is still available in the standalone CLI for temporary hook installation.
+Logs are written to `/tmp/clash.log`.
