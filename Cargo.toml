@@ -11,6 +11,7 @@ serde = { version = "1", features = ["derive"] }
 serde_regex = "1"
 serde_json = "1"
 thiserror = "2"
+toml = "0.8"
 dirs = "6.0.0"
 mac-notification-sys = "0.6.9"
 pest = "2"

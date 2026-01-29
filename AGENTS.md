@@ -8,3 +8,6 @@
 
 ## Testing
 * `just check` for automated testing
+
+## Development
+* Create a new directory within the `plans` and put larger "project" level plans in there and update as you accomplish work.

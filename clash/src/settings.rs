@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{default, path::PathBuf};
 
 use anyhow::Result;
 use claude_settings::ClaudeSettings;
@@ -46,4 +46,33 @@ impl ClashSettings {
     pub fn load_or_create() -> Result<Self> {
         Self::load().or_else(|_| Self::create())
     }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct PermissionSet {
+    Allow: Vec<Pattern>,
+    Deny: Vec<Pattern>,
+    Ask: Vec<Pattern>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Pattern {
+    Exact(String),
+    Glob(String),
+    #[serde(with = "serde_regex")]
+    Pattern(regex::Regex),
+}
+
+pub enum Permission {
+    Shell {},
+}
+#[derive(Clone, Default)]
+struct Find {
+    exec: bool,
+    remove: bool,
+}
+
+// example
+#[derive(Clone)]
+pub enum KnownCommand {
+    Find(Find),
 }
