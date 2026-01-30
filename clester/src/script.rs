@@ -1,6 +1,6 @@
 //! Test script parsing for clester.
 //!
-//! Parses TOML test scripts that define settings configurations,
+//! Parses YAML test scripts that define settings configurations,
 //! hook invocation steps, and expected outcomes.
 
 use std::collections::HashMap;
@@ -19,7 +19,6 @@ pub struct TestScript {
     pub settings: SettingsConfig,
 
     /// Ordered sequence of hook invocations to execute.
-    #[serde(rename = "step")]
     pub steps: Vec<Step>,
 }
 
@@ -129,15 +128,15 @@ pub struct Expectation {
 }
 
 impl TestScript {
-    /// Parse a test script from a TOML file.
+    /// Parse a test script from a YAML file.
     pub fn from_file(path: &Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         Self::from_str(&content)
     }
 
-    /// Parse a test script from a TOML string.
+    /// Parse a test script from a YAML string.
     pub fn from_str(content: &str) -> anyhow::Result<Self> {
-        Ok(toml::from_str(content)?)
+        Ok(serde_yaml::from_str(content)?)
     }
 }
 
@@ -147,35 +146,38 @@ mod tests {
 
     #[test]
     fn test_parse_basic_script() {
-        let toml = r#"
-[meta]
-name = "basic permissions"
-description = "Test allow/deny/ask"
+        let yaml = r#"
+meta:
+  name: basic permissions
+  description: Test allow/deny/ask
 
-[settings.user]
-permissions.allow = ["Bash(git:*)"]
-permissions.deny = ["Read(.env)"]
+settings:
+  user:
+    permissions:
+      allow:
+        - "Bash(git:*)"
+      deny:
+        - "Read(.env)"
 
-[[step]]
-name = "git status allowed"
-hook = "pre-tool-use"
-tool_name = "Bash"
-tool_input = { command = "git status" }
+steps:
+  - name: git status allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
 
-[step.expect]
-decision = "allow"
-
-[[step]]
-name = "read .env denied"
-hook = "pre-tool-use"
-tool_name = "Read"
-tool_input = { file_path = ".env" }
-
-[step.expect]
-decision = "deny"
+  - name: read .env denied
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: ".env"
+    expect:
+      decision: deny
 "#;
 
-        let script = TestScript::from_str(toml).unwrap();
+        let script = TestScript::from_str(yaml).unwrap();
         assert_eq!(script.meta.name, "basic permissions");
         assert_eq!(script.steps.len(), 2);
         assert_eq!(script.steps[0].expect.decision.as_deref(), Some("allow"));
@@ -184,52 +186,56 @@ decision = "deny"
 
     #[test]
     fn test_parse_notification_step() {
-        let toml = r#"
-[meta]
-name = "notification test"
+        let yaml = r#"
+meta:
+  name: notification test
 
-[[step]]
-name = "handle notification"
-hook = "notification"
-message = "Claude needs your permission"
-notification_type = "permission_prompt"
-
-[step.expect]
-no_decision = true
-exit_code = 0
+steps:
+  - name: handle notification
+    hook: notification
+    message: Claude needs your permission
+    notification_type: permission_prompt
+    expect:
+      no_decision: true
+      exit_code: 0
 "#;
 
-        let script = TestScript::from_str(toml).unwrap();
+        let script = TestScript::from_str(yaml).unwrap();
         assert_eq!(script.steps[0].hook, "notification");
         assert_eq!(script.steps[0].expect.no_decision, Some(true));
     }
 
     #[test]
     fn test_parse_multi_level_settings() {
-        let toml = r#"
-[meta]
-name = "multi-level settings"
+        let yaml = r#"
+meta:
+  name: multi-level settings
 
-[settings.user]
-permissions.allow = ["Bash(git:*)"]
+settings:
+  user:
+    permissions:
+      allow:
+        - "Bash(git:*)"
+  project:
+    permissions:
+      deny:
+        - "Read(.env)"
+  project_local:
+    permissions:
+      allow:
+        - "Bash(npm run test)"
 
-[settings.project]
-permissions.deny = ["Read(.env)"]
-
-[settings.project_local]
-permissions.allow = ["Bash(npm run test)"]
-
-[[step]]
-name = "test"
-hook = "pre-tool-use"
-tool_name = "Bash"
-tool_input = { command = "git status" }
-
-[step.expect]
-decision = "allow"
+steps:
+  - name: test
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
 "#;
 
-        let script = TestScript::from_str(toml).unwrap();
+        let script = TestScript::from_str(yaml).unwrap();
         assert!(script.settings.user.is_some());
         assert!(script.settings.project.is_some());
         assert!(script.settings.project_local.is_some());

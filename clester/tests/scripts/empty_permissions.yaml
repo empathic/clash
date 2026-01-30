@@ -1,0 +1,35 @@
+meta:
+  name: empty permissions
+  description: With no permissions configured, everything should default to ask
+
+settings:
+  user:
+    permissions:
+      allow: []
+      deny: []
+
+steps:
+  - name: bash should ask
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: ls
+    expect:
+      decision: ask
+
+  - name: read should ask
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/file.txt
+    expect:
+      decision: ask
+
+  - name: write should ask
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/file.txt
+      content: test
+    expect:
+      decision: ask

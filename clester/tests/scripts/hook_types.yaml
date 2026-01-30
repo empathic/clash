@@ -1,0 +1,45 @@
+meta:
+  name: all hook types
+  description: Test that all hook event types are handled correctly
+
+settings:
+  user:
+    permissions:
+      allow:
+        - "Bash(git:*)"
+      deny:
+        - "Bash(rm:*)"
+
+steps:
+  - name: pre-tool-use allow
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: pre-tool-use deny
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "rm -rf /"
+    expect:
+      decision: deny
+
+  - name: post-tool-use continues
+    hook: post-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      no_decision: true
+      exit_code: 0
+
+  - name: notification continues
+    hook: notification
+    message: Claude needs permission to use Bash
+    notification_type: permission_prompt
+    expect:
+      no_decision: true
+      exit_code: 0

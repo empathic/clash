@@ -209,8 +209,8 @@ dependencies = [
  "claude_settings",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tempfile",
- "toml",
 ]
 
 [[package]]

@@ -30,4 +30,3 @@ claude_settings = { path = "claude_settings" }
 
 # Dev dependencies
 tempfile = "3"
-toml = "0.8"

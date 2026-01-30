@@ -262,7 +262,7 @@ fn collect_scripts(path: &Path) -> Result<Vec<PathBuf>> {
         {
             let entry = entry?;
             let p = entry.path();
-            if p.extension().is_some_and(|ext| ext == "toml") {
+            if p.extension().is_some_and(|ext| ext == "yaml" || ext == "yml") {
                 scripts.push(p);
             }
         }

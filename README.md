@@ -131,7 +131,7 @@ just clester
 just clester -v
 
 # Run a single test script
-just clester-run clester/tests/scripts/basic_permissions.toml
+just clester-run clester/tests/scripts/basic_permissions.yaml
 
 # Validate test scripts without executing
 just clester-validate
@@ -142,40 +142,43 @@ just ci
 
 ### Writing test scripts
 
-Test scripts are TOML files that define:
+Test scripts are YAML files that define:
 
 1. **Settings** - Permission configurations at user/project levels
 2. **Steps** - Hook invocations with expected outcomes
 
 Example test script:
 
-```toml
-[meta]
-name = "basic permission enforcement"
-description = "Test that allow/deny rules work"
+```yaml
+meta:
+  name: basic permission enforcement
+  description: Test that allow/deny rules work
 
-[settings.user]
-permissions.allow = ["Bash(git:*)"]
-permissions.deny = ["Read(.env)"]
+settings:
+  user:
+    permissions:
+      allow:
+        - "Bash(git:*)"
+      deny:
+        - "Read(.env)"
 
-[[step]]
-name = "git status should be allowed"
-hook = "pre-tool-use"
-tool_name = "Bash"
-tool_input = { command = "git status" }
+steps:
+  - name: git status should be allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+      reason_contains: explicitly allowed
 
-[step.expect]
-decision = "allow"
-reason_contains = "explicitly allowed"
-
-[[step]]
-name = "read .env should be denied"
-hook = "pre-tool-use"
-tool_name = "Read"
-tool_input = { file_path = ".env" }
-
-[step.expect]
-decision = "deny"
+  - name: read .env should be denied
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: ".env"
+    expect:
+      decision: deny
 ```
 
 ### Test script reference
