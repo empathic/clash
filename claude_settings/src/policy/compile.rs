@@ -39,8 +39,14 @@ pub enum CompiledPattern {
 pub enum CompiledMatchExpr {
     Any,
     Exact(String),
-    Glob { pattern: String, regex: Regex },
-    Typed { entity_type: String, name: Option<String> },
+    Glob {
+        pattern: String,
+        regex: Regex,
+    },
+    Typed {
+        entity_type: String,
+        name: Option<String>,
+    },
 }
 
 /// Error during policy compilation.
@@ -245,10 +251,7 @@ impl CompiledMatchExpr {
             CompiledMatchExpr::Typed {
                 entity_type,
                 name: None,
-            } => {
-                entity == entity_type.as_str()
-                    || entity.starts_with(&format!("{}:", entity_type))
-            }
+            } => entity == entity_type.as_str() || entity.starts_with(&format!("{}:", entity_type)),
             CompiledMatchExpr::Typed {
                 entity_type,
                 name: Some(name),
@@ -467,21 +470,21 @@ noun = "~/sensitive/**"
 "#,
         );
 
-        let decision =
-            policy.evaluate("agent:untrusted", &Verb::Read, "~/sensitive/secrets.json");
+        let decision = policy.evaluate("agent:untrusted", &Verb::Read, "~/sensitive/secrets.json");
         assert_eq!(decision.effect, Effect::Forbid);
 
-        let decision =
-            policy.evaluate("agent:untrusted", &Verb::Write, "~/sensitive/secrets.json");
+        let decision = policy.evaluate("agent:untrusted", &Verb::Write, "~/sensitive/secrets.json");
         assert_eq!(decision.effect, Effect::Forbid);
 
-        let decision =
-            policy.evaluate("agent:untrusted", &Verb::Execute, "~/sensitive/secrets.json");
+        let decision = policy.evaluate(
+            "agent:untrusted",
+            &Verb::Execute,
+            "~/sensitive/secrets.json",
+        );
         assert_eq!(decision.effect, Effect::Forbid);
 
         // Different entity → not matched
-        let decision =
-            policy.evaluate("agent:claude", &Verb::Read, "~/sensitive/secrets.json");
+        let decision = policy.evaluate("agent:claude", &Verb::Read, "~/sensitive/secrets.json");
         assert_eq!(decision.effect, Effect::Ask); // default
     }
 

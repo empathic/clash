@@ -239,8 +239,7 @@ impl MatchExpr {
                 name: None,
             } => {
                 // "agent" matches "agent" and "agent:*"
-                entity == entity_type.as_str()
-                    || entity.starts_with(&format!("{}:", entity_type))
+                entity == entity_type.as_str() || entity.starts_with(&format!("{}:", entity_type))
             }
             MatchExpr::Typed {
                 entity_type,
@@ -366,9 +365,7 @@ pub enum DelegateType {
 impl Statement {
     /// Returns true if this statement matches the given request.
     pub fn matches(&self, entity: &str, verb: &Verb, noun: &str) -> bool {
-        self.entity.matches_entity(entity)
-            && self.verb.matches(verb)
-            && self.noun.matches(noun)
+        self.entity.matches_entity(entity) && self.verb.matches(verb) && self.noun.matches(noun)
     }
 }
 
