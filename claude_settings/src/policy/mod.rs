@@ -297,6 +297,17 @@ impl Verb {
             _ => None,
         }
     }
+
+    /// Return the short tool name used in YAML rule syntax.
+    pub fn rule_name(&self) -> &'static str {
+        match self {
+            Verb::Read => "read",
+            Verb::Write => "write",
+            Verb::Edit => "edit",
+            Verb::Execute => "bash",
+            Verb::Delegate => "delegate",
+        }
+    }
 }
 
 impl fmt::Display for Verb {

@@ -223,9 +223,9 @@ mod tests {
 
     // --- Policy engine tests ---
 
-    fn settings_with_policy(toml_str: &str) -> ClashSettings {
-        use claude_settings::policy::parse::parse_toml;
-        let doc = parse_toml(toml_str).expect("valid TOML");
+    fn settings_with_policy(yaml: &str) -> ClashSettings {
+        use claude_settings::policy::parse::parse_yaml;
+        let doc = parse_yaml(yaml).expect("valid YAML");
         ClashSettings {
             engine_mode: crate::settings::EngineMode::Policy,
             from_claude: None,
@@ -235,15 +235,7 @@ mod tests {
 
     #[test]
     fn test_policy_permit_bash() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"
-[[statements]]
-effect = "permit"
-entity = "*"
-verb = "execute"
-noun = "git *"
-"#,
-        );
+        let settings = settings_with_policy("rules:\n  - permit * bash git *\n");
         let result = check_permission(&bash_input("git status"), &settings)?;
         assert_eq!(result, HookOutput::allow(Some("policy: permitted".into())),);
         Ok(())
@@ -251,32 +243,15 @@ noun = "git *"
 
     #[test]
     fn test_policy_forbid_bash() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"
-[[statements]]
-effect = "forbid"
-entity = "*"
-verb = "execute"
-noun = "rm *"
-reason = "Destructive command"
-"#,
-        );
+        let settings = settings_with_policy("rules:\n  - forbid * bash rm *\n");
         let result = check_permission(&bash_input("rm -rf /"), &settings)?;
-        assert_eq!(result, HookOutput::deny("Destructive command".into()),);
+        assert_eq!(result, HookOutput::deny("policy: forbidden".into()),);
         Ok(())
     }
 
     #[test]
     fn test_policy_ask_default() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"
-[[statements]]
-effect = "permit"
-entity = "user"
-verb = "execute"
-noun = "*"
-"#,
-        );
+        let settings = settings_with_policy("rules:\n  - permit user bash *\n");
         // entity is "agent" by default, so this permit for "user" won't match
         let result = check_permission(&bash_input("ls"), &settings)?;
         assert_eq!(result, HookOutput::ask(Some("policy: ask".into())),);
@@ -285,15 +260,7 @@ noun = "*"
 
     #[test]
     fn test_policy_read_file() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"
-[[statements]]
-effect = "permit"
-entity = "*"
-verb = "read"
-noun = "*.rs"
-"#,
-        );
+        let settings = settings_with_policy("rules:\n  - permit * read *.rs\n");
         let result = check_permission(&read_input("src/main.rs"), &settings)?;
         assert_eq!(result, HookOutput::allow(Some("policy: permitted".into())),);
         Ok(())
@@ -302,39 +269,21 @@ noun = "*.rs"
     #[test]
     fn test_policy_forbid_overrides_permit() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-[[statements]]
-effect = "permit"
-entity = "*"
-verb = "read"
-noun = "*"
-
-[[statements]]
-effect = "forbid"
-entity = "*"
-verb = "read"
-noun = ".env"
-reason = "Never read .env"
-"#,
+            "\
+rules:
+  - permit * read *
+  - forbid * read .env
+",
         );
         let result = check_permission(&read_input(".env"), &settings)?;
-        assert_eq!(result, HookOutput::deny("Never read .env".into()),);
+        assert_eq!(result, HookOutput::deny("policy: forbidden".into()),);
         Ok(())
     }
 
     #[test]
     fn test_auto_mode_uses_policy_when_available() -> Result<()> {
-        use claude_settings::policy::parse::parse_toml;
-        let doc = parse_toml(
-            r#"
-[[statements]]
-effect = "permit"
-entity = "*"
-verb = "execute"
-noun = "echo *"
-"#,
-        )
-        .unwrap();
+        use claude_settings::policy::parse::parse_yaml;
+        let doc = parse_yaml("rules:\n  - permit * bash echo *\n").unwrap();
         let settings = ClashSettings {
             engine_mode: crate::settings::EngineMode::Auto,
             from_claude: None,

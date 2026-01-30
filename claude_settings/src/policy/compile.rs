@@ -290,22 +290,14 @@ fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
 mod tests {
     use super::*;
 
-    fn compile_doc(toml_str: &str) -> CompiledPolicy {
-        let doc = parse::parse_toml(toml_str).unwrap();
+    fn compile_yaml(yaml: &str) -> CompiledPolicy {
+        let doc = parse::parse_yaml(yaml).unwrap();
         CompiledPolicy::compile(&doc).unwrap()
     }
 
     #[test]
     fn test_simple_permit() {
-        let policy = compile_doc(
-            r#"
-[[statements]]
-effect = "permit"
-entity = "agent:claude"
-verb = "execute"
-noun = "git *"
-"#,
-        );
+        let policy = compile_yaml("rules:\n  - permit agent:claude bash git *\n");
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "git status");
         assert_eq!(decision.effect, Effect::Permit);
@@ -316,21 +308,12 @@ noun = "git *"
 
     #[test]
     fn test_forbid_overrides_permit() {
-        let policy = compile_doc(
-            r#"
-[[statements]]
-effect = "permit"
-entity = "*"
-verb = "read"
-noun = "*"
-
-[[statements]]
-effect = "forbid"
-entity = "*"
-verb = "read"
-noun = ".env"
-reason = "Never read .env"
-"#,
+        let policy = compile_yaml(
+            "\
+rules:
+  - permit * read *
+  - forbid * read .env
+",
         );
 
         let decision = policy.evaluate("agent:claude", &Verb::Read, "src/main.rs");
@@ -338,26 +321,16 @@ reason = "Never read .env"
 
         let decision = policy.evaluate("agent:claude", &Verb::Read, ".env");
         assert_eq!(decision.effect, Effect::Forbid);
-        assert_eq!(decision.reason.as_deref(), Some("Never read .env"));
     }
 
     #[test]
     fn test_ask_overrides_permit() {
-        let policy = compile_doc(
-            r#"
-[[statements]]
-effect = "permit"
-entity = "agent:*"
-verb = "execute"
-noun = "*"
-
-[[statements]]
-effect = "ask"
-entity = "agent:*"
-verb = "execute"
-noun = "rm *"
-reason = "Destructive command"
-"#,
+        let policy = compile_yaml(
+            "\
+rules:
+  - permit agent:* bash *
+  - ask agent:* bash rm *
+",
         );
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "ls");
@@ -369,21 +342,12 @@ reason = "Destructive command"
 
     #[test]
     fn test_negated_entity() {
-        let policy = compile_doc(
-            r#"
-[[statements]]
-effect = "permit"
-entity = "*"
-verb = "read"
-noun = "~/*"
-
-[[statements]]
-effect = "forbid"
-entity = "!user"
-verb = "read"
-noun = "~/config/*"
-reason = "Only users can read config"
-"#,
+        let policy = compile_yaml(
+            "\
+rules:
+  - permit * read ~/*
+  - forbid !user read ~/config/*
+",
         );
 
         // Agent reading config → forbidden
@@ -401,16 +365,7 @@ reason = "Only users can read config"
 
     #[test]
     fn test_negated_noun() {
-        let policy = compile_doc(
-            r#"
-[[statements]]
-effect = "forbid"
-entity = "agent:*"
-verb = "write"
-noun = "!~/code/proj/**"
-reason = "Can only write in project"
-"#,
-        );
+        let policy = compile_yaml("rules:\n  - forbid agent:* write !~/code/proj/**\n");
 
         // Writing in project → not forbidden (noun negation doesn't match)
         let decision = policy.evaluate("agent:claude", &Verb::Write, "~/code/proj/src/main.rs");
@@ -423,12 +378,7 @@ reason = "Can only write in project"
 
     #[test]
     fn test_configurable_default() {
-        let policy = compile_doc(
-            r#"
-[policy]
-default = "forbid"
-"#,
-        );
+        let policy = compile_yaml("default: forbid\n");
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "anything");
         assert_eq!(decision.effect, Effect::Forbid);
@@ -436,13 +386,17 @@ default = "forbid"
 
     #[test]
     fn test_legacy_permissions_integration() {
-        let policy = compile_doc(
-            r#"
-[permissions]
-allow = ["Bash(git:*)", "Read"]
-deny = ["Read(.env)"]
-ask = ["Write"]
-"#,
+        let policy = compile_yaml(
+            "\
+permissions:
+  allow:
+    - \"Bash(git:*)\"
+    - \"Read\"
+  deny:
+    - \"Read(.env)\"
+  ask:
+    - \"Write\"
+",
         );
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "git status");
@@ -460,15 +414,7 @@ ask = ["Write"]
 
     #[test]
     fn test_verb_wildcard() {
-        let policy = compile_doc(
-            r#"
-[[statements]]
-effect = "forbid"
-entity = "agent:untrusted"
-verb = "*"
-noun = "~/sensitive/**"
-"#,
-        );
+        let policy = compile_yaml("rules:\n  - forbid agent:untrusted * ~/sensitive/**\n");
 
         let decision = policy.evaluate("agent:untrusted", &Verb::Read, "~/sensitive/secrets.json");
         assert_eq!(decision.effect, Effect::Forbid);
@@ -489,41 +435,29 @@ noun = "~/sensitive/**"
     }
 
     #[test]
-    fn test_mixed_legacy_and_statements() {
-        let policy = compile_doc(
-            r#"
-[permissions]
-allow = ["Bash(git:*)"]
-
-[[statements]]
-effect = "forbid"
-entity = "*"
-verb = "execute"
-noun = "git push *"
-reason = "No pushing"
-"#,
+    fn test_mixed_legacy_and_rules() {
+        let policy = compile_yaml(
+            "\
+permissions:
+  allow:
+    - \"Bash(git:*)\"
+rules:
+  - forbid * bash git push *
+",
         );
 
         // git status → allowed by legacy
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "git status");
         assert_eq!(decision.effect, Effect::Permit);
 
-        // git push → forbidden by explicit statement (forbid > permit)
+        // git push → forbidden by explicit rule (forbid > permit)
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "git push origin main");
         assert_eq!(decision.effect, Effect::Forbid);
     }
 
     #[test]
     fn test_entity_type_hierarchy() {
-        let policy = compile_doc(
-            r#"
-[[statements]]
-effect = "permit"
-entity = "agent:*"
-verb = "read"
-noun = "*"
-"#,
-        );
+        let policy = compile_yaml("rules:\n  - permit agent:* read *\n");
 
         let decision = policy.evaluate("agent:claude", &Verb::Read, "test.txt");
         assert_eq!(decision.effect, Effect::Permit);

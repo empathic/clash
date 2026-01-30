@@ -189,9 +189,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "figment",
+ "pest",
+ "pest_derive",
  "regex",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tempfile",
  "thiserror",
  "toml",

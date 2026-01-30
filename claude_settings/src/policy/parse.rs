@@ -1,17 +1,175 @@
 //! Parsing and deserialization for policy documents.
 //!
 //! Handles:
-//! - TOML deserialization of `PolicyDocument`
+//! - YAML deserialization of policy documents
+//! - Pest-based parsing of compact rule strings (`effect entity tool pattern`)
 //! - Custom serde for `Pattern` (with `!` negation prefix)
 //! - Custom serde for `VerbPattern` (with `*` wildcard)
 //! - Legacy `[permissions]` desugaring to statements
 
+use pest::Parser;
+use pest_derive::Parser;
+use serde::{Deserialize, Serialize};
+
 use super::*;
+
+// ---------------------------------------------------------------------------
+// Pest grammar
+// ---------------------------------------------------------------------------
+
+#[derive(Parser)]
+#[grammar = "policy/rule.pest"]
+struct RuleParser;
+
+// ---------------------------------------------------------------------------
+// Error type
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, thiserror::Error)]
+pub enum PolicyParseError {
+    #[error("YAML parse error: {0}")]
+    Yaml(#[from] serde_yaml::Error),
+
+    #[error("invalid rule '{rule}': {message}")]
+    InvalidRule { rule: String, message: String },
+
+    #[error("invalid effect '{0}'")]
+    InvalidEffect(String),
+
+    #[error("invalid tool '{0}'")]
+    InvalidTool(String),
+}
+
+// ---------------------------------------------------------------------------
+// YAML document shape (serde)
+// ---------------------------------------------------------------------------
+
+/// Raw YAML representation that maps 1:1 to the file format.
+#[derive(Debug, Serialize, Deserialize)]
+struct RawPolicyYaml {
+    #[serde(default = "default_ask_str")]
+    default: String,
+
+    #[serde(default)]
+    rules: Vec<String>,
+
+    /// Legacy backward-compat with Claude Code permission format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    permissions: Option<LegacyPermissions>,
+}
+
+fn default_ask_str() -> String {
+    "ask".into()
+}
+
+// ---------------------------------------------------------------------------
+// Public parsing API
+// ---------------------------------------------------------------------------
+
+/// Parse a policy document from a YAML string.
+pub fn parse_yaml(input: &str) -> Result<PolicyDocument, PolicyParseError> {
+    let raw: RawPolicyYaml = serde_yaml::from_str(input)?;
+
+    let default = parse_effect_str(&raw.default)?;
+
+    let mut statements = Vec::new();
+
+    // Desugar legacy permissions if present.
+    if let Some(ref perms) = raw.permissions {
+        statements.extend(desugar_legacy(perms));
+    }
+
+    // Parse compact rule strings.
+    for rule_str in &raw.rules {
+        let stmt = parse_rule(rule_str)?;
+        statements.push(stmt);
+    }
+
+    Ok(PolicyDocument {
+        policy: PolicyConfig { default },
+        permissions: raw.permissions,
+        statements,
+    })
+}
+
+/// Parse a single compact rule string into a `Statement`.
+///
+/// Format: `effect entity tool pattern`
+///
+/// Examples:
+/// - `permit * bash cargo build *`
+/// - `forbid !user read ~/config/*`
+/// - `ask agent:claude * *`
+pub fn parse_rule(input: &str) -> Result<Statement, PolicyParseError> {
+    let input = input.trim();
+    let pairs = RuleParser::parse(Rule::rule, input).map_err(|e| PolicyParseError::InvalidRule {
+        rule: input.to_string(),
+        message: e.to_string(),
+    })?;
+
+    let rule_pair = pairs.into_iter().next().unwrap();
+    let mut inner = rule_pair.into_inner();
+
+    // effect
+    let effect_pair = inner.next().unwrap();
+    let effect = parse_effect_str(effect_pair.as_str())?;
+
+    // entity
+    let entity_pair = inner.next().unwrap();
+    let entity = parse_entity_pair(entity_pair);
+
+    // tool → verb
+    let tool_pair = inner.next().unwrap();
+    let verb = parse_tool_str(tool_pair.as_str())?;
+
+    // pattern → noun
+    let pattern_pair = inner.next().unwrap();
+    let noun = parse_pattern(pattern_pair.as_str().trim());
+
+    Ok(Statement {
+        effect,
+        entity,
+        verb,
+        noun,
+        reason: None,
+        delegate: None,
+    })
+}
+
+/// Serialize a `PolicyDocument` back to YAML.
+pub fn to_yaml(doc: &PolicyDocument) -> Result<String, serde_yaml::Error> {
+    let raw = RawPolicyYaml {
+        default: doc.policy.default.to_string(),
+        rules: doc.statements.iter().map(format_rule).collect(),
+        permissions: doc.permissions.clone(),
+    };
+    serde_yaml::to_string(&raw)
+}
+
+/// Format a `Statement` as a compact rule string.
+pub fn format_rule(stmt: &Statement) -> String {
+    let effect = stmt.effect.to_string();
+    let entity = format_pattern_str(&stmt.entity);
+    let tool = match &stmt.verb {
+        VerbPattern::Any => "*".to_string(),
+        VerbPattern::Exact(v) => v.rule_name().to_string(),
+    };
+    let noun = format_pattern_str(&stmt.noun);
+    format!("{} {} {} {}", effect, entity, tool, noun)
+}
+
+// ---------------------------------------------------------------------------
+// Kept for backward compatibility — parse TOML policy documents.
+// ---------------------------------------------------------------------------
 
 /// Parse a policy document from a TOML string.
 pub fn parse_toml(input: &str) -> Result<PolicyDocument, toml::de::Error> {
     toml::from_str(input)
 }
+
+// ---------------------------------------------------------------------------
+// Pattern / verb parsing (shared between rule parser and serde)
+// ---------------------------------------------------------------------------
 
 /// Parse a pattern string (used for entity and noun slots).
 ///
@@ -97,11 +255,11 @@ pub fn parse_verb_pattern(s: &str) -> Result<VerbPattern, String> {
 /// Desugar legacy `[permissions]` block into policy statements.
 ///
 /// Converts Claude Code format like:
-/// ```toml
-/// [permissions]
-/// allow = ["Bash(git:*)", "Read(**/*.rs)"]
-/// deny = ["Read(.env)"]
-/// ask = ["Write"]
+/// ```yaml
+/// permissions:
+///   allow: ["Bash(git:*)", "Read(**/*.rs)"]
+///   deny: ["Read(.env)"]
+///   ask: ["Write"]
 /// ```
 ///
 /// Into equivalent statements with `entity = "agent"`.
@@ -125,6 +283,76 @@ pub fn desugar_legacy(perms: &LegacyPermissions) -> Vec<Statement> {
     }
 
     statements
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+fn parse_effect_str(s: &str) -> Result<Effect, PolicyParseError> {
+    match s {
+        "permit" => Ok(Effect::Permit),
+        "forbid" => Ok(Effect::Forbid),
+        "ask" => Ok(Effect::Ask),
+        "delegate" => Ok(Effect::Delegate),
+        other => Err(PolicyParseError::InvalidEffect(other.into())),
+    }
+}
+
+fn parse_tool_str(s: &str) -> Result<VerbPattern, PolicyParseError> {
+    match s {
+        "*" => Ok(VerbPattern::Any),
+        "bash" => Ok(VerbPattern::Exact(Verb::Execute)),
+        "read" => Ok(VerbPattern::Exact(Verb::Read)),
+        "write" => Ok(VerbPattern::Exact(Verb::Write)),
+        "edit" => Ok(VerbPattern::Exact(Verb::Edit)),
+        other => Err(PolicyParseError::InvalidTool(other.into())),
+    }
+}
+
+/// Build a `Pattern` from a pest entity pair.
+fn parse_entity_pair(pair: pest::iterators::Pair<Rule>) -> Pattern {
+    let mut negated = false;
+    let mut entity_value = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::negation => negated = true,
+            Rule::entity_value => {
+                entity_value = Some(parse_entity_value(inner));
+            }
+            _ => {}
+        }
+    }
+
+    let expr = entity_value.unwrap_or(MatchExpr::Any);
+    if negated {
+        Pattern::Not(expr)
+    } else {
+        Pattern::Match(expr)
+    }
+}
+
+fn parse_entity_value(pair: pest::iterators::Pair<Rule>) -> MatchExpr {
+    let inner = pair.into_inner().next().unwrap();
+    match inner.as_rule() {
+        Rule::wildcard => MatchExpr::Any,
+        Rule::typed_entity => {
+            let mut parts = inner.into_inner();
+            let entity_type = parts.next().unwrap().as_str().to_string();
+            let name_part = parts.next().unwrap();
+            let name = match name_part.as_rule() {
+                Rule::wildcard => None,
+                _ => Some(name_part.as_str().to_string()),
+            };
+            MatchExpr::Typed { entity_type, name }
+        }
+        Rule::identifier => {
+            let s = inner.as_str();
+            MatchExpr::Exact(s.to_string())
+        }
+        _ => MatchExpr::Any,
+    }
 }
 
 /// Convert a single legacy permission pattern like `"Bash(git:*)"` into a Statement.
@@ -173,6 +401,14 @@ fn legacy_pattern_to_statement(pattern: &str, effect: Effect) -> Option<Statemen
     })
 }
 
+/// Format a `Pattern` as a string for rule serialization.
+fn format_pattern_str(pattern: &Pattern) -> String {
+    match pattern {
+        Pattern::Match(expr) => format_match_expr(expr),
+        Pattern::Not(expr) => format!("!{}", format_match_expr(expr)),
+    }
+}
+
 // --- Custom serde implementations ---
 
 impl Serialize for Pattern {
@@ -180,11 +416,7 @@ impl Serialize for Pattern {
     where
         S: serde::Serializer,
     {
-        let s = match self {
-            Pattern::Match(expr) => format_match_expr(expr),
-            Pattern::Not(expr) => format!("!{}", format_match_expr(expr)),
-        };
-        serializer.serialize_str(&s)
+        serializer.serialize_str(&format_pattern_str(self))
     }
 }
 
@@ -247,7 +479,7 @@ fn format_match_expr(expr: &MatchExpr) -> String {
         MatchExpr::Typed {
             entity_type,
             name: None,
-        } => entity_type.clone(),
+        } => format!("{}:*", entity_type),
         MatchExpr::Typed {
             entity_type,
             name: Some(name),
@@ -258,6 +490,8 @@ fn format_match_expr(expr: &MatchExpr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Pattern parsing ---
 
     #[test]
     fn test_parse_pattern_wildcard() {
@@ -279,9 +513,6 @@ mod tests {
 
     #[test]
     fn test_parse_pattern_negated_exact() {
-        // "!user" → Not(Exact("user"))
-        // "user" without a colon is Exact, not Typed.
-        // Entity matching handles Exact strings via direct comparison.
         assert_eq!(
             parse_pattern("!user"),
             Pattern::Not(MatchExpr::Exact("user".into()))
@@ -328,8 +559,6 @@ mod tests {
 
     #[test]
     fn test_parse_pattern_bare_type() {
-        // "agent" without colon → treated as a typed entity with no name
-        // (because it doesn't contain /, ., or ~ which would make it a path)
         assert_eq!(
             parse_pattern("agent"),
             Pattern::Match(MatchExpr::Exact("agent".into()))
@@ -350,19 +579,112 @@ mod tests {
         assert!(parse_verb_pattern("unknown").is_err());
     }
 
-    #[test]
-    fn test_parse_toml_simple() {
-        let toml_str = r#"
-[policy]
-default = "ask"
+    // --- Rule parsing (pest) ---
 
-[[statements]]
-effect = "permit"
-entity = "agent:claude"
-verb = "execute"
-noun = "git *"
+    #[test]
+    fn test_parse_rule_simple_permit() {
+        let stmt = parse_rule("permit * bash cargo build *").unwrap();
+        assert_eq!(stmt.effect, Effect::Permit);
+        assert_eq!(stmt.entity, Pattern::Match(MatchExpr::Any));
+        assert_eq!(stmt.verb, VerbPattern::Exact(Verb::Execute));
+        assert!(stmt.matches("agent", &Verb::Execute, "cargo build --release"));
+    }
+
+    #[test]
+    fn test_parse_rule_typed_entity() {
+        let stmt = parse_rule("permit agent:claude bash git *").unwrap();
+        assert_eq!(stmt.effect, Effect::Permit);
+        assert_eq!(
+            stmt.entity,
+            Pattern::Match(MatchExpr::Typed {
+                entity_type: "agent".into(),
+                name: Some("claude".into()),
+            })
+        );
+        assert!(stmt.matches("agent:claude", &Verb::Execute, "git status"));
+        assert!(!stmt.matches("agent:codex", &Verb::Execute, "git status"));
+    }
+
+    #[test]
+    fn test_parse_rule_negated_entity() {
+        let stmt = parse_rule("forbid !user read ~/config/*").unwrap();
+        assert_eq!(stmt.effect, Effect::Forbid);
+        assert!(stmt.matches("agent:claude", &Verb::Read, "~/config/test.json"));
+        assert!(!stmt.matches("user", &Verb::Read, "~/config/test.json"));
+    }
+
+    #[test]
+    fn test_parse_rule_wildcard_tool() {
+        let stmt = parse_rule("forbid agent:untrusted * ~/sensitive/**").unwrap();
+        assert_eq!(stmt.verb, VerbPattern::Any);
+        assert!(stmt.matches("agent:untrusted", &Verb::Read, "~/sensitive/secrets.json"));
+        assert!(stmt.matches("agent:untrusted", &Verb::Write, "~/sensitive/secrets.json"));
+    }
+
+    #[test]
+    fn test_parse_rule_all_wildcards() {
+        let stmt = parse_rule("ask * * *").unwrap();
+        assert_eq!(stmt.effect, Effect::Ask);
+        assert_eq!(stmt.entity, Pattern::Match(MatchExpr::Any));
+        assert_eq!(stmt.verb, VerbPattern::Any);
+        assert!(stmt.matches("anyone", &Verb::Execute, "anything"));
+    }
+
+    #[test]
+    fn test_parse_rule_read_tool() {
+        let stmt = parse_rule("permit * read *.rs").unwrap();
+        assert_eq!(stmt.verb, VerbPattern::Exact(Verb::Read));
+        assert!(stmt.matches("agent", &Verb::Read, "main.rs"));
+    }
+
+    #[test]
+    fn test_parse_rule_write_tool() {
+        let stmt = parse_rule("forbid * write /etc/*").unwrap();
+        assert_eq!(stmt.verb, VerbPattern::Exact(Verb::Write));
+        assert!(stmt.matches("agent", &Verb::Write, "/etc/passwd"));
+    }
+
+    #[test]
+    fn test_parse_rule_edit_tool() {
+        let stmt = parse_rule("permit * edit src/**").unwrap();
+        assert_eq!(stmt.verb, VerbPattern::Exact(Verb::Edit));
+    }
+
+    #[test]
+    fn test_parse_rule_entity_wildcard_type() {
+        let stmt = parse_rule("permit agent:* bash git *").unwrap();
+        assert_eq!(
+            stmt.entity,
+            Pattern::Match(MatchExpr::Typed {
+                entity_type: "agent".into(),
+                name: None,
+            })
+        );
+        assert!(stmt.matches("agent:claude", &Verb::Execute, "git status"));
+        assert!(stmt.matches("agent:codex", &Verb::Execute, "git status"));
+        assert!(!stmt.matches("user", &Verb::Execute, "git status"));
+    }
+
+    #[test]
+    fn test_parse_rule_invalid() {
+        assert!(parse_rule("").is_err());
+        assert!(parse_rule("permit").is_err());
+        assert!(parse_rule("permit *").is_err());
+        assert!(parse_rule("permit * bash").is_err());
+        assert!(parse_rule("invalid * bash *").is_err());
+    }
+
+    // --- YAML document parsing ---
+
+    #[test]
+    fn test_parse_yaml_simple() {
+        let yaml = r#"
+default: ask
+
+rules:
+  - permit agent:claude bash git *
 "#;
-        let doc = parse_toml(toml_str).unwrap();
+        let doc = parse_yaml(yaml).unwrap();
         assert_eq!(doc.policy.default, Effect::Ask);
         assert_eq!(doc.statements.len(), 1);
 
@@ -373,16 +695,29 @@ noun = "git *"
     }
 
     #[test]
-    fn test_parse_toml_with_negation() {
-        let toml_str = r#"
-[[statements]]
-effect = "forbid"
-entity = "!user"
-verb = "read"
-noun = "~/config/*"
-reason = "Only users can read config"
+    fn test_parse_yaml_multiple_rules() {
+        let yaml = r#"
+default: ask
+
+rules:
+  - permit * bash cargo build *
+  - permit * bash cargo test *
+  - forbid * bash rm -rf /
 "#;
-        let doc = parse_toml(toml_str).unwrap();
+        let doc = parse_yaml(yaml).unwrap();
+        assert_eq!(doc.statements.len(), 3);
+        assert_eq!(doc.statements[0].effect, Effect::Permit);
+        assert_eq!(doc.statements[1].effect, Effect::Permit);
+        assert_eq!(doc.statements[2].effect, Effect::Forbid);
+    }
+
+    #[test]
+    fn test_parse_yaml_with_negation() {
+        let yaml = r#"
+rules:
+  - forbid !user read ~/config/*
+"#;
+        let doc = parse_yaml(yaml).unwrap();
         let stmt = &doc.statements[0];
 
         assert_eq!(stmt.effect, Effect::Forbid);
@@ -391,17 +726,32 @@ reason = "Only users can read config"
     }
 
     #[test]
-    fn test_parse_toml_with_legacy_permissions() {
-        let toml_str = r#"
-[policy]
-default = "ask"
+    fn test_parse_yaml_default_values() {
+        let yaml = "rules:\n  - permit * * *.rs\n";
+        let doc = parse_yaml(yaml).unwrap();
+        assert_eq!(doc.policy.default, Effect::Ask); // default
+        let stmt = &doc.statements[0];
+        assert!(stmt.entity.matches_entity("agent:claude"));
+        assert!(stmt.entity.matches_entity("user"));
+        assert!(stmt.verb.matches(&Verb::Read));
+        assert!(stmt.verb.matches(&Verb::Execute));
+    }
 
-[permissions]
-allow = ["Bash(git:*)", "Read(**/*.rs)"]
-deny = ["Read(.env)"]
-ask = ["Write"]
+    #[test]
+    fn test_parse_yaml_with_legacy_permissions() {
+        let yaml = r#"
+default: ask
+
+permissions:
+  allow:
+    - "Bash(git:*)"
+    - "Read(**/*.rs)"
+  deny:
+    - "Read(.env)"
+  ask:
+    - "Write"
 "#;
-        let doc = parse_toml(toml_str).unwrap();
+        let doc = parse_yaml(yaml).unwrap();
         assert!(doc.permissions.is_some());
         let perms = doc.permissions.as_ref().unwrap();
         assert_eq!(perms.allow.len(), 2);
@@ -409,23 +759,7 @@ ask = ["Write"]
         assert_eq!(perms.ask.len(), 1);
     }
 
-    #[test]
-    fn test_parse_toml_default_values() {
-        let toml_str = r#"
-[[statements]]
-effect = "permit"
-noun = "*.rs"
-"#;
-        let doc = parse_toml(toml_str).unwrap();
-        assert_eq!(doc.policy.default, Effect::Ask); // default
-        let stmt = &doc.statements[0];
-        // entity defaults to * (any)
-        assert!(stmt.entity.matches_entity("agent:claude"));
-        assert!(stmt.entity.matches_entity("user"));
-        // verb defaults to * (any)
-        assert!(stmt.verb.matches(&Verb::Read));
-        assert!(stmt.verb.matches(&Verb::Execute));
-    }
+    // --- Legacy desugaring ---
 
     #[test]
     fn test_desugar_legacy_bash() {
@@ -453,12 +787,10 @@ noun = "*.rs"
         let stmts = desugar_legacy(&perms);
         assert_eq!(stmts.len(), 2);
 
-        // "Read" → permit(agent, read, *)
         let allow_stmt = &stmts[0];
         assert_eq!(allow_stmt.effect, Effect::Permit);
         assert!(allow_stmt.matches("agent:claude", &Verb::Read, "anything.txt"));
 
-        // "Read(.env)" → forbid(agent, read, .env)
         let deny_stmt = &stmts[1];
         assert_eq!(deny_stmt.effect, Effect::Forbid);
         assert!(deny_stmt.matches("agent:claude", &Verb::Read, ".env"));
@@ -477,6 +809,8 @@ noun = "*.rs"
         assert!(stmts[0].matches("agent:claude", &Verb::Read, "src/main.rs"));
         assert!(!stmts[0].matches("agent:claude", &Verb::Read, "src/main.py"));
     }
+
+    // --- Serde roundtrips ---
 
     #[test]
     fn test_pattern_serde_roundtrip() {
@@ -514,41 +848,49 @@ noun = "*.rs"
         }
     }
 
+    // --- Rule formatting roundtrip ---
+
     #[test]
-    fn test_full_toml_roundtrip() {
+    fn test_format_rule_roundtrip() {
+        let rules = vec![
+            "permit * bash cargo build *",
+            "forbid !user read ~/config/*",
+            "ask agent:claude * *",
+            "permit agent:* bash git *",
+        ];
+        for rule in rules {
+            let stmt = parse_rule(rule).unwrap();
+            let formatted = format_rule(&stmt);
+            let reparsed = parse_rule(&formatted).unwrap();
+            // Effects must match
+            assert_eq!(stmt.effect, reparsed.effect, "effect mismatch for: {}", rule);
+            // Verify the reparsed statement matches the same inputs
+            assert_eq!(
+                stmt.matches("agent:claude", &Verb::Execute, "cargo build --release"),
+                reparsed.matches("agent:claude", &Verb::Execute, "cargo build --release"),
+                "behavior mismatch for: {}",
+                rule
+            );
+        }
+    }
+
+    // --- TOML backward compat ---
+
+    #[test]
+    fn test_parse_toml_still_works() {
         let toml_str = r#"
 [policy]
-default = "forbid"
+default = "ask"
 
 [[statements]]
 effect = "permit"
 entity = "agent:claude"
 verb = "execute"
 noun = "git *"
-reason = "Allow git commands"
-
-[[statements]]
-effect = "forbid"
-entity = "!user"
-verb = "read"
-noun = "~/config/*"
-reason = "Only users can read config"
-
-[[statements]]
-effect = "ask"
-entity = "*"
-verb = "*"
-noun = "*"
-reason = "Default: ask for everything else"
 "#;
         let doc = parse_toml(toml_str).unwrap();
-        assert_eq!(doc.policy.default, Effect::Forbid);
-        assert_eq!(doc.statements.len(), 3);
-
-        // Re-serialize to TOML
-        let reserialized = toml::to_string_pretty(&doc).unwrap();
-        let reparsed = parse_toml(&reserialized).unwrap();
-        assert_eq!(reparsed.statements.len(), 3);
-        assert_eq!(reparsed.policy.default, Effect::Forbid);
+        assert_eq!(doc.policy.default, Effect::Ask);
+        assert_eq!(doc.statements.len(), 1);
+        assert!(doc.statements[0].matches("agent:claude", &Verb::Execute, "git status"));
     }
 }
