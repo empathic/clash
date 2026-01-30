@@ -11,6 +11,7 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 dirs = { workspace = true }
 figment = { workspace = true }
+brush-parser = { workspace = true }
 tracing = { workspace = true }
 pest = { workspace = true }
 pest_derive = { workspace = true }

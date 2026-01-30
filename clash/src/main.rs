@@ -15,6 +15,7 @@ mod hooks;
 mod notifications;
 mod permissions;
 mod settings;
+mod shell;
 
 use claude_settings::PermissionRule;
 use hooks::{HookOutput, HookSpecificOutput, NotificationHookInput, ToolUseHookInput, exit_code};

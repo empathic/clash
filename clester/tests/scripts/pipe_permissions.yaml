@@ -1,0 +1,158 @@
+meta:
+  name: pipe and compound command permissions
+  description: Test that piped and compound bash commands check each segment independently
+
+clash:
+  engine_mode: policy
+  policy:
+    default: ask
+    rules:
+      - "allow * bash git *"
+      - "allow * bash cat *"
+      - "allow * bash grep *"
+      - "allow * bash echo *"
+      - "allow * bash wc *"
+      - "allow * bash sort *"
+      - "deny * bash rm *"
+      - "deny * bash curl *"
+
+steps:
+  # --- Simple commands (no pipes) still work ---
+
+  - name: single allowed command
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "git status"
+    expect:
+      decision: allow
+
+  - name: single denied command
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "rm -rf /"
+    expect:
+      decision: deny
+
+  # --- Pipeline splitting ---
+
+  - name: pipeline with all allowed segments
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "cat file.txt | grep hello"
+    expect:
+      decision: allow
+
+  - name: three-stage pipeline all allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "cat file.txt | grep hello | wc -l"
+    expect:
+      decision: allow
+
+  - name: pipeline with denied segment blocks whole command
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "cat file.txt | rm -rf /tmp"
+    expect:
+      decision: deny
+
+  - name: pipeline with denied segment at start
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "rm -rf / | cat"
+    expect:
+      decision: deny
+
+  - name: pipeline with unmatched segment causes ask
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "cat file.txt | python3 -c 'import os'"
+    expect:
+      decision: ask
+
+  # --- AND/OR operator splitting ---
+
+  - name: AND with all allowed segments
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "echo hello && echo world"
+    expect:
+      decision: allow
+
+  - name: AND with denied segment blocks
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "echo hello && rm -rf /"
+    expect:
+      decision: deny
+
+  - name: OR with denied segment blocks
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "cat file.txt || rm -rf /"
+    expect:
+      decision: deny
+
+  # --- Semicolon splitting ---
+
+  - name: semicolon with all allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "echo hello; echo world"
+    expect:
+      decision: allow
+
+  - name: semicolon with denied segment blocks
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "echo hello; rm -rf /"
+    expect:
+      decision: deny
+
+  # --- Mixed operators ---
+
+  - name: pipe plus AND with denied segment
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "cat file.txt | grep hello && rm -rf /"
+    expect:
+      decision: deny
+
+  - name: pipe plus AND all allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "cat file.txt | grep hello && echo done"
+    expect:
+      decision: allow
+
+  # --- Quoted pipes are NOT split ---
+
+  - name: quoted pipe is not a separator
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "echo 'hello | world'"
+    expect:
+      decision: allow
+
+  - name: double-quoted pipe is not a separator
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "echo \"hello | world\""
+    expect:
+      decision: allow

