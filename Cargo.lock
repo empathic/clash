@@ -201,6 +201,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "clester"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "claude_settings",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

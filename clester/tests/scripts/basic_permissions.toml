@@ -1,0 +1,63 @@
+[meta]
+name = "basic permission enforcement"
+description = "Test that allow/deny rules produce the correct decisions"
+
+[settings.user]
+permissions.allow = ["Bash(git:*)", "Read"]
+permissions.deny = ["Read(.env)", "Bash(rm -rf:*)"]
+
+[[step]]
+name = "git status should be allowed"
+hook = "pre-tool-use"
+tool_name = "Bash"
+tool_input = { command = "git status" }
+
+[step.expect]
+decision = "allow"
+reason_contains = "explicitly allowed"
+
+[[step]]
+name = "git diff should be allowed (prefix match)"
+hook = "pre-tool-use"
+tool_name = "Bash"
+tool_input = { command = "git diff --cached" }
+
+[step.expect]
+decision = "allow"
+
+[[step]]
+name = "read any file should be allowed"
+hook = "pre-tool-use"
+tool_name = "Read"
+tool_input = { file_path = "/tmp/somefile.txt" }
+
+[step.expect]
+decision = "allow"
+
+[[step]]
+name = "read .env should be denied (deny overrides allow)"
+hook = "pre-tool-use"
+tool_name = "Read"
+tool_input = { file_path = ".env" }
+
+[step.expect]
+decision = "deny"
+reason_contains = "explicitly denied"
+
+[[step]]
+name = "rm -rf should be denied"
+hook = "pre-tool-use"
+tool_name = "Bash"
+tool_input = { command = "rm -rf /" }
+
+[step.expect]
+decision = "deny"
+
+[[step]]
+name = "unconfigured command should ask"
+hook = "pre-tool-use"
+tool_name = "Bash"
+tool_input = { command = "curl https://example.com" }
+
+[step.expect]
+decision = "ask"

@@ -1,0 +1,34 @@
+[meta]
+name = "empty permissions"
+description = "With no permissions configured, everything should default to ask"
+
+[settings.user]
+permissions.allow = []
+permissions.deny = []
+
+[[step]]
+name = "bash should ask"
+hook = "pre-tool-use"
+tool_name = "Bash"
+tool_input = { command = "ls" }
+
+[step.expect]
+decision = "ask"
+
+[[step]]
+name = "read should ask"
+hook = "pre-tool-use"
+tool_name = "Read"
+tool_input = { file_path = "/tmp/file.txt" }
+
+[step.expect]
+decision = "ask"
+
+[[step]]
+name = "write should ask"
+hook = "pre-tool-use"
+tool_name = "Write"
+tool_input = { file_path = "/tmp/file.txt", content = "test" }
+
+[step.expect]
+decision = "ask"

@@ -90,7 +90,8 @@ Example permission configuration:
 clash/
 ├── clash/              # Main CLI binary
 ├── clash-plugin/       # Claude Code plugin
-└── claude_settings/    # Settings library (also usable standalone)
+├── claude_settings/    # Settings library (also usable standalone)
+└── clester/            # End-to-end testing tool
 ```
 
 ## Library usage
@@ -115,6 +116,81 @@ let new_settings = Settings::new()
     .with_permissions(PermissionSet::new().allow("Bash(git:*)"));
 manager.write(SettingsLevel::Project, &new_settings)?;
 ```
+
+## Testing with clester
+
+`clester` (claude tester) is a headless, deterministic end-to-end testing tool for clash. It simulates Claude Code's hook invocations by feeding scripted inputs to the clash binary and asserting on outputs.
+
+### Running tests
+
+```bash
+# Run all end-to-end tests
+just clester
+
+# Run with verbose output (shows clash stdout/stderr)
+just clester -v
+
+# Run a single test script
+just clester-run clester/tests/scripts/basic_permissions.toml
+
+# Validate test scripts without executing
+just clester-validate
+
+# Full CI: unit tests + clippy + end-to-end tests
+just ci
+```
+
+### Writing test scripts
+
+Test scripts are TOML files that define:
+
+1. **Settings** - Permission configurations at user/project levels
+2. **Steps** - Hook invocations with expected outcomes
+
+Example test script:
+
+```toml
+[meta]
+name = "basic permission enforcement"
+description = "Test that allow/deny rules work"
+
+[settings.user]
+permissions.allow = ["Bash(git:*)"]
+permissions.deny = ["Read(.env)"]
+
+[[step]]
+name = "git status should be allowed"
+hook = "pre-tool-use"
+tool_name = "Bash"
+tool_input = { command = "git status" }
+
+[step.expect]
+decision = "allow"
+reason_contains = "explicitly allowed"
+
+[[step]]
+name = "read .env should be denied"
+hook = "pre-tool-use"
+tool_name = "Read"
+tool_input = { file_path = ".env" }
+
+[step.expect]
+decision = "deny"
+```
+
+### Test script reference
+
+**Settings levels**: `settings.user`, `settings.project`, `settings.project_local`
+
+**Hook types**: `pre-tool-use`, `post-tool-use`, `permission-request`, `notification`
+
+**Tool types**: `Bash`, `Read`, `Write`, `Edit`
+
+**Assertions**:
+- `decision` - Expected permission decision: `"allow"`, `"deny"`, or `"ask"`
+- `exit_code` - Expected process exit code (default: 0)
+- `no_decision` - Expect no hook-specific output (for informational hooks)
+- `reason_contains` - Expected substring in the decision reason
 
 ## License
 

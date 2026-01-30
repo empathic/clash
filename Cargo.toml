@@ -1,5 +1,5 @@
 [workspace]
-members = ["clash", "claude_settings"]
+members = ["clash", "claude_settings", "clester"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -30,3 +30,4 @@ claude_settings = { path = "claude_settings" }
 
 # Dev dependencies
 tempfile = "3"
+toml = "0.8"

@@ -1,0 +1,34 @@
+[meta]
+name = "permission request handling"
+description = "Test that permission-request hooks produce correct decisions"
+
+[settings.user]
+permissions.allow = ["Bash(git:*)"]
+permissions.deny = ["Bash(rm:*)"]
+
+[[step]]
+name = "permission request for allowed tool"
+hook = "permission-request"
+tool_name = "Bash"
+tool_input = { command = "git status" }
+
+[step.expect]
+decision = "allow"
+
+[[step]]
+name = "permission request for denied tool"
+hook = "permission-request"
+tool_name = "Bash"
+tool_input = { command = "rm -rf /" }
+
+[step.expect]
+decision = "deny"
+
+[[step]]
+name = "permission request for unconfigured tool"
+hook = "permission-request"
+tool_name = "Bash"
+tool_input = { command = "curl https://example.com" }
+
+[step.expect]
+decision = "ask"

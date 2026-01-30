@@ -20,3 +20,27 @@ check:
     cargo fmt
     cargo test
     cargo clippy
+
+# Run clester end-to-end tests against clash
+clester *ARGS:
+    cargo build --bins
+    ./target/debug/clester run clester/tests/scripts/ {{ARGS}}
+
+# Run clester with verbose output
+clester-verbose:
+    just clester -v
+
+# Validate clester test scripts without executing
+clester-validate:
+    cargo build --bin clester
+    ./target/debug/clester validate clester/tests/scripts/
+
+# Run a single clester test script
+clester-run SCRIPT:
+    cargo build --bins
+    ./target/debug/clester run {{SCRIPT}}
+
+# Full CI check: unit tests + end-to-end tests
+ci:
+    just check
+    just clester
