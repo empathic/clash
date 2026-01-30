@@ -20,7 +20,7 @@ steps:
       command: git status
     expect:
       decision: allow
-      reason_contains: explicitly allowed
+      reason_contains: policy
 
   - name: git diff should be allowed (prefix match)
     hook: pre-tool-use
@@ -45,7 +45,7 @@ steps:
       file_path: ".env"
     expect:
       decision: deny
-      reason_contains: explicitly denied
+      reason_contains: policy
 
   - name: rm -rf should be denied
     hook: pre-tool-use

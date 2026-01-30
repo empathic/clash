@@ -16,7 +16,8 @@ mod notifications;
 mod permissions;
 mod settings;
 
-use hooks::{HookOutput, NotificationHookInput, ToolUseHookInput, exit_code};
+use claude_settings::PermissionRule;
+use hooks::{HookOutput, HookSpecificOutput, NotificationHookInput, ToolUseHookInput, exit_code};
 use permissions::check_permission;
 
 #[derive(Parser, Debug)]
@@ -117,14 +118,25 @@ fn handle_permission_request(
     input: &ToolUseHookInput,
     settings: &settings::ClashSettings,
 ) -> anyhow::Result<HookOutput> {
-    // Use the same permission checking logic, but return PermissionRequest responses
     let pre_tool_result = check_permission(input, settings)?;
 
-    // Convert PreToolUse decision to PermissionRequest decision
-    // If PreToolUse would allow, approve the permission request
-    // If PreToolUse would deny, deny the permission request
-    // If PreToolUse would ask, don't respond (let user decide)
-    Ok(pre_tool_result)
+    // Convert PreToolUse decision to PermissionRequest format.
+    // Claude Code validates that hookEventName matches the event type.
+    Ok(match pre_tool_result.hook_specific_output {
+        Some(HookSpecificOutput::PreToolUse(ref pre)) => match pre.permission_decision {
+            Some(PermissionRule::Allow) => HookOutput::approve_permission(None),
+            Some(PermissionRule::Deny) => {
+                let reason = pre
+                    .permission_decision_reason
+                    .clone()
+                    .unwrap_or_else(|| "denied by policy".into());
+                HookOutput::deny_permission(reason, false)
+            }
+            // Ask or no decision: don't respond, let the user decide
+            _ => HookOutput::continue_execution(),
+        },
+        _ => pre_tool_result,
+    })
 }
 
 #[derive(Subcommand, Debug)]

@@ -33,4 +33,4 @@ steps:
     tool_input:
       command: "curl https://example.com"
     expect:
-      decision: ask
+      no_decision: true

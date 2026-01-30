@@ -1,33 +1,21 @@
-use claude_settings::PermissionRule;
 use claude_settings::policy::{Effect, Verb};
 use tracing::{Level, info, instrument, warn};
 
 use crate::hooks::{HookOutput, ToolInput, ToolUseHookInput};
-use crate::settings::{ClashSettings, EngineMode};
+use crate::settings::ClashSettings;
 
 /// Check if a tool invocation should be allowed, denied, or require user confirmation.
-#[instrument(level=Level::INFO)]
+#[instrument(level=Level::DEBUG, ret)]
 pub fn check_permission(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
 ) -> anyhow::Result<HookOutput> {
     // TODO(eliot): re-enable mac notifications
-    match settings.engine_mode {
-        EngineMode::Policy => check_permission_policy(input, settings),
-        EngineMode::Legacy => check_permission_legacy(input, settings),
-        EngineMode::Auto => {
-            // If a policy document is loaded, use the policy engine.
-            // Otherwise, fall back to legacy.
-            if settings.policy.is_some() {
-                check_permission_policy(input, settings)
-            } else {
-                check_permission_legacy(input, settings)
-            }
-        }
-    }
+    check_permission_policy(input, settings)
 }
 
-/// Check permission using the new policy engine (entity, verb, noun triples).
+/// Check permission using the policy engine (entity, verb, noun triples).
+#[instrument(level=Level::DEBUG, ret)]
 fn check_permission_policy(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
@@ -100,50 +88,14 @@ fn extract_noun(input: &ToolUseHookInput) -> String {
     }
 }
 
-/// Check permission using the legacy Claude Code PermissionSet.
-fn check_permission_legacy(
-    input: &ToolUseHookInput,
-    settings: &ClashSettings,
-) -> anyhow::Result<HookOutput> {
-    match &settings.from_claude {
-        Some(claude) => Ok(check_permission_claude(input, claude)),
-        None => Ok(HookOutput::ask(Some(
-            "clash currently not configured".into(),
-        ))),
-    }
-}
-
-#[instrument(level=Level::INFO)]
-pub fn check_permission_claude(
-    input: &ToolUseHookInput,
-    settings: &claude_settings::Settings,
-) -> HookOutput {
-    let perms = &settings.permissions;
-    fn decide(tool: &str, arg: Option<&str>, perms: &claude_settings::PermissionSet) -> HookOutput {
-        match perms.check(tool, arg) {
-            PermissionRule::Allow => HookOutput::allow(Some("explicitly allowed".into())),
-            PermissionRule::Deny => HookOutput::deny("explicitly denied".into()),
-            _ => HookOutput::ask(Some("no applicable setting".into())),
-        }
-    }
-
-    match input.typed_tool_input() {
-        ToolInput::Bash(bash_input) => decide("Bash", Some(&bash_input.command), perms),
-        ToolInput::Write(write_input) => decide("Write", Some(&write_input.file_path), perms),
-        ToolInput::Edit(edit_input) => decide("Edit", Some(&edit_input.file_path), perms),
-        ToolInput::Read(read_input) => decide("Read", Some(&read_input.file_path), perms),
-        ToolInput::Unknown(value) => {
-            warn!("value" = ?value, "Unknown tool type");
-            HookOutput::ask(Some("Unknown tool type".into()))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hooks::ToolUseHookInput;
     use anyhow::Result;
+    use claude_settings::policy::parse::desugar_legacy;
+    use claude_settings::policy::parse::parse_yaml;
+    use claude_settings::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
     use serde_json::json;
 
     fn bash_input(command: &str) -> ToolUseHookInput {
@@ -161,75 +113,77 @@ mod tests {
         }
     }
 
+    fn settings_with_policy(yaml: &str) -> ClashSettings {
+        let doc = parse_yaml(yaml).expect("valid YAML");
+        ClashSettings {
+            engine_mode: crate::settings::EngineMode::Policy,
+            policy: Some(doc),
+        }
+    }
+
+    /// Build ClashSettings from legacy permission strings, compiled into a PolicyDocument.
+    fn settings_with_legacy_perms(
+        allow: Vec<&str>,
+        deny: Vec<&str>,
+        ask: Vec<&str>,
+    ) -> ClashSettings {
+        let legacy = LegacyPermissions {
+            allow: allow.into_iter().map(String::from).collect(),
+            deny: deny.into_iter().map(String::from).collect(),
+            ask: ask.into_iter().map(String::from).collect(),
+        };
+        let statements = desugar_legacy(&legacy);
+        let doc = PolicyDocument {
+            policy: PolicyConfig::default(),
+            permissions: None,
+            statements,
+        };
+        ClashSettings {
+            engine_mode: crate::settings::EngineMode::Auto,
+            policy: Some(doc),
+        }
+    }
+
+    // --- Legacy permissions compiled to policy ---
+
     #[test]
     fn test_allow_npm_exact() -> Result<()> {
-        let settings: ClashSettings = serde_json::from_value(json!({"from_claude": {
-            "permissions": {
-                "allow": ["Bash(npm run test)"],
-            }
-        }}))
-        .unwrap();
+        let settings = settings_with_legacy_perms(vec!["Bash(npm run test)"], vec![], vec![]);
         assert_eq!(
             check_permission(&bash_input("npm run test"), &settings)?,
-            HookOutput::allow(Some("explicitly allowed".into())),
+            HookOutput::allow(Some("policy: allowed".into())),
         );
         Ok(())
     }
     #[test]
     fn test_allow_npm_glob() -> Result<()> {
-        let settings: ClashSettings = serde_json::from_value(json!({"from_claude": {
-            "permissions": {
-                "allow": ["Bash(npm run test *)"],
-            }
-        }}))
-        .unwrap();
+        let settings = settings_with_legacy_perms(vec!["Bash(npm run test *)"], vec![], vec![]);
         assert_eq!(
             check_permission(&bash_input("npm run test any"), &settings)?,
-            HookOutput::allow(Some("explicitly allowed".into())),
+            HookOutput::allow(Some("policy: allowed".into())),
         );
         Ok(())
     }
     #[test]
     fn test_allow_empty() -> Result<()> {
-        let settings: ClashSettings = serde_json::from_value(json!({"from_claude": {
-            "permissions": {
-                "allow": [],
-            }
-        }}))
-        .unwrap();
+        let settings = settings_with_legacy_perms(vec![], vec![], vec![]);
         assert_eq!(
             check_permission(&bash_input("npm run test any"), &settings)?,
-            HookOutput::ask(Some("no applicable setting".into())),
+            HookOutput::ask(Some("policy: ask".into())),
         );
         Ok(())
     }
     #[test]
     fn test_deny_glob() -> Result<()> {
-        let settings: ClashSettings = serde_json::from_value(json!({"from_claude": {
-            "permissions": {
-                "allow": [],
-                "deny": ["Bash(*)"],
-            }
-        }}))
-        .unwrap();
+        let settings = settings_with_legacy_perms(vec![], vec!["Bash(*)"], vec![]);
         assert_eq!(
             check_permission(&bash_input("npm run test any"), &settings)?,
-            HookOutput::deny("explicitly denied".into()),
+            HookOutput::deny("policy: denied".into()),
         );
         Ok(())
     }
 
     // --- Policy engine tests ---
-
-    fn settings_with_policy(yaml: &str) -> ClashSettings {
-        use claude_settings::policy::parse::parse_yaml;
-        let doc = parse_yaml(yaml).expect("valid YAML");
-        ClashSettings {
-            engine_mode: crate::settings::EngineMode::Policy,
-            from_claude: None,
-            policy: Some(doc),
-        }
-    }
 
     #[test]
     fn test_policy_allow_bash() -> Result<()> {
@@ -280,11 +234,9 @@ rules:
 
     #[test]
     fn test_auto_mode_uses_policy_when_available() -> Result<()> {
-        use claude_settings::policy::parse::parse_yaml;
         let doc = parse_yaml("rules:\n  - allow * bash echo *\n").unwrap();
         let settings = ClashSettings {
             engine_mode: crate::settings::EngineMode::Auto,
-            from_claude: None,
             policy: Some(doc),
         };
         let result = check_permission(&bash_input("echo hello"), &settings)?;
@@ -293,20 +245,12 @@ rules:
     }
 
     #[test]
-    fn test_auto_mode_falls_back_to_legacy() -> Result<()> {
-        let settings: ClashSettings = serde_json::from_value(json!({
-            "engine_mode": "auto",
-            "from_claude": {
-                "permissions": {
-                    "allow": ["Bash(npm run test)"],
-                }
-            }
-        }))
-        .unwrap();
-        // No policy loaded → should fall back to legacy
+    fn test_auto_mode_legacy_compiled_to_policy() -> Result<()> {
+        // Legacy permissions compiled into a policy document
+        let settings = settings_with_legacy_perms(vec!["Bash(npm run test)"], vec![], vec![]);
         assert_eq!(
             check_permission(&bash_input("npm run test"), &settings)?,
-            HookOutput::allow(Some("explicitly allowed".into())),
+            HookOutput::allow(Some("policy: allowed".into())),
         );
         Ok(())
     }

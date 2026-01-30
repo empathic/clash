@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use claude_settings::ClaudeSettings;
-use claude_settings::policy::PolicyDocument;
 use claude_settings::policy::compile::CompiledPolicy;
+use claude_settings::policy::parse::desugar_legacy;
+use claude_settings::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -27,10 +28,7 @@ pub struct ClashSettings {
     #[serde(default)]
     pub engine_mode: EngineMode,
 
-    /// Legacy Claude Code settings (loaded from Claude's settings hierarchy).
-    pub(crate) from_claude: Option<claude_settings::Settings>,
-
-    /// Parsed policy document (not serialized — loaded at runtime from policy.yaml).
+    /// Parsed policy document (not serialized — loaded at runtime from policy.yaml or compiled from Claude settings).
     #[serde(skip)]
     pub(crate) policy: Option<PolicyDocument>,
 }
@@ -49,24 +47,74 @@ impl ClashSettings {
     }
 
     /// Try to load and compile the policy document from ~/.clash/policy.yaml.
-    fn load_policy(&mut self) {
+    fn load_policy_file(&self) -> Option<PolicyDocument> {
         let path = Self::policy_file();
         if path.exists() {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => match claude_settings::policy::parse::parse_yaml(&contents) {
                     Ok(doc) => {
                         info!(path = %path.display(), "Loaded policy document");
-                        self.policy = Some(doc);
+                        Some(doc)
                     }
                     Err(e) => {
                         warn!(path = %path.display(), error = %e, "Failed to parse policy.yaml");
+                        None
                     }
                 },
                 Err(e) => {
                     warn!(path = %path.display(), error = %e, "Failed to read policy.yaml");
+                    None
                 }
             }
+        } else {
+            None
         }
+    }
+
+    /// Compile Claude Code's legacy permissions into a PolicyDocument.
+    ///
+    /// Reads Claude settings via ClaudeSettings::new().effective(), converts the
+    /// PermissionSet to LegacyPermissions, and desugars into policy Statements.
+    fn compile_claude_to_policy() -> Option<PolicyDocument> {
+        let effective = match ClaudeSettings::new().effective() {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "Failed to load Claude Code settings for policy compilation");
+                return None;
+            }
+        };
+
+        let perms = effective.permissions.to_permissions();
+        let legacy = LegacyPermissions {
+            allow: perms.allow,
+            deny: perms.deny,
+            ask: perms.ask,
+        };
+
+        let statements = desugar_legacy(&legacy);
+        if statements.is_empty() {
+            info!("No legacy Claude permissions found; compiled policy has no statements");
+        }
+
+        Some(PolicyDocument {
+            policy: PolicyConfig::default(),
+            permissions: None,
+            statements,
+        })
+    }
+
+    /// Resolve the policy based on engine_mode:
+    /// - Policy: load only from policy.yaml
+    /// - Legacy: compile Claude settings into a PolicyDocument
+    /// - Auto: use policy.yaml if it exists, else compile Claude settings
+    fn resolve_policy(&mut self) {
+        self.policy = match self.engine_mode {
+            EngineMode::Policy => self.load_policy_file(),
+            EngineMode::Legacy => Self::compile_claude_to_policy(),
+            EngineMode::Auto => self
+                .load_policy_file()
+                .or_else(Self::compile_claude_to_policy),
+        };
     }
 
     /// Compile the loaded policy document into a CompiledPolicy for evaluation.
@@ -93,17 +141,13 @@ impl ClashSettings {
     pub fn load() -> Result<Self> {
         let mut loaded: Self =
             serde_json::from_str(&std::fs::read_to_string(Self::settings_file())?)?;
-        loaded.from_claude = ClaudeSettings::new().effective().ok();
-        loaded.load_policy();
+        loaded.resolve_policy();
         Ok(loaded)
     }
 
     pub fn create() -> Result<Self> {
-        let mut this = Self {
-            from_claude: Some(ClaudeSettings::new().effective()?),
-            ..Default::default()
-        };
-        this.load_policy();
+        let mut this = Self::default();
+        this.resolve_policy();
         this.save()?;
         Ok(this)
     }
