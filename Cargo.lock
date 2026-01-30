@@ -178,6 +178,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_regex",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]
@@ -188,11 +189,28 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "figment",
+ "pest",
+ "pest_derive",
  "regex",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tempfile",
  "thiserror",
+ "toml",
+]
+
+[[package]]
+name = "clester"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "claude_settings",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
 ]
 
 [[package]]

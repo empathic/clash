@@ -1,0 +1,68 @@
+meta:
+  name: all tool types
+  description: Test permission checking for Bash, Read, Write, and Edit tools
+
+settings:
+  user:
+    permissions:
+      allow:
+        - "Bash(git:*)"
+        - Read
+        - "Write(/tmp/*)"
+      deny:
+        - "Edit(.env)"
+
+steps:
+  - name: bash allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: read allowed (blanket)
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /home/user/code/main.rs
+    expect:
+      decision: allow
+
+  - name: write to /tmp allowed
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/test.txt
+      content: hello
+    expect:
+      decision: allow
+
+  - name: write elsewhere asks
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /home/user/important.txt
+      content: hello
+    expect:
+      decision: ask
+
+  - name: edit .env denied
+    hook: pre-tool-use
+    tool_name: Edit
+    tool_input:
+      file_path: ".env"
+      old_string: KEY=old
+      new_string: KEY=new
+    expect:
+      decision: deny
+
+  - name: edit other file asks
+    hook: pre-tool-use
+    tool_name: Edit
+    tool_input:
+      file_path: main.rs
+      old_string: old
+      new_string: new
+    expect:
+      decision: ask
