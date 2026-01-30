@@ -76,7 +76,7 @@ impl CompiledPolicy {
         }
 
         // Then add explicit statements (these take precedence via evaluation order,
-        // but since we use forbid > ask > permit, order within the same effect
+        // but since we use deny > ask > allow, order within the same effect
         // doesn't matter)
         for stmt in &doc.statements {
             statements.push(CompiledStatement::compile(stmt)?);
@@ -91,26 +91,26 @@ impl CompiledPolicy {
     /// Evaluate a request against this policy.
     ///
     /// Returns the resulting effect after applying all matching statements
-    /// with precedence: forbid > ask > permit > delegate.
+    /// with precedence: deny > ask > allow > delegate.
     ///
     /// If no statement matches, returns the configured default effect.
     pub fn evaluate(&self, entity: &str, verb: &Verb, noun: &str) -> PolicyDecision {
-        let mut has_permit = false;
+        let mut has_allow = false;
         let mut has_ask = false;
-        let mut has_forbid = false;
+        let mut has_deny = false;
         let mut has_delegate = false;
 
-        let mut forbid_reason: Option<&str> = None;
+        let mut deny_reason: Option<&str> = None;
         let mut ask_reason: Option<&str> = None;
         let mut delegate_config: Option<&DelegateConfig> = None;
 
         for stmt in &self.statements {
             if stmt.matches(entity, verb, noun) {
                 match stmt.effect {
-                    Effect::Forbid => {
-                        has_forbid = true;
-                        if forbid_reason.is_none() {
-                            forbid_reason = stmt.reason.as_deref();
+                    Effect::Deny => {
+                        has_deny = true;
+                        if deny_reason.is_none() {
+                            deny_reason = stmt.reason.as_deref();
                         }
                     }
                     Effect::Ask => {
@@ -119,8 +119,8 @@ impl CompiledPolicy {
                             ask_reason = stmt.reason.as_deref();
                         }
                     }
-                    Effect::Permit => {
-                        has_permit = true;
+                    Effect::Allow => {
+                        has_allow = true;
                     }
                     Effect::Delegate => {
                         has_delegate = true;
@@ -132,11 +132,11 @@ impl CompiledPolicy {
             }
         }
 
-        // Precedence: forbid > ask > permit > delegate
-        if has_forbid {
+        // Precedence: deny > ask > allow > delegate
+        if has_deny {
             return PolicyDecision {
-                effect: Effect::Forbid,
-                reason: forbid_reason.map(|s| s.to_string()),
+                effect: Effect::Deny,
+                reason: deny_reason.map(|s| s.to_string()),
                 delegate: None,
             };
         }
@@ -147,9 +147,9 @@ impl CompiledPolicy {
                 delegate: None,
             };
         }
-        if has_permit {
+        if has_allow {
             return PolicyDecision {
-                effect: Effect::Permit,
+                effect: Effect::Allow,
                 reason: None,
                 delegate: None,
             };
@@ -296,45 +296,45 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_permit() {
-        let policy = compile_yaml("rules:\n  - permit agent:claude bash git *\n");
+    fn test_simple_allow() {
+        let policy = compile_yaml("rules:\n  - allow agent:claude bash git *\n");
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "git status");
-        assert_eq!(decision.effect, Effect::Permit);
+        assert_eq!(decision.effect, Effect::Allow);
 
         let decision = policy.evaluate("agent:codex", &Verb::Execute, "git status");
         assert_eq!(decision.effect, Effect::Ask); // default
     }
 
     #[test]
-    fn test_forbid_overrides_permit() {
+    fn test_deny_overrides_allow() {
         let policy = compile_yaml(
             "\
 rules:
-  - permit * read *
-  - forbid * read .env
+  - allow * read *
+  - deny * read .env
 ",
         );
 
         let decision = policy.evaluate("agent:claude", &Verb::Read, "src/main.rs");
-        assert_eq!(decision.effect, Effect::Permit);
+        assert_eq!(decision.effect, Effect::Allow);
 
         let decision = policy.evaluate("agent:claude", &Verb::Read, ".env");
-        assert_eq!(decision.effect, Effect::Forbid);
+        assert_eq!(decision.effect, Effect::Deny);
     }
 
     #[test]
-    fn test_ask_overrides_permit() {
+    fn test_ask_overrides_allow() {
         let policy = compile_yaml(
             "\
 rules:
-  - permit agent:* bash *
+  - allow agent:* bash *
   - ask agent:* bash rm *
 ",
         );
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "ls");
-        assert_eq!(decision.effect, Effect::Permit);
+        assert_eq!(decision.effect, Effect::Allow);
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "rm -rf /tmp");
         assert_eq!(decision.effect, Effect::Ask);
@@ -345,43 +345,43 @@ rules:
         let policy = compile_yaml(
             "\
 rules:
-  - permit * read ~/*
-  - forbid !user read ~/config/*
+  - allow * read ~/*
+  - deny !user read ~/config/*
 ",
         );
 
-        // Agent reading config → forbidden
+        // Agent reading config → denied
         let decision = policy.evaluate("agent:claude", &Verb::Read, "~/config/test.json");
-        assert_eq!(decision.effect, Effect::Forbid);
+        assert_eq!(decision.effect, Effect::Deny);
 
-        // User reading config → permitted (forbid doesn't match user)
+        // User reading config → allowed (deny doesn't match user)
         let decision = policy.evaluate("user", &Verb::Read, "~/config/test.json");
-        assert_eq!(decision.effect, Effect::Permit);
+        assert_eq!(decision.effect, Effect::Allow);
 
-        // Agent reading non-config → permitted
+        // Agent reading non-config → allowed
         let decision = policy.evaluate("agent:claude", &Verb::Read, "~/docs/readme.md");
-        assert_eq!(decision.effect, Effect::Permit);
+        assert_eq!(decision.effect, Effect::Allow);
     }
 
     #[test]
     fn test_negated_noun() {
-        let policy = compile_yaml("rules:\n  - forbid agent:* write !~/code/proj/**\n");
+        let policy = compile_yaml("rules:\n  - deny agent:* write !~/code/proj/**\n");
 
-        // Writing in project → not forbidden (noun negation doesn't match)
+        // Writing in project → not denied (noun negation doesn't match)
         let decision = policy.evaluate("agent:claude", &Verb::Write, "~/code/proj/src/main.rs");
         assert_eq!(decision.effect, Effect::Ask); // default, not matched
 
-        // Writing outside project → forbidden
+        // Writing outside project → denied
         let decision = policy.evaluate("agent:claude", &Verb::Write, "/tmp/evil.sh");
-        assert_eq!(decision.effect, Effect::Forbid);
+        assert_eq!(decision.effect, Effect::Deny);
     }
 
     #[test]
     fn test_configurable_default() {
-        let policy = compile_yaml("default: forbid\n");
+        let policy = compile_yaml("default: deny\n");
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "anything");
-        assert_eq!(decision.effect, Effect::Forbid);
+        assert_eq!(decision.effect, Effect::Deny);
     }
 
     #[test]
@@ -400,13 +400,13 @@ permissions:
         );
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "git status");
-        assert_eq!(decision.effect, Effect::Permit);
+        assert_eq!(decision.effect, Effect::Allow);
 
         let decision = policy.evaluate("agent:claude", &Verb::Read, "src/main.rs");
-        assert_eq!(decision.effect, Effect::Permit);
+        assert_eq!(decision.effect, Effect::Allow);
 
         let decision = policy.evaluate("agent:claude", &Verb::Read, ".env");
-        assert_eq!(decision.effect, Effect::Forbid);
+        assert_eq!(decision.effect, Effect::Deny);
 
         let decision = policy.evaluate("agent:claude", &Verb::Write, "output.txt");
         assert_eq!(decision.effect, Effect::Ask);
@@ -414,20 +414,20 @@ permissions:
 
     #[test]
     fn test_verb_wildcard() {
-        let policy = compile_yaml("rules:\n  - forbid agent:untrusted * ~/sensitive/**\n");
+        let policy = compile_yaml("rules:\n  - deny agent:untrusted * ~/sensitive/**\n");
 
         let decision = policy.evaluate("agent:untrusted", &Verb::Read, "~/sensitive/secrets.json");
-        assert_eq!(decision.effect, Effect::Forbid);
+        assert_eq!(decision.effect, Effect::Deny);
 
         let decision = policy.evaluate("agent:untrusted", &Verb::Write, "~/sensitive/secrets.json");
-        assert_eq!(decision.effect, Effect::Forbid);
+        assert_eq!(decision.effect, Effect::Deny);
 
         let decision = policy.evaluate(
             "agent:untrusted",
             &Verb::Execute,
             "~/sensitive/secrets.json",
         );
-        assert_eq!(decision.effect, Effect::Forbid);
+        assert_eq!(decision.effect, Effect::Deny);
 
         // Different entity → not matched
         let decision = policy.evaluate("agent:claude", &Verb::Read, "~/sensitive/secrets.json");
@@ -442,28 +442,28 @@ permissions:
   allow:
     - \"Bash(git:*)\"
 rules:
-  - forbid * bash git push *
+  - deny * bash git push *
 ",
         );
 
         // git status → allowed by legacy
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "git status");
-        assert_eq!(decision.effect, Effect::Permit);
+        assert_eq!(decision.effect, Effect::Allow);
 
-        // git push → forbidden by explicit rule (forbid > permit)
+        // git push → denied by explicit rule (deny > allow)
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "git push origin main");
-        assert_eq!(decision.effect, Effect::Forbid);
+        assert_eq!(decision.effect, Effect::Deny);
     }
 
     #[test]
     fn test_entity_type_hierarchy() {
-        let policy = compile_yaml("rules:\n  - permit agent:* read *\n");
+        let policy = compile_yaml("rules:\n  - allow agent:* read *\n");
 
         let decision = policy.evaluate("agent:claude", &Verb::Read, "test.txt");
-        assert_eq!(decision.effect, Effect::Permit);
+        assert_eq!(decision.effect, Effect::Allow);
 
         let decision = policy.evaluate("agent:codex", &Verb::Read, "test.txt");
-        assert_eq!(decision.effect, Effect::Permit);
+        assert_eq!(decision.effect, Effect::Allow);
 
         // "user" is not an agent
         let decision = policy.evaluate("user", &Verb::Read, "test.txt");

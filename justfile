@@ -44,3 +44,6 @@ clester-run SCRIPT:
 ci:
     just check
     just clester
+
+clash *ARGS:
+    cargo run -p clash {{ARGS}}

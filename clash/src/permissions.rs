@@ -72,12 +72,10 @@ fn check_permission_policy(
     );
 
     Ok(match decision.effect {
-        Effect::Permit => HookOutput::allow(decision.reason.or(Some("policy: permitted".into()))),
-        Effect::Forbid => HookOutput::deny(
-            decision
-                .reason
-                .unwrap_or_else(|| "policy: forbidden".into()),
-        ),
+        Effect::Allow => HookOutput::allow(decision.reason.or(Some("policy: allowed".into()))),
+        Effect::Deny => {
+            HookOutput::deny(decision.reason.unwrap_or_else(|| "policy: denied".into()))
+        }
         Effect::Ask => HookOutput::ask(decision.reason.or(Some("policy: ask".into()))),
         Effect::Delegate => {
             // Delegation is not yet implemented; fall back to ask.
@@ -234,25 +232,25 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_permit_bash() -> Result<()> {
-        let settings = settings_with_policy("rules:\n  - permit * bash git *\n");
+    fn test_policy_allow_bash() -> Result<()> {
+        let settings = settings_with_policy("rules:\n  - allow * bash git *\n");
         let result = check_permission(&bash_input("git status"), &settings)?;
-        assert_eq!(result, HookOutput::allow(Some("policy: permitted".into())),);
+        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())),);
         Ok(())
     }
 
     #[test]
-    fn test_policy_forbid_bash() -> Result<()> {
-        let settings = settings_with_policy("rules:\n  - forbid * bash rm *\n");
+    fn test_policy_deny_bash() -> Result<()> {
+        let settings = settings_with_policy("rules:\n  - deny * bash rm *\n");
         let result = check_permission(&bash_input("rm -rf /"), &settings)?;
-        assert_eq!(result, HookOutput::deny("policy: forbidden".into()),);
+        assert_eq!(result, HookOutput::deny("policy: denied".into()),);
         Ok(())
     }
 
     #[test]
     fn test_policy_ask_default() -> Result<()> {
-        let settings = settings_with_policy("rules:\n  - permit user bash *\n");
-        // entity is "agent" by default, so this permit for "user" won't match
+        let settings = settings_with_policy("rules:\n  - allow user bash *\n");
+        // entity is "agent" by default, so this allow for "user" won't match
         let result = check_permission(&bash_input("ls"), &settings)?;
         assert_eq!(result, HookOutput::ask(Some("policy: ask".into())),);
         Ok(())
@@ -260,37 +258,37 @@ mod tests {
 
     #[test]
     fn test_policy_read_file() -> Result<()> {
-        let settings = settings_with_policy("rules:\n  - permit * read *.rs\n");
+        let settings = settings_with_policy("rules:\n  - allow * read *.rs\n");
         let result = check_permission(&read_input("src/main.rs"), &settings)?;
-        assert_eq!(result, HookOutput::allow(Some("policy: permitted".into())),);
+        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())),);
         Ok(())
     }
 
     #[test]
-    fn test_policy_forbid_overrides_permit() -> Result<()> {
+    fn test_policy_deny_overrides_allow() -> Result<()> {
         let settings = settings_with_policy(
             "\
 rules:
-  - permit * read *
-  - forbid * read .env
+  - allow * read *
+  - deny * read .env
 ",
         );
         let result = check_permission(&read_input(".env"), &settings)?;
-        assert_eq!(result, HookOutput::deny("policy: forbidden".into()),);
+        assert_eq!(result, HookOutput::deny("policy: denied".into()),);
         Ok(())
     }
 
     #[test]
     fn test_auto_mode_uses_policy_when_available() -> Result<()> {
         use claude_settings::policy::parse::parse_yaml;
-        let doc = parse_yaml("rules:\n  - permit * bash echo *\n").unwrap();
+        let doc = parse_yaml("rules:\n  - allow * bash echo *\n").unwrap();
         let settings = ClashSettings {
             engine_mode: crate::settings::EngineMode::Auto,
             from_claude: None,
             policy: Some(doc),
         };
         let result = check_permission(&bash_input("echo hello"), &settings)?;
-        assert_eq!(result, HookOutput::allow(Some("policy: permitted".into())),);
+        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())),);
         Ok(())
     }
 

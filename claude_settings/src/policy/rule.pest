@@ -1,11 +1,11 @@
 // Grammar for policy rule strings.
 //
 // Format: effect entity tool pattern
-// Example: permit * bash cargo build *
+// Example: allow * bash cargo build *
 
 rule = { SOI ~ effect ~ sep ~ entity ~ sep ~ tool ~ sep ~ pattern ~ EOI }
 
-effect = { "permit" | "forbid" | "ask" | "delegate" }
+effect = { "allow" | "deny" | "ask" | "delegate" }
 
 entity = { negation? ~ entity_value }
 negation = { "!" }

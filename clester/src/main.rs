@@ -7,7 +7,7 @@
 //!
 //! ```bash
 //! # Run a single test script
-//! clester run tests/basic_permissions.toml
+//! clester run tests/basic_permissions.yaml
 //!
 //! # Run all test scripts in a directory
 //! clester run tests/
@@ -16,7 +16,7 @@
 //! clester run -v tests/
 //!
 //! # Validate a test script without running
-//! clester validate tests/basic_permissions.toml
+//! clester validate tests/basic_permissions.yaml
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -50,7 +50,7 @@ struct Cli {
 enum Commands {
     /// Run one or more test scripts
     Run {
-        /// Path to a test script (.toml) or directory of scripts
+        /// Path to a test script (.yaml) or directory of scripts
         path: PathBuf,
 
         /// Verbose output: show stdout/stderr from clash
@@ -64,7 +64,7 @@ enum Commands {
 
     /// Validate test scripts without executing
     Validate {
-        /// Path to a test script (.toml) or directory of scripts
+        /// Path to a test script (.yaml) or directory of scripts
         path: PathBuf,
     },
 }
@@ -123,7 +123,7 @@ fn cmd_run(path: &Path, verbose: bool, clash_bin: Option<&Path>) -> Result<bool>
 
         eprintln!("--- {} ({}) ---", script.meta.name, script_path.display());
 
-        let env = TestEnvironment::setup(&script.settings)
+        let env = TestEnvironment::setup(&script.settings, script.clash.as_ref())
             .context("failed to set up test environment")?;
 
         let mut script_passed = true;
@@ -262,7 +262,9 @@ fn collect_scripts(path: &Path) -> Result<Vec<PathBuf>> {
         {
             let entry = entry?;
             let p = entry.path();
-            if p.extension().is_some_and(|ext| ext == "yaml" || ext == "yml") {
+            if p.extension()
+                .is_some_and(|ext| ext == "yaml" || ext == "yml")
+            {
                 scripts.push(p);
             }
         }

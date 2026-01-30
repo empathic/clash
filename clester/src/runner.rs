@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn test_build_pre_tool_use_json() {
         let config = SettingsConfig::default();
-        let env = TestEnvironment::setup(&config).unwrap();
+        let env = TestEnvironment::setup(&config, None).unwrap();
 
         let step = Step {
             name: "test".into(),
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn test_build_notification_json() {
         let config = SettingsConfig::default();
-        let env = TestEnvironment::setup(&config).unwrap();
+        let env = TestEnvironment::setup(&config, None).unwrap();
 
         let step = Step {
             name: "notif".into(),

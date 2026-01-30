@@ -2,16 +2,16 @@
 # Review and customize as needed.
 #
 # Evaluation: all matching statements are collected, then precedence applies:
-#   forbid > ask > permit
+#   deny > ask > allow
 # If no statement matches, the default effect is used.
 
 default: ask
 
 rules:
-  - permit * bash cargo build *
-  - permit * bash cargo clippy *
-  - permit * bash find *
-  - permit * bash cargo test *
-  - permit * read *
-  - permit * write *.rs
-  - permit * write *.md
+  - allow * bash cargo build *
+  - allow * bash cargo clippy *
+  - allow * bash find *
+  - allow * bash cargo test *
+  - allow * read *
+  - allow * write *.rs
+  - allow * write *.md

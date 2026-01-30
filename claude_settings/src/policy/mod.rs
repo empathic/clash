@@ -6,7 +6,7 @@
 //! ## Core Concepts
 //!
 //! - **Statement**: `effect(entity, verb, noun)` — a rule that matches requests
-//! - **Effect**: `permit`, `forbid`, or `ask`
+//! - **Effect**: `allow`, `deny`, or `ask`
 //! - **Entity**: who is requesting (e.g., `agent:claude`, `user`, `service:mcp`)
 //! - **Verb**: what action (`read`, `write`, `edit`, `execute`)
 //! - **Noun**: what resource (file paths, command strings, globs)
@@ -14,14 +14,14 @@
 //! ## Evaluation
 //!
 //! 1. Collect all statements that match the request
-//! 2. Apply precedence: **forbid > ask > permit**
+//! 2. Apply precedence: **deny > ask > allow**
 //! 3. If no match: apply the configurable default effect
 //!
 //! ## Negation
 //!
 //! `!` inverts the match on entity and noun slots:
-//! - `forbid(!user, read, ~/config/*)` — only users can read config
-//! - `forbid(agent:*, write, !~/code/proj/**)` — agents can't write outside project
+//! - `deny(!user, read, ~/config/*)` — only users can read config
+//! - `deny(agent:*, write, !~/code/proj/**)` — agents can't write outside project
 //!
 //! ## Example
 //!
@@ -29,7 +29,7 @@
 //! use claude_settings::policy::{PolicyDocument, Statement, Effect, Pattern, MatchExpr, VerbPattern, Verb};
 //!
 //! let stmt = Statement {
-//!     effect: Effect::Permit,
+//!     effect: Effect::Allow,
 //!     entity: Pattern::Match(MatchExpr::Typed {
 //!         entity_type: "agent".into(),
 //!         name: Some("claude".into()),
@@ -70,7 +70,7 @@ pub struct PolicyDocument {
 pub struct PolicyConfig {
     /// Default effect when no statement matches a request.
     /// - `"ask"` for interactive environments (human in the loop)
-    /// - `"forbid"` for headless/CI environments
+    /// - `"deny"` for headless/CI environments
     #[serde(default = "PolicyConfig::default_effect")]
     pub default: Effect,
 }
@@ -136,9 +136,9 @@ pub struct Statement {
 #[serde(rename_all = "lowercase")]
 pub enum Effect {
     /// Allow the action without prompting.
-    Permit,
+    Allow,
     /// Deny the action.
-    Forbid,
+    Deny,
     /// Prompt the user for confirmation.
     Ask,
     /// Delegate the decision to an external evaluator.
@@ -148,8 +148,8 @@ pub enum Effect {
 impl fmt::Display for Effect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Effect::Permit => write!(f, "permit"),
-            Effect::Forbid => write!(f, "forbid"),
+            Effect::Allow => write!(f, "allow"),
+            Effect::Deny => write!(f, "deny"),
             Effect::Ask => write!(f, "ask"),
             Effect::Delegate => write!(f, "delegate"),
         }
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn test_statement_matches() {
         let stmt = Statement {
-            effect: Effect::Permit,
+            effect: Effect::Allow,
             entity: Pattern::Match(MatchExpr::Typed {
                 entity_type: "agent".into(),
                 name: Some("claude".into()),
@@ -508,10 +508,10 @@ mod tests {
     }
 
     #[test]
-    fn test_forbid_non_users_from_config() {
-        // forbid(!user, read, ~/config/*)
+    fn test_deny_non_users_from_config() {
+        // deny(!user, read, ~/config/*)
         let stmt = Statement {
-            effect: Effect::Forbid,
+            effect: Effect::Deny,
             entity: Pattern::Not(MatchExpr::Typed {
                 entity_type: "user".into(),
                 name: None,
@@ -532,8 +532,8 @@ mod tests {
 
     #[test]
     fn test_effect_display() {
-        assert_eq!(Effect::Permit.to_string(), "permit");
-        assert_eq!(Effect::Forbid.to_string(), "forbid");
+        assert_eq!(Effect::Allow.to_string(), "allow");
+        assert_eq!(Effect::Deny.to_string(), "deny");
         assert_eq!(Effect::Ask.to_string(), "ask");
         assert_eq!(Effect::Delegate.to_string(), "delegate");
     }

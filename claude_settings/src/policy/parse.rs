@@ -97,15 +97,16 @@ pub fn parse_yaml(input: &str) -> Result<PolicyDocument, PolicyParseError> {
 /// Format: `effect entity tool pattern`
 ///
 /// Examples:
-/// - `permit * bash cargo build *`
-/// - `forbid !user read ~/config/*`
+/// - `allow * bash cargo build *`
+/// - `deny !user read ~/config/*`
 /// - `ask agent:claude * *`
 pub fn parse_rule(input: &str) -> Result<Statement, PolicyParseError> {
     let input = input.trim();
-    let pairs = RuleParser::parse(Rule::rule, input).map_err(|e| PolicyParseError::InvalidRule {
-        rule: input.to_string(),
-        message: e.to_string(),
-    })?;
+    let pairs =
+        RuleParser::parse(Rule::rule, input).map_err(|e| PolicyParseError::InvalidRule {
+            rule: input.to_string(),
+            message: e.to_string(),
+        })?;
 
     let rule_pair = pairs.into_iter().next().unwrap();
     let mut inner = rule_pair.into_inner();
@@ -267,12 +268,12 @@ pub fn desugar_legacy(perms: &LegacyPermissions) -> Vec<Statement> {
     let mut statements = Vec::new();
 
     for pattern in &perms.allow {
-        if let Some(stmt) = legacy_pattern_to_statement(pattern, Effect::Permit) {
+        if let Some(stmt) = legacy_pattern_to_statement(pattern, Effect::Allow) {
             statements.push(stmt);
         }
     }
     for pattern in &perms.deny {
-        if let Some(stmt) = legacy_pattern_to_statement(pattern, Effect::Forbid) {
+        if let Some(stmt) = legacy_pattern_to_statement(pattern, Effect::Deny) {
             statements.push(stmt);
         }
     }
@@ -291,8 +292,8 @@ pub fn desugar_legacy(perms: &LegacyPermissions) -> Vec<Statement> {
 
 fn parse_effect_str(s: &str) -> Result<Effect, PolicyParseError> {
     match s {
-        "permit" => Ok(Effect::Permit),
-        "forbid" => Ok(Effect::Forbid),
+        "allow" => Ok(Effect::Allow),
+        "deny" => Ok(Effect::Deny),
         "ask" => Ok(Effect::Ask),
         "delegate" => Ok(Effect::Delegate),
         other => Err(PolicyParseError::InvalidEffect(other.into())),
@@ -582,9 +583,9 @@ mod tests {
     // --- Rule parsing (pest) ---
 
     #[test]
-    fn test_parse_rule_simple_permit() {
-        let stmt = parse_rule("permit * bash cargo build *").unwrap();
-        assert_eq!(stmt.effect, Effect::Permit);
+    fn test_parse_rule_simple_allow() {
+        let stmt = parse_rule("allow * bash cargo build *").unwrap();
+        assert_eq!(stmt.effect, Effect::Allow);
         assert_eq!(stmt.entity, Pattern::Match(MatchExpr::Any));
         assert_eq!(stmt.verb, VerbPattern::Exact(Verb::Execute));
         assert!(stmt.matches("agent", &Verb::Execute, "cargo build --release"));
@@ -592,8 +593,8 @@ mod tests {
 
     #[test]
     fn test_parse_rule_typed_entity() {
-        let stmt = parse_rule("permit agent:claude bash git *").unwrap();
-        assert_eq!(stmt.effect, Effect::Permit);
+        let stmt = parse_rule("allow agent:claude bash git *").unwrap();
+        assert_eq!(stmt.effect, Effect::Allow);
         assert_eq!(
             stmt.entity,
             Pattern::Match(MatchExpr::Typed {
@@ -607,15 +608,15 @@ mod tests {
 
     #[test]
     fn test_parse_rule_negated_entity() {
-        let stmt = parse_rule("forbid !user read ~/config/*").unwrap();
-        assert_eq!(stmt.effect, Effect::Forbid);
+        let stmt = parse_rule("deny !user read ~/config/*").unwrap();
+        assert_eq!(stmt.effect, Effect::Deny);
         assert!(stmt.matches("agent:claude", &Verb::Read, "~/config/test.json"));
         assert!(!stmt.matches("user", &Verb::Read, "~/config/test.json"));
     }
 
     #[test]
     fn test_parse_rule_wildcard_tool() {
-        let stmt = parse_rule("forbid agent:untrusted * ~/sensitive/**").unwrap();
+        let stmt = parse_rule("deny agent:untrusted * ~/sensitive/**").unwrap();
         assert_eq!(stmt.verb, VerbPattern::Any);
         assert!(stmt.matches("agent:untrusted", &Verb::Read, "~/sensitive/secrets.json"));
         assert!(stmt.matches("agent:untrusted", &Verb::Write, "~/sensitive/secrets.json"));
@@ -632,27 +633,27 @@ mod tests {
 
     #[test]
     fn test_parse_rule_read_tool() {
-        let stmt = parse_rule("permit * read *.rs").unwrap();
+        let stmt = parse_rule("allow * read *.rs").unwrap();
         assert_eq!(stmt.verb, VerbPattern::Exact(Verb::Read));
         assert!(stmt.matches("agent", &Verb::Read, "main.rs"));
     }
 
     #[test]
     fn test_parse_rule_write_tool() {
-        let stmt = parse_rule("forbid * write /etc/*").unwrap();
+        let stmt = parse_rule("deny * write /etc/*").unwrap();
         assert_eq!(stmt.verb, VerbPattern::Exact(Verb::Write));
         assert!(stmt.matches("agent", &Verb::Write, "/etc/passwd"));
     }
 
     #[test]
     fn test_parse_rule_edit_tool() {
-        let stmt = parse_rule("permit * edit src/**").unwrap();
+        let stmt = parse_rule("allow * edit src/**").unwrap();
         assert_eq!(stmt.verb, VerbPattern::Exact(Verb::Edit));
     }
 
     #[test]
     fn test_parse_rule_entity_wildcard_type() {
-        let stmt = parse_rule("permit agent:* bash git *").unwrap();
+        let stmt = parse_rule("allow agent:* bash git *").unwrap();
         assert_eq!(
             stmt.entity,
             Pattern::Match(MatchExpr::Typed {
@@ -668,9 +669,9 @@ mod tests {
     #[test]
     fn test_parse_rule_invalid() {
         assert!(parse_rule("").is_err());
-        assert!(parse_rule("permit").is_err());
-        assert!(parse_rule("permit *").is_err());
-        assert!(parse_rule("permit * bash").is_err());
+        assert!(parse_rule("allow").is_err());
+        assert!(parse_rule("allow *").is_err());
+        assert!(parse_rule("allow * bash").is_err());
         assert!(parse_rule("invalid * bash *").is_err());
     }
 
@@ -682,14 +683,14 @@ mod tests {
 default: ask
 
 rules:
-  - permit agent:claude bash git *
+  - allow agent:claude bash git *
 "#;
         let doc = parse_yaml(yaml).unwrap();
         assert_eq!(doc.policy.default, Effect::Ask);
         assert_eq!(doc.statements.len(), 1);
 
         let stmt = &doc.statements[0];
-        assert_eq!(stmt.effect, Effect::Permit);
+        assert_eq!(stmt.effect, Effect::Allow);
         assert!(stmt.matches("agent:claude", &Verb::Execute, "git status"));
         assert!(!stmt.matches("agent:codex", &Verb::Execute, "git status"));
     }
@@ -700,34 +701,34 @@ rules:
 default: ask
 
 rules:
-  - permit * bash cargo build *
-  - permit * bash cargo test *
-  - forbid * bash rm -rf /
+  - allow * bash cargo build *
+  - allow * bash cargo test *
+  - deny * bash rm -rf /
 "#;
         let doc = parse_yaml(yaml).unwrap();
         assert_eq!(doc.statements.len(), 3);
-        assert_eq!(doc.statements[0].effect, Effect::Permit);
-        assert_eq!(doc.statements[1].effect, Effect::Permit);
-        assert_eq!(doc.statements[2].effect, Effect::Forbid);
+        assert_eq!(doc.statements[0].effect, Effect::Allow);
+        assert_eq!(doc.statements[1].effect, Effect::Allow);
+        assert_eq!(doc.statements[2].effect, Effect::Deny);
     }
 
     #[test]
     fn test_parse_yaml_with_negation() {
         let yaml = r#"
 rules:
-  - forbid !user read ~/config/*
+  - deny !user read ~/config/*
 "#;
         let doc = parse_yaml(yaml).unwrap();
         let stmt = &doc.statements[0];
 
-        assert_eq!(stmt.effect, Effect::Forbid);
+        assert_eq!(stmt.effect, Effect::Deny);
         assert!(stmt.matches("agent:claude", &Verb::Read, "~/config/test.json"));
         assert!(!stmt.matches("user", &Verb::Read, "~/config/test.json"));
     }
 
     #[test]
     fn test_parse_yaml_default_values() {
-        let yaml = "rules:\n  - permit * * *.rs\n";
+        let yaml = "rules:\n  - allow * * *.rs\n";
         let doc = parse_yaml(yaml).unwrap();
         assert_eq!(doc.policy.default, Effect::Ask); // default
         let stmt = &doc.statements[0];
@@ -771,7 +772,7 @@ permissions:
         let stmts = desugar_legacy(&perms);
         assert_eq!(stmts.len(), 1);
         let stmt = &stmts[0];
-        assert_eq!(stmt.effect, Effect::Permit);
+        assert_eq!(stmt.effect, Effect::Allow);
         assert!(stmt.matches("agent:claude", &Verb::Execute, "git status"));
         assert!(stmt.matches("agent:claude", &Verb::Execute, "git commit -m 'test'"));
         assert!(!stmt.matches("agent:claude", &Verb::Execute, "npm install"));
@@ -788,11 +789,11 @@ permissions:
         assert_eq!(stmts.len(), 2);
 
         let allow_stmt = &stmts[0];
-        assert_eq!(allow_stmt.effect, Effect::Permit);
+        assert_eq!(allow_stmt.effect, Effect::Allow);
         assert!(allow_stmt.matches("agent:claude", &Verb::Read, "anything.txt"));
 
         let deny_stmt = &stmts[1];
-        assert_eq!(deny_stmt.effect, Effect::Forbid);
+        assert_eq!(deny_stmt.effect, Effect::Deny);
         assert!(deny_stmt.matches("agent:claude", &Verb::Read, ".env"));
         assert!(!deny_stmt.matches("agent:claude", &Verb::Read, ".env.local"));
     }
@@ -853,17 +854,21 @@ permissions:
     #[test]
     fn test_format_rule_roundtrip() {
         let rules = vec![
-            "permit * bash cargo build *",
-            "forbid !user read ~/config/*",
+            "allow * bash cargo build *",
+            "deny !user read ~/config/*",
             "ask agent:claude * *",
-            "permit agent:* bash git *",
+            "allow agent:* bash git *",
         ];
         for rule in rules {
             let stmt = parse_rule(rule).unwrap();
             let formatted = format_rule(&stmt);
             let reparsed = parse_rule(&formatted).unwrap();
             // Effects must match
-            assert_eq!(stmt.effect, reparsed.effect, "effect mismatch for: {}", rule);
+            assert_eq!(
+                stmt.effect, reparsed.effect,
+                "effect mismatch for: {}",
+                rule
+            );
             // Verify the reparsed statement matches the same inputs
             assert_eq!(
                 stmt.matches("agent:claude", &Verb::Execute, "cargo build --release"),
@@ -883,7 +888,7 @@ permissions:
 default = "ask"
 
 [[statements]]
-effect = "permit"
+effect = "allow"
 entity = "agent:claude"
 verb = "execute"
 noun = "git *"

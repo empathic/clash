@@ -18,8 +18,42 @@ pub struct TestScript {
     #[serde(default)]
     pub settings: SettingsConfig,
 
+    /// Clash-specific configuration (engine mode, policy).
+    #[serde(default)]
+    pub clash: Option<ClashConfig>,
+
     /// Ordered sequence of hook invocations to execute.
     pub steps: Vec<Step>,
+}
+
+/// Clash-specific settings: engine mode and policy document.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClashConfig {
+    /// Which permission engine to use: "policy", "legacy", or "auto".
+    #[serde(default)]
+    pub engine_mode: Option<String>,
+
+    /// Policy document to write to ~/.clash/policy.yaml.
+    #[serde(default)]
+    pub policy: Option<PolicySpec>,
+}
+
+/// Policy document specification for ~/.clash/policy.yaml.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PolicySpec {
+    /// Default effect when no rule matches: "allow", "deny", "ask", "delegate".
+    #[serde(default = "PolicySpec::default_effect")]
+    pub default: String,
+
+    /// Policy rules in compact format (e.g. "allow * bash git *").
+    #[serde(default)]
+    pub rules: Vec<String>,
+}
+
+impl PolicySpec {
+    fn default_effect() -> String {
+        "ask".into()
+    }
 }
 
 /// Test metadata.
@@ -203,6 +237,59 @@ steps:
         let script = TestScript::from_str(yaml).unwrap();
         assert_eq!(script.steps[0].hook, "notification");
         assert_eq!(script.steps[0].expect.no_decision, Some(true));
+    }
+
+    #[test]
+    fn test_parse_clash_config() {
+        let yaml = r#"
+meta:
+  name: clash config test
+
+clash:
+  engine_mode: policy
+  policy:
+    default: ask
+    rules:
+      - "allow * bash git *"
+      - "deny * read .env"
+
+steps:
+  - name: test
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+"#;
+
+        let script = TestScript::from_str(yaml).unwrap();
+        let clash = script.clash.expect("clash config should be present");
+        assert_eq!(clash.engine_mode.as_deref(), Some("policy"));
+        let policy = clash.policy.expect("policy should be present");
+        assert_eq!(policy.default, "ask");
+        assert_eq!(policy.rules.len(), 2);
+        assert_eq!(policy.rules[0], "allow * bash git *");
+    }
+
+    #[test]
+    fn test_parse_clash_config_omitted() {
+        let yaml = r#"
+meta:
+  name: no clash config
+
+steps:
+  - name: test
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: ask
+"#;
+
+        let script = TestScript::from_str(yaml).unwrap();
+        assert!(script.clash.is_none());
     }
 
     #[test]
