@@ -7,7 +7,7 @@ clash:
   policy:
     default: deny
     rules:
-      - "allow * bash cargo *"
+      allow bash cargo * : []
 
 settings:
   user:

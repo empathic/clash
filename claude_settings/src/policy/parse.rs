@@ -38,6 +38,15 @@ pub enum PolicyParseError {
 
     #[error("invalid tool '{0}'")]
     InvalidTool(String),
+
+    #[error("invalid filter expression: {0}")]
+    InvalidFilter(String),
+
+    #[error("invalid profile expression: {0}")]
+    InvalidProfile(String),
+
+    #[error("unknown constraint or profile '{0}'")]
+    UnknownRef(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -50,7 +59,19 @@ struct RawPolicyYaml {
     #[serde(default = "default_ask_str")]
     default: String,
 
+    /// Named constraint primitives.
     #[serde(default)]
+    constraints: HashMap<String, ConstraintDef>,
+
+    /// Named profiles (boolean expressions over constraint names).
+    #[serde(default)]
+    profiles: HashMap<String, ProfileExpr>,
+
+    #[serde(
+        default,
+        deserialize_with = "deserialize_rules",
+        serialize_with = "serialize_rules"
+    )]
     rules: Vec<String>,
 
     /// Legacy backward-compat with Claude Code permission format.
@@ -60,6 +81,90 @@ struct RawPolicyYaml {
 
 fn default_ask_str() -> String {
     "ask".into()
+}
+
+/// Deserialize rules from either a YAML sequence (old format) or mapping (new format).
+///
+/// Old format (sequence of strings):
+/// ```yaml
+/// rules:
+///   - "allow bash git * : strict-git"
+///   - deny bash rm *
+/// ```
+///
+/// New format (mapping of rule → constraint):
+/// ```yaml
+/// rules:
+///   allow bash git * : strict-git
+///   allow bash cargo * : sandboxed
+///   deny bash rm * : []
+/// ```
+fn deserialize_rules<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value = serde_yaml::Value::deserialize(deserializer)?;
+    match value {
+        serde_yaml::Value::Sequence(seq) => seq
+            .into_iter()
+            .map(|v| match v {
+                serde_yaml::Value::String(s) => Ok(s),
+                _ => Err(Error::custom("rule must be a string")),
+            })
+            .collect(),
+        serde_yaml::Value::Mapping(map) => {
+            let mut rules = Vec::new();
+            for (key, value) in map {
+                let rule_key = match key {
+                    serde_yaml::Value::String(s) => s,
+                    _ => return Err(Error::custom("rule key must be a string")),
+                };
+                let constraint = match &value {
+                    serde_yaml::Value::String(s) => Some(s.clone()),
+                    serde_yaml::Value::Null => None,
+                    serde_yaml::Value::Sequence(seq) if seq.is_empty() => None,
+                    _ => {
+                        return Err(Error::custom(format!(
+                            "constraint for '{}' must be a string, null, or []",
+                            rule_key
+                        )));
+                    }
+                };
+                if let Some(constraint) = constraint {
+                    rules.push(format!("{} : {}", rule_key, constraint));
+                } else {
+                    rules.push(rule_key);
+                }
+            }
+            Ok(rules)
+        }
+        serde_yaml::Value::Null => Ok(Vec::new()),
+        _ => Err(Error::custom("rules must be a sequence or mapping")),
+    }
+}
+
+/// Serialize rules as a YAML mapping (new format).
+///
+/// Rules with constraints are split on the ` : ` separator.
+/// Rules without constraints get `[]` as the value.
+fn serialize_rules<S>(rules: &[String], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut map = serializer.serialize_map(Some(rules.len()))?;
+    for rule in rules {
+        if let Some(colon_idx) = find_constraint_separator(rule) {
+            let key = rule[..colon_idx].trim_end();
+            let value = rule[colon_idx + 1..].trim();
+            map.serialize_entry(key, value)?;
+        } else {
+            let empty: Vec<String> = Vec::new();
+            map.serialize_entry(rule.trim(), &empty)?;
+        }
+    }
+    map.end()
 }
 
 // ---------------------------------------------------------------------------
@@ -88,22 +193,56 @@ pub fn parse_yaml(input: &str) -> Result<PolicyDocument, PolicyParseError> {
     Ok(PolicyDocument {
         policy: PolicyConfig { default },
         permissions: raw.permissions,
+        constraints: raw.constraints,
+        profiles: raw.profiles,
         statements,
     })
 }
 
 /// Parse a single compact rule string into a `Statement`.
 ///
-/// Format: `effect entity tool pattern`
+/// Format: `effect [entity] tool pattern`
+///
+/// The entity is optional — when omitted, it defaults to `agent` (any agent).
+/// The parser detects whether entity is present by checking if the second
+/// token is a known tool keyword (`bash`, `read`, `write`, `edit`, `*`).
 ///
 /// Examples:
-/// - `allow * bash cargo build *`
-/// - `deny !user read ~/config/*`
-/// - `ask agent:claude * *`
+/// - `allow bash cargo build *`       — entity defaults to agent
+/// - `allow agent:claude bash git *`  — explicit entity
+/// - `deny !user read ~/config/*`     — explicit negated entity
+/// - `ask * * *`                       — explicit wildcard entity
 pub fn parse_rule(input: &str) -> Result<Statement, PolicyParseError> {
     let input = input.trim();
+
+    // Split on ` : ` to extract optional profile expression.
+    // We need to find the last ` : ` that separates the rule from the profile.
+    // The rule part goes to the pest parser, the profile part is parsed separately.
+    let (rule_part, profile_expr) = if let Some(colon_idx) = find_constraint_separator(input) {
+        let rule_str = input[..colon_idx].trim();
+        let profile_str = input[colon_idx + 1..].trim();
+        let profile =
+            parse_profile_expr(profile_str).map_err(|e| PolicyParseError::InvalidRule {
+                rule: input.to_string(),
+                message: format!("invalid constraint expression: {}", e),
+            })?;
+        (rule_str, Some(profile))
+    } else {
+        (input, None)
+    };
+
+    // Check if entity is omitted: if the second token is a known tool keyword,
+    // insert the default entity "agent" (matches any agent) before parsing.
+    let expanded_rule;
+    let parse_input = if needs_entity_insertion(rule_part) {
+        expanded_rule = insert_default_entity(rule_part);
+        expanded_rule.as_str()
+    } else {
+        rule_part
+    };
+
     let pairs =
-        RuleParser::parse(Rule::rule, input).map_err(|e| PolicyParseError::InvalidRule {
+        RuleParser::parse(Rule::rule, parse_input).map_err(|e| PolicyParseError::InvalidRule {
             rule: input.to_string(),
             message: e.to_string(),
         })?;
@@ -134,13 +273,352 @@ pub fn parse_rule(input: &str) -> Result<Statement, PolicyParseError> {
         noun,
         reason: None,
         delegate: None,
+        profile: profile_expr,
     })
+}
+
+const TOOL_KEYWORDS: &[&str] = &["bash", "read", "write", "edit"];
+
+/// Check if the rule string is missing an entity (second token is a tool keyword).
+fn needs_entity_insertion(rule: &str) -> bool {
+    let mut tokens = rule.split_whitespace();
+    let _effect = tokens.next(); // skip effect
+    match tokens.next() {
+        Some(second) => TOOL_KEYWORDS.contains(&second),
+        None => false,
+    }
+}
+
+/// Insert the default entity `agent` after the effect keyword.
+fn insert_default_entity(rule: &str) -> String {
+    // Find the end of the first whitespace-separated token (effect)
+    let trimmed = rule.trim_start();
+    if let Some(space_idx) = trimmed.find([' ', '\t']) {
+        let effect = &trimmed[..space_idx];
+        let rest = &trimmed[space_idx..];
+        format!("{} agent{}", effect, rest)
+    } else {
+        rule.to_string()
+    }
+}
+
+/// Find the position of the `:` constraint separator in a rule string.
+///
+/// Returns the byte offset of `:` if found, or None if the rule has no constraint.
+/// We look for `:` that is NOT part of an entity type (like `agent:claude`).
+/// The constraint separator `:` must have a space before it.
+fn find_constraint_separator(input: &str) -> Option<usize> {
+    // Walk backwards from the end, looking for ' :' pattern.
+    // The entity colon (agent:claude) never has a space before the colon.
+    let bytes = input.as_bytes();
+    (1..bytes.len())
+        .rev()
+        .find(|&i| bytes[i] == b':' && bytes[i - 1] == b' ')
+}
+
+// ---------------------------------------------------------------------------
+// Filter expression parser (recursive descent)
+// ---------------------------------------------------------------------------
+
+/// Parse a filter expression string like `subpath(.) & !literal(.env)`.
+///
+/// Grammar (precedence: `!` > `&` > `|`):
+///   expr     = or_expr
+///   or_expr  = and_expr ( '|' and_expr )*
+///   and_expr = unary ( '&' unary )*
+///   unary    = '!' unary | atom
+///   atom     = 'subpath(' path ')' | 'literal(' path ')' | 'regex(' pattern ')' | '(' expr ')'
+pub fn parse_filter_expr(input: &str) -> Result<FilterExpr, PolicyParseError> {
+    let input = input.trim();
+    let tokens = tokenize_expr(input).map_err(PolicyParseError::InvalidFilter)?;
+    let mut pos = 0;
+    let result = parse_filter_or(&tokens, &mut pos)?;
+    if pos != tokens.len() {
+        return Err(PolicyParseError::InvalidFilter(format!(
+            "unexpected token at position {}: {:?}",
+            pos,
+            tokens.get(pos)
+        )));
+    }
+    Ok(result)
+}
+
+/// Parse a profile expression string like `sandboxed & safe-io`.
+///
+/// Grammar (precedence: `!` > `&` > `|`):
+///   expr     = or_expr
+///   or_expr  = and_expr ( '|' and_expr )*
+///   and_expr = unary ( '&' unary )*
+///   unary    = '!' unary | atom
+///   atom     = identifier | '(' expr ')'
+pub fn parse_profile_expr(input: &str) -> Result<ProfileExpr, PolicyParseError> {
+    let input = input.trim();
+    let tokens = tokenize_expr(input).map_err(PolicyParseError::InvalidProfile)?;
+    let mut pos = 0;
+    let result = parse_profile_or(&tokens, &mut pos)?;
+    if pos != tokens.len() {
+        return Err(PolicyParseError::InvalidProfile(format!(
+            "unexpected token at position {}: {:?}",
+            pos,
+            tokens.get(pos)
+        )));
+    }
+    Ok(result)
+}
+
+// -- Shared tokenizer for boolean expressions --
+
+#[derive(Debug, Clone, PartialEq)]
+enum ExprToken {
+    And,           // &
+    Or,            // |
+    Not,           // !
+    LParen,        // (
+    RParen,        // )
+    Ident(String), // identifier or function call like subpath(./src)
+}
+
+/// Tokenize an expression string into tokens.
+/// Handles function-call syntax like `subpath(./src)` as a single Ident token.
+fn tokenize_expr(input: &str) -> Result<Vec<ExprToken>, String> {
+    let mut tokens = Vec::new();
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        match chars[i] {
+            ' ' | '\t' => i += 1,
+            '&' => {
+                tokens.push(ExprToken::And);
+                i += 1;
+            }
+            '|' => {
+                tokens.push(ExprToken::Or);
+                i += 1;
+            }
+            '!' => {
+                tokens.push(ExprToken::Not);
+                i += 1;
+            }
+            '(' => {
+                tokens.push(ExprToken::LParen);
+                i += 1;
+            }
+            ')' => {
+                tokens.push(ExprToken::RParen);
+                i += 1;
+            }
+            _ => {
+                // Read an identifier, possibly including a function call like subpath(./src)
+                let start = i;
+                // Read the identifier part
+                while i < chars.len()
+                    && !matches!(chars[i], ' ' | '\t' | '&' | '|' | '!' | '(' | ')')
+                {
+                    i += 1;
+                }
+                let word = &input[start..i];
+
+                // Check if this is a function call (next non-space char is '(')
+                let mut peek = i;
+                while peek < chars.len() && (chars[peek] == ' ' || chars[peek] == '\t') {
+                    peek += 1;
+                }
+                if peek < chars.len()
+                    && chars[peek] == '('
+                    && matches!(word, "subpath" | "literal" | "regex")
+                {
+                    // Consume the '(' and everything up to the matching ')'
+                    i = peek + 1; // skip '('
+                    let arg_start = i;
+                    let mut depth = 1;
+                    while i < chars.len() && depth > 0 {
+                        match chars[i] {
+                            '(' => depth += 1,
+                            ')' => depth -= 1,
+                            _ => {}
+                        }
+                        if depth > 0 {
+                            i += 1;
+                        }
+                    }
+                    if depth != 0 {
+                        return Err(format!("unclosed parenthesis in {}()", word));
+                    }
+                    let arg = input[arg_start..i].trim();
+                    i += 1; // skip closing ')'
+                    tokens.push(ExprToken::Ident(format!("{}({})", word, arg)));
+                } else {
+                    tokens.push(ExprToken::Ident(word.to_string()));
+                }
+            }
+        }
+    }
+    Ok(tokens)
+}
+
+// -- Filter expression recursive descent --
+
+fn parse_filter_or(tokens: &[ExprToken], pos: &mut usize) -> Result<FilterExpr, PolicyParseError> {
+    let mut left = parse_filter_and(tokens, pos)?;
+    while *pos < tokens.len() && tokens[*pos] == ExprToken::Or {
+        *pos += 1;
+        let right = parse_filter_and(tokens, pos)?;
+        left = FilterExpr::Or(Box::new(left), Box::new(right));
+    }
+    Ok(left)
+}
+
+fn parse_filter_and(tokens: &[ExprToken], pos: &mut usize) -> Result<FilterExpr, PolicyParseError> {
+    let mut left = parse_filter_unary(tokens, pos)?;
+    while *pos < tokens.len() && tokens[*pos] == ExprToken::And {
+        *pos += 1;
+        let right = parse_filter_unary(tokens, pos)?;
+        left = FilterExpr::And(Box::new(left), Box::new(right));
+    }
+    Ok(left)
+}
+
+fn parse_filter_unary(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+) -> Result<FilterExpr, PolicyParseError> {
+    if *pos < tokens.len() && tokens[*pos] == ExprToken::Not {
+        *pos += 1;
+        let inner = parse_filter_unary(tokens, pos)?;
+        return Ok(FilterExpr::Not(Box::new(inner)));
+    }
+    parse_filter_atom(tokens, pos)
+}
+
+fn parse_filter_atom(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+) -> Result<FilterExpr, PolicyParseError> {
+    if *pos >= tokens.len() {
+        return Err(PolicyParseError::InvalidFilter(
+            "unexpected end of expression".into(),
+        ));
+    }
+    match &tokens[*pos] {
+        ExprToken::LParen => {
+            *pos += 1;
+            let expr = parse_filter_or(tokens, pos)?;
+            if *pos >= tokens.len() || tokens[*pos] != ExprToken::RParen {
+                return Err(PolicyParseError::InvalidFilter(
+                    "expected closing ')'".into(),
+                ));
+            }
+            *pos += 1;
+            Ok(expr)
+        }
+        ExprToken::Ident(s) => {
+            let expr = parse_filter_function(s)?;
+            *pos += 1;
+            Ok(expr)
+        }
+        other => Err(PolicyParseError::InvalidFilter(format!(
+            "unexpected token: {:?}",
+            other
+        ))),
+    }
+}
+
+/// Parse a filter function call like `subpath(./src)`, `literal(.env)`, `regex(.*\.rs$)`.
+fn parse_filter_function(s: &str) -> Result<FilterExpr, PolicyParseError> {
+    if let Some(arg) = s.strip_prefix("subpath(").and_then(|s| s.strip_suffix(')')) {
+        Ok(FilterExpr::Subpath(arg.to_string()))
+    } else if let Some(arg) = s.strip_prefix("literal(").and_then(|s| s.strip_suffix(')')) {
+        Ok(FilterExpr::Literal(arg.to_string()))
+    } else if let Some(arg) = s.strip_prefix("regex(").and_then(|s| s.strip_suffix(')')) {
+        Ok(FilterExpr::Regex(arg.to_string()))
+    } else {
+        Err(PolicyParseError::InvalidFilter(format!(
+            "expected subpath(), literal(), or regex(), got '{}'",
+            s
+        )))
+    }
+}
+
+// -- Profile expression recursive descent --
+
+fn parse_profile_or(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+) -> Result<ProfileExpr, PolicyParseError> {
+    let mut left = parse_profile_and(tokens, pos)?;
+    while *pos < tokens.len() && tokens[*pos] == ExprToken::Or {
+        *pos += 1;
+        let right = parse_profile_and(tokens, pos)?;
+        left = ProfileExpr::Or(Box::new(left), Box::new(right));
+    }
+    Ok(left)
+}
+
+fn parse_profile_and(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+) -> Result<ProfileExpr, PolicyParseError> {
+    let mut left = parse_profile_unary(tokens, pos)?;
+    while *pos < tokens.len() && tokens[*pos] == ExprToken::And {
+        *pos += 1;
+        let right = parse_profile_unary(tokens, pos)?;
+        left = ProfileExpr::And(Box::new(left), Box::new(right));
+    }
+    Ok(left)
+}
+
+fn parse_profile_unary(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+) -> Result<ProfileExpr, PolicyParseError> {
+    if *pos < tokens.len() && tokens[*pos] == ExprToken::Not {
+        *pos += 1;
+        let inner = parse_profile_unary(tokens, pos)?;
+        return Ok(ProfileExpr::Not(Box::new(inner)));
+    }
+    parse_profile_atom(tokens, pos)
+}
+
+fn parse_profile_atom(
+    tokens: &[ExprToken],
+    pos: &mut usize,
+) -> Result<ProfileExpr, PolicyParseError> {
+    if *pos >= tokens.len() {
+        return Err(PolicyParseError::InvalidProfile(
+            "unexpected end of expression".into(),
+        ));
+    }
+    match &tokens[*pos] {
+        ExprToken::LParen => {
+            *pos += 1;
+            let expr = parse_profile_or(tokens, pos)?;
+            if *pos >= tokens.len() || tokens[*pos] != ExprToken::RParen {
+                return Err(PolicyParseError::InvalidProfile(
+                    "expected closing ')'".into(),
+                ));
+            }
+            *pos += 1;
+            Ok(expr)
+        }
+        ExprToken::Ident(s) => {
+            let expr = ProfileExpr::Ref(s.to_string());
+            *pos += 1;
+            Ok(expr)
+        }
+        other => Err(PolicyParseError::InvalidProfile(format!(
+            "unexpected token: {:?}",
+            other
+        ))),
+    }
 }
 
 /// Serialize a `PolicyDocument` back to YAML.
 pub fn to_yaml(doc: &PolicyDocument) -> Result<String, serde_yaml::Error> {
     let raw = RawPolicyYaml {
         default: doc.policy.default.to_string(),
+        constraints: doc.constraints.clone(),
+        profiles: doc.profiles.clone(),
         rules: doc.statements.iter().map(format_rule).collect(),
         permissions: doc.permissions.clone(),
     };
@@ -148,15 +626,45 @@ pub fn to_yaml(doc: &PolicyDocument) -> Result<String, serde_yaml::Error> {
 }
 
 /// Format a `Statement` as a compact rule string.
+///
+/// When the entity is the default (any agent), it is omitted from the output.
 pub fn format_rule(stmt: &Statement) -> String {
     let effect = stmt.effect.to_string();
-    let entity = format_pattern_str(&stmt.entity);
     let tool = match &stmt.verb {
         VerbPattern::Any => "*".to_string(),
         VerbPattern::Exact(v) => v.rule_name().to_string(),
     };
     let noun = format_pattern_str(&stmt.noun);
-    format!("{} {} {} {}", effect, entity, tool, noun)
+
+    let base = if is_default_entity(&stmt.entity) {
+        format!("{} {} {}", effect, tool, noun)
+    } else {
+        let entity = format_pattern_str(&stmt.entity);
+        format!("{} {} {} {}", effect, entity, tool, noun)
+    };
+
+    if let Some(ref profile) = stmt.profile {
+        format!("{} : {}", base, profile)
+    } else {
+        base
+    }
+}
+
+/// Check if an entity pattern is the default (matches any agent).
+///
+/// The default entity is either:
+/// - `agent` (typed, no name) — matches agent and agent:*
+/// - `*` (wildcard) — matches everything
+///
+/// Both are implicit when entity is omitted from a rule.
+fn is_default_entity(entity: &Pattern) -> bool {
+    match entity {
+        Pattern::Match(MatchExpr::Typed {
+            entity_type,
+            name: None,
+        }) => entity_type == "agent",
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -349,8 +857,13 @@ fn parse_entity_value(pair: pest::iterators::Pair<Rule>) -> MatchExpr {
             MatchExpr::Typed { entity_type, name }
         }
         Rule::identifier => {
+            // A bare identifier in entity position is an entity type (e.g., "agent", "user").
+            // Treat it as Typed with no name, so "agent" matches "agent" and "agent:*".
             let s = inner.as_str();
-            MatchExpr::Exact(s.to_string())
+            MatchExpr::Typed {
+                entity_type: s.to_string(),
+                name: None,
+            }
         }
         _ => MatchExpr::Any,
     }
@@ -399,6 +912,7 @@ fn legacy_pattern_to_statement(pattern: &str, effect: Effect) -> Option<Statemen
         noun,
         reason: None,
         delegate: None,
+        profile: None,
     })
 }
 
@@ -480,7 +994,7 @@ fn format_match_expr(expr: &MatchExpr) -> String {
         MatchExpr::Typed {
             entity_type,
             name: None,
-        } => format!("{}:*", entity_type),
+        } => entity_type.clone(),
         MatchExpr::Typed {
             entity_type,
             name: Some(name),
@@ -879,6 +1393,100 @@ permissions:
         }
     }
 
+    // --- Implicit entity ---
+
+    #[test]
+    fn test_parse_rule_implicit_entity() {
+        // When entity is omitted, "agent" is inserted as default.
+        let stmt = parse_rule("allow bash git *").unwrap();
+        assert_eq!(stmt.effect, Effect::Allow);
+        assert_eq!(
+            stmt.entity,
+            Pattern::Match(MatchExpr::Typed {
+                entity_type: "agent".into(),
+                name: None,
+            })
+        );
+        assert_eq!(stmt.verb, VerbPattern::Exact(Verb::Execute));
+        assert!(stmt.matches("agent", &Verb::Execute, "git status"));
+        assert!(stmt.matches("agent:claude", &Verb::Execute, "git status"));
+    }
+
+    #[test]
+    fn test_parse_rule_implicit_entity_deny() {
+        let stmt = parse_rule("deny bash rm *").unwrap();
+        assert_eq!(stmt.effect, Effect::Deny);
+        assert!(stmt.matches("agent", &Verb::Execute, "rm -rf /"));
+    }
+
+    #[test]
+    fn test_parse_rule_implicit_entity_read() {
+        let stmt = parse_rule("allow read *.rs").unwrap();
+        assert_eq!(stmt.verb, VerbPattern::Exact(Verb::Read));
+        assert!(stmt.matches("agent", &Verb::Read, "main.rs"));
+    }
+
+    #[test]
+    fn test_parse_rule_implicit_entity_with_constraint() {
+        let stmt = parse_rule("allow bash git * : strict-git").unwrap();
+        assert_eq!(stmt.effect, Effect::Allow);
+        assert!(stmt.profile.is_some());
+        assert_eq!(
+            stmt.entity,
+            Pattern::Match(MatchExpr::Typed {
+                entity_type: "agent".into(),
+                name: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_format_rule_omits_default_entity() {
+        // Explicit "agent" or "agent:*" entity should be omitted in formatted output.
+        let stmt = parse_rule("allow agent bash git *").unwrap();
+        assert_eq!(format_rule(&stmt), "allow bash git *");
+
+        let stmt = parse_rule("allow agent:* bash git *").unwrap();
+        assert_eq!(format_rule(&stmt), "allow bash git *");
+    }
+
+    #[test]
+    fn test_format_rule_keeps_explicit_entity() {
+        // Non-default entities should be kept.
+        let stmt = parse_rule("allow agent:claude bash git *").unwrap();
+        assert_eq!(format_rule(&stmt), "allow agent:claude bash git *");
+
+        let stmt = parse_rule("allow * bash git *").unwrap();
+        assert_eq!(format_rule(&stmt), "allow * bash git *");
+    }
+
+    #[test]
+    fn test_implicit_entity_roundtrip() {
+        // Rules with implicit entity should roundtrip correctly.
+        let rules = vec![
+            "allow bash cargo build *",
+            "deny bash rm *",
+            "allow read *.rs",
+            "allow edit src/**",
+        ];
+        for rule in rules {
+            let stmt = parse_rule(rule).unwrap();
+            let formatted = format_rule(&stmt);
+            let reparsed = parse_rule(&formatted).unwrap();
+            assert_eq!(
+                stmt.effect, reparsed.effect,
+                "effect mismatch for: {}",
+                rule
+            );
+            assert_eq!(
+                stmt.entity, reparsed.entity,
+                "entity mismatch for: {}",
+                rule
+            );
+            assert_eq!(stmt.verb, reparsed.verb, "verb mismatch for: {}", rule);
+        }
+    }
+
     // --- TOML backward compat ---
 
     #[test]
@@ -897,5 +1505,366 @@ noun = "git *"
         assert_eq!(doc.policy.default, Effect::Ask);
         assert_eq!(doc.statements.len(), 1);
         assert!(doc.statements[0].matches("agent:claude", &Verb::Execute, "git status"));
+    }
+
+    // --- Filter expression parsing ---
+
+    #[test]
+    fn test_parse_filter_expr_subpath() {
+        let expr = parse_filter_expr("subpath(.)").unwrap();
+        assert_eq!(expr, FilterExpr::Subpath(".".into()));
+    }
+
+    #[test]
+    fn test_parse_filter_expr_literal() {
+        let expr = parse_filter_expr("literal(.env)").unwrap();
+        assert_eq!(expr, FilterExpr::Literal(".env".into()));
+    }
+
+    #[test]
+    fn test_parse_filter_expr_regex() {
+        let expr = parse_filter_expr("regex(.*\\.rs$)").unwrap();
+        assert_eq!(expr, FilterExpr::Regex(".*\\.rs$".into()));
+    }
+
+    #[test]
+    fn test_parse_filter_expr_not() {
+        let expr = parse_filter_expr("!literal(.env)").unwrap();
+        assert_eq!(
+            expr,
+            FilterExpr::Not(Box::new(FilterExpr::Literal(".env".into())))
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_expr_and() {
+        let expr = parse_filter_expr("subpath(.) & !literal(.env)").unwrap();
+        assert_eq!(
+            expr,
+            FilterExpr::And(
+                Box::new(FilterExpr::Subpath(".".into())),
+                Box::new(FilterExpr::Not(Box::new(FilterExpr::Literal(
+                    ".env".into()
+                ))))
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_expr_or() {
+        let expr = parse_filter_expr("subpath(./src) | subpath(./test)").unwrap();
+        assert_eq!(
+            expr,
+            FilterExpr::Or(
+                Box::new(FilterExpr::Subpath("./src".into())),
+                Box::new(FilterExpr::Subpath("./test".into()))
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_expr_precedence() {
+        // & binds tighter than |
+        let expr = parse_filter_expr("subpath(./a) | subpath(./b) & !literal(.env)").unwrap();
+        // Should parse as: a | (b & !.env)
+        assert_eq!(
+            expr,
+            FilterExpr::Or(
+                Box::new(FilterExpr::Subpath("./a".into())),
+                Box::new(FilterExpr::And(
+                    Box::new(FilterExpr::Subpath("./b".into())),
+                    Box::new(FilterExpr::Not(Box::new(FilterExpr::Literal(
+                        ".env".into()
+                    ))))
+                ))
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_expr_parens() {
+        let expr = parse_filter_expr("(subpath(./a) | subpath(./b)) & !literal(.env)").unwrap();
+        assert_eq!(
+            expr,
+            FilterExpr::And(
+                Box::new(FilterExpr::Or(
+                    Box::new(FilterExpr::Subpath("./a".into())),
+                    Box::new(FilterExpr::Subpath("./b".into()))
+                )),
+                Box::new(FilterExpr::Not(Box::new(FilterExpr::Literal(
+                    ".env".into()
+                ))))
+            )
+        );
+    }
+
+    // --- Profile expression parsing ---
+
+    #[test]
+    fn test_parse_profile_expr_ref() {
+        let expr = parse_profile_expr("sandboxed").unwrap();
+        assert_eq!(expr, ProfileExpr::Ref("sandboxed".into()));
+    }
+
+    #[test]
+    fn test_parse_profile_expr_and() {
+        let expr = parse_profile_expr("local & safe-io").unwrap();
+        assert_eq!(
+            expr,
+            ProfileExpr::And(
+                Box::new(ProfileExpr::Ref("local".into())),
+                Box::new(ProfileExpr::Ref("safe-io".into()))
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_profile_expr_or() {
+        let expr = parse_profile_expr("a | b").unwrap();
+        assert_eq!(
+            expr,
+            ProfileExpr::Or(
+                Box::new(ProfileExpr::Ref("a".into())),
+                Box::new(ProfileExpr::Ref("b".into()))
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_profile_expr_not() {
+        let expr = parse_profile_expr("!unsafe").unwrap();
+        assert_eq!(
+            expr,
+            ProfileExpr::Not(Box::new(ProfileExpr::Ref("unsafe".into())))
+        );
+    }
+
+    #[test]
+    fn test_parse_profile_expr_complex() {
+        let expr = parse_profile_expr("sandboxed & git-safe-args").unwrap();
+        assert_eq!(
+            expr,
+            ProfileExpr::And(
+                Box::new(ProfileExpr::Ref("sandboxed".into())),
+                Box::new(ProfileExpr::Ref("git-safe-args".into()))
+            )
+        );
+    }
+
+    // --- Rule parsing with constraint suffix ---
+
+    #[test]
+    fn test_parse_rule_with_constraint() {
+        let stmt = parse_rule("allow agent bash git * : strict-git").unwrap();
+        assert_eq!(stmt.effect, Effect::Allow);
+        assert_eq!(stmt.profile, Some(ProfileExpr::Ref("strict-git".into())));
+    }
+
+    #[test]
+    fn test_parse_rule_with_inline_constraint() {
+        let stmt = parse_rule("allow agent read * : local & no-secrets").unwrap();
+        assert_eq!(stmt.effect, Effect::Allow);
+        assert_eq!(
+            stmt.profile,
+            Some(ProfileExpr::And(
+                Box::new(ProfileExpr::Ref("local".into())),
+                Box::new(ProfileExpr::Ref("no-secrets".into()))
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_rule_without_constraint() {
+        let stmt = parse_rule("deny agent bash rm *").unwrap();
+        assert_eq!(stmt.effect, Effect::Deny);
+        assert_eq!(stmt.profile, None);
+    }
+
+    // --- YAML with constraints and profiles ---
+
+    #[test]
+    fn test_parse_yaml_with_constraints() {
+        let yaml = r#"
+default: deny
+
+constraints:
+  local:
+    fs: subpath(.)
+  safe-io:
+    pipe: false
+    redirect: false
+
+profiles:
+  sandboxed: local & safe-io
+
+rules:
+  - "allow agent bash git * : sandboxed"
+  - deny agent bash rm *
+"#;
+        let doc = parse_yaml(yaml).unwrap();
+        assert_eq!(doc.policy.default, Effect::Deny);
+        assert_eq!(doc.constraints.len(), 2);
+        assert!(doc.constraints.contains_key("local"));
+        assert!(doc.constraints.contains_key("safe-io"));
+        assert_eq!(doc.profiles.len(), 1);
+        assert!(doc.profiles.contains_key("sandboxed"));
+        assert_eq!(doc.statements.len(), 2);
+
+        // First statement has a constraint
+        assert_eq!(
+            doc.statements[0].profile,
+            Some(ProfileExpr::Ref("sandboxed".into()))
+        );
+        // Second statement has no constraint
+        assert_eq!(doc.statements[1].profile, None);
+    }
+
+    // --- Mapping-format rules ---
+
+    #[test]
+    fn test_parse_yaml_mapping_format() {
+        let yaml = r#"
+default: ask
+
+rules:
+  allow bash git * : strict-git
+  allow bash cargo * : sandboxed
+  deny bash rm * : []
+"#;
+        let doc = parse_yaml(yaml).unwrap();
+        assert_eq!(doc.statements.len(), 3);
+
+        assert_eq!(doc.statements[0].effect, Effect::Allow);
+        assert_eq!(
+            doc.statements[0].profile,
+            Some(ProfileExpr::Ref("strict-git".into()))
+        );
+        assert!(doc.statements[0].matches("agent", &Verb::Execute, "git status"));
+
+        assert_eq!(doc.statements[1].effect, Effect::Allow);
+        assert_eq!(
+            doc.statements[1].profile,
+            Some(ProfileExpr::Ref("sandboxed".into()))
+        );
+
+        assert_eq!(doc.statements[2].effect, Effect::Deny);
+        assert_eq!(doc.statements[2].profile, None);
+        assert!(doc.statements[2].matches("agent", &Verb::Execute, "rm -rf /"));
+    }
+
+    #[test]
+    fn test_parse_yaml_mapping_format_no_constraint() {
+        let yaml = r#"
+rules:
+  allow bash git * : []
+  allow read * :
+  deny bash rm * : []
+"#;
+        let doc = parse_yaml(yaml).unwrap();
+        assert_eq!(doc.statements.len(), 3);
+
+        // All should have no profile/constraint
+        for stmt in &doc.statements {
+            assert_eq!(stmt.profile, None, "expected no constraint for: {:?}", stmt);
+        }
+    }
+
+    #[test]
+    fn test_parse_yaml_mapping_format_with_constraints() {
+        let yaml = r#"
+default: deny
+
+constraints:
+  local:
+    fs: subpath(.)
+  safe-io:
+    pipe: false
+    redirect: false
+
+profiles:
+  sandboxed: local & safe-io
+
+rules:
+  allow bash git * : sandboxed
+  allow read * : local
+  deny bash rm * : []
+"#;
+        let doc = parse_yaml(yaml).unwrap();
+        assert_eq!(doc.policy.default, Effect::Deny);
+        assert_eq!(doc.constraints.len(), 2);
+        assert_eq!(doc.profiles.len(), 1);
+        assert_eq!(doc.statements.len(), 3);
+
+        assert_eq!(
+            doc.statements[0].profile,
+            Some(ProfileExpr::Ref("sandboxed".into()))
+        );
+        assert_eq!(
+            doc.statements[1].profile,
+            Some(ProfileExpr::Ref("local".into()))
+        );
+        assert_eq!(doc.statements[2].profile, None);
+    }
+
+    #[test]
+    fn test_parse_yaml_mapping_format_inline_constraint() {
+        let yaml = r#"
+rules:
+  allow edit * : local & no-secrets
+"#;
+        let doc = parse_yaml(yaml).unwrap();
+        assert_eq!(doc.statements.len(), 1);
+        assert_eq!(
+            doc.statements[0].profile,
+            Some(ProfileExpr::And(
+                Box::new(ProfileExpr::Ref("local".into())),
+                Box::new(ProfileExpr::Ref("no-secrets".into()))
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_yaml_mapping_format_with_explicit_entity() {
+        let yaml = r#"
+rules:
+  allow agent:claude bash git * : strict-git
+  deny * bash rm * : []
+"#;
+        let doc = parse_yaml(yaml).unwrap();
+        assert_eq!(doc.statements.len(), 2);
+
+        assert_eq!(
+            doc.statements[0].entity,
+            Pattern::Match(MatchExpr::Typed {
+                entity_type: "agent".into(),
+                name: Some("claude".into()),
+            })
+        );
+        assert_eq!(doc.statements[1].entity, Pattern::Match(MatchExpr::Any));
+    }
+
+    #[test]
+    fn test_yaml_mapping_serialization_roundtrip() {
+        let yaml = r#"
+default: ask
+
+constraints:
+  safe-io:
+    pipe: false
+
+rules:
+  allow bash git * : safe-io
+  deny bash rm * : []
+"#;
+        let doc = parse_yaml(yaml).unwrap();
+        let serialized = to_yaml(&doc).unwrap();
+        let reparsed = parse_yaml(&serialized).unwrap();
+
+        assert_eq!(doc.policy.default, reparsed.policy.default);
+        assert_eq!(doc.statements.len(), reparsed.statements.len());
+        for (a, b) in doc.statements.iter().zip(reparsed.statements.iter()) {
+            assert_eq!(a.effect, b.effect);
+            assert_eq!(a.profile, b.profile);
+        }
     }
 }

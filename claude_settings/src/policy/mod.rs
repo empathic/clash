@@ -38,6 +38,7 @@
 //!     noun: Pattern::Match(MatchExpr::Glob("git *".into())),
 //!     reason: None,
 //!     delegate: None,
+//!     profile: None,
 //! };
 //! ```
 
@@ -59,6 +60,14 @@ pub struct PolicyDocument {
     /// Legacy-compatible simple permissions (backward compat with Claude Code format).
     #[serde(default)]
     pub permissions: Option<LegacyPermissions>,
+
+    /// Named constraint primitives (typed maps with fs, pipe, redirect, etc.).
+    #[serde(default)]
+    pub constraints: HashMap<String, ConstraintDef>,
+
+    /// Named profiles (boolean expressions over constraint/profile names).
+    #[serde(default)]
+    pub profiles: HashMap<String, ProfileExpr>,
 
     /// The list of policy statements.
     #[serde(default)]
@@ -129,6 +138,11 @@ pub struct Statement {
     /// Delegation configuration (required when effect = delegate).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegate: Option<DelegateConfig>,
+
+    /// Optional constraint binding (profile expression).
+    /// When present, the rule only matches if the constraint is satisfied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ProfileExpr>,
 }
 
 /// The effect a statement produces.
@@ -322,6 +336,147 @@ impl fmt::Display for Verb {
     }
 }
 
+/// A named constraint primitive with typed properties.
+///
+/// Each field is optional; only specified fields are checked.
+/// Multiple fields are ANDed together (all must be satisfied).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConstraintDef {
+    /// Filesystem filter expression (subpath, literal, regex with boolean ops).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fs: Option<FilterExpr>,
+    /// Whether pipe operators are allowed in the command string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipe: Option<bool>,
+    /// Whether I/O redirects are allowed in the command string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirect: Option<bool>,
+    /// Arguments that must not appear in the command.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "forbid-args"
+    )]
+    pub forbid_args: Option<Vec<String>>,
+    /// Arguments that must appear in the command (at least one).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "require-args"
+    )]
+    pub require_args: Option<Vec<String>>,
+}
+
+/// A filesystem filter expression (SBPL-style).
+///
+/// Composes with boolean operators to express complex path constraints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FilterExpr {
+    /// Resolved path must be under this directory.
+    Subpath(String),
+    /// Exactly this path.
+    Literal(String),
+    /// Regex match on resolved path.
+    Regex(String),
+    /// Both filters must match.
+    And(Box<FilterExpr>, Box<FilterExpr>),
+    /// At least one filter must match.
+    Or(Box<FilterExpr>, Box<FilterExpr>),
+    /// Filter must NOT match.
+    Not(Box<FilterExpr>),
+}
+
+/// A profile expression — references to constraints/profiles composed with boolean ops.
+///
+/// Used in profile definitions and rule constraint bindings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileExpr {
+    /// Reference to a named constraint or profile.
+    Ref(String),
+    /// Both expressions must be satisfied.
+    And(Box<ProfileExpr>, Box<ProfileExpr>),
+    /// At least one expression must be satisfied.
+    Or(Box<ProfileExpr>, Box<ProfileExpr>),
+    /// Expression must NOT be satisfied.
+    Not(Box<ProfileExpr>),
+}
+
+impl fmt::Display for FilterExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FilterExpr::Subpath(s) => write!(f, "subpath({})", s),
+            FilterExpr::Literal(s) => write!(f, "literal({})", s),
+            FilterExpr::Regex(s) => write!(f, "regex({})", s),
+            FilterExpr::Not(inner) => write!(f, "!{}", inner),
+            FilterExpr::And(a, b) => write!(f, "{} & {}", a, b),
+            FilterExpr::Or(a, b) => write!(f, "{} | {}", a, b),
+        }
+    }
+}
+
+impl Serialize for FilterExpr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for FilterExpr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        parse::parse_filter_expr(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+impl fmt::Display for ProfileExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProfileExpr::Ref(name) => write!(f, "{}", name),
+            ProfileExpr::Not(inner) => write!(f, "!{}", inner),
+            ProfileExpr::And(a, b) => write!(f, "{} & {}", a, b),
+            ProfileExpr::Or(a, b) => write!(f, "{} | {}", a, b),
+        }
+    }
+}
+
+impl Serialize for ProfileExpr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for ProfileExpr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        parse::parse_profile_expr(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Context for evaluating constraints against a specific request.
+pub struct EvalContext<'a> {
+    /// The entity making the request.
+    pub entity: &'a str,
+    /// The verb (action) being performed.
+    pub verb: &'a Verb,
+    /// The noun (resource) being acted on.
+    pub noun: &'a str,
+    /// The current working directory (for resolving relative paths).
+    pub cwd: &'a str,
+    /// The raw tool input JSON (for extracting command strings, file paths, etc.).
+    pub tool_input: &'a serde_json::Value,
+}
+
 /// Configuration for delegating a permission decision to an external evaluator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegateConfig {
@@ -498,6 +653,7 @@ mod tests {
             noun: Pattern::Match(MatchExpr::Glob("git *".into())),
             reason: None,
             delegate: None,
+            profile: None,
         };
 
         assert!(stmt.matches("agent:claude", &Verb::Execute, "git status"));
@@ -520,6 +676,7 @@ mod tests {
             noun: Pattern::Match(MatchExpr::Glob("~/config/*".into())),
             reason: Some("Only users can read config".into()),
             delegate: None,
+            profile: None,
         };
 
         // Agent trying to read config → matches (agent is !user)

@@ -134,6 +134,8 @@ impl ClashSettings {
         Some(PolicyDocument {
             policy: PolicyConfig::default(),
             permissions: None,
+            constraints: Default::default(),
+            profiles: Default::default(),
             statements,
         })
     }

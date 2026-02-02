@@ -1,4 +1,4 @@
-use claude_settings::policy::{Effect, Verb};
+use claude_settings::policy::{Effect, EvalContext, Verb};
 use claude_settings::sandbox::SandboxPolicy;
 use tracing::{Level, info, instrument, warn};
 
@@ -50,7 +50,16 @@ fn check_permission_policy(
     // so we treat all invocations as coming from "agent".
     let entity = "agent";
 
-    let decision = compiled.evaluate(entity, &verb, &noun);
+    // Build evaluation context with cwd and tool_input for constraint evaluation.
+    let ctx = EvalContext {
+        entity,
+        verb: &verb,
+        noun: &noun,
+        cwd: &input.cwd,
+        tool_input: &input.tool_input,
+    };
+
+    let decision = compiled.evaluate_with_context(&ctx);
     info!(
         entity,
         verb = %verb,
@@ -187,6 +196,8 @@ mod tests {
         let doc = PolicyDocument {
             policy: PolicyConfig::default(),
             permissions: None,
+            constraints: Default::default(),
+            profiles: Default::default(),
             statements,
         };
         ClashSettings {
@@ -305,6 +316,157 @@ rules:
             check_permission(&bash_input("npm run test"), &settings)?,
             HookOutput::allow(Some("policy: allowed".into())),
         );
+        Ok(())
+    }
+
+    // --- Constraint integration tests ---
+
+    fn bash_input_with_cwd(command: &str, cwd: &str) -> ToolUseHookInput {
+        ToolUseHookInput {
+            tool_name: "Bash".into(),
+            tool_input: json!({"command": command}),
+            cwd: cwd.into(),
+            ..Default::default()
+        }
+    }
+
+    fn read_input_with_cwd(file_path: &str, cwd: &str) -> ToolUseHookInput {
+        ToolUseHookInput {
+            tool_name: "Read".into(),
+            tool_input: json!({"file_path": file_path}),
+            cwd: cwd.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_constraint_pipe_blocks_piped_command() -> Result<()> {
+        let settings = settings_with_policy(
+            "\
+constraints:
+  safe-io:
+    pipe: false
+rules:
+  - \"allow * bash * : safe-io\"
+",
+        );
+        // Command without pipe → allowed
+        let result = check_permission(&bash_input("ls -la"), &settings)?;
+        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())));
+
+        // Command with pipe → constraint fails → falls through to default (ask)
+        let result = check_permission(&bash_input("cat foo | grep bar"), &settings)?;
+        assert_eq!(result, HookOutput::ask(Some("policy: ask".into())));
+        Ok(())
+    }
+
+    #[test]
+    fn test_constraint_forbid_args_blocks_force_push() -> Result<()> {
+        let settings = settings_with_policy(
+            "\
+constraints:
+  git-safe:
+    forbid-args:
+      - --force
+      - --force-with-lease
+rules:
+  - \"allow * bash git * : git-safe\"
+",
+        );
+        // git push without --force → allowed
+        let result = check_permission(&bash_input("git push origin main"), &settings)?;
+        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())));
+
+        // git push --force → constraint fails
+        let result = check_permission(&bash_input("git push --force origin main"), &settings)?;
+        assert_eq!(result, HookOutput::ask(Some("policy: ask".into())));
+        Ok(())
+    }
+
+    #[test]
+    fn test_constraint_fs_subpath_with_cwd() -> Result<()> {
+        let settings = settings_with_policy(
+            "\
+constraints:
+  local:
+    fs: subpath(.)
+rules:
+  - \"allow * read * : local\"
+",
+        );
+        // File under cwd → allowed
+        let result = check_permission(
+            &read_input_with_cwd("/home/user/project/src/main.rs", "/home/user/project"),
+            &settings,
+        )?;
+        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())));
+
+        // File outside cwd → constraint fails
+        let result = check_permission(
+            &read_input_with_cwd("/etc/passwd", "/home/user/project"),
+            &settings,
+        )?;
+        assert_eq!(result, HookOutput::ask(Some("policy: ask".into())));
+        Ok(())
+    }
+
+    #[test]
+    fn test_profile_composition_integration() -> Result<()> {
+        let settings = settings_with_policy(
+            "\
+constraints:
+  local:
+    fs: subpath(.)
+  safe-io:
+    pipe: false
+    redirect: false
+  git-safe:
+    forbid-args:
+      - --force
+      - --hard
+profiles:
+  sandboxed: local & safe-io
+  strict-git: sandboxed & git-safe
+rules:
+  - \"allow * bash git * : strict-git\"
+  - \"allow * bash cargo * : sandboxed\"
+  - \"allow * read * : local\"
+  - deny * bash rm *
+",
+        );
+
+        // git status (no pipe, no force, within cwd) → allowed
+        let result = check_permission(
+            &bash_input_with_cwd("git status", "/home/user/project"),
+            &settings,
+        )?;
+        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())));
+
+        // git push --force → git-safe constraint fails → default
+        let result = check_permission(
+            &bash_input_with_cwd("git push --force origin main", "/home/user/project"),
+            &settings,
+        )?;
+        assert_eq!(result, HookOutput::ask(Some("policy: ask".into())));
+
+        // rm -rf / → unconditional deny
+        let result = check_permission(&bash_input("rm -rf /"), &settings)?;
+        assert_eq!(result, HookOutput::deny("policy: denied".into()));
+
+        // read file under cwd → allowed
+        let result = check_permission(
+            &read_input_with_cwd("/home/user/project/Cargo.toml", "/home/user/project"),
+            &settings,
+        )?;
+        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())));
+
+        // read file outside cwd → default
+        let result = check_permission(
+            &read_input_with_cwd("/etc/passwd", "/home/user/project"),
+            &settings,
+        )?;
+        assert_eq!(result, HookOutput::ask(Some("policy: ask".into())));
+
         Ok(())
     }
 }

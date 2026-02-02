@@ -45,14 +45,60 @@ pub struct PolicySpec {
     #[serde(default = "PolicySpec::default_effect")]
     pub default: String,
 
-    /// Policy rules in compact format (e.g. "allow * bash git *").
-    #[serde(default)]
+    /// Policy rules — supports both YAML list and mapping formats.
+    #[serde(default, deserialize_with = "deserialize_rules")]
     pub rules: Vec<String>,
 }
 
 impl PolicySpec {
     fn default_effect() -> String {
         "ask".into()
+    }
+}
+
+/// Deserialize rules from either a YAML sequence or mapping.
+fn deserialize_rules<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value = serde_yaml::Value::deserialize(deserializer)?;
+    match value {
+        serde_yaml::Value::Sequence(seq) => seq
+            .into_iter()
+            .map(|v| match v {
+                serde_yaml::Value::String(s) => Ok(s),
+                _ => Err(Error::custom("rule must be a string")),
+            })
+            .collect(),
+        serde_yaml::Value::Mapping(map) => {
+            let mut rules = Vec::new();
+            for (key, value) in map {
+                let rule_key = match key {
+                    serde_yaml::Value::String(s) => s,
+                    _ => return Err(Error::custom("rule key must be a string")),
+                };
+                let constraint = match &value {
+                    serde_yaml::Value::String(s) => Some(s.clone()),
+                    serde_yaml::Value::Null => None,
+                    serde_yaml::Value::Sequence(seq) if seq.is_empty() => None,
+                    _ => {
+                        return Err(Error::custom(format!(
+                            "constraint for '{}' must be a string, null, or []",
+                            rule_key
+                        )));
+                    }
+                };
+                if let Some(constraint) = constraint {
+                    rules.push(format!("{} : {}", rule_key, constraint));
+                } else {
+                    rules.push(rule_key);
+                }
+            }
+            Ok(rules)
+        }
+        serde_yaml::Value::Null => Ok(Vec::new()),
+        _ => Err(Error::custom("rules must be a sequence or mapping")),
     }
 }
 

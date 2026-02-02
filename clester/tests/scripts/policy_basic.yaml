@@ -7,10 +7,10 @@ clash:
   policy:
     default: ask
     rules:
-      - "allow * bash git *"
-      - "allow * read *"
-      - "deny * read .env"
-      - "deny * bash rm *"
+      allow bash git * : []
+      allow read * : []
+      deny read .env : []
+      deny bash rm * : []
 
 steps:
   - name: git status allowed by policy

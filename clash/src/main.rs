@@ -440,6 +440,8 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
     let doc = PolicyDocument {
         policy: PolicyConfig { default },
         permissions: None,
+        constraints: Default::default(),
+        profiles: Default::default(),
         statements,
     };
 

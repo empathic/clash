@@ -154,6 +154,13 @@ fn write_clash_settings(home_dir: &Path, clash: Option<&ClashConfig>) -> Result<
 }
 
 /// Write ~/.clash/policy.yaml from a PolicySpec.
+///
+/// Rules are written as a YAML mapping (new format):
+/// ```yaml
+/// rules:
+///   allow bash git * : strict-git
+///   deny bash rm * : []
+/// ```
 fn write_policy_file(home_dir: &Path, policy: &PolicySpec) -> Result<()> {
     let path = home_dir.join(".clash/policy.yaml");
     let mut content = format!("default: {}\n", policy.default);
@@ -161,7 +168,13 @@ fn write_policy_file(home_dir: &Path, policy: &PolicySpec) -> Result<()> {
     if !policy.rules.is_empty() {
         content.push_str("\nrules:\n");
         for rule in &policy.rules {
-            content.push_str(&format!("  - {}\n", rule));
+            // If the rule already contains ` : `, write it as a mapping entry directly.
+            // Otherwise, append `: []` (no constraint).
+            if rule.rfind(" : ").is_some() {
+                content.push_str(&format!("  {}\n", rule));
+            } else {
+                content.push_str(&format!("  {} : []\n", rule.trim()));
+            }
         }
     }
 
@@ -264,8 +277,9 @@ mod tests {
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
         let content = std::fs::read_to_string(env.home_dir.join(".clash/policy.yaml")).unwrap();
         assert!(content.contains("default: ask"));
-        assert!(content.contains("allow * bash git *"));
-        assert!(content.contains("deny * read .env"));
+        // Rules are written in mapping format (rule : constraint or rule : [])
+        assert!(content.contains("allow * bash git * : []"));
+        assert!(content.contains("deny * read .env : []"));
     }
 
     #[test]
