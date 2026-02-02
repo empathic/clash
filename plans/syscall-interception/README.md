@@ -467,12 +467,27 @@ The backend implementations are internal — users never interact with Landlock
 or Seatbelt directly. They write capability rules, and the backend does the
 right thing.
 
-### Helper Binary
+### Unified CLI
 
-Single entry point on both platforms:
+The sandbox is a subcommand of `clash` itself — no separate binary:
 
 ```
-clash-sandbox --policy <json> --cwd /project -- bash -c "npm test"
+# Apply sandbox and exec a command:
+clash sandbox exec --policy <json> --cwd /project -- bash -c "npm test"
+
+# Launch Claude Code with clash managing hooks + sandbox:
+clash launch [-- claude-code-args...]
+
+# Test sandbox enforcement interactively:
+clash sandbox test --policy <json> --cwd /project -- ls -la /etc
+```
+
+This works because the sandbox setup (Landlock/seccomp/Seatbelt) is applied to the
+current process and then `execvp` replaces it. The `clash` binary is already on PATH
+via the plugin, so the PreToolUse hook can rewrite Bash commands to:
+
+```
+clash sandbox exec --policy '...' --cwd $CWD -- bash -c "git status"
 ```
 
 Internally:
@@ -504,79 +519,90 @@ These are backend details — the user's policy YAML is the same on both platfor
 This is the same approach used by OpenAI Codex CLI, the `hakoniwa` crate, Google's
 Sandbox2, and various container runtimes. It's battle-tested and well-understood.
 
-```
-┌──────────────────────────────────────────────────────┐
-│                    Claude Code                        │
-│                                                       │
-│  ┌─────────────────────────────────────────────────┐  │
-│  │            Clash (hook process)                  │  │
-│  │                                                  │  │
-│  │  1. Receive PreToolUse hook input                │  │
-│  │  2. Evaluate policy (existing logic)             │  │
-│  │  3. If allowed → compute sandbox policy          │  │
-│  │  4. Return allow + sandbox instructions          │  │
-│  └──────────┬──────────────────────────────────────┘  │
-│             │                                         │
-│             ▼                                         │
-│  ┌─────────────────────────────────────────────────┐  │
-│  │         clash-sandbox (helper binary)            │  │
-│  │                                                  │  │
-│  │  1. Parse sandbox policy from args/env           │  │
-│  │  2. Apply Landlock rules (filesystem + network)  │  │
-│  │  3. Apply seccomp-BPF filter (syscall blocklist) │  │
-│  │  4. Drop privileges (no_new_privs)               │  │
-│  │  5. execvp(target_command)                       │  │
-│  │                                                  │  │
-│  │  ← restrictions inherited by all descendants →   │  │
-│  └─────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────┘
-```
+### Unified CLI
 
-### How It Integrates With Clash
-
-Currently, clash operates as a **hook** — it receives tool invocations from Claude Code,
-evaluates policy, and returns allow/deny/ask. It does not control *how* commands are
-executed. Enforcement happens in two complementary layers:
-
-#### Layer 1: Policy Evaluation (existing)
-The current clash policy engine continues to work as-is. It decides whether a tool
-invocation is allowed based on tool name and arguments. This is the "intent" layer.
-
-#### Layer 2: Runtime Sandbox (new)
-When a Bash tool invocation is allowed, clash can additionally specify **sandbox
-constraints** that Claude Code should apply to the actual process execution. This is the
-"enforcement" layer.
-
-There are two integration models:
-
-**Model A: Sandbox Helper Binary (recommended)**
-
-Clash provides a `clash-sandbox` binary. When a Bash tool use is allowed, clash's hook
-response tells Claude Code to execute the command via the sandbox helper instead of
-directly:
+Clash is a single binary with multiple roles:
 
 ```
-# Instead of executing:
-bash -c "git status"
-
-# Claude Code would execute:
-clash-sandbox --read-only / --writable $CWD --no-network -- bash -c "git status"
+clash launch           — start Claude Code with clash managing hooks + sandbox
+clash hook pre-tool-use  — existing: evaluate intent policy
+clash hook post-tool-use — existing: informational
+clash sandbox exec     — new: apply sandbox and exec a command
+clash sandbox test     — new: test sandbox interactively
+clash migrate          — existing: convert legacy permissions
 ```
 
-This requires Claude Code to support a "wrapper command" mechanism in its hook response,
-or clash registers itself as the command executor.
+### How It Works
 
-**Model B: Hook-Based Sandbox Setup (alternative)**
+```
+┌─────────────────────────────────────────────────────────┐
+│  $ clash launch                                          │
+│  (starts Claude Code with clash registered as hook)      │
+│                                                          │
+│  Claude Code calls: clash hook pre-tool-use              │
+│  ┌─────────────────────────────────────────────────────┐ │
+│  │  clash hook pre-tool-use                            │ │
+│  │                                                     │ │
+│  │  1. Receive tool input from stdin                   │ │
+│  │  2. Evaluate intent policy (allow/deny/ask)         │ │
+│  │  3. If allowed + sandbox policy exists:             │ │
+│  │     rewrite command via updated_input to:           │ │
+│  │     "clash sandbox exec --policy ... -- <cmd>"      │ │
+│  │  4. Return allow + updated_input                    │ │
+│  └─────────────────────────────────────────────────────┘ │
+│                                                          │
+│  Claude Code executes the rewritten command:             │
+│  ┌─────────────────────────────────────────────────────┐ │
+│  │  clash sandbox exec --policy <json> -- bash -c ...  │ │
+│  │                                                     │ │
+│  │  1. Parse sandbox policy from --policy              │ │
+│  │  2. Apply Landlock rules (Linux) or SBPL (macOS)    │ │
+│  │  3. Apply seccomp-BPF filter (Linux only)           │ │
+│  │  4. Drop privileges (no_new_privs)                  │ │
+│  │  5. execvp(target_command)                          │ │
+│  │                                                     │ │
+│  │  ← restrictions inherited by all descendants →      │ │
+│  └─────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────┘
+```
 
-If Claude Code supports `PostToolUse` hooks that run in the same process context before
-the tool executes, clash could set up Landlock/seccomp in-process. However, this is
-unlikely given Claude Code's architecture — hooks are separate processes.
+### Two Enforcement Layers, One Binary
 
-**Model C: Plugin-Managed Execution (future)**
+**Layer 1: Intent Policy** (existing `clash hook pre-tool-use`)
 
-Clash evolves from a hook-based tool into a plugin that manages command execution itself.
-The plugin receives tool invocations and handles the full lifecycle: policy check, sandbox
-setup, execution, and result capture.
+Decides *whether* a tool runs. Uses the existing statement-based policy engine
+(`allow * bash git *`, `deny * bash rm -rf *`). Returns allow/deny/ask.
+
+**Layer 2: Capability Sandbox** (new `clash sandbox exec`)
+
+Limits *what the command can actually do* once running. Kernel-enforced,
+irrevocable, inherited by all child processes.
+
+Both layers are enforced by the same `clash` binary in different invocation modes.
+The hook rewrites the command so that Claude Code unknowingly runs it through the
+sandbox. This uses the existing `updated_input` field in the hook protocol — no
+changes to Claude Code required.
+
+### `clash launch`
+
+The `launch` subcommand is the user-facing entry point:
+
+```bash
+# Start Claude Code with clash enforcement
+clash launch
+
+# Pass args through to claude
+clash launch -- --model sonnet --verbose
+
+# Launch with a specific policy file
+clash launch --policy ./strict-policy.yaml
+```
+
+`clash launch` does:
+1. Ensures hooks are registered (sets up the hook config pointing to itself)
+2. Loads and validates the sandbox policy
+3. Spawns Claude Code as a child process with the right hook environment
+4. Exits when Claude Code exits
 
 ### Policy Mapping
 
@@ -616,21 +642,23 @@ check AND operates within the sandbox.
 
 **Goal:** Define `Cap`, `SandboxPolicy`, `SandboxRule` and implement Linux enforcement.
 
-1. Create `clash-sandbox/` crate in workspace
-2. Define `Cap` bitflags, `SandboxPolicy`, `SandboxRule`, `SandboxBackend` trait
-3. Implement `LinuxSandbox` backend:
+1. Add `Cap` bitflags, `SandboxPolicy`, `SandboxRule`, `SandboxBackend` trait to
+   a new `sandbox` module in `claude_settings` (shared types) or `clash` (if
+   clash-specific)
+2. Add `clash sandbox exec` and `clash sandbox test` subcommands to `clash/src/main.rs`
+3. Implement `LinuxSandbox` backend (behind `#[cfg(target_os = "linux")]`):
    - Map `Cap` flags → Landlock `AccessFs` bitflags
    - `landlock` crate for filesystem access control
    - `seccompiler` (pure Rust) for network filtering via seccomp
    - `PR_SET_NO_NEW_PRIVS` for privilege escalation prevention
-4. CLI: `clash-sandbox --policy <json> --cwd <path> -- <command> [args...]`
+4. Add `landlock` + `seccompiler` as Linux-only dependencies in `clash/Cargo.toml`
 5. Test on Linux with common commands (git, npm, cargo, python, etc.)
 
 ### Phase 2: macOS Seatbelt Backend
 
 **Goal:** Implement macOS enforcement via the same `Cap`/`SandboxPolicy` API.
 
-1. Implement `MacOSSandbox` backend:
+1. Implement `MacOSSandbox` backend (behind `#[cfg(target_os = "macos")]`):
    - Map `Cap` flags → SBPL operations (`file-read*`, `file-write-data`,
      `file-write-create`, `file-write-unlink`, `process-exec`)
    - Generate SBPL profile string from `SandboxPolicy`
@@ -639,28 +667,42 @@ check AND operates within the sandbox.
    - Always allow `sysctl-read`, `mach-lookup` (tools won't function without these)
    - `process-fork` must be allowed for subprocesses
    - Test Seatbelt-specific edge cases (dyld, signed binaries, etc.)
-3. Test on macOS with same command suite
+3. `clash sandbox exec` now works on both platforms — same subcommand, different backend
+4. Test on macOS with same command suite
 
-### Phase 3: Policy Language Extension
+### Phase 3: Policy Language + Hook Integration
 
-**Goal:** Parse `sandbox:` YAML into `SandboxPolicy` at policy load time.
+**Goal:** Parse `sandbox:` YAML and wire up the hook to rewrite commands.
 
 1. Add `sandbox:` section to policy.yaml schema
 2. Parse capability expressions (`read + write + create`)
 3. Implement policy-to-`SandboxPolicy` compilation
-4. Per-rule sandbox overrides (e.g., `git push` needs network, `git status` doesn't)
+4. Modify `check_permission` in `permissions.rs`: when allowing a Bash tool and
+   a sandbox policy exists, set `updated_input` to rewrite the command as
+   `clash sandbox exec --policy '...' --cwd $CWD -- <original command>`
 5. Environment variable expansion (`$CWD`, `$HOME`, `$TMPDIR`)
 
-### Phase 4: Integration & Testing
+### Phase 4: `clash launch`
 
-**Goal:** End-to-end testing with Claude Code on both platforms.
+**Goal:** Provide a single command to start Claude Code with full enforcement.
 
-1. Add clester tests for sandbox behavior
-2. Test common tool invocations work under sandbox on both platforms
-3. Test that violations are properly blocked and reported
-4. Performance benchmarking (sandbox setup overhead)
-5. Graceful degradation: older kernels, containerized environments, etc.
-6. Platform-specific edge case testing (macOS: `uv`/`cargo` Mach IPC needs,
+1. Add `clash launch` subcommand
+2. Generate/validate hook configuration pointing to `clash hook pre-tool-use` etc.
+3. Spawn Claude Code as a child process with hook env set up
+4. Pass through args to Claude Code
+5. Support `--policy <file>` to override default policy path
+
+### Phase 5: Testing
+
+**Goal:** End-to-end testing on both platforms.
+
+1. Unit tests for `Cap` → Landlock/SBPL compilation
+2. `clash sandbox test` subcommand for interactive testing
+3. Add clester tests for sandbox behavior via hook integration
+4. Test common tool invocations work under sandbox on both platforms
+5. Test that violations are properly blocked and reported
+6. Graceful degradation: older kernels, containerized environments, etc.
+7. Platform-specific edge case testing (macOS: `uv`/`cargo` Mach IPC needs,
    Linux: `/proc` access for tools, nested container environments)
 
 ---
