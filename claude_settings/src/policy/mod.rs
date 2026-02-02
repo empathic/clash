@@ -50,6 +50,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::sandbox::{Cap, NetworkPolicy};
+
 /// A complete policy document, as loaded from a TOML file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyDocument {
@@ -343,8 +345,17 @@ impl fmt::Display for Verb {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConstraintDef {
     /// Filesystem filter expression (subpath, literal, regex with boolean ops).
+    /// For bash rules, `fs` generates sandbox rules instead of a permission guard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fs: Option<FilterExpr>,
+    /// Filesystem capabilities for sandbox rules (default: all).
+    /// Only meaningful when `fs` is present on a bash rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caps: Option<Cap>,
+    /// Network policy for sandbox (deny or allow, default: allow).
+    /// Only meaningful on bash rules with `fs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkPolicy>,
     /// Whether pipe operators are allowed in the command string.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipe: Option<bool>,

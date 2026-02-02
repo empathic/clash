@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use claude_settings::sandbox::{Cap, NetworkPolicy, RuleEffect, SandboxPolicy};
+use claude_settings::sandbox::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy};
 use landlock::{
     ABI, Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset, RulesetAttr,
     RulesetCreatedAttr, RulesetStatus,
@@ -135,6 +135,11 @@ fn install_landlock_rules(policy: &SandboxPolicy, cwd: &str) -> Result<(), Sandb
 
     // Apply each rule
     for rule in &policy.rules {
+        if rule.path_match == PathMatch::Regex {
+            // Landlock can't enforce regex path rules — skip silently.
+            // Regex rules are enforced on macOS via Seatbelt SBPL.
+            continue;
+        }
         if rule.effect == RuleEffect::Allow {
             let resolved = SandboxPolicy::resolve_path(&rule.path, cwd);
             let access = cap_to_access_fs(rule.caps);
@@ -212,13 +217,15 @@ fn install_seccomp_network_filter() -> Result<(), SandboxError> {
     }
 
     // For socket() and socketpair(): only deny if domain != AF_UNIX
-    let unix_only_rule = SeccompRule::new(vec![SeccompCondition::new(
-        0, // first argument: domain
-        SeccompCmpArgLen::Dword,
-        SeccompCmpOp::Ne,
-        libc::AF_UNIX as u64,
-    )
-    .map_err(|e| SandboxError::Apply(format!("seccomp condition: {}", e)))?])
+    let unix_only_rule = SeccompRule::new(vec![
+        SeccompCondition::new(
+            0, // first argument: domain
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Ne,
+            libc::AF_UNIX as u64,
+        )
+        .map_err(|e| SandboxError::Apply(format!("seccomp condition: {}", e)))?,
+    ])
     .map_err(|e| SandboxError::Apply(format!("seccomp rule: {}", e)))?;
 
     rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);

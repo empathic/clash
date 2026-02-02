@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
-
 use super::*;
+use crate::sandbox::{Cap, NetworkPolicy, RuleEffect, SandboxPolicy, SandboxRule};
 
 /// A compiled policy ready for fast evaluation.
 #[derive(Debug)]
@@ -40,6 +40,8 @@ pub struct CompiledStatement {
 #[derive(Debug)]
 struct CompiledConstraintDef {
     fs: Option<CompiledFilterExpr>,
+    caps: Option<Cap>,
+    network: Option<NetworkPolicy>,
     pipe: Option<bool>,
     redirect: Option<bool>,
     forbid_args: Option<Vec<String>>,
@@ -164,6 +166,9 @@ impl CompiledPolicy {
         let mut ask_reason: Option<&str> = None;
         let mut delegate_config: Option<&DelegateConfig> = None;
 
+        // Track profiles from matched allow statements (for sandbox generation).
+        let mut allow_profiles: Vec<&ProfileExpr> = Vec::new();
+
         for stmt in &self.statements {
             if stmt.matches(ctx.entity, ctx.verb, ctx.noun)
                 && self.check_profile(&stmt.profile, ctx)
@@ -183,6 +188,9 @@ impl CompiledPolicy {
                     }
                     Effect::Allow => {
                         has_allow = true;
+                        if let Some(ref profile) = stmt.profile {
+                            allow_profiles.push(profile);
+                        }
                     }
                     Effect::Delegate => {
                         has_delegate = true;
@@ -200,6 +208,7 @@ impl CompiledPolicy {
                 effect: Effect::Deny,
                 reason: deny_reason.map(|s| s.to_string()),
                 delegate: None,
+                sandbox: None,
             };
         }
         if has_ask {
@@ -207,13 +216,21 @@ impl CompiledPolicy {
                 effect: Effect::Ask,
                 reason: ask_reason.map(|s| s.to_string()),
                 delegate: None,
+                sandbox: None,
             };
         }
         if has_allow {
+            // For bash commands, generate sandbox from matched allow profiles.
+            let sandbox = if *ctx.verb == Verb::Execute {
+                self.generate_sandbox_from_profiles(&allow_profiles, ctx.cwd)
+            } else {
+                None
+            };
             return PolicyDecision {
                 effect: Effect::Allow,
                 reason: None,
                 delegate: None,
+                sandbox,
             };
         }
         if has_delegate {
@@ -221,6 +238,7 @@ impl CompiledPolicy {
                 effect: Effect::Delegate,
                 reason: None,
                 delegate: delegate_config.cloned(),
+                sandbox: None,
             };
         }
 
@@ -229,6 +247,7 @@ impl CompiledPolicy {
             effect: self.default,
             reason: None,
             delegate: None,
+            sandbox: None,
         }
     }
 
@@ -265,6 +284,171 @@ impl CompiledPolicy {
             ProfileExpr::Not(inner) => !self.eval_profile_expr(inner, ctx),
         }
     }
+
+    /// Generate a sandbox policy from the profiles of matched allow statements.
+    ///
+    /// Walks each profile expression tree collecting `fs`, `caps`, and `network`
+    /// from referenced constraints. Then generates sandbox rules from the `fs` filters.
+    ///
+    /// Composition rules:
+    /// - `caps`: intersection (most restrictive wins)
+    /// - `network`: deny wins over allow
+    /// - `fs` rules: all collected into one sandbox rule list
+    /// - No `fs` in any constraint → no sandbox generated
+    fn generate_sandbox_from_profiles(
+        &self,
+        profiles: &[&ProfileExpr],
+        cwd: &str,
+    ) -> Option<SandboxPolicy> {
+        let mut all_fs: Vec<(&CompiledFilterExpr, RuleEffect)> = Vec::new();
+        let mut merged_caps: Option<Cap> = None;
+        let mut merged_network = NetworkPolicy::Allow;
+
+        for profile in profiles {
+            self.collect_profile_sandbox_parts(
+                profile,
+                &mut all_fs,
+                &mut merged_caps,
+                &mut merged_network,
+            );
+        }
+
+        // No fs constraints → no sandbox
+        if all_fs.is_empty() {
+            return None;
+        }
+
+        // Determine final caps for sandbox rules.
+        // If no explicit caps were specified, use all caps.
+        let final_caps = merged_caps.unwrap_or(Cap::all());
+
+        // Generate sandbox rules from collected fs expressions.
+        let mut rules = Vec::new();
+        for (fs_expr, effect) in &all_fs {
+            filter_to_sandbox_rules(fs_expr, *effect, final_caps, cwd, &mut rules);
+        }
+
+        Some(SandboxPolicy {
+            default: Cap::READ | Cap::EXECUTE,
+            rules,
+            network: merged_network,
+        })
+    }
+
+    /// Walk a profile expression tree collecting sandbox-relevant parts
+    /// (fs filters, caps, network) from referenced constraints.
+    fn collect_profile_sandbox_parts<'a>(
+        &'a self,
+        expr: &ProfileExpr,
+        fs_exprs: &mut Vec<(&'a CompiledFilterExpr, RuleEffect)>,
+        caps: &mut Option<Cap>,
+        network: &mut NetworkPolicy,
+    ) {
+        match expr {
+            ProfileExpr::Ref(name) => {
+                // First check if it's a named profile (composite) — recurse
+                if let Some(profile_expr) = self.profiles.get(name) {
+                    self.collect_profile_sandbox_parts(profile_expr, fs_exprs, caps, network);
+                    return;
+                }
+                // Then check if it's a named constraint (primitive)
+                if let Some(constraint) = self.constraints.get(name) {
+                    if let Some(ref fs) = constraint.fs {
+                        fs_exprs.push((fs, RuleEffect::Allow));
+                    }
+                    if let Some(c) = constraint.caps {
+                        // Intersection: most restrictive wins
+                        *caps = Some(caps.map_or(c, |existing| existing & c));
+                    }
+                    if let Some(n) = constraint.network {
+                        // Deny wins over allow
+                        if n == NetworkPolicy::Deny {
+                            *network = NetworkPolicy::Deny;
+                        }
+                    }
+                }
+            }
+            ProfileExpr::And(a, b) => {
+                self.collect_profile_sandbox_parts(a, fs_exprs, caps, network);
+                self.collect_profile_sandbox_parts(b, fs_exprs, caps, network);
+            }
+            ProfileExpr::Or(a, b) => {
+                self.collect_profile_sandbox_parts(a, fs_exprs, caps, network);
+                self.collect_profile_sandbox_parts(b, fs_exprs, caps, network);
+            }
+            ProfileExpr::Not(inner) => {
+                // For Not, we collect fs with flipped effect
+                let mut inner_fs: Vec<(&CompiledFilterExpr, RuleEffect)> = Vec::new();
+                self.collect_profile_sandbox_parts(inner, &mut inner_fs, caps, network);
+                for (fs, effect) in inner_fs {
+                    let flipped = match effect {
+                        RuleEffect::Allow => RuleEffect::Deny,
+                        RuleEffect::Deny => RuleEffect::Allow,
+                    };
+                    fs_exprs.push((fs, flipped));
+                }
+            }
+        }
+    }
+}
+
+/// Walk a `CompiledFilterExpr` tree and produce sandbox rules.
+///
+/// | FilterExpr          | SandboxRule                                              |
+/// |---------------------|----------------------------------------------------------|
+/// | Subpath(".")        | Allow <caps> in <resolved-cwd>, Subpath                  |
+/// | Literal(".env")     | Allow <caps> in <resolved-path>, Literal                 |
+/// | Regex(...)          | Allow <caps> matching <pattern>, Regex (macOS only)      |
+/// | Not(inner)          | Flip effect: Allow↔Deny                                  |
+/// | And(a, b) / Or(a,b) | Collect rules from both sides                            |
+fn filter_to_sandbox_rules(
+    expr: &CompiledFilterExpr,
+    effect: RuleEffect,
+    caps: Cap,
+    cwd: &str,
+    rules: &mut Vec<SandboxRule>,
+) {
+    use crate::sandbox::PathMatch;
+
+    match expr {
+        CompiledFilterExpr::Subpath(base) => {
+            let resolved = resolve_path(base, cwd);
+            rules.push(SandboxRule {
+                effect,
+                caps,
+                path: resolved.to_string_lossy().into_owned(),
+                path_match: PathMatch::Subpath,
+            });
+        }
+        CompiledFilterExpr::Literal(path) => {
+            let resolved = resolve_path(path, cwd);
+            rules.push(SandboxRule {
+                effect,
+                caps,
+                path: resolved.to_string_lossy().into_owned(),
+                path_match: PathMatch::Literal,
+            });
+        }
+        CompiledFilterExpr::Regex(regex) => {
+            rules.push(SandboxRule {
+                effect,
+                caps,
+                path: regex.to_string(),
+                path_match: PathMatch::Regex,
+            });
+        }
+        CompiledFilterExpr::And(a, b) | CompiledFilterExpr::Or(a, b) => {
+            filter_to_sandbox_rules(a, effect, caps, cwd, rules);
+            filter_to_sandbox_rules(b, effect, caps, cwd, rules);
+        }
+        CompiledFilterExpr::Not(inner) => {
+            let flipped = match effect {
+                RuleEffect::Allow => RuleEffect::Deny,
+                RuleEffect::Deny => RuleEffect::Allow,
+            };
+            filter_to_sandbox_rules(inner, flipped, caps, cwd, rules);
+        }
+    }
 }
 
 /// The result of evaluating a policy.
@@ -273,6 +457,9 @@ pub struct PolicyDecision {
     pub effect: Effect,
     pub reason: Option<String>,
     pub delegate: Option<DelegateConfig>,
+    /// Per-command sandbox policy generated from `fs`/`caps`/`network` constraints.
+    /// Only present for bash (Execute) commands that matched allow rules with `fs` constraints.
+    pub sandbox: Option<SandboxPolicy>,
 }
 
 impl CompiledStatement {
@@ -303,6 +490,8 @@ impl CompiledConstraintDef {
         };
         Ok(CompiledConstraintDef {
             fs,
+            caps: def.caps,
+            network: def.network,
             pipe: def.pipe,
             redirect: def.redirect,
             forbid_args: def.forbid_args.clone(),
@@ -312,12 +501,18 @@ impl CompiledConstraintDef {
 
     /// Evaluate this constraint against the given context.
     /// All specified fields must be satisfied (AND).
+    ///
+    /// For bash (Execute) commands, the `fs` check is skipped because `fs` constraints
+    /// generate sandbox rules rather than acting as permission guards.
     fn eval(&self, ctx: &EvalContext) -> bool {
-        // Check filesystem filter
-        if let Some(ref fs) = self.fs
-            && !fs.matches(ctx.noun, ctx.cwd)
-        {
-            return false;
+        // For bash commands, skip fs check — fs generates sandbox rules instead.
+        // For other verbs (read/write/edit), fs acts as a permission guard.
+        if *ctx.verb != Verb::Execute {
+            if let Some(ref fs) = self.fs
+                && !fs.matches(ctx.noun, ctx.cwd)
+            {
+                return false;
+            }
         }
 
         // Check pipe constraint (only relevant for bash commands)
@@ -1297,5 +1492,308 @@ rules:
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Ask);
+    }
+
+    // --- Sandbox generation tests ---
+
+    #[test]
+    fn test_sandbox_generated_from_fs_subpath() {
+        let policy = compile_yaml(
+            "\
+constraints:
+  local:
+    fs: subpath(.)
+rules:
+  - \"allow * bash * : local\"
+",
+        );
+
+        let ctx = EvalContext {
+            entity: "agent",
+            verb: &Verb::Execute,
+            noun: "ls -la",
+            cwd: "/home/user/project",
+            tool_input: &serde_json::Value::Null,
+        };
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+
+        // Should have a sandbox policy generated from the fs constraint
+        let sandbox = decision.sandbox.expect("expected sandbox policy");
+        assert_eq!(sandbox.default, Cap::READ | Cap::EXECUTE);
+        assert_eq!(sandbox.rules.len(), 1);
+        assert_eq!(sandbox.rules[0].effect, RuleEffect::Allow);
+        assert_eq!(sandbox.rules[0].caps, Cap::all()); // no caps constraint → all
+        assert_eq!(sandbox.rules[0].path, "/home/user/project");
+        assert_eq!(sandbox.rules[0].path_match, crate::sandbox::PathMatch::Subpath);
+    }
+
+    #[test]
+    fn test_sandbox_caps_intersection() {
+        let policy = compile_yaml(
+            "\
+constraints:
+  local:
+    fs: subpath(.)
+  read-only:
+    caps: read + execute
+rules:
+  - \"allow * bash * : local & read-only\"
+",
+        );
+
+        let ctx = EvalContext {
+            entity: "agent",
+            verb: &Verb::Execute,
+            noun: "ls -la",
+            cwd: "/home/user/project",
+            tool_input: &serde_json::Value::Null,
+        };
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+
+        let sandbox = decision.sandbox.expect("expected sandbox policy");
+        assert_eq!(sandbox.rules.len(), 1);
+        // caps should be intersected: read + execute
+        assert_eq!(sandbox.rules[0].caps, Cap::READ | Cap::EXECUTE);
+    }
+
+    #[test]
+    fn test_sandbox_network_deny_wins() {
+        let policy = compile_yaml(
+            "\
+constraints:
+  local:
+    fs: subpath(.)
+    network: deny
+rules:
+  - \"allow * bash * : local\"
+",
+        );
+
+        let ctx = EvalContext {
+            entity: "agent",
+            verb: &Verb::Execute,
+            noun: "ls -la",
+            cwd: "/home/user/project",
+            tool_input: &serde_json::Value::Null,
+        };
+        let decision = policy.evaluate_with_context(&ctx);
+        let sandbox = decision.sandbox.expect("expected sandbox policy");
+        assert_eq!(sandbox.network, NetworkPolicy::Deny);
+    }
+
+    #[test]
+    fn test_no_sandbox_for_non_bash() {
+        let policy = compile_yaml(
+            "\
+constraints:
+  local:
+    fs: subpath(.)
+rules:
+  - \"allow * read * : local\"
+",
+        );
+
+        // Read verb: fs acts as permission guard, no sandbox generated
+        let ctx = EvalContext {
+            entity: "agent",
+            verb: &Verb::Read,
+            noun: "/home/user/project/src/main.rs",
+            cwd: "/home/user/project",
+            tool_input: &serde_json::Value::Null,
+        };
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        assert!(decision.sandbox.is_none());
+    }
+
+    #[test]
+    fn test_no_sandbox_without_fs() {
+        let policy = compile_yaml(
+            "\
+constraints:
+  safe-io:
+    pipe: false
+rules:
+  - \"allow * bash * : safe-io\"
+",
+        );
+
+        let ctx = EvalContext {
+            entity: "agent",
+            verb: &Verb::Execute,
+            noun: "ls -la",
+            cwd: "/home/user/project",
+            tool_input: &serde_json::Value::Null,
+        };
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        // No fs in any constraint → no sandbox
+        assert!(decision.sandbox.is_none());
+    }
+
+    #[test]
+    fn test_sandbox_not_filter_generates_deny() {
+        let policy = compile_yaml(
+            "\
+constraints:
+  no-git:
+    fs: \"!subpath(.git)\"
+rules:
+  - \"allow * bash * : no-git\"
+",
+        );
+
+        let ctx = EvalContext {
+            entity: "agent",
+            verb: &Verb::Execute,
+            noun: "ls -la",
+            cwd: "/home/user/project",
+            tool_input: &serde_json::Value::Null,
+        };
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+
+        let sandbox = decision.sandbox.expect("expected sandbox policy");
+        // Not(Subpath(.git)) → Deny rule for .git
+        assert_eq!(sandbox.rules.len(), 1);
+        assert_eq!(sandbox.rules[0].effect, RuleEffect::Deny);
+        assert_eq!(sandbox.rules[0].path, "/home/user/project/.git");
+        assert_eq!(sandbox.rules[0].path_match, crate::sandbox::PathMatch::Subpath);
+    }
+
+    #[test]
+    fn test_sandbox_regex_generates_rule() {
+        let policy = compile_yaml(
+            "\
+constraints:
+  no-env:
+    fs: \"regex(\\\\.env)\"
+rules:
+  - \"allow * bash * : no-env\"
+",
+        );
+
+        let ctx = EvalContext {
+            entity: "agent",
+            verb: &Verb::Execute,
+            noun: "ls",
+            cwd: "/home/user/project",
+            tool_input: &serde_json::Value::Null,
+        };
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+
+        // Regex fs generates a sandbox rule with PathMatch::Regex
+        // (enforced on macOS via Seatbelt SBPL, skipped on Linux)
+        let sandbox = decision.sandbox.expect("expected sandbox policy");
+        assert_eq!(sandbox.rules.len(), 1);
+        assert_eq!(sandbox.rules[0].path_match, crate::sandbox::PathMatch::Regex);
+        assert_eq!(sandbox.rules[0].path, "\\.env");
+    }
+
+    #[test]
+    fn test_fs_on_bash_no_longer_gates_matching() {
+        // fs: subpath(.) used to check the command string as a path (broken).
+        // Now fs is skipped for bash rules — the rule always matches
+        // regardless of the command string, and fs generates sandbox instead.
+        let policy = compile_yaml(
+            "\
+constraints:
+  local:
+    fs: subpath(/home/user/project)
+rules:
+  - \"allow * bash * : local\"
+",
+        );
+
+        // Command "ls -la" doesn't look like a path under /home/user/project,
+        // but the rule should still match because fs is skipped for bash.
+        let ctx = EvalContext {
+            entity: "agent",
+            verb: &Verb::Execute,
+            noun: "ls -la",
+            cwd: "/home/user/project",
+            tool_input: &serde_json::Value::Null,
+        };
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        assert!(decision.sandbox.is_some());
+    }
+
+    #[test]
+    fn test_sandbox_literal_non_recursive() {
+        let policy = compile_yaml(
+            "\
+constraints:
+  env-file:
+    fs: literal(.env)
+rules:
+  - \"allow * bash * : env-file\"
+",
+        );
+
+        let ctx = EvalContext {
+            entity: "agent",
+            verb: &Verb::Execute,
+            noun: "cat .env",
+            cwd: "/home/user/project",
+            tool_input: &serde_json::Value::Null,
+        };
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+
+        let sandbox = decision.sandbox.expect("expected sandbox policy");
+        assert_eq!(sandbox.rules.len(), 1);
+        assert_eq!(sandbox.rules[0].path, "/home/user/project/.env");
+        assert_eq!(sandbox.rules[0].path_match, crate::sandbox::PathMatch::Literal);
+    }
+
+    #[test]
+    fn test_sandbox_no_sandbox_when_allow_has_no_profile() {
+        let policy = compile_yaml(
+            "\
+rules:
+  - allow * bash *
+",
+        );
+
+        let ctx = EvalContext {
+            entity: "agent",
+            verb: &Verb::Execute,
+            noun: "ls -la",
+            cwd: "/home/user/project",
+            tool_input: &serde_json::Value::Null,
+        };
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        // No profile → no sandbox
+        assert!(decision.sandbox.is_none());
+    }
+
+    #[test]
+    fn test_sandbox_network_default_allow() {
+        // When no network policy is specified, default is allow
+        let policy = compile_yaml(
+            "\
+constraints:
+  local:
+    fs: subpath(.)
+rules:
+  - \"allow * bash * : local\"
+",
+        );
+
+        let ctx = EvalContext {
+            entity: "agent",
+            verb: &Verb::Execute,
+            noun: "ls",
+            cwd: "/home/user/project",
+            tool_input: &serde_json::Value::Null,
+        };
+        let decision = policy.evaluate_with_context(&ctx);
+        let sandbox = decision.sandbox.expect("expected sandbox policy");
+        assert_eq!(sandbox.network, NetworkPolicy::Allow);
     }
 }

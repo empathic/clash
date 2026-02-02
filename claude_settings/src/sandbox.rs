@@ -110,16 +110,26 @@ pub struct SandboxRule {
     /// The capabilities this rule applies to.
     pub caps: Cap,
 
-    /// The path this rule applies to. Supports `$CWD`, `$HOME`, `$TMPDIR`.
+    /// The path or pattern this rule applies to. Supports `$CWD`, `$HOME`, `$TMPDIR`.
     pub path: String,
 
-    /// Whether to include all descendants (default: true).
-    #[serde(default = "default_true")]
-    pub recursive: bool,
+    /// How the path is matched against the filesystem.
+    #[serde(default)]
+    pub path_match: PathMatch,
 }
 
-fn default_true() -> bool {
-    true
+/// How a sandbox rule's path is matched against the filesystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PathMatch {
+    /// Match this path and all descendants (recursive).
+    #[default]
+    Subpath,
+    /// Match exactly this path (non-recursive).
+    Literal,
+    /// Match paths against a regex pattern.
+    /// Supported on macOS (Seatbelt SBPL). Skipped on Linux (Landlock).
+    Regex,
 }
 
 /// Whether a rule grants or revokes capabilities.
@@ -145,8 +155,16 @@ impl SandboxPolicy {
     /// Resolve a path, expanding environment variables ($CWD, $HOME, $TMPDIR).
     pub fn resolve_path(path: &str, cwd: &str) -> String {
         path.replace("$CWD", cwd)
-            .replace("$HOME", &dirs::home_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default())
-            .replace("$TMPDIR", &std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into()))
+            .replace(
+                "$HOME",
+                &dirs::home_dir()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            )
+            .replace(
+                "$TMPDIR",
+                &std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into()),
+            )
     }
 
     /// Compute the effective capabilities for a given path by evaluating all rules.
@@ -159,10 +177,12 @@ impl SandboxPolicy {
 
         for rule in &self.rules {
             let rule_path = Self::resolve_path(&rule.path, cwd);
-            let matches = if rule.recursive {
-                path.starts_with(&rule_path) || path == rule_path
-            } else {
-                path == rule_path
+            let matches = match rule.path_match {
+                PathMatch::Subpath => path.starts_with(&rule_path) || path == rule_path,
+                PathMatch::Literal => path == rule_path,
+                PathMatch::Regex => regex::Regex::new(&rule_path)
+                    .map(|re| re.is_match(path))
+                    .unwrap_or(false),
             };
 
             if matches {
@@ -184,16 +204,22 @@ pub fn parse_sandbox_rule(s: &str) -> Result<SandboxRule, String> {
     // Split on " in " to separate caps from path
     let parts: Vec<&str> = s.splitn(2, " in ").collect();
     if parts.len() != 2 {
-        return Err(format!("expected '<effect> <caps> in <path>', got: '{}'", s));
+        return Err(format!(
+            "expected '<effect> <caps> in <path>', got: '{}'",
+            s
+        ));
     }
 
     let caps_part = parts[0].trim();
     let path = parts[1].trim().to_string();
 
     // First word is the effect
-    let (effect_str, caps_str) = caps_part
-        .split_once(char::is_whitespace)
-        .ok_or_else(|| format!("expected 'allow <caps>' or 'deny <caps>', got: '{}'", caps_part))?;
+    let (effect_str, caps_str) = caps_part.split_once(char::is_whitespace).ok_or_else(|| {
+        format!(
+            "expected 'allow <caps>' or 'deny <caps>', got: '{}'",
+            caps_part
+        )
+    })?;
 
     let effect = match effect_str.trim() {
         "allow" => RuleEffect::Allow,
@@ -207,50 +233,7 @@ pub fn parse_sandbox_rule(s: &str) -> Result<SandboxRule, String> {
         effect,
         caps,
         path,
-        recursive: true,
-    })
-}
-
-/// Parse a full sandbox policy from the `sandbox:` YAML section.
-pub fn parse_sandbox_section(value: &serde_yaml::Value) -> Result<SandboxPolicy, String> {
-    let map = value.as_mapping().ok_or("sandbox section must be a mapping")?;
-
-    // Parse default caps
-    let default = match map.get(&serde_yaml::Value::String("default".into())) {
-        Some(serde_yaml::Value::String(s)) => Cap::parse(s)?,
-        Some(_) => return Err("sandbox.default must be a string like 'read + execute'".into()),
-        None => Cap::READ | Cap::EXECUTE,
-    };
-
-    // Parse network policy
-    let network = match map.get(&serde_yaml::Value::String("network".into())) {
-        Some(serde_yaml::Value::String(s)) => match s.as_str() {
-            "deny" => NetworkPolicy::Deny,
-            "allow" => NetworkPolicy::Allow,
-            other => return Err(format!("sandbox.network must be 'deny' or 'allow', got: '{}'", other)),
-        },
-        Some(_) => return Err("sandbox.network must be a string".into()),
-        None => NetworkPolicy::Deny,
-    };
-
-    // Parse rules
-    let rules = match map.get(&serde_yaml::Value::String("rules".into())) {
-        Some(serde_yaml::Value::Sequence(seq)) => {
-            let mut rules = Vec::new();
-            for item in seq {
-                let s = item.as_str().ok_or("sandbox rule must be a string")?;
-                rules.push(parse_sandbox_rule(s)?);
-            }
-            rules
-        }
-        Some(_) => return Err("sandbox.rules must be a list".into()),
-        None => Vec::new(),
-    };
-
-    Ok(SandboxPolicy {
-        default,
-        rules,
-        network,
+        path_match: PathMatch::Subpath,
     })
 }
 
@@ -274,7 +257,10 @@ mod tests {
     fn test_cap_display() {
         assert_eq!(Cap::READ.display(), "read");
         assert_eq!((Cap::READ | Cap::WRITE).display(), "read + write");
-        assert_eq!(Cap::all().display(), "read + write + create + delete + execute");
+        assert_eq!(
+            Cap::all().display(),
+            "read + write + create + delete + execute"
+        );
     }
 
     #[test]
@@ -292,7 +278,7 @@ mod tests {
         assert_eq!(rule.effect, RuleEffect::Allow);
         assert_eq!(rule.caps, Cap::READ | Cap::WRITE);
         assert_eq!(rule.path, "$CWD");
-        assert!(rule.recursive);
+        assert_eq!(rule.path_match, PathMatch::Subpath);
     }
 
     #[test]
@@ -312,13 +298,13 @@ mod tests {
                     effect: RuleEffect::Allow,
                     caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE,
                     path: "/project".into(),
-                    recursive: true,
+                    path_match: PathMatch::Subpath,
                 },
                 SandboxRule {
                     effect: RuleEffect::Deny,
                     caps: Cap::WRITE | Cap::DELETE | Cap::CREATE,
                     path: "/project/.git".into(),
-                    recursive: true,
+                    path_match: PathMatch::Subpath,
                 },
             ],
             network: NetworkPolicy::Deny,
@@ -330,7 +316,10 @@ mod tests {
 
         // Project dir: read + write + create + delete + execute (default + allow)
         let caps = policy.effective_caps("/project/src/main.rs", "/project");
-        assert_eq!(caps, Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE | Cap::EXECUTE);
+        assert_eq!(
+            caps,
+            Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE | Cap::EXECUTE
+        );
 
         // .git dir: deny overrides allow, so only read + execute remain
         let caps = policy.effective_caps("/project/.git/config", "/project");
@@ -341,14 +330,12 @@ mod tests {
     fn test_sandbox_policy_serde() {
         let policy = SandboxPolicy {
             default: Cap::READ | Cap::EXECUTE,
-            rules: vec![
-                SandboxRule {
-                    effect: RuleEffect::Allow,
-                    caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE,
-                    path: "$CWD".into(),
-                    recursive: true,
-                },
-            ],
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE,
+                path: "$CWD".into(),
+                recursive: true,
+            }],
             network: NetworkPolicy::Deny,
         };
 
@@ -357,25 +344,5 @@ mod tests {
         assert_eq!(deserialized.default, policy.default);
         assert_eq!(deserialized.rules.len(), 1);
         assert_eq!(deserialized.network, NetworkPolicy::Deny);
-    }
-
-    #[test]
-    fn test_parse_sandbox_section() {
-        let yaml = r#"
-default: read + execute
-network: deny
-rules:
-  - allow read + write + create + delete in $CWD
-  - deny write + delete + create in $CWD/.git
-  - deny read in $CWD/.env
-"#;
-        let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
-        let policy = parse_sandbox_section(&value).unwrap();
-        assert_eq!(policy.default, Cap::READ | Cap::EXECUTE);
-        assert_eq!(policy.network, NetworkPolicy::Deny);
-        assert_eq!(policy.rules.len(), 3);
-        assert_eq!(policy.rules[0].effect, RuleEffect::Allow);
-        assert_eq!(policy.rules[1].effect, RuleEffect::Deny);
-        assert_eq!(policy.rules[2].path, "$CWD/.env");
     }
 }

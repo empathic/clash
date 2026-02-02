@@ -272,9 +272,13 @@ fn main() -> Result<()> {
 /// Run a command inside a sandbox.
 fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
     match cmd {
-        SandboxCmd::Exec { policy, cwd, command } => {
-            let policy: SandboxPolicy = serde_json::from_str(&policy)
-                .context("failed to parse --policy JSON")?;
+        SandboxCmd::Exec {
+            policy,
+            cwd,
+            command,
+        } => {
+            let policy: SandboxPolicy =
+                serde_json::from_str(&policy).context("failed to parse --policy JSON")?;
             let cwd_path = std::path::Path::new(&cwd);
 
             // This does not return on success (replaces the process via execvp)
@@ -283,16 +287,25 @@ fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
                 // exec_sandboxed returns Infallible on success, so Ok is unreachable
             }
         }
-        SandboxCmd::Test { policy, cwd, command } => {
-            let policy: SandboxPolicy = serde_json::from_str(&policy)
-                .context("failed to parse --policy JSON")?;
+        SandboxCmd::Test {
+            policy,
+            cwd,
+            command,
+        } => {
+            let policy: SandboxPolicy =
+                serde_json::from_str(&policy).context("failed to parse --policy JSON")?;
             let cwd_path = std::path::Path::new(&cwd);
 
             eprintln!("Testing sandbox with policy:");
             eprintln!("  default: {}", policy.default.display());
             eprintln!("  network: {:?}", policy.network);
             for rule in &policy.rules {
-                eprintln!("  {:?} {} in {}", rule.effect, rule.caps.display(), rule.path);
+                eprintln!(
+                    "  {:?} {} in {}",
+                    rule.effect,
+                    rule.caps.display(),
+                    rule.path
+                );
             }
             eprintln!("  command: {:?}", command);
             eprintln!("---");
@@ -326,8 +339,7 @@ fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
 /// Launch Claude Code with clash managing hooks and sandbox enforcement.
 fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     // Resolve the clash binary path for hook commands
-    let clash_bin = std::env::current_exe()
-        .context("failed to determine clash binary path")?;
+    let clash_bin = std::env::current_exe().context("failed to determine clash binary path")?;
     let clash_bin_str = clash_bin.to_string_lossy();
 
     // Validate that we have a policy if one was specified

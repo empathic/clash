@@ -72,13 +72,13 @@ fn check_permission_policy(
     Ok(match decision.effect {
         Effect::Allow => {
             let mut output = HookOutput::allow(decision.reason.or(Some("policy: allowed".into())));
-            // If there's a sandbox policy and this is a Bash tool, rewrite the
+            // If the policy decision includes a per-command sandbox, rewrite the
             // command to run through `clash sandbox exec`.
-            if let Some(sandbox_policy) = settings.sandbox_policy() {
-                if let Some(updated) = wrap_bash_with_sandbox(input, sandbox_policy) {
-                    output.set_updated_input(updated);
-                    info!("Rewrote Bash command to run under sandbox");
-                }
+            if let Some(ref sandbox_policy) = decision.sandbox
+                && let Some(updated) = wrap_bash_with_sandbox(input, sandbox_policy)
+            {
+                output.set_updated_input(updated);
+                info!("Rewrote Bash command to run under sandbox");
             }
             output
         }
@@ -121,7 +121,10 @@ fn wrap_bash_with_sandbox(
 
     let mut updated = input.tool_input.clone();
     if let Some(obj) = updated.as_object_mut() {
-        obj.insert("command".into(), serde_json::Value::String(sandboxed_command));
+        obj.insert(
+            "command".into(),
+            serde_json::Value::String(sandboxed_command),
+        );
     }
 
     Some(updated)
@@ -177,7 +180,6 @@ mod tests {
         ClashSettings {
             engine_mode: crate::settings::EngineMode::Policy,
             policy: Some(doc),
-            sandbox: None,
         }
     }
 
@@ -203,7 +205,6 @@ mod tests {
         ClashSettings {
             engine_mode: crate::settings::EngineMode::Auto,
             policy: Some(doc),
-            sandbox: None,
         }
     }
 
@@ -301,7 +302,6 @@ rules:
         let settings = ClashSettings {
             engine_mode: crate::settings::EngineMode::Auto,
             policy: Some(doc),
-            sandbox: None,
         };
         let result = check_permission(&bash_input("echo hello"), &settings)?;
         assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())),);
@@ -410,6 +410,24 @@ rules:
         Ok(())
     }
 
+    /// Extract the permission decision from a HookOutput.
+    fn get_decision(output: &HookOutput) -> Option<claude_settings::PermissionRule> {
+        match &output.hook_specific_output {
+            Some(crate::hooks::HookSpecificOutput::PreToolUse(pre)) => {
+                pre.permission_decision.clone()
+            }
+            _ => None,
+        }
+    }
+
+    /// Check if the HookOutput has an updated_input (sandbox rewrite).
+    fn has_updated_input(output: &HookOutput) -> bool {
+        match &output.hook_specific_output {
+            Some(crate::hooks::HookSpecificOutput::PreToolUse(pre)) => pre.updated_input.is_some(),
+            _ => false,
+        }
+    }
+
     #[test]
     fn test_profile_composition_integration() -> Result<()> {
         let settings = settings_with_policy(
@@ -435,12 +453,17 @@ rules:
 ",
         );
 
-        // git status (no pipe, no force, within cwd) → allowed
+        // git status (no pipe, no force, within cwd) → allowed with sandbox
         let result = check_permission(
             &bash_input_with_cwd("git status", "/home/user/project"),
             &settings,
         )?;
-        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())));
+        assert_eq!(
+            get_decision(&result),
+            Some(claude_settings::PermissionRule::Allow)
+        );
+        // Bash command with fs constraint should have sandbox-rewritten input
+        assert!(has_updated_input(&result));
 
         // git push --force → git-safe constraint fails → default
         let result = check_permission(
@@ -453,7 +476,7 @@ rules:
         let result = check_permission(&bash_input("rm -rf /"), &settings)?;
         assert_eq!(result, HookOutput::deny("policy: denied".into()));
 
-        // read file under cwd → allowed
+        // read file under cwd → allowed (fs acts as permission guard, no sandbox)
         let result = check_permission(
             &read_input_with_cwd("/home/user/project/Cargo.toml", "/home/user/project"),
             &settings,

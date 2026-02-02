@@ -5,7 +5,6 @@ use claude_settings::ClaudeSettings;
 use claude_settings::policy::compile::CompiledPolicy;
 use claude_settings::policy::parse::desugar_legacy;
 use claude_settings::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
-use claude_settings::sandbox::SandboxPolicy;
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -32,10 +31,6 @@ pub struct ClashSettings {
     /// Parsed policy document (not serialized — loaded at runtime from policy.yaml or compiled from Claude settings).
     #[serde(skip)]
     pub(crate) policy: Option<PolicyDocument>,
-
-    /// Parsed sandbox policy (not serialized — loaded at runtime from sandbox section of policy.yaml).
-    #[serde(skip)]
-    pub(crate) sandbox: Option<SandboxPolicy>,
 }
 
 impl ClashSettings {
@@ -51,31 +46,21 @@ impl ClashSettings {
         Self::settings_dir().join("policy.yaml")
     }
 
-    /// Get the sandbox policy, if one is configured.
-    pub fn sandbox_policy(&self) -> Option<&SandboxPolicy> {
-        self.sandbox.as_ref()
-    }
-
     /// Try to load and compile the policy document from ~/.clash/policy.yaml.
     fn load_policy_file(&mut self) -> Option<PolicyDocument> {
         let path = Self::policy_file();
         if path.exists() {
             match std::fs::read_to_string(&path) {
-                Ok(contents) => {
-                    // Try to load sandbox section from the same YAML
-                    self.load_sandbox_from_yaml(&contents);
-
-                    match claude_settings::policy::parse::parse_yaml(&contents) {
-                        Ok(doc) => {
-                            info!(path = %path.display(), "Loaded policy document");
-                            Some(doc)
-                        }
-                        Err(e) => {
-                            warn!(path = %path.display(), error = %e, "Failed to parse policy.yaml");
-                            None
-                        }
+                Ok(contents) => match claude_settings::policy::parse::parse_yaml(&contents) {
+                    Ok(doc) => {
+                        info!(path = %path.display(), "Loaded policy document");
+                        Some(doc)
                     }
-                }
+                    Err(e) => {
+                        warn!(path = %path.display(), error = %e, "Failed to parse policy.yaml");
+                        None
+                    }
+                },
                 Err(e) => {
                     warn!(path = %path.display(), error = %e, "Failed to read policy.yaml");
                     None
@@ -83,26 +68,6 @@ impl ClashSettings {
             }
         } else {
             None
-        }
-    }
-
-    /// Try to parse the `sandbox:` section from policy YAML.
-    fn load_sandbox_from_yaml(&mut self, yaml: &str) {
-        let value: serde_yaml::Value = match serde_yaml::from_str(yaml) {
-            Ok(v) => v,
-            Err(_) => return,
-        };
-
-        if let Some(sandbox_value) = value.get("sandbox") {
-            match claude_settings::sandbox::parse_sandbox_section(sandbox_value) {
-                Ok(policy) => {
-                    info!("Loaded sandbox policy from policy.yaml");
-                    self.sandbox = Some(policy);
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to parse sandbox section in policy.yaml");
-                }
-            }
         }
     }
 

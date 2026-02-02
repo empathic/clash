@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use claude_settings::sandbox::{Cap, NetworkPolicy, RuleEffect, SandboxPolicy};
+use claude_settings::sandbox::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy};
 
 use super::{SandboxError, SupportLevel};
 
@@ -52,7 +52,7 @@ fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     p += "(allow mach-register)\n";
 
     // Default capabilities applied to root
-    emit_caps_for_path(&mut p, "/", policy.default, true);
+    emit_caps_for_path(&mut p, "/", policy.default, PathMatch::Subpath);
 
     // /dev/null always writable
     p += "(allow file-write* (literal \"/dev/null\"))\n";
@@ -63,10 +63,10 @@ fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
         let resolved = SandboxPolicy::resolve_path(&rule.path, cwd);
         match rule.effect {
             RuleEffect::Allow => {
-                emit_caps_for_path(&mut p, &resolved, rule.caps, rule.recursive);
+                emit_caps_for_path(&mut p, &resolved, rule.caps, rule.path_match);
             }
             RuleEffect::Deny => {
-                emit_deny_for_path(&mut p, &resolved, rule.caps, rule.recursive);
+                emit_deny_for_path(&mut p, &resolved, rule.caps, rule.path_match);
             }
         }
     }
@@ -84,13 +84,18 @@ fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     p
 }
 
+/// Build an SBPL path filter from a path and match type.
+fn sbpl_filter(path: &str, path_match: PathMatch) -> String {
+    match path_match {
+        PathMatch::Subpath => format!("(subpath \"{}\")", path),
+        PathMatch::Literal => format!("(literal \"{}\")", path),
+        PathMatch::Regex => format!("(regex #\"{}\")", path),
+    }
+}
+
 /// Emit SBPL allow statements for the given caps on a path.
-fn emit_caps_for_path(profile: &mut String, path: &str, caps: Cap, recursive: bool) {
-    let filter = if recursive {
-        format!("(subpath \"{}\")", path)
-    } else {
-        format!("(literal \"{}\")", path)
-    };
+fn emit_caps_for_path(profile: &mut String, path: &str, caps: Cap, path_match: PathMatch) {
+    let filter = sbpl_filter(path, path_match);
 
     if caps.contains(Cap::READ) {
         profile.push_str(&format!("(allow file-read* {})\n", filter));
@@ -110,12 +115,8 @@ fn emit_caps_for_path(profile: &mut String, path: &str, caps: Cap, recursive: bo
 }
 
 /// Emit SBPL deny statements for the given caps on a path.
-fn emit_deny_for_path(profile: &mut String, path: &str, caps: Cap, recursive: bool) {
-    let filter = if recursive {
-        format!("(subpath \"{}\")", path)
-    } else {
-        format!("(literal \"{}\")", path)
-    };
+fn emit_deny_for_path(profile: &mut String, path: &str, caps: Cap, path_match: PathMatch) {
+    let filter = sbpl_filter(path, path_match);
 
     if caps.contains(Cap::READ) {
         profile.push_str(&format!("(deny file-read* {})\n", filter));
