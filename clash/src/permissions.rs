@@ -1,4 +1,5 @@
 use claude_settings::policy::{Effect, Verb};
+use claude_settings::sandbox::SandboxPolicy;
 use tracing::{Level, info, instrument, warn};
 
 use crate::hooks::{HookOutput, ToolInput, ToolUseHookInput};
@@ -60,7 +61,18 @@ fn check_permission_policy(
     );
 
     Ok(match decision.effect {
-        Effect::Allow => HookOutput::allow(decision.reason.or(Some("policy: allowed".into()))),
+        Effect::Allow => {
+            let mut output = HookOutput::allow(decision.reason.or(Some("policy: allowed".into())));
+            // If there's a sandbox policy and this is a Bash tool, rewrite the
+            // command to run through `clash sandbox exec`.
+            if let Some(sandbox_policy) = settings.sandbox_policy() {
+                if let Some(updated) = wrap_bash_with_sandbox(input, sandbox_policy) {
+                    output.set_updated_input(updated);
+                    info!("Rewrote Bash command to run under sandbox");
+                }
+            }
+            output
+        }
         Effect::Deny => {
             HookOutput::deny(decision.reason.unwrap_or_else(|| "policy: denied".into()))
         }
@@ -71,6 +83,44 @@ fn check_permission_policy(
             HookOutput::ask(Some("policy: delegation not yet implemented".into()))
         }
     })
+}
+
+/// If the tool input is a Bash command and a sandbox policy exists,
+/// rewrite the command to run through `clash sandbox exec`.
+///
+/// Returns the updated `tool_input` JSON if rewriting is applicable, or None.
+fn wrap_bash_with_sandbox(
+    input: &ToolUseHookInput,
+    sandbox_policy: &SandboxPolicy,
+) -> Option<serde_json::Value> {
+    let bash_input = match input.typed_tool_input() {
+        ToolInput::Bash(b) => b,
+        _ => return None,
+    };
+
+    let clash_bin = std::env::current_exe().ok()?;
+    let policy_json = serde_json::to_string(sandbox_policy).ok()?;
+
+    // Build: clash sandbox exec --policy <json> --cwd <cwd> -- bash -c "<original command>"
+    let sandboxed_command = format!(
+        "{} sandbox exec --policy {} --cwd {} -- bash -c {}",
+        shell_escape(&clash_bin.to_string_lossy()),
+        shell_escape(&policy_json),
+        shell_escape(&input.cwd),
+        shell_escape(&bash_input.command),
+    );
+
+    let mut updated = input.tool_input.clone();
+    if let Some(obj) = updated.as_object_mut() {
+        obj.insert("command".into(), serde_json::Value::String(sandboxed_command));
+    }
+
+    Some(updated)
+}
+
+/// Simple shell escaping: wrap in single quotes, escaping embedded single quotes.
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Extract the noun (resource identifier) from a tool input.
@@ -118,6 +168,7 @@ mod tests {
         ClashSettings {
             engine_mode: crate::settings::EngineMode::Policy,
             policy: Some(doc),
+            sandbox: None,
         }
     }
 
@@ -141,6 +192,7 @@ mod tests {
         ClashSettings {
             engine_mode: crate::settings::EngineMode::Auto,
             policy: Some(doc),
+            sandbox: None,
         }
     }
 
@@ -238,6 +290,7 @@ rules:
         let settings = ClashSettings {
             engine_mode: crate::settings::EngineMode::Auto,
             policy: Some(doc),
+            sandbox: None,
         };
         let result = check_permission(&bash_input("echo hello"), &settings)?;
         assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())),);

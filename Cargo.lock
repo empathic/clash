@@ -171,13 +171,18 @@ dependencies = [
  "claude_settings",
  "dirs",
  "figment",
+ "landlock",
+ "libc",
  "mac-notification-sys",
  "pest",
  "pest_derive",
  "regex",
+ "seccompiler",
  "serde",
  "serde_json",
  "serde_regex",
+ "serde_yaml",
+ "thiserror",
  "toml",
  "tracing",
  "tracing-subscriber",
@@ -188,6 +193,8 @@ name = "claude_settings"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bitflags",
+ "dirs",
  "figment",
  "pest",
  "pest_derive",
@@ -286,6 +293,26 @@ checksum = "89a09f22a6c6069a18470eb92d2298acf25463f14256d24778e1230d789a2aec"
 dependencies = [
  "bitflags",
  "objc2",
+]
+
+[[package]]
+name = "enumflags2"
+version = "0.7.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1027f7680c853e056ebcec683615fb6fbbc07dbaa13b4d5d9442b146ded4ecef"
+dependencies = [
+ "enumflags2_derive",
+]
+
+[[package]]
+name = "enumflags2_derive"
+version = "0.7.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67c78a4d8fdf9953a5c9d458f9efe940fd97a0cab0941c075a813ac594733827"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -397,6 +424,17 @@ name = "itoa"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
+
+[[package]]
+name = "landlock"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49fefd6652c57d68aaa32544a4c0e642929725bdc1fd929367cdeb673ab81088"
+dependencies = [
+ "enumflags2",
+ "libc",
+ "thiserror",
+]
 
 [[package]]
 name = "lazy_static"
@@ -668,6 +706,15 @@ name = "ryu"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a50f4cf475b65d88e057964e0e9bb1f0aa9bbb2036dc65c64596b42932536984"
+
+[[package]]
+name = "seccompiler"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "345a3e4dddf721a478089d4697b83c6c0a8f5bf16086f6c13397e4534eb6e2e5"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "serde"
