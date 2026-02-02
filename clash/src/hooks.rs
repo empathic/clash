@@ -332,6 +332,14 @@ impl HookOutput {
         }
     }
 
+    /// Set the updated_input field on a PreToolUse response.
+    /// This rewrites the tool input before Claude Code executes it.
+    pub fn set_updated_input(&mut self, updated_input: serde_json::Value) {
+        if let Some(HookSpecificOutput::PreToolUse(ref mut pre)) = self.hook_specific_output {
+            pre.updated_input = Some(updated_input);
+        }
+    }
+
     /// Continue execution without making a decision (for informational hooks)
     pub fn continue_execution() -> Self {
         Self {

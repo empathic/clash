@@ -8,6 +8,8 @@ authors = ["Empathic Team"]
 
 [dependencies]
 anyhow = { workspace = true }
+bitflags = { workspace = true }
+dirs = { workspace = true }
 figment = { workspace = true }
 regex = { workspace = true }
 pest = { workspace = true }
