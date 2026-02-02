@@ -284,356 +284,216 @@ OpenAI Codex generates an SBPL profile at runtime by:
 
 ### Design Principle
 
-The key insight is that **Landlock+seccomp and Seatbelt have a compatible capability
-surface**, even though their enforcement mechanisms differ completely. Both support:
+The API exposes **high-level capabilities** — read, write, create, delete, execute,
+network — not syscalls, LSM hooks, or SBPL operations. Each platform backend maps
+these capabilities to its own enforcement primitives. Users never think about Landlock
+rights or Seatbelt operations.
 
-| Capability | Linux (Landlock + seccomp) | macOS (Seatbelt) |
+Both Landlock and Seatbelt have the granularity to support this:
+
+| Capability | Linux (Landlock) | macOS (Seatbelt) |
 |---|---|---|
-| Restrict writable paths | Landlock `AccessFs::from_all(abi)` on allowed paths | `(allow file-write* (subpath ...))` |
-| Allow reads broadly | Landlock `AccessFs::from_read(abi)` on `/` | `(allow file-read* (subpath "/"))` |
-| Restrict reads to paths | Landlock read rules on specific paths | `(allow file-read* (subpath ...))` |
-| Block network | seccomp blocks `socket()` for non-AF_UNIX | `(deny network*)` |
-| Allow network | Don't install seccomp network filter | `(allow network*)` |
-| Block dangerous syscalls | seccomp blocklist (ptrace, mount, etc.) | `(deny default)` covers most of these |
-| Allow process execution | Landlock execute access on paths | `(allow process-exec (subpath ...))` |
-| Child inheritance | Automatic + irrevocable | Automatic + irrevocable |
-| No privilege escalation | `PR_SET_NO_NEW_PRIVS` | Implicit in Seatbelt |
+| `read` | `ReadFile + ReadDir` | `file-read*` |
+| `write` | `WriteFile + Truncate` | `file-write-data` |
+| `create` | `MakeReg + MakeDir + MakeSym + MakeFifo + MakeSock + MakeChar + MakeBlock` | `file-write-create` |
+| `delete` | `RemoveFile + RemoveDir` | `file-write-unlink` |
+| `execute` | `Execute` | `process-exec` |
+| `network` | seccomp blocks `socket()` for non-AF_UNIX | `(deny network*)` |
 
-The abstraction is a **platform-agnostic sandbox policy** that compiles down to either
-Landlock+seccomp rules or an SBPL profile.
+The abstraction is a list of **capability rules** applied to paths.
 
 ### Proposed API
 
 ```rust
-/// Platform-agnostic sandbox policy.
-///
-/// Compiles to Landlock+seccomp on Linux, SBPL profile on macOS.
-/// Describes the maximum capabilities a sandboxed process tree may have.
+use bitflags::bitflags;
+
+bitflags! {
+    /// High-level filesystem capabilities.
+    /// Each backend maps these to its own enforcement primitives.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct Cap: u8 {
+        const READ    = 0b0000_0001;
+        const WRITE   = 0b0000_0010;
+        const CREATE  = 0b0000_0100;
+        const DELETE  = 0b0000_1000;
+        const EXECUTE = 0b0001_0000;
+    }
+}
+
+/// A sandbox policy is a list of capability rules applied to paths,
+/// plus a network policy. Platform backends compile this to their
+/// native enforcement (Landlock+seccomp, Seatbelt SBPL, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxPolicy {
-    /// Filesystem access rules. Evaluated as allow-list against a default-deny
-    /// for writes and (optionally) reads.
-    pub filesystem: FilesystemPolicy,
+    /// Default capabilities for paths not matched by any rule.
+    /// Typical default: READ | EXECUTE (can read and run, but not modify).
+    pub default: Cap,
+
+    /// Ordered list of rules. First match wins (like a firewall).
+    pub rules: Vec<SandboxRule>,
 
     /// Network access policy.
     pub network: NetworkPolicy,
-
-    /// Additional platform-agnostic restrictions.
-    pub restrictions: Restrictions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilesystemPolicy {
-    /// Paths the sandbox may write to. Everything else is read-only (or denied).
-    /// Supports environment variable expansion ($CWD, $HOME, $TMPDIR).
-    pub writable_paths: Vec<SandboxPath>,
-
-    /// Paths the sandbox may read from. If empty, reads are unrestricted.
-    /// When non-empty, acts as an allow-list (default-deny for reads).
-    pub readable_paths: Vec<SandboxPath>,
-
-    /// Paths the sandbox may execute binaries from.
-    /// Defaults to system paths (/usr/bin, /usr/local/bin, etc.) if empty.
-    pub executable_paths: Vec<SandboxPath>,
-
-    /// Paths that are always denied (overrides writable/readable).
-    /// Use for protecting sensitive files within otherwise-allowed directories.
-    /// e.g., deny write to .git/** even though $CWD is writable.
-    pub denied_paths: Vec<DeniedPath>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SandboxPath {
-    /// The path, possibly with environment variables ($CWD, $HOME, $TMPDIR).
+pub struct SandboxRule {
+    /// The path this rule applies to. Supports $CWD, $HOME, $TMPDIR.
     pub path: String,
-    /// Whether to include all descendants (subpath) or just this exact path.
+
+    /// Whether to include all descendants (true) or just this exact path.
+    #[serde(default = "default_true")]
     pub recursive: bool,
+
+    /// The capabilities granted (allow rule) or denied (deny rule).
+    pub caps: Cap,
+
+    /// Whether this rule grants or revokes capabilities.
+    pub effect: RuleEffect,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeniedPath {
-    pub path: SandboxPath,
-    /// Which access to deny: read, write, or both.
-    pub deny: DenyAccess,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DenyAccess {
-    Read,
-    Write,
-    ReadWrite,
+pub enum RuleEffect {
+    Allow,
+    Deny,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NetworkPolicy {
-    /// No network access (default). AF_UNIX still allowed on Linux.
+    /// No network access. Unix domain sockets still allowed where possible.
     Deny,
-    /// Full network access.
+    /// Unrestricted network access.
     Allow,
-    /// Allow only specific targets (future: TCP connect to host:port).
-    AllowSpecific(Vec<NetworkTarget>),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NetworkTarget {
-    pub host: String,
-    pub port: Option<u16>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Restrictions {
-    /// Block ptrace, mount, and other dangerous syscalls.
-    /// On macOS, covered by (deny default). On Linux, via seccomp.
-    pub block_dangerous_syscalls: bool,
-
-    /// Set NO_NEW_PRIVS on Linux. Always true on macOS (implicit).
-    pub no_new_privs: bool,
 }
 ```
 
 ### Policy YAML Syntax
 
-The user-facing YAML maps directly to `SandboxPolicy`:
+The user-facing policy expresses capabilities directly:
 
 ```yaml
 sandbox:
-  filesystem:
-    writable:
-      - $CWD          # working directory (recursive by default)
-      - /tmp
-      - $TMPDIR
-    readable: []       # empty = unrestricted reads
-    executable:
-      - /usr/bin
-      - /usr/local/bin
-      - /opt/homebrew/bin    # macOS homebrew
-      - /nix                 # nix users
-    deny:
-      - path: $CWD/.git
-        access: write        # protect .git from writes
-      - path: $CWD/.env
-        access: read         # prevent reading secrets
+  # Default: can read and execute, but not write/create/delete
+  default: read + execute
 
-  network: deny              # or: allow, or list of host:port
+  rules:
+    # Working directory: full access
+    - allow read + write + create + delete in $CWD
 
-  restrictions:
-    block_dangerous_syscalls: true
-    no_new_privs: true
+    # But protect .git from writes and deletes
+    - deny write + delete + create in $CWD/.git
+
+    # Prevent reading secrets
+    - deny read in $CWD/.env
+    - deny read in $HOME/.ssh
+
+    # Allow writing to temp
+    - allow write + create + delete in /tmp
+    - allow write + create + delete in $TMPDIR
+
+    # Specific tool needs: cargo/npm caches
+    - allow write + create + delete in $HOME/.cargo/registry
+    - allow write + create + delete in $HOME/.npm
+
+  network: deny
 ```
 
-### Compilation Targets
+This directly answers the user's examples:
+- "no child process can read X" → `deny read in X`
+- "child procs can write but not delete" → `allow read + write + create in $CWD` (omit `delete`)
 
-The `SandboxPolicy` compiles to platform-specific enforcement:
+### Capability Compilation
+
+Each backend compiles `Cap` flags to its native primitives:
 
 ```
-SandboxPolicy
-    │
-    ├─── Linux: compile_to_landlock_seccomp()
-    │    │
-    │    ├── Landlock ruleset
-    │    │   ├── AccessFs::from_read(abi) on readable paths (or /)
-    │    │   ├── AccessFs::from_all(abi) on writable paths
-    │    │   └── AccessFs::Execute on executable paths
-    │    │
-    │    ├── seccomp-BPF filter
-    │    │   ├── Block socket() for non-AF_UNIX (if network=deny)
-    │    │   ├── Block ptrace, mount, reboot, etc.
-    │    │   └── Allow everything else
-    │    │
-    │    └── prctl(PR_SET_NO_NEW_PRIVS)
-    │
-    └─── macOS: compile_to_sbpl()
-         │
-         └── SBPL profile string
-             ├── (version 1)
-             ├── (deny default)
-             ├── (allow file-read* ...) for readable paths
-             ├── (allow file-write* ...) for writable paths
-             ├── (allow process-exec ...) for executable paths
-             ├── (deny network*) or (allow network*)
-             └── (param ...) for variable expansion
+Cap::READ
+    ├─ Linux  → Landlock: AccessFs::ReadFile | AccessFs::ReadDir
+    └─ macOS  → SBPL: (allow file-read-data) (allow file-read-metadata)
+
+Cap::WRITE
+    ├─ Linux  → Landlock: AccessFs::WriteFile | AccessFs::Truncate
+    └─ macOS  → SBPL: (allow file-write-data)
+
+Cap::CREATE
+    ├─ Linux  → Landlock: AccessFs::MakeReg | AccessFs::MakeDir | AccessFs::MakeSym
+    │                      | AccessFs::MakeFifo | AccessFs::MakeSock
+    └─ macOS  → SBPL: (allow file-write-create)
+
+Cap::DELETE
+    ├─ Linux  → Landlock: AccessFs::RemoveFile | AccessFs::RemoveDir
+    └─ macOS  → SBPL: (allow file-write-unlink)
+
+Cap::EXECUTE
+    ├─ Linux  → Landlock: AccessFs::Execute
+    └─ macOS  → SBPL: (allow process-exec)
+
+NetworkPolicy::Deny
+    ├─ Linux  → seccomp: block socket() for non-AF_UNIX domains
+    │           seccomp: block connect, bind, listen, sendto, etc.
+    └─ macOS  → SBPL: (deny network*)
+
+NetworkPolicy::Allow
+    ├─ Linux  → no seccomp network filter
+    └─ macOS  → SBPL: (allow network*)
 ```
 
 ### Platform Backend Trait
 
 ```rust
-/// Platform-specific sandbox enforcement backend.
+/// Platform-specific sandbox enforcement.
+/// Each platform compiles SandboxPolicy to its native mechanism.
 pub trait SandboxBackend {
     /// Apply the sandbox policy and exec the command.
-    /// This function does not return on success (replaces the process).
+    /// Does not return on success (replaces the process via execvp).
     fn exec_sandboxed(
         policy: &SandboxPolicy,
         cwd: &Path,
         command: &[String],
     ) -> Result<!, SandboxError>;
 
-    /// Check if the current platform/kernel supports this backend.
+    /// Check whether this platform supports sandboxing.
     fn is_supported() -> SupportLevel;
 }
 
 pub enum SupportLevel {
-    /// Full support for all policy features.
     Full,
-    /// Partial support (e.g., filesystem but not network on older Linux).
-    Partial { unsupported: Vec<String> },
-    /// Not supported on this platform/kernel.
+    Partial { missing: Vec<String> },
     Unsupported { reason: String },
 }
-
-// Platform implementations:
-
-#[cfg(target_os = "linux")]
-pub struct LinuxSandbox;
-
-#[cfg(target_os = "linux")]
-impl SandboxBackend for LinuxSandbox {
-    fn exec_sandboxed(
-        policy: &SandboxPolicy,
-        cwd: &Path,
-        command: &[String],
-    ) -> Result<!, SandboxError> {
-        // 1. set_no_new_privs()
-        // 2. install_seccomp_filter(policy)
-        // 3. install_landlock_rules(policy, cwd)
-        // 4. execvp(command)
-        todo!()
-    }
-
-    fn is_supported() -> SupportLevel {
-        // Check kernel version, Landlock ABI, seccomp support
-        todo!()
-    }
-}
-
-#[cfg(target_os = "macos")]
-pub struct MacOSSandbox;
-
-#[cfg(target_os = "macos")]
-impl SandboxBackend for MacOSSandbox {
-    fn exec_sandboxed(
-        policy: &SandboxPolicy,
-        cwd: &Path,
-        command: &[String],
-    ) -> Result<!, SandboxError> {
-        // 1. Compile SandboxPolicy → SBPL string
-        // 2. Write to temp file or pass via -p
-        // 3. exec sandbox-exec -p <profile> -- <command>
-        todo!()
-    }
-
-    fn is_supported() -> SupportLevel {
-        // Check that /usr/bin/sandbox-exec exists
-        todo!()
-    }
-}
 ```
 
-### SBPL Profile Generation
+The backend implementations are internal — users never interact with Landlock
+or Seatbelt directly. They write capability rules, and the backend does the
+right thing.
 
-The macOS backend generates an SBPL profile from `SandboxPolicy`:
+### Helper Binary
 
-```rust
-fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &Path) -> String {
-    let mut profile = String::from("(version 1)\n(deny default)\n");
-
-    // Readable paths
-    if policy.filesystem.readable_paths.is_empty() {
-        // Unrestricted reads
-        profile += "(allow file-read*)\n";
-    } else {
-        for path in &policy.filesystem.readable_paths {
-            let resolved = resolve_sandbox_path(path, cwd);
-            profile += &format!("(allow file-read* (subpath \"{}\"))\n", resolved);
-        }
-    }
-
-    // Writable paths
-    for path in &policy.filesystem.writable_paths {
-        let resolved = resolve_sandbox_path(path, cwd);
-        profile += &format!("(allow file-write* (subpath \"{}\"))\n", resolved);
-    }
-    profile += "(allow file-write* (literal \"/dev/null\"))\n";
-
-    // Denied paths (override allows)
-    for denied in &policy.filesystem.denied_paths {
-        let resolved = resolve_sandbox_path(&denied.path, cwd);
-        match denied.deny {
-            DenyAccess::Write => {
-                profile += &format!("(deny file-write* (subpath \"{}\"))\n", resolved);
-            }
-            DenyAccess::Read => {
-                profile += &format!("(deny file-read* (subpath \"{}\"))\n", resolved);
-            }
-            DenyAccess::ReadWrite => {
-                profile += &format!("(deny file-read* (subpath \"{}\"))\n", resolved);
-                profile += &format!("(deny file-write* (subpath \"{}\"))\n", resolved);
-            }
-        }
-    }
-
-    // Executable paths
-    for path in &policy.filesystem.executable_paths {
-        let resolved = resolve_sandbox_path(path, cwd);
-        profile += &format!("(allow process-exec (subpath \"{}\"))\n", resolved);
-    }
-    // Always allow process-fork for subprocesses
-    profile += "(allow process-fork)\n";
-
-    // Network
-    match &policy.network {
-        NetworkPolicy::Deny => {
-            profile += "(deny network*)\n";
-        }
-        NetworkPolicy::Allow => {
-            profile += "(allow network*)\n";
-        }
-        NetworkPolicy::AllowSpecific(targets) => {
-            for target in targets {
-                let port = target.port.map(|p| format!(":{}", p)).unwrap_or_default();
-                profile += &format!(
-                    "(allow network* (remote ip \"{}:{}\"))\n",
-                    target.host, port
-                );
-            }
-        }
-    }
-
-    // Seatbelt-specific: allow sysctl-read, mach-lookup for basic process
-    // operation (many tools need these to function)
-    profile += "(allow sysctl-read)\n";
-    profile += "(allow mach-lookup)\n";
-
-    profile
-}
-```
-
-### Capability Gaps Between Platforms
-
-Not everything maps 1:1. The abstraction must handle these differences:
-
-| Feature | Linux | macOS | Cross-Platform Handling |
-|---|---|---|---|
-| AF_UNIX socket filtering | seccomp allows AF_UNIX specifically | Seatbelt allows all sockets or none | On macOS, `network: deny` blocks less granularly. Document the difference. |
-| Per-syscall blocklist | seccomp-BPF filter | Not possible in SBPL | `block_dangerous_syscalls` is best-effort on macOS — `(deny default)` covers most. |
-| Regex path matching | Not in Landlock (glob only in policy, resolved to paths) | Native SBPL `(regex #"...")` | Use resolved paths in both. Policy layer does glob matching pre-resolution. |
-| Mach IPC filtering | N/A on Linux | Seatbelt `(deny mach*)` | macOS-specific — not in cross-platform API, but backend can add defaults. |
-| File descriptor restrictions | seccomp can block specific fd-related syscalls | Not in SBPL | Linux-specific enhancement, not in shared API. |
-| Dynamic tightening | Landlock can stack (add more restrictions) | Cannot modify profile after apply | Shared API assumes one-shot apply before exec. Landlock stacking is backend-internal. |
-
-### Helper Binary Design
-
-The `clash-sandbox` binary is the single entry point on both platforms:
+Single entry point on both platforms:
 
 ```
-clash-sandbox --policy '{"filesystem":...}' --cwd /project -- bash -c "npm test"
+clash-sandbox --policy <json> --cwd /project -- bash -c "npm test"
 ```
 
 Internally:
-- On Linux: applies Landlock + seccomp directly, then `execvp`
-- On macOS: generates SBPL profile, writes to temp file, then `exec sandbox-exec -p <profile> -- <command>`
+- **Linux**: resolves paths → builds Landlock ruleset from Cap flags → installs
+  seccomp network filter → sets `NO_NEW_PRIVS` → `execvp`
+- **macOS**: resolves paths → generates SBPL profile from Cap flags → applies
+  via `sandbox_init()` FFI → `execvp`
 
-Or alternatively on macOS, use `sandbox_init()` directly from Rust via FFI to
-avoid the temp file and the deprecated `sandbox-exec` binary.
+### Platform-Specific Behavior
+
+The capability model is deliberately simple. Where platforms differ, the backend
+does the best it can:
+
+| Behavior | Linux | macOS |
+|---|---|---|
+| `network: deny` | AF_UNIX still allowed (tools need socketpair for IPC) | All sockets blocked (may need macOS-specific workaround) |
+| Dangerous syscall blocking | seccomp blocks ptrace, mount, reboot, kexec, module_load | `(deny default)` covers most; backends add safe defaults |
+| Mach IPC | N/A | Backend always allows `sysctl-read` + `mach-lookup` (tools break without these) |
+| Dynamic tightening | Landlock can stack restrictions | Profile is static once applied |
+
+These are backend details — the user's policy YAML is the same on both platforms.
 
 ---
 
@@ -720,91 +580,60 @@ setup, execution, and result capture.
 
 ### Policy Mapping
 
-The policy language would extend to support resource-level constraints:
+The clash policy file gains a `sandbox:` section alongside the existing `rules:`.
+The two layers are complementary:
 
 ```yaml
 default: ask
 
 rules:
-  # Existing: intent-based rules
+  # Layer 1: intent-based rules (existing clash policy engine)
   - allow * bash git *
   - deny * bash rm -rf *
 
-  # New: resource-based sandbox constraints
-  sandbox:
-    filesystem:
-      - read: /**                    # Read anywhere
-      - write: $CWD/**              # Write only in working directory
-      - write: /tmp/**              # Write to tmp
-      - execute: /usr/bin/**        # Execute system binaries
-      - execute: /usr/local/bin/**
+# Layer 2: capability-based sandbox (new, kernel-enforced)
+sandbox:
+  default: read + execute
 
-    network:
-      deny: all                     # No network by default
-      # or:
-      # allow: tcp connect to 443   # HTTPS only
+  rules:
+    - allow read + write + create + delete in $CWD
+    - deny write + delete + create in $CWD/.git
+    - deny read in $CWD/.env
+    - allow write + create + delete in /tmp
 
-    syscalls:
-      deny:
-        - ptrace                    # No debugging other processes
-        - mount                     # No filesystem mounting
-        - reboot                    # Obviously
-        - kexec_load
-        - init_module
-        - delete_module
+  network: deny
 ```
 
-### Sandbox Policy Compilation
-
-At startup or policy load time, compile the YAML policy into concrete enforcement parameters:
-
-```rust
-struct SandboxPolicy {
-    /// Landlock filesystem rules
-    filesystem: Vec<FilesystemRule>,
-    /// Landlock network rules
-    network: NetworkPolicy,
-    /// seccomp-BPF blocked syscalls
-    blocked_syscalls: Vec<Syscall>,
-    /// Whether to set NO_NEW_PRIVS
-    no_new_privs: bool,
-}
-
-struct FilesystemRule {
-    path: PathBuf,
-    access: LandlockAccess, // read, write, execute, etc.
-}
-
-enum NetworkPolicy {
-    DenyAll,
-    AllowUnixOnly,
-    AllowSpecific(Vec<NetworkRule>),
-}
-```
+Intent rules decide *whether* a tool runs. Sandbox rules limit *what it can
+actually do* once running. Both layers apply — a command must pass the intent
+check AND operates within the sandbox.
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: Cross-Platform Sandbox Types + Linux Backend
+### Phase 1: Capability Types + Linux Backend
 
-**Goal:** Define the platform-agnostic `SandboxPolicy` and implement Linux enforcement.
+**Goal:** Define `Cap`, `SandboxPolicy`, `SandboxRule` and implement Linux enforcement.
 
 1. Create `clash-sandbox/` crate in workspace
-2. Define `SandboxPolicy`, `FilesystemPolicy`, `NetworkPolicy`, `SandboxBackend` trait
+2. Define `Cap` bitflags, `SandboxPolicy`, `SandboxRule`, `SandboxBackend` trait
 3. Implement `LinuxSandbox` backend:
+   - Map `Cap` flags → Landlock `AccessFs` bitflags
    - `landlock` crate for filesystem access control
-   - `seccompiler` (pure Rust) for syscall + network filtering
+   - `seccompiler` (pure Rust) for network filtering via seccomp
    - `PR_SET_NO_NEW_PRIVS` for privilege escalation prevention
 4. CLI: `clash-sandbox --policy <json> --cwd <path> -- <command> [args...]`
 5. Test on Linux with common commands (git, npm, cargo, python, etc.)
 
 ### Phase 2: macOS Seatbelt Backend
 
-**Goal:** Implement macOS enforcement via the same `SandboxPolicy` API.
+**Goal:** Implement macOS enforcement via the same `Cap`/`SandboxPolicy` API.
 
 1. Implement `MacOSSandbox` backend:
-   - `compile_to_sbpl()` — generate SBPL profile string from `SandboxPolicy`
+   - Map `Cap` flags → SBPL operations (`file-read*`, `file-write-data`,
+     `file-write-create`, `file-write-unlink`, `process-exec`)
+   - Generate SBPL profile string from `SandboxPolicy`
    - Apply via `sandbox_init()` FFI (preferred) or `sandbox-exec -p` (fallback)
 2. Handle macOS-specific needs:
    - Always allow `sysctl-read`, `mach-lookup` (tools won't function without these)
@@ -814,13 +643,13 @@ enum NetworkPolicy {
 
 ### Phase 3: Policy Language Extension
 
-**Goal:** Extend the clash policy YAML to express sandbox constraints.
+**Goal:** Parse `sandbox:` YAML into `SandboxPolicy` at policy load time.
 
 1. Add `sandbox:` section to policy.yaml schema
-2. Implement policy-to-`SandboxPolicy` compilation
-3. Per-rule sandbox overrides (e.g., `git push` needs network, `git status` doesn't)
-4. Environment variable expansion (`$CWD`, `$HOME`, `$TMPDIR`)
-5. Denied path overrides (`.git` write-protection, `.env` read-protection)
+2. Parse capability expressions (`read + write + create`)
+3. Implement policy-to-`SandboxPolicy` compilation
+4. Per-rule sandbox overrides (e.g., `git push` needs network, `git status` doesn't)
+5. Environment variable expansion (`$CWD`, `$HOME`, `$TMPDIR`)
 
 ### Phase 4: Integration & Testing
 
