@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use claude_settings::ClaudeSettings;
-use claude_settings::policy::compile::CompiledPolicy;
+use claude_settings::policy::CompiledPolicy;
 use claude_settings::policy::parse::desugar_legacy;
 use claude_settings::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
 use dirs::home_dir;

@@ -7,13 +7,17 @@
 //! - Custom serde for `VerbPattern` (with `*` wildcard)
 //! - Legacy `[permissions]` desugaring to statements
 
+use std::collections::HashMap;
+
 use pest::Parser;
 use pest_derive::Parser;
 use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use tracing::{Level, instrument};
 
+use super::error::PolicyParseError;
 use super::*;
+use crate::sandbox::{Cap, NetworkPolicy};
 
 // ---------------------------------------------------------------------------
 // Pest grammar
@@ -22,49 +26,6 @@ use super::*;
 #[derive(Parser)]
 #[grammar = "policy/rule.pest"]
 struct RuleParser;
-
-// ---------------------------------------------------------------------------
-// Error type
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, thiserror::Error)]
-pub enum PolicyParseError {
-    #[error("YAML parse error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
-
-    #[error("invalid rule '{rule}': {message}")]
-    InvalidRule { rule: String, message: String },
-
-    #[error("invalid effect '{0}'")]
-    InvalidEffect(String),
-
-    #[error("invalid tool '{0}'")]
-    InvalidTool(String),
-
-    #[error("invalid filter expression: {0}")]
-    InvalidFilter(String),
-
-    #[error("invalid profile expression: {0}")]
-    InvalidProfile(String),
-
-    #[error("unknown constraint or profile '{0}'")]
-    UnknownRef(String),
-
-    #[error("circular profile include: {0}")]
-    CircularInclude(String),
-
-    #[error("unknown profile '{0}' in include")]
-    UnknownInclude(String),
-
-    #[error("invalid new-format rule key '{0}': {1}")]
-    InvalidNewRuleKey(String, String),
-
-    #[error("invalid cap-scoped fs key '{0}': {1}")]
-    InvalidCapScopedFs(String, String),
-
-    #[error("invalid args entry: {0}")]
-    InvalidArg(String),
-}
 
 // ---------------------------------------------------------------------------
 // YAML document shape (serde)
@@ -759,304 +720,8 @@ fn find_constraint_separator(input: &str) -> Option<usize> {
         .find(|&i| bytes[i] == b':' && bytes[i - 1] == b' ')
 }
 
-// ---------------------------------------------------------------------------
-// Filter expression parser (recursive descent)
-// ---------------------------------------------------------------------------
-
-/// Parse a filter expression string like `subpath(.) & !literal(.env)`.
-///
-/// Grammar (precedence: `!` > `&` > `|`):
-///   expr     = or_expr
-///   or_expr  = and_expr ( '|' and_expr )*
-///   and_expr = unary ( '&' unary )*
-///   unary    = '!' unary | atom
-///   atom     = 'subpath(' path ')' | 'literal(' path ')' | 'regex(' pattern ')' | '(' expr ')'
-#[instrument(level = Level::TRACE)]
-pub fn parse_filter_expr(input: &str) -> Result<FilterExpr, PolicyParseError> {
-    let input = input.trim();
-    let tokens = tokenize_expr(input).map_err(PolicyParseError::InvalidFilter)?;
-    let mut pos = 0;
-    let result = parse_filter_or(&tokens, &mut pos)?;
-    if pos != tokens.len() {
-        return Err(PolicyParseError::InvalidFilter(format!(
-            "unexpected token at position {}: {:?}",
-            pos,
-            tokens.get(pos)
-        )));
-    }
-    Ok(result)
-}
-
-/// Parse a profile expression string like `sandboxed & safe-io`.
-///
-/// Grammar (precedence: `!` > `&` > `|`):
-///   expr     = or_expr
-///   or_expr  = and_expr ( '|' and_expr )*
-///   and_expr = unary ( '&' unary )*
-///   unary    = '!' unary | atom
-///   atom     = identifier | '(' expr ')'
-#[instrument(level = Level::TRACE)]
-pub fn parse_profile_expr(input: &str) -> Result<ProfileExpr, PolicyParseError> {
-    let input = input.trim();
-    let tokens = tokenize_expr(input).map_err(PolicyParseError::InvalidProfile)?;
-    let mut pos = 0;
-    let result = parse_profile_or(&tokens, &mut pos)?;
-    if pos != tokens.len() {
-        return Err(PolicyParseError::InvalidProfile(format!(
-            "unexpected token at position {}: {:?}",
-            pos,
-            tokens.get(pos)
-        )));
-    }
-    Ok(result)
-}
-
-// -- Shared tokenizer for boolean expressions --
-
-#[derive(Debug, Clone, PartialEq)]
-enum ExprToken {
-    And,           // &
-    Or,            // |
-    Not,           // !
-    LParen,        // (
-    RParen,        // )
-    Ident(String), // identifier or function call like subpath(./src)
-}
-
-/// Tokenize an expression string into tokens.
-/// Handles function-call syntax like `subpath(./src)` as a single Ident token.
-fn tokenize_expr(input: &str) -> Result<Vec<ExprToken>, String> {
-    let mut tokens = Vec::new();
-    let chars: Vec<char> = input.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        match chars[i] {
-            ' ' | '\t' => i += 1,
-            '&' => {
-                tokens.push(ExprToken::And);
-                i += 1;
-            }
-            '|' => {
-                tokens.push(ExprToken::Or);
-                i += 1;
-            }
-            '!' => {
-                tokens.push(ExprToken::Not);
-                i += 1;
-            }
-            '(' => {
-                tokens.push(ExprToken::LParen);
-                i += 1;
-            }
-            ')' => {
-                tokens.push(ExprToken::RParen);
-                i += 1;
-            }
-            _ => {
-                // Read an identifier, possibly including a function call like subpath(./src)
-                let start = i;
-                // Read the identifier part
-                while i < chars.len()
-                    && !matches!(chars[i], ' ' | '\t' | '&' | '|' | '!' | '(' | ')')
-                {
-                    i += 1;
-                }
-                let word = &input[start..i];
-
-                // Check if this is a function call (next non-space char is '(')
-                let mut peek = i;
-                while peek < chars.len() && (chars[peek] == ' ' || chars[peek] == '\t') {
-                    peek += 1;
-                }
-                if peek < chars.len()
-                    && chars[peek] == '('
-                    && matches!(word, "subpath" | "literal" | "regex")
-                {
-                    // Consume the '(' and everything up to the matching ')'
-                    i = peek + 1; // skip '('
-                    let arg_start = i;
-                    let mut depth = 1;
-                    while i < chars.len() && depth > 0 {
-                        match chars[i] {
-                            '(' => depth += 1,
-                            ')' => depth -= 1,
-                            _ => {}
-                        }
-                        if depth > 0 {
-                            i += 1;
-                        }
-                    }
-                    if depth != 0 {
-                        return Err(format!("unclosed parenthesis in {}()", word));
-                    }
-                    let arg = input[arg_start..i].trim();
-                    i += 1; // skip closing ')'
-                    tokens.push(ExprToken::Ident(format!("{}({})", word, arg)));
-                } else {
-                    tokens.push(ExprToken::Ident(word.to_string()));
-                }
-            }
-        }
-    }
-    Ok(tokens)
-}
-
-// -- Filter expression recursive descent --
-
-fn parse_filter_or(tokens: &[ExprToken], pos: &mut usize) -> Result<FilterExpr, PolicyParseError> {
-    let mut left = parse_filter_and(tokens, pos)?;
-    while *pos < tokens.len() && tokens[*pos] == ExprToken::Or {
-        *pos += 1;
-        let right = parse_filter_and(tokens, pos)?;
-        left = FilterExpr::Or(Box::new(left), Box::new(right));
-    }
-    Ok(left)
-}
-
-fn parse_filter_and(tokens: &[ExprToken], pos: &mut usize) -> Result<FilterExpr, PolicyParseError> {
-    let mut left = parse_filter_unary(tokens, pos)?;
-    while *pos < tokens.len() && tokens[*pos] == ExprToken::And {
-        *pos += 1;
-        let right = parse_filter_unary(tokens, pos)?;
-        left = FilterExpr::And(Box::new(left), Box::new(right));
-    }
-    Ok(left)
-}
-
-fn parse_filter_unary(
-    tokens: &[ExprToken],
-    pos: &mut usize,
-) -> Result<FilterExpr, PolicyParseError> {
-    if *pos < tokens.len() && tokens[*pos] == ExprToken::Not {
-        *pos += 1;
-        let inner = parse_filter_unary(tokens, pos)?;
-        return Ok(FilterExpr::Not(Box::new(inner)));
-    }
-    parse_filter_atom(tokens, pos)
-}
-
-fn parse_filter_atom(
-    tokens: &[ExprToken],
-    pos: &mut usize,
-) -> Result<FilterExpr, PolicyParseError> {
-    if *pos >= tokens.len() {
-        return Err(PolicyParseError::InvalidFilter(
-            "unexpected end of expression".into(),
-        ));
-    }
-    match &tokens[*pos] {
-        ExprToken::LParen => {
-            *pos += 1;
-            let expr = parse_filter_or(tokens, pos)?;
-            if *pos >= tokens.len() || tokens[*pos] != ExprToken::RParen {
-                return Err(PolicyParseError::InvalidFilter(
-                    "expected closing ')'".into(),
-                ));
-            }
-            *pos += 1;
-            Ok(expr)
-        }
-        ExprToken::Ident(s) => {
-            let expr = parse_filter_function(s)?;
-            *pos += 1;
-            Ok(expr)
-        }
-        other => Err(PolicyParseError::InvalidFilter(format!(
-            "unexpected token: {:?}",
-            other
-        ))),
-    }
-}
-
-/// Parse a filter function call like `subpath(./src)`, `literal(.env)`, `regex(.*\.rs$)`.
-fn parse_filter_function(s: &str) -> Result<FilterExpr, PolicyParseError> {
-    if let Some(arg) = s.strip_prefix("subpath(").and_then(|s| s.strip_suffix(')')) {
-        Ok(FilterExpr::Subpath(arg.to_string()))
-    } else if let Some(arg) = s.strip_prefix("literal(").and_then(|s| s.strip_suffix(')')) {
-        Ok(FilterExpr::Literal(arg.to_string()))
-    } else if let Some(arg) = s.strip_prefix("regex(").and_then(|s| s.strip_suffix(')')) {
-        Ok(FilterExpr::Regex(arg.to_string()))
-    } else {
-        Err(PolicyParseError::InvalidFilter(format!(
-            "expected subpath(), literal(), or regex(), got '{}'",
-            s
-        )))
-    }
-}
-
-// -- Profile expression recursive descent --
-
-fn parse_profile_or(
-    tokens: &[ExprToken],
-    pos: &mut usize,
-) -> Result<ProfileExpr, PolicyParseError> {
-    let mut left = parse_profile_and(tokens, pos)?;
-    while *pos < tokens.len() && tokens[*pos] == ExprToken::Or {
-        *pos += 1;
-        let right = parse_profile_and(tokens, pos)?;
-        left = ProfileExpr::Or(Box::new(left), Box::new(right));
-    }
-    Ok(left)
-}
-
-fn parse_profile_and(
-    tokens: &[ExprToken],
-    pos: &mut usize,
-) -> Result<ProfileExpr, PolicyParseError> {
-    let mut left = parse_profile_unary(tokens, pos)?;
-    while *pos < tokens.len() && tokens[*pos] == ExprToken::And {
-        *pos += 1;
-        let right = parse_profile_unary(tokens, pos)?;
-        left = ProfileExpr::And(Box::new(left), Box::new(right));
-    }
-    Ok(left)
-}
-
-fn parse_profile_unary(
-    tokens: &[ExprToken],
-    pos: &mut usize,
-) -> Result<ProfileExpr, PolicyParseError> {
-    if *pos < tokens.len() && tokens[*pos] == ExprToken::Not {
-        *pos += 1;
-        let inner = parse_profile_unary(tokens, pos)?;
-        return Ok(ProfileExpr::Not(Box::new(inner)));
-    }
-    parse_profile_atom(tokens, pos)
-}
-
-fn parse_profile_atom(
-    tokens: &[ExprToken],
-    pos: &mut usize,
-) -> Result<ProfileExpr, PolicyParseError> {
-    if *pos >= tokens.len() {
-        return Err(PolicyParseError::InvalidProfile(
-            "unexpected end of expression".into(),
-        ));
-    }
-    match &tokens[*pos] {
-        ExprToken::LParen => {
-            *pos += 1;
-            let expr = parse_profile_or(tokens, pos)?;
-            if *pos >= tokens.len() || tokens[*pos] != ExprToken::RParen {
-                return Err(PolicyParseError::InvalidProfile(
-                    "expected closing ')'".into(),
-                ));
-            }
-            *pos += 1;
-            Ok(expr)
-        }
-        ExprToken::Ident(s) => {
-            let expr = ProfileExpr::Ref(s.to_string());
-            *pos += 1;
-            Ok(expr)
-        }
-        other => Err(PolicyParseError::InvalidProfile(format!(
-            "unexpected token: {:?}",
-            other
-        ))),
-    }
-}
+// Expression parsing delegated to expr module.
+pub use super::expr::{parse_filter_expr, parse_profile_expr};
 
 /// Serialize a `PolicyDocument` back to YAML.
 #[instrument(level = Level::TRACE)]
@@ -1081,12 +746,12 @@ pub fn format_rule(stmt: &Statement) -> String {
         VerbPattern::Any => "*".to_string(),
         VerbPattern::Exact(v) => v.rule_name().to_string(),
     };
-    let noun = format_pattern_str(&stmt.noun);
+    let noun = super::ast::format_pattern_str(&stmt.noun);
 
     let base = if is_default_entity(&stmt.entity) {
         format!("{} {} {}", effect, tool, noun)
     } else {
-        let entity = format_pattern_str(&stmt.entity);
+        let entity = super::ast::format_pattern_str(&stmt.entity);
         format!("{} {} {} {}", effect, entity, tool, noun)
     };
 
@@ -1212,39 +877,8 @@ pub fn parse_verb_pattern(s: &str) -> Result<VerbPattern, String> {
     }
 }
 
-/// Desugar legacy `[permissions]` block into policy statements.
-///
-/// Converts Claude Code format like:
-/// ```yaml
-/// permissions:
-///   allow: ["Bash(git:*)", "Read(**/*.rs)"]
-///   deny: ["Read(.env)"]
-///   ask: ["Write"]
-/// ```
-///
-/// Into equivalent statements with `entity = "agent"`.
-#[instrument(level = Level::TRACE, skip(perms))]
-pub fn desugar_legacy(perms: &LegacyPermissions) -> Vec<Statement> {
-    let mut statements = Vec::new();
-
-    for pattern in &perms.allow {
-        if let Some(stmt) = legacy_pattern_to_statement(pattern, Effect::Allow) {
-            statements.push(stmt);
-        }
-    }
-    for pattern in &perms.deny {
-        if let Some(stmt) = legacy_pattern_to_statement(pattern, Effect::Deny) {
-            statements.push(stmt);
-        }
-    }
-    for pattern in &perms.ask {
-        if let Some(stmt) = legacy_pattern_to_statement(pattern, Effect::Ask) {
-            statements.push(stmt);
-        }
-    }
-
-    statements
-}
+// Re-export legacy desugaring for backward compatibility.
+pub use super::legacy::desugar_legacy;
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -1318,139 +952,6 @@ fn parse_entity_value(pair: pest::iterators::Pair<Rule>) -> MatchExpr {
             }
         }
         _ => MatchExpr::Any,
-    }
-}
-
-/// Convert a single legacy permission pattern like `"Bash(git:*)"` into a Statement.
-fn legacy_pattern_to_statement(pattern: &str, effect: Effect) -> Option<Statement> {
-    let pattern = pattern.trim();
-
-    // Parse "ToolName(arg)" or "ToolName"
-    let (tool_name, arg) = if let Some(paren_start) = pattern.find('(') {
-        if !pattern.ends_with(')') {
-            return None;
-        }
-        let tool = &pattern[..paren_start];
-        let arg = &pattern[paren_start + 1..pattern.len() - 1];
-        (tool, Some(arg))
-    } else {
-        (pattern, None)
-    };
-
-    let verb = Verb::from_tool_name(tool_name)?;
-    let verb_pattern = VerbPattern::Exact(verb);
-
-    let noun = match arg {
-        None => Pattern::Match(MatchExpr::Any),
-        Some(arg) => {
-            // Handle prefix pattern "git:*" → glob "git *"
-            if let Some(prefix) = arg.strip_suffix(":*") {
-                Pattern::Match(MatchExpr::Glob(format!("{} *", prefix)))
-            } else if arg.contains('*') || arg.contains("**") || arg.contains('?') {
-                Pattern::Match(MatchExpr::Glob(arg.to_string()))
-            } else {
-                Pattern::Match(MatchExpr::Exact(arg.to_string()))
-            }
-        }
-    };
-
-    Some(Statement {
-        effect,
-        entity: Pattern::Match(MatchExpr::Typed {
-            entity_type: "agent".into(),
-            name: None,
-        }),
-        verb: verb_pattern,
-        noun,
-        reason: None,
-        delegate: None,
-        profile: None,
-    })
-}
-
-/// Format a `Pattern` as a string for rule serialization.
-fn format_pattern_str(pattern: &Pattern) -> String {
-    match pattern {
-        Pattern::Match(expr) => format_match_expr(expr),
-        Pattern::Not(expr) => format!("!{}", format_match_expr(expr)),
-    }
-}
-
-// --- Custom serde implementations ---
-
-impl Serialize for Pattern {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&format_pattern_str(self))
-    }
-}
-
-impl<'de> Deserialize<'de> for Pattern {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Ok(parse_pattern(&s))
-    }
-}
-
-impl Serialize for VerbPattern {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            VerbPattern::Any => serializer.serialize_str("*"),
-            VerbPattern::Exact(verb) => serializer.serialize_str(&verb.to_string()),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for VerbPattern {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        parse_verb_pattern(&s).map_err(serde::de::Error::custom)
-    }
-}
-
-impl Serialize for MatchExpr {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&format_match_expr(self))
-    }
-}
-
-impl<'de> Deserialize<'de> for MatchExpr {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Ok(parse_match_expr(&s))
-    }
-}
-
-fn format_match_expr(expr: &MatchExpr) -> String {
-    match expr {
-        MatchExpr::Any => "*".to_string(),
-        MatchExpr::Exact(s) => s.clone(),
-        MatchExpr::Glob(s) => s.clone(),
-        MatchExpr::Typed {
-            entity_type,
-            name: None,
-        } => entity_type.clone(),
-        MatchExpr::Typed {
-            entity_type,
-            name: Some(name),
-        } => format!("{}:{}", entity_type, name),
     }
 }
 

@@ -4,126 +4,16 @@
 //! organizes statements for efficient evaluation.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 
 use tracing::{Level, instrument};
 
+use super::error::CompileError;
+use super::ir::{
+    CompiledConstraintDef, CompiledFilterExpr, CompiledInlineConstraints, CompiledMatchExpr,
+    CompiledPattern, CompiledPolicy, CompiledProfileRule, CompiledStatement,
+};
 use super::*;
-use crate::sandbox::{Cap, NetworkPolicy, RuleEffect, SandboxPolicy, SandboxRule};
 use regex::Regex;
-
-/// A compiled policy ready for fast evaluation.
-#[derive(Debug)]
-pub struct CompiledPolicy {
-    /// Default effect when no statement matches.
-    pub default: Effect,
-    /// Compiled statements in evaluation order (legacy format).
-    pub statements: Vec<CompiledStatement>,
-    /// Compiled constraint definitions (name → compiled constraint) — legacy format.
-    constraints: HashMap<String, CompiledConstraintDef>,
-    /// Profile definitions (name → profile expression) — legacy format.
-    profiles: HashMap<String, ProfileExpr>,
-    /// Flattened rules from the active profile (new format).
-    /// When non-empty, evaluation uses this path instead of legacy statements.
-    active_profile_rules: Vec<CompiledProfileRule>,
-}
-
-/// A compiled statement with pre-compiled matchers.
-#[derive(Debug)]
-pub struct CompiledStatement {
-    pub effect: Effect,
-    pub entity_matcher: CompiledPattern,
-    pub verb_matcher: VerbPattern,
-    pub noun_matcher: CompiledPattern,
-    pub reason: Option<String>,
-    pub delegate: Option<DelegateConfig>,
-    /// Optional constraint binding (profile expression).
-    pub profile: Option<ProfileExpr>,
-}
-
-/// A compiled constraint definition with pre-compiled regexes.
-#[derive(Debug)]
-struct CompiledConstraintDef {
-    fs: Option<CompiledFilterExpr>,
-    caps: Option<Cap>,
-    network: Option<NetworkPolicy>,
-    pipe: Option<bool>,
-    redirect: Option<bool>,
-    forbid_args: Option<Vec<String>>,
-    require_args: Option<Vec<String>>,
-}
-
-/// A compiled filter expression with pre-compiled regexes.
-#[derive(Debug)]
-enum CompiledFilterExpr {
-    Subpath(String),
-    Literal(String),
-    Regex(Regex),
-    And(Box<CompiledFilterExpr>, Box<CompiledFilterExpr>),
-    Or(Box<CompiledFilterExpr>, Box<CompiledFilterExpr>),
-    Not(Box<CompiledFilterExpr>),
-}
-
-/// A compiled rule from the new profile-based format.
-#[derive(Debug)]
-struct CompiledProfileRule {
-    effect: Effect,
-    /// Raw verb string for matching (e.g. "bash", "safe-read", "*").
-    verb: String,
-    noun_matcher: CompiledPattern,
-    constraints: Option<CompiledInlineConstraints>,
-}
-
-/// Compiled inline constraints for a new-format profile rule.
-#[derive(Debug)]
-struct CompiledInlineConstraints {
-    /// Cap-scoped filesystem entries.
-    fs: Option<Vec<(Cap, CompiledFilterExpr)>>,
-    forbid_args: Vec<String>,
-    require_args: Vec<String>,
-    network: Option<NetworkPolicy>,
-    pipe: Option<bool>,
-    redirect: Option<bool>,
-}
-
-/// A compiled pattern (potentially negated).
-#[derive(Debug)]
-pub enum CompiledPattern {
-    Match(CompiledMatchExpr),
-    Not(CompiledMatchExpr),
-}
-
-/// A compiled match expression with pre-compiled regex for globs.
-#[derive(Debug)]
-pub enum CompiledMatchExpr {
-    Any,
-    Exact(String),
-    Glob {
-        pattern: String,
-        regex: Regex,
-    },
-    Typed {
-        entity_type: String,
-        name: Option<String>,
-    },
-}
-
-/// Error during policy compilation.
-#[derive(Debug, thiserror::Error)]
-pub enum CompileError {
-    #[error("invalid glob pattern '{pattern}': {source}")]
-    InvalidGlob {
-        pattern: String,
-        source: regex::Error,
-    },
-    #[error("invalid regex in filter '{pattern}': {source}")]
-    InvalidFilterRegex {
-        pattern: String,
-        source: regex::Error,
-    },
-    #[error("profile flattening error: {0}")]
-    ProfileError(String),
-}
 
 impl CompiledPolicy {
     /// Returns true if this policy uses the new profile-based format.
@@ -182,667 +72,10 @@ impl CompiledPolicy {
             active_profile_rules,
         })
     }
-
-    /// Evaluate a request against this policy (backward-compatible version).
-    ///
-    /// Returns the resulting effect after applying all matching statements
-    /// with precedence: deny > ask > allow > delegate.
-    ///
-    /// If no statement matches, returns the configured default effect.
-    ///
-    /// This version creates a minimal `EvalContext` without cwd or tool_input.
-    /// For full constraint evaluation, use `evaluate_with_context`.
-    #[instrument(level = Level::TRACE, skip(self), fields(entity, verb, noun))]
-    pub fn evaluate(&self, entity: &str, verb: &Verb, noun: &str) -> PolicyDecision {
-        let verb_str = verb.rule_name();
-        let ctx = EvalContext {
-            entity,
-            verb,
-            noun,
-            cwd: "",
-            tool_input: &serde_json::Value::Null,
-            verb_str,
-        };
-        self.evaluate_with_context(&ctx)
-    }
-
-    /// Evaluate a request against this policy with full context.
-    ///
-    /// The `EvalContext` provides cwd and tool_input for constraint evaluation.
-    /// Dispatches to new-format evaluation if active_profile_rules is non-empty.
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn evaluate_with_context(&self, ctx: &EvalContext) -> PolicyDecision {
-        if !self.active_profile_rules.is_empty() {
-            return self.evaluate_new_format(ctx);
-        }
-
-        let mut has_allow = false;
-        let mut has_ask = false;
-        let mut has_deny = false;
-        let mut has_delegate = false;
-
-        let mut deny_reason: Option<&str> = None;
-        let mut ask_reason: Option<&str> = None;
-        let mut delegate_config: Option<&DelegateConfig> = None;
-
-        // Track profiles from matched allow statements (for sandbox generation).
-        let mut allow_profiles: Vec<&ProfileExpr> = Vec::new();
-
-        let mut explanation: Vec<String> = Vec::new();
-
-        for stmt in &self.statements {
-            if !stmt.matches(ctx.entity, ctx.verb, ctx.noun) {
-                continue;
-            }
-
-            // Statement pattern matched — now check profile/constraint
-            let profile_result = self.check_profile(&stmt.profile, ctx);
-            if let Err(ref reason) = profile_result {
-                explanation.push(format!(
-                    "skipped: {} (constraint failed: {})",
-                    Self::describe_statement(stmt),
-                    reason
-                ));
-                continue;
-            }
-
-            explanation.push(format!("matched: {}", Self::describe_statement(stmt),));
-
-            match stmt.effect {
-                Effect::Deny => {
-                    has_deny = true;
-                    if deny_reason.is_none() {
-                        deny_reason = stmt.reason.as_deref();
-                    }
-                }
-                Effect::Ask => {
-                    has_ask = true;
-                    if ask_reason.is_none() {
-                        ask_reason = stmt.reason.as_deref();
-                    }
-                }
-                Effect::Allow => {
-                    has_allow = true;
-                    if let Some(ref profile) = stmt.profile {
-                        allow_profiles.push(profile);
-                    }
-                }
-                Effect::Delegate => {
-                    has_delegate = true;
-                    if delegate_config.is_none() {
-                        delegate_config = stmt.delegate.as_ref();
-                    }
-                }
-            }
-        }
-
-        // Precedence: deny > ask > allow > delegate
-        if has_deny {
-            explanation.push(format!(
-                "result: deny (deny > ask > allow; {} deny, {} ask, {} allow matched)",
-                if has_deny { 1 } else { 0 },
-                if has_ask { "1+" } else { "0" },
-                if has_allow { "1+" } else { "0" },
-            ));
-            return PolicyDecision {
-                effect: Effect::Deny,
-                reason: deny_reason.map(|s| s.to_string()),
-                explanation,
-                delegate: None,
-                sandbox: None,
-            };
-        }
-        if has_ask {
-            explanation.push("result: ask (ask > allow)".into());
-            return PolicyDecision {
-                effect: Effect::Ask,
-                reason: ask_reason.map(|s| s.to_string()),
-                explanation,
-                delegate: None,
-                sandbox: None,
-            };
-        }
-        if has_allow {
-            explanation.push("result: allow".into());
-            // For bash commands, generate sandbox from matched allow profiles.
-            let sandbox = if *ctx.verb == Verb::Execute {
-                self.generate_sandbox_from_profiles(&allow_profiles, ctx.cwd)
-            } else {
-                None
-            };
-            return PolicyDecision {
-                effect: Effect::Allow,
-                reason: None,
-                explanation,
-                delegate: None,
-                sandbox,
-            };
-        }
-        if has_delegate {
-            explanation.push("result: delegate".into());
-            return PolicyDecision {
-                effect: Effect::Delegate,
-                reason: None,
-                explanation,
-                delegate: delegate_config.cloned(),
-                sandbox: None,
-            };
-        }
-
-        // No match → default
-        explanation.push(format!("no rules matched; default: {}", self.default));
-        PolicyDecision {
-            effect: self.default,
-            reason: None,
-            explanation,
-            delegate: None,
-            sandbox: None,
-        }
-    }
-
-    /// Build a human-readable description of a statement for explanations.
-    fn describe_statement(stmt: &CompiledStatement) -> String {
-        let verb = match &stmt.verb_matcher {
-            VerbPattern::Any => "*",
-            VerbPattern::Exact(v) => v.rule_name(),
-        };
-        let profile_suffix = if stmt.profile.is_some() {
-            format!(" : {}", stmt.profile.as_ref().unwrap())
-        } else {
-            String::new()
-        };
-        format!(
-            "{} {} {} -> {}{}",
-            stmt.effect, verb, "*", stmt.effect, profile_suffix,
-        )
-    }
-
-    /// Check if a profile expression is satisfied for the given context.
-    /// If no profile is specified, the check passes (unconditional rule).
-    fn check_profile(
-        &self,
-        profile: &Option<ProfileExpr>,
-        ctx: &EvalContext,
-    ) -> Result<(), String> {
-        match profile {
-            None => Ok(()),
-            Some(expr) => self.eval_profile_expr(expr, ctx),
-        }
-    }
-
-    /// Evaluate a profile expression recursively.
-    /// Returns `Ok(())` if satisfied, or `Err(reason)` explaining why not.
-    fn eval_profile_expr(&self, expr: &ProfileExpr, ctx: &EvalContext) -> Result<(), String> {
-        match expr {
-            ProfileExpr::Ref(name) => {
-                // First check if it's a named profile (composite)
-                if let Some(profile_expr) = self.profiles.get(name) {
-                    return self.eval_profile_expr(profile_expr, ctx);
-                }
-                // Then check if it's a named constraint (primitive)
-                if let Some(constraint) = self.constraints.get(name) {
-                    return constraint.eval(ctx);
-                }
-                // Unknown reference — fail closed (constraint not satisfied)
-                Err(format!("unknown constraint or profile '{}'", name))
-            }
-            ProfileExpr::And(a, b) => {
-                self.eval_profile_expr(a, ctx)?;
-                self.eval_profile_expr(b, ctx)
-            }
-            ProfileExpr::Or(a, b) => {
-                let a_result = self.eval_profile_expr(a, ctx);
-                if a_result.is_ok() {
-                    return Ok(());
-                }
-                let b_result = self.eval_profile_expr(b, ctx);
-                if b_result.is_ok() {
-                    return Ok(());
-                }
-                // Both failed — combine reasons
-                Err(format!(
-                    "({}) OR ({})",
-                    a_result.unwrap_err(),
-                    b_result.unwrap_err()
-                ))
-            }
-            ProfileExpr::Not(inner) => match self.eval_profile_expr(inner, ctx) {
-                Ok(()) => Err("NOT(satisfied)".into()),
-                Err(_) => Ok(()),
-            },
-        }
-    }
-
-    /// Generate a sandbox policy from the profiles of matched allow statements.
-    ///
-    /// Walks each profile expression tree collecting `fs`, `caps`, and `network`
-    /// from referenced constraints. Then generates sandbox rules from the `fs` filters.
-    ///
-    /// Composition rules:
-    /// - `caps`: intersection (most restrictive wins)
-    /// - `network`: deny wins over allow
-    /// - `fs` rules: all collected into one sandbox rule list
-    /// - No `fs` in any constraint → no sandbox generated
-    fn generate_sandbox_from_profiles(
-        &self,
-        profiles: &[&ProfileExpr],
-        cwd: &str,
-    ) -> Option<SandboxPolicy> {
-        let mut all_fs: Vec<(&CompiledFilterExpr, RuleEffect)> = Vec::new();
-        let mut merged_caps: Option<Cap> = None;
-        let mut merged_network = NetworkPolicy::Allow;
-
-        for profile in profiles {
-            self.collect_profile_sandbox_parts(
-                profile,
-                &mut all_fs,
-                &mut merged_caps,
-                &mut merged_network,
-            );
-        }
-
-        // No fs constraints → no sandbox
-        if all_fs.is_empty() {
-            return None;
-        }
-
-        // Determine final caps for sandbox rules.
-        // If no explicit caps were specified, use all caps.
-        let final_caps = merged_caps.unwrap_or(Cap::all());
-
-        // Generate sandbox rules from collected fs expressions.
-        let mut rules = Vec::new();
-        for (fs_expr, effect) in &all_fs {
-            filter_to_sandbox_rules(fs_expr, *effect, final_caps, cwd, &mut rules);
-        }
-
-        Some(SandboxPolicy {
-            default: Cap::READ | Cap::EXECUTE,
-            rules,
-            network: merged_network,
-        })
-    }
-
-    /// Walk a profile expression tree collecting sandbox-relevant parts
-    /// (fs filters, caps, network) from referenced constraints.
-    fn collect_profile_sandbox_parts<'a>(
-        &'a self,
-        expr: &ProfileExpr,
-        fs_exprs: &mut Vec<(&'a CompiledFilterExpr, RuleEffect)>,
-        caps: &mut Option<Cap>,
-        network: &mut NetworkPolicy,
-    ) {
-        match expr {
-            ProfileExpr::Ref(name) => {
-                // First check if it's a named profile (composite) — recurse
-                if let Some(profile_expr) = self.profiles.get(name) {
-                    self.collect_profile_sandbox_parts(profile_expr, fs_exprs, caps, network);
-                    return;
-                }
-                // Then check if it's a named constraint (primitive)
-                if let Some(constraint) = self.constraints.get(name) {
-                    if let Some(ref fs) = constraint.fs {
-                        fs_exprs.push((fs, RuleEffect::Allow));
-                    }
-                    if let Some(c) = constraint.caps {
-                        // Intersection: most restrictive wins
-                        *caps = Some(caps.map_or(c, |existing| existing & c));
-                    }
-                    if let Some(n) = constraint.network {
-                        // Deny wins over allow
-                        if n == NetworkPolicy::Deny {
-                            *network = NetworkPolicy::Deny;
-                        }
-                    }
-                }
-            }
-            ProfileExpr::And(a, b) => {
-                self.collect_profile_sandbox_parts(a, fs_exprs, caps, network);
-                self.collect_profile_sandbox_parts(b, fs_exprs, caps, network);
-            }
-            ProfileExpr::Or(a, b) => {
-                self.collect_profile_sandbox_parts(a, fs_exprs, caps, network);
-                self.collect_profile_sandbox_parts(b, fs_exprs, caps, network);
-            }
-            ProfileExpr::Not(inner) => {
-                // For Not, we collect fs with flipped effect
-                let mut inner_fs: Vec<(&CompiledFilterExpr, RuleEffect)> = Vec::new();
-                self.collect_profile_sandbox_parts(inner, &mut inner_fs, caps, network);
-                for (fs, effect) in inner_fs {
-                    let flipped = match effect {
-                        RuleEffect::Allow => RuleEffect::Deny,
-                        RuleEffect::Deny => RuleEffect::Allow,
-                    };
-                    fs_exprs.push((fs, flipped));
-                }
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // New-format evaluation
-    // -----------------------------------------------------------------------
-
-    /// Evaluate using the new profile-based format.
-    ///
-    /// For each rule in the flattened active profile:
-    /// - Match verb string against `ctx.verb_str`
-    /// - Match noun pattern
-    /// - Check inline constraints (pipe, redirect, args)
-    /// - Cap-scoped fs: for non-bash verbs, check as permission guard;
-    ///   for bash, collect for sandbox generation
-    ///
-    /// Precedence: deny > ask > allow (same as legacy).
-    #[instrument(level = Level::TRACE, skip(self))]
-    fn evaluate_new_format(&self, ctx: &EvalContext) -> PolicyDecision {
-        let mut has_allow = false;
-        let mut has_ask = false;
-        let mut has_deny = false;
-
-        // Collect cap-scoped fs entries from matched allow rules (for sandbox).
-        let mut allow_fs_entries: Vec<(&CompiledFilterExpr, Cap)> = Vec::new();
-        let mut merged_network = NetworkPolicy::Allow;
-
-        let mut explanation: Vec<String> = Vec::new();
-
-        for rule in &self.active_profile_rules {
-            let rule_desc = format!("{} {} *", rule.effect, rule.verb);
-
-            // Match verb: "*" matches anything, otherwise exact match
-            let verb_matches = rule.verb == "*" || rule.verb == ctx.verb_str;
-            if !verb_matches {
-                continue;
-            }
-
-            // Match noun
-            if !rule.noun_matcher.matches_noun(ctx.noun) {
-                continue;
-            }
-
-            // Check inline constraints
-            if let Err(reason) = self.check_new_constraints(&rule.constraints, ctx) {
-                explanation.push(format!("skipped: {} ({})", rule_desc, reason));
-                continue;
-            }
-
-            // Cap-scoped fs permission guard for non-bash verbs
-            if *ctx.verb != Verb::Execute {
-                if let Err(reason) = self.check_cap_scoped_fs_guard(&rule.constraints, ctx) {
-                    explanation.push(format!("skipped: {} ({})", rule_desc, reason));
-                    continue;
-                }
-            }
-
-            explanation.push(format!("matched: {} -> {}", rule_desc, rule.effect));
-
-            match rule.effect {
-                Effect::Deny => {
-                    has_deny = true;
-                }
-                Effect::Ask => {
-                    has_ask = true;
-                }
-                Effect::Allow => {
-                    has_allow = true;
-                    // Collect fs entries for sandbox generation (bash only)
-                    if *ctx.verb == Verb::Execute {
-                        if let Some(ref constraints) = rule.constraints {
-                            if let Some(ref fs_entries) = constraints.fs {
-                                for (caps, compiled_fs) in fs_entries {
-                                    allow_fs_entries.push((compiled_fs, *caps));
-                                }
-                            }
-                            if let Some(net) = constraints.network {
-                                if net == NetworkPolicy::Deny {
-                                    merged_network = NetworkPolicy::Deny;
-                                }
-                            }
-                        }
-                    }
-                }
-                Effect::Delegate => {
-                    // Not supported in new format
-                }
-            }
-        }
-
-        // Precedence: deny > ask > allow
-        if has_deny {
-            explanation.push("result: deny (deny > ask > allow)".into());
-            return PolicyDecision {
-                effect: Effect::Deny,
-                reason: None,
-                explanation,
-                delegate: None,
-                sandbox: None,
-            };
-        }
-        if has_ask {
-            explanation.push("result: ask (ask > allow)".into());
-            return PolicyDecision {
-                effect: Effect::Ask,
-                reason: None,
-                explanation,
-                delegate: None,
-                sandbox: None,
-            };
-        }
-        if has_allow {
-            explanation.push("result: allow".into());
-            let sandbox = if *ctx.verb == Verb::Execute && !allow_fs_entries.is_empty() {
-                let mut rules = Vec::new();
-                for (fs_expr, caps) in &allow_fs_entries {
-                    filter_to_sandbox_rules(fs_expr, RuleEffect::Allow, *caps, ctx.cwd, &mut rules);
-                }
-                Some(SandboxPolicy {
-                    default: Cap::READ | Cap::EXECUTE,
-                    rules,
-                    network: merged_network,
-                })
-            } else {
-                None
-            };
-            return PolicyDecision {
-                effect: Effect::Allow,
-                reason: None,
-                explanation,
-                delegate: None,
-                sandbox,
-            };
-        }
-
-        // No match → default
-        explanation.push(format!("no rules matched; default: {}", self.default));
-        PolicyDecision {
-            effect: self.default,
-            reason: None,
-            explanation,
-            delegate: None,
-            sandbox: None,
-        }
-    }
-
-    /// Check non-fs inline constraints (pipe, redirect, args).
-    /// Returns `Ok(())` if satisfied, or `Err(reason)` explaining why not.
-    fn check_new_constraints(
-        &self,
-        constraints: &Option<CompiledInlineConstraints>,
-        ctx: &EvalContext,
-    ) -> Result<(), String> {
-        let constraints = match constraints {
-            Some(c) => c,
-            None => return Ok(()),
-        };
-
-        // Check pipe
-        if let Some(allow_pipe) = constraints.pipe
-            && !allow_pipe
-            && command_has_pipe(ctx.noun)
-        {
-            return Err("pipe constraint: command contains '|'".into());
-        }
-
-        // Check redirect
-        if let Some(allow_redirect) = constraints.redirect
-            && !allow_redirect
-            && command_has_redirect(ctx.noun)
-        {
-            return Err("redirect constraint: command contains '>' or '<'".into());
-        }
-
-        // Check forbidden args
-        if !constraints.forbid_args.is_empty() {
-            let args = tokenize_command(ctx.noun);
-            for forbidden in &constraints.forbid_args {
-                if args.iter().any(|a| *a == forbidden) {
-                    return Err(format!("forbid-args: found forbidden arg '{}'", forbidden));
-                }
-            }
-        }
-
-        // Check required args (at least one must be present)
-        if !constraints.require_args.is_empty() {
-            let args = tokenize_command(ctx.noun);
-            if !constraints
-                .require_args
-                .iter()
-                .any(|req| args.iter().any(|a| *a == req))
-            {
-                return Err(format!(
-                    "require-args: none of {:?} found in command",
-                    constraints.require_args
-                ));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Cap-scoped fs permission guard for non-bash verbs.
-    ///
-    /// Maps the verb to a capability, then checks if any fs entry's caps
-    /// intersect with the verb's cap. If they do, the noun must match
-    /// that filter expression.
-    ///
-    /// Returns `Ok(())` if satisfied, or `Err(reason)` explaining why not.
-    fn check_cap_scoped_fs_guard(
-        &self,
-        constraints: &Option<CompiledInlineConstraints>,
-        ctx: &EvalContext,
-    ) -> Result<(), String> {
-        let constraints = match constraints {
-            Some(c) => c,
-            None => return Ok(()),
-        };
-
-        let fs_entries = match &constraints.fs {
-            Some(entries) => entries,
-            None => return Ok(()),
-        };
-
-        // Map verb to cap
-        let verb_cap = match ctx.verb {
-            Verb::Read => Cap::READ,
-            Verb::Write => Cap::WRITE | Cap::CREATE,
-            Verb::Edit => Cap::WRITE,
-            Verb::Execute => return Ok(()), // bash uses sandbox path
-            Verb::Delegate => return Ok(()),
-        };
-
-        // Check if any fs entry's caps intersect with the verb's cap.
-        // If so, the noun must match that filter.
-        for (caps, filter) in fs_entries {
-            if caps.intersects(verb_cap) {
-                // This fs entry is relevant — noun must match
-                if !filter.matches(ctx.noun, ctx.cwd) {
-                    return Err(format!(
-                        "fs guard: '{}' does not match filter for {} cap",
-                        ctx.noun,
-                        ctx.verb.rule_name()
-                    ));
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
-/// Walk a `CompiledFilterExpr` tree and produce sandbox rules.
-///
-/// | FilterExpr          | SandboxRule                                              |
-/// |---------------------|----------------------------------------------------------|
-/// | Subpath(".")        | Allow <caps> in <resolved-cwd>, Subpath                  |
-/// | Literal(".env")     | Allow <caps> in <resolved-path>, Literal                 |
-/// | Regex(...)          | Allow <caps> matching <pattern>, Regex (macOS only)      |
-/// | Not(inner)          | Flip effect: Allow↔Deny                                  |
-/// | And(a, b) / Or(a,b) | Collect rules from both sides                            |
-fn filter_to_sandbox_rules(
-    expr: &CompiledFilterExpr,
-    effect: RuleEffect,
-    caps: Cap,
-    cwd: &str,
-    rules: &mut Vec<SandboxRule>,
-) {
-    use crate::sandbox::PathMatch;
-
-    match expr {
-        CompiledFilterExpr::Subpath(base) => {
-            let resolved = resolve_path(base, cwd);
-            rules.push(SandboxRule {
-                effect,
-                caps,
-                path: resolved.to_string_lossy().into_owned(),
-                path_match: PathMatch::Subpath,
-            });
-        }
-        CompiledFilterExpr::Literal(path) => {
-            let resolved = resolve_path(path, cwd);
-            rules.push(SandboxRule {
-                effect,
-                caps,
-                path: resolved.to_string_lossy().into_owned(),
-                path_match: PathMatch::Literal,
-            });
-        }
-        CompiledFilterExpr::Regex(regex) => {
-            rules.push(SandboxRule {
-                effect,
-                caps,
-                path: regex.to_string(),
-                path_match: PathMatch::Regex,
-            });
-        }
-        CompiledFilterExpr::And(a, b) | CompiledFilterExpr::Or(a, b) => {
-            filter_to_sandbox_rules(a, effect, caps, cwd, rules);
-            filter_to_sandbox_rules(b, effect, caps, cwd, rules);
-        }
-        CompiledFilterExpr::Not(inner) => {
-            let flipped = match effect {
-                RuleEffect::Allow => RuleEffect::Deny,
-                RuleEffect::Deny => RuleEffect::Allow,
-            };
-            filter_to_sandbox_rules(inner, flipped, caps, cwd, rules);
-        }
-    }
-}
-
-/// The result of evaluating a policy.
-#[derive(Debug, Clone)]
-pub struct PolicyDecision {
-    pub effect: Effect,
-    pub reason: Option<String>,
-    /// Trace of how this decision was reached: which rules matched, which
-    /// constraints passed/failed, and the final precedence logic.
-    pub explanation: Vec<String>,
-    pub delegate: Option<DelegateConfig>,
-    /// Per-command sandbox policy generated from `fs`/`caps`/`network` constraints.
-    /// Only present for bash (Execute) commands that matched allow rules with `fs` constraints.
-    pub sandbox: Option<SandboxPolicy>,
 }
 
 impl CompiledStatement {
-    fn compile(stmt: &Statement) -> Result<Self, CompileError> {
+    pub(crate) fn compile(stmt: &Statement) -> Result<Self, CompileError> {
         Ok(CompiledStatement {
             effect: stmt.effect,
             entity_matcher: CompiledPattern::compile(&stmt.entity)?,
@@ -853,16 +86,10 @@ impl CompiledStatement {
             profile: stmt.profile.clone(),
         })
     }
-
-    fn matches(&self, entity: &str, verb: &Verb, noun: &str) -> bool {
-        self.entity_matcher.matches_entity(entity)
-            && self.verb_matcher.matches(verb)
-            && self.noun_matcher.matches_noun(noun)
-    }
 }
 
 impl CompiledProfileRule {
-    fn compile(rule: &ProfileRule) -> Result<Self, CompileError> {
+    pub(crate) fn compile(rule: &ProfileRule) -> Result<Self, CompileError> {
         let noun_matcher = CompiledPattern::compile(&rule.noun)?;
         let constraints = match &rule.constraints {
             Some(ic) => Some(CompiledInlineConstraints::compile(ic)?),
@@ -878,7 +105,7 @@ impl CompiledProfileRule {
 }
 
 impl CompiledInlineConstraints {
-    fn compile(ic: &InlineConstraints) -> Result<Self, CompileError> {
+    pub(crate) fn compile(ic: &InlineConstraints) -> Result<Self, CompileError> {
         let fs = match &ic.fs {
             Some(entries) => {
                 let mut compiled = Vec::new();
@@ -913,7 +140,7 @@ impl CompiledInlineConstraints {
 }
 
 impl CompiledConstraintDef {
-    fn compile(def: &ConstraintDef) -> Result<Self, CompileError> {
+    pub(crate) fn compile(def: &ConstraintDef) -> Result<Self, CompileError> {
         let fs = match &def.fs {
             Some(expr) => Some(CompiledFilterExpr::compile(expr)?),
             None => None,
@@ -928,74 +155,10 @@ impl CompiledConstraintDef {
             require_args: def.require_args.clone(),
         })
     }
-
-    /// Evaluate this constraint against the given context.
-    /// All specified fields must be satisfied (AND).
-    ///
-    /// For bash (Execute) commands, the `fs` check is skipped because `fs` constraints
-    /// generate sandbox rules rather than acting as permission guards.
-    ///
-    /// Returns `Ok(())` if satisfied, or `Err(reason)` explaining why not.
-    fn eval(&self, ctx: &EvalContext) -> Result<(), String> {
-        // For bash commands, skip fs check — fs generates sandbox rules instead.
-        // For other verbs (read/write/edit), fs acts as a permission guard.
-        if *ctx.verb != Verb::Execute {
-            if let Some(ref fs) = self.fs
-                && !fs.matches(ctx.noun, ctx.cwd)
-            {
-                return Err(format!(
-                    "fs constraint: '{}' does not match filter",
-                    ctx.noun
-                ));
-            }
-        }
-
-        // Check pipe constraint (only relevant for bash commands)
-        if let Some(allow_pipe) = self.pipe
-            && !allow_pipe
-            && command_has_pipe(ctx.noun)
-        {
-            return Err("pipe constraint: command contains '|'".into());
-        }
-
-        // Check redirect constraint (only relevant for bash commands)
-        if let Some(allow_redirect) = self.redirect
-            && !allow_redirect
-            && command_has_redirect(ctx.noun)
-        {
-            return Err("redirect constraint: command contains '>' or '<'".into());
-        }
-
-        // Check forbidden arguments
-        if let Some(ref forbidden) = self.forbid_args {
-            let args = tokenize_command(ctx.noun);
-            for forbidden_arg in forbidden {
-                if args.iter().any(|a| a == forbidden_arg) {
-                    return Err(format!(
-                        "forbid-args: found forbidden arg '{}'",
-                        forbidden_arg
-                    ));
-                }
-            }
-        }
-
-        // Check required arguments (at least one must be present)
-        if let Some(ref required) = self.require_args {
-            let args = tokenize_command(ctx.noun);
-            if !required.iter().any(|req| args.iter().any(|a| a == req)) {
-                return Err(format!(
-                    "require-args: none of {:?} found in command",
-                    required
-                ));
-            }
-        }
-
-        Ok(())
-    }
 }
 
 impl CompiledFilterExpr {
-    fn compile(expr: &FilterExpr) -> Result<Self, CompileError> {
+    pub(crate) fn compile(expr: &FilterExpr) -> Result<Self, CompileError> {
         match expr {
             FilterExpr::Subpath(s) => Ok(CompiledFilterExpr::Subpath(s.clone())),
             FilterExpr::Literal(s) => Ok(CompiledFilterExpr::Literal(s.clone())),
@@ -1020,145 +183,19 @@ impl CompiledFilterExpr {
             ))),
         }
     }
-
-    /// Check if the given path matches this filter expression.
-    ///
-    /// The path is resolved relative to `cwd` before matching.
-    fn matches(&self, path: &str, cwd: &str) -> bool {
-        match self {
-            CompiledFilterExpr::Subpath(base) => {
-                let resolved = resolve_path(path, cwd);
-                let base_resolved = resolve_path(base, cwd);
-                resolved.starts_with(&base_resolved)
-            }
-            CompiledFilterExpr::Literal(expected) => {
-                let resolved = resolve_path(path, cwd);
-                let expected_resolved = resolve_path(expected, cwd);
-                resolved == expected_resolved
-            }
-            CompiledFilterExpr::Regex(regex) => {
-                let resolved = resolve_path(path, cwd);
-                let resolved_str = resolved.to_string_lossy();
-                regex.is_match(&resolved_str)
-            }
-            CompiledFilterExpr::And(a, b) => a.matches(path, cwd) && b.matches(path, cwd),
-            CompiledFilterExpr::Or(a, b) => a.matches(path, cwd) || b.matches(path, cwd),
-            CompiledFilterExpr::Not(inner) => !inner.matches(path, cwd),
-        }
-    }
 }
-
-// ---------------------------------------------------------------------------
-// Helper functions for constraint evaluation
-// ---------------------------------------------------------------------------
-
-/// Resolve a path relative to cwd. Handles `.` as cwd.
-fn resolve_path(path: &str, cwd: &str) -> PathBuf {
-    let p = Path::new(path);
-    if p.is_absolute() {
-        // Use lexical normalization for absolute paths
-        lexical_normalize(p)
-    } else if path == "." {
-        lexical_normalize(Path::new(cwd))
-    } else if path.starts_with("./") || path.starts_with("..") {
-        lexical_normalize(&Path::new(cwd).join(path))
-    } else {
-        // Bare relative path — resolve against cwd
-        lexical_normalize(&Path::new(cwd).join(path))
-    }
-}
-
-/// Lexical path normalization (no filesystem access).
-/// Removes `.` and resolves `..` components.
-fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut components = Vec::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {} // skip '.'
-            std::path::Component::ParentDir => {
-                // Pop the last component if there is one (and it's not ..)
-                if !components.is_empty() {
-                    components.pop();
-                }
-            }
-            other => components.push(other),
-        }
-    }
-    components.iter().collect()
-}
-
-/// Check if a command string contains shell pipe operators.
-fn command_has_pipe(command: &str) -> bool {
-    // Look for unquoted pipe characters
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-    let mut prev_char = ' ';
-
-    for ch in command.chars() {
-        match ch {
-            '\'' if !in_double_quote && prev_char != '\\' => in_single_quote = !in_single_quote,
-            '"' if !in_single_quote && prev_char != '\\' => in_double_quote = !in_double_quote,
-            '|' if !in_single_quote && !in_double_quote => return true,
-            _ => {}
-        }
-        prev_char = ch;
-    }
-    false
-}
-
-/// Check if a command string contains shell redirect operators.
-fn command_has_redirect(command: &str) -> bool {
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-    let mut prev_char = ' ';
-
-    for ch in command.chars() {
-        match ch {
-            '\'' if !in_double_quote && prev_char != '\\' => in_single_quote = !in_single_quote,
-            '"' if !in_single_quote && prev_char != '\\' => in_double_quote = !in_double_quote,
-            '>' | '<' if !in_single_quote && !in_double_quote => return true,
-            _ => {}
-        }
-        prev_char = ch;
-    }
-    false
-}
-
-/// Tokenize a command string by splitting on whitespace.
-/// Simple tokenization — does not handle shell quoting.
-fn tokenize_command(command: &str) -> Vec<&str> {
-    command.split_whitespace().collect()
-}
-
-// ---------------------------------------------------------------------------
-// CompiledPattern and CompiledMatchExpr (unchanged)
-// ---------------------------------------------------------------------------
 
 impl CompiledPattern {
-    fn compile(pattern: &Pattern) -> Result<Self, CompileError> {
+    pub(crate) fn compile(pattern: &Pattern) -> Result<Self, CompileError> {
         match pattern {
             Pattern::Match(expr) => Ok(CompiledPattern::Match(CompiledMatchExpr::compile(expr)?)),
             Pattern::Not(expr) => Ok(CompiledPattern::Not(CompiledMatchExpr::compile(expr)?)),
         }
     }
-
-    fn matches_entity(&self, entity: &str) -> bool {
-        match self {
-            CompiledPattern::Match(expr) => expr.matches_entity(entity),
-            CompiledPattern::Not(expr) => !expr.matches_entity(entity),
-        }
-    }
-
-    fn matches_noun(&self, noun: &str) -> bool {
-        match self {
-            CompiledPattern::Match(expr) => expr.matches_noun(noun),
-            CompiledPattern::Not(expr) => !expr.matches_noun(noun),
-        }
-    }
 }
 
 impl CompiledMatchExpr {
-    fn compile(expr: &MatchExpr) -> Result<Self, CompileError> {
+    pub(crate) fn compile(expr: &MatchExpr) -> Result<Self, CompileError> {
         match expr {
             MatchExpr::Any => Ok(CompiledMatchExpr::Any),
             MatchExpr::Exact(s) => Ok(CompiledMatchExpr::Exact(s.clone())),
@@ -1176,31 +213,6 @@ impl CompiledMatchExpr {
                 entity_type: entity_type.clone(),
                 name: name.clone(),
             }),
-        }
-    }
-
-    fn matches_entity(&self, entity: &str) -> bool {
-        match self {
-            CompiledMatchExpr::Any => true,
-            CompiledMatchExpr::Exact(s) => entity == s,
-            CompiledMatchExpr::Glob { regex, .. } => regex.is_match(entity),
-            CompiledMatchExpr::Typed {
-                entity_type,
-                name: None,
-            } => entity == entity_type.as_str() || entity.starts_with(&format!("{}:", entity_type)),
-            CompiledMatchExpr::Typed {
-                entity_type,
-                name: Some(name),
-            } => entity == format!("{}:{}", entity_type, name),
-        }
-    }
-
-    fn matches_noun(&self, noun: &str) -> bool {
-        match self {
-            CompiledMatchExpr::Any => true,
-            CompiledMatchExpr::Exact(s) => noun == s,
-            CompiledMatchExpr::Glob { regex, .. } => regex.is_match(noun),
-            CompiledMatchExpr::Typed { .. } => false,
         }
     }
 }
@@ -1224,7 +236,9 @@ fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ir::PolicyDecision;
     use super::*;
+    use crate::sandbox::{Cap, NetworkPolicy, RuleEffect};
 
     fn compile_yaml(yaml: &str) -> CompiledPolicy {
         let doc = parse::parse_yaml(yaml).unwrap();
@@ -1889,6 +903,7 @@ rules:
 
     #[test]
     fn test_command_has_pipe() {
+        use super::super::eval::command_has_pipe;
         assert!(command_has_pipe("cat foo | grep bar"));
         assert!(command_has_pipe("ls | wc -l"));
         assert!(!command_has_pipe("echo 'hello | world'"));
@@ -1898,6 +913,7 @@ rules:
 
     #[test]
     fn test_command_has_redirect() {
+        use super::super::eval::command_has_redirect;
         assert!(command_has_redirect("echo hello > file.txt"));
         assert!(command_has_redirect("echo hello >> file.txt"));
         assert!(command_has_redirect("cat < input.txt"));
@@ -1907,6 +923,8 @@ rules:
 
     #[test]
     fn test_resolve_path() {
+        use super::super::eval::resolve_path;
+        use std::path::PathBuf;
         assert_eq!(
             resolve_path("/absolute/path", "/cwd"),
             PathBuf::from("/absolute/path")

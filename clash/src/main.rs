@@ -226,7 +226,7 @@ fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOut
                     } else {
                         "new"
                     };
-                    match claude_settings::policy::compile::CompiledPolicy::compile(&doc) {
+                    match claude_settings::policy::CompiledPolicy::compile(&doc) {
                         Ok(_) => {
                             lines.push(format!(
                                 "policy.yaml: OK ({} rules, format={}, default={})",
