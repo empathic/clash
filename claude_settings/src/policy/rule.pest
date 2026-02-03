@@ -14,7 +14,7 @@ typed_entity = { identifier ~ ":" ~ (wildcard | identifier) }
 wildcard = { "*" }
 identifier = @{ (ASCII_ALPHANUMERIC | "_" | "-" | ".")+ }
 
-tool = { "bash" | "read" | "write" | "edit" | "*" }
+tool = { wildcard | identifier }
 
 pattern = @{ ANY+ }
 

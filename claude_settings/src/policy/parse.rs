@@ -764,6 +764,7 @@ pub fn format_rule(stmt: &Statement) -> String {
     let tool = match &stmt.verb {
         VerbPattern::Any => "*".to_string(),
         VerbPattern::Exact(v) => v.rule_name().to_string(),
+        VerbPattern::Named(s) => s.clone(),
     };
     let noun = super::ast::format_pattern_str(&stmt.noun);
 
@@ -892,7 +893,7 @@ pub fn parse_verb_pattern(s: &str) -> Result<VerbPattern, String> {
         "edit" => Ok(VerbPattern::Exact(Verb::Edit)),
         "execute" => Ok(VerbPattern::Exact(Verb::Execute)),
         "delegate" => Ok(VerbPattern::Exact(Verb::Delegate)),
-        _ => Err(format!("unknown verb: {}", s)),
+        other => Ok(VerbPattern::Named(other.to_string())),
     }
 }
 
@@ -920,7 +921,7 @@ fn parse_tool_str(s: &str) -> Result<VerbPattern, PolicyParseError> {
         "read" => Ok(VerbPattern::Exact(Verb::Read)),
         "write" => Ok(VerbPattern::Exact(Verb::Write)),
         "edit" => Ok(VerbPattern::Exact(Verb::Edit)),
-        other => Err(PolicyParseError::InvalidTool(other.into())),
+        other => Ok(VerbPattern::Named(other.to_string())),
     }
 }
 
@@ -1063,7 +1064,10 @@ mod tests {
             parse_verb_pattern("execute").unwrap(),
             VerbPattern::Exact(Verb::Execute)
         );
-        assert!(parse_verb_pattern("unknown").is_err());
+        assert_eq!(
+            parse_verb_pattern("task").unwrap(),
+            VerbPattern::Named("task".into())
+        );
     }
 
     // --- Rule parsing (pest) ---
@@ -2030,5 +2034,83 @@ rules:
         assert!(doc.profile_defs.is_empty());
         assert_eq!(doc.policy.default, Effect::Ask);
         assert_eq!(doc.statements.len(), 2);
+    }
+
+    // --- Custom tool name tests ---
+
+    #[test]
+    fn test_parse_rule_custom_tool() {
+        // Custom tool with explicit entity
+        let stmt = parse_rule("allow * task *").unwrap();
+        assert_eq!(stmt.effect, Effect::Allow);
+        assert_eq!(stmt.verb, VerbPattern::Named("task".into()));
+        assert_eq!(stmt.entity, Pattern::Match(MatchExpr::Any));
+    }
+
+    #[test]
+    fn test_parse_rule_custom_tool_with_noun() {
+        let stmt = parse_rule("deny * glob *.rs").unwrap();
+        assert_eq!(stmt.effect, Effect::Deny);
+        assert_eq!(stmt.verb, VerbPattern::Named("glob".into()));
+    }
+
+    #[test]
+    fn test_parse_rule_custom_tool_with_entity() {
+        let stmt = parse_rule("allow agent:claude websearch *").unwrap();
+        assert_eq!(stmt.effect, Effect::Allow);
+        assert_eq!(stmt.verb, VerbPattern::Named("websearch".into()));
+        assert_eq!(
+            stmt.entity,
+            Pattern::Match(MatchExpr::Typed {
+                entity_type: "agent".into(),
+                name: Some("claude".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn test_format_rule_custom_tool_roundtrip() {
+        let rules = vec![
+            "allow * task *",
+            "deny * glob *.rs",
+            "allow agent:claude websearch *",
+        ];
+        for rule in rules {
+            let stmt = parse_rule(rule).unwrap();
+            let formatted = format_rule(&stmt);
+            let reparsed = parse_rule(&formatted).unwrap();
+            assert_eq!(
+                stmt.effect, reparsed.effect,
+                "effect mismatch for: {}",
+                rule
+            );
+            assert_eq!(stmt.verb, reparsed.verb, "verb mismatch for: {}", rule);
+        }
+    }
+
+    #[test]
+    fn test_parse_yaml_custom_tool() {
+        let yaml = r#"
+default: ask
+
+rules:
+  - allow * task *
+  - deny * websearch *
+"#;
+        let doc = parse_yaml(yaml).unwrap();
+        assert_eq!(doc.statements.len(), 2);
+        assert_eq!(doc.statements[0].verb, VerbPattern::Named("task".into()));
+        assert_eq!(
+            doc.statements[1].verb,
+            VerbPattern::Named("websearch".into())
+        );
+    }
+
+    #[test]
+    fn test_verb_pattern_named_serde_roundtrip() {
+        let pattern = VerbPattern::Named("task".into());
+        let json = serde_json::to_string(&pattern).unwrap();
+        let parsed: VerbPattern = serde_json::from_str(&json).unwrap();
+        assert_eq!(pattern, parsed);
     }
 }

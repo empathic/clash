@@ -106,7 +106,7 @@ typed_entity    = identifier ~ ":" ~ (wildcard | identifier)
 wildcard        = "*"
 identifier      = (ASCII_ALPHANUMERIC | "_" | "-" | ".")+
 
-tool            = "bash" | "read" | "write" | "edit" | "*"
+tool            = wildcard | identifier
 
 pattern         = ANY+
 
@@ -120,6 +120,13 @@ When the second token (after effect) is a known tool keyword (`bash`, `read`, `w
 ```
 allow bash git *       →  allow agent bash git *
 deny read .env         →  deny agent read .env
+```
+
+For custom tool names, entity insertion does not apply — you must specify the entity explicitly:
+
+```
+allow * task *         # Correct: explicit wildcard entity
+allow agent task *     # Correct: explicit entity
 ```
 
 ### Constraint Suffix
@@ -232,7 +239,7 @@ effect_str      = "allow" | "deny" | "ask" | "delegate"
 
 ## Verb / Tool Values
 
-Legacy format uses tool keywords that map to verbs:
+Both legacy and new formats accept arbitrary tool names. Known tool keywords map to canonical verbs:
 
 | Tool keyword | Verb |
 |-------------|------|
@@ -241,8 +248,9 @@ Legacy format uses tool keywords that map to verbs:
 | `write` | Write |
 | `edit` | Edit |
 | `*` | Any |
+| any other name | Named (matched by string) |
 
-New format accepts arbitrary verb strings (e.g., `safe-read`). The verb string is matched against the raw tool name.
+Arbitrary tool names (e.g., `task`, `glob`, `websearch`) are matched against the lowercased tool name from Claude Code. For example, `allow * task *` matches tool invocations with `tool_name: "Task"`.
 
 ---
 

@@ -231,6 +231,8 @@ pub enum VerbPattern {
     Any,
     /// Matches a specific verb.
     Exact(Verb),
+    /// Matches an arbitrary tool name (lowercased).
+    Named(String),
 }
 
 impl VerbPattern {
@@ -244,6 +246,9 @@ impl VerbPattern {
         match self {
             VerbPattern::Any => true,
             VerbPattern::Exact(v) => v == verb,
+            // Named variants are matched via verb_str at the compiled rule level,
+            // not through Verb enum comparison.
+            VerbPattern::Named(_) => false,
         }
     }
 }
@@ -543,6 +548,7 @@ impl Serialize for VerbPattern {
         match self {
             VerbPattern::Any => serializer.serialize_str("*"),
             VerbPattern::Exact(verb) => serializer.serialize_str(&verb.to_string()),
+            VerbPattern::Named(s) => serializer.serialize_str(s),
         }
     }
 }

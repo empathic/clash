@@ -58,7 +58,7 @@ impl PolicyParseError {
                 eff
             )),
             PolicyParseError::InvalidTool(tool) => Some(format!(
-                "valid tools are: bash, read, write, edit, * (got '{}')",
+                "any tool name is valid (bash, read, write, edit, task, glob, etc.) or * for wildcard (got '{}')",
                 tool
             )),
             PolicyParseError::InvalidRule { rule, .. } => Some(format!(

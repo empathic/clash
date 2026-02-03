@@ -160,7 +160,7 @@ ask * *:                   # Ask for everything else
 ```
 
 - **Effect**: `allow`, `deny`, or `ask`
-- **Verb**: `bash`, `read`, `write`, `edit`, or `*` (wildcard)
+- **Verb**: `bash`, `read`, `write`, `edit`, any tool name (e.g., `task`, `glob`, `websearch`), or `*` (wildcard)
 - **Noun**: A resource pattern — file path, command string, or glob (with `*` and `**`)
 
 #### Inline constraints

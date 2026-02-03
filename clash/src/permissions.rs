@@ -38,15 +38,6 @@ fn check_permission_policy(
     let fallback_verb = Verb::Execute; // used when verb is None for new-format
     let verb_ref = verb.as_ref().unwrap_or(&fallback_verb);
 
-    // For old-format policies with unknown tools, bail early.
-    if verb.is_none() && !compiled.has_profile_rules() {
-        info!(tool = %input.tool_name, "Unknown tool name for policy evaluation");
-        return Ok(HookOutput::ask(Some(format!(
-            "unknown tool '{}' for policy evaluation",
-            input.tool_name
-        ))));
-    }
-
     // Extract the noun (the resource being acted on) from the tool input.
     let noun = extract_noun(input);
 
@@ -177,18 +168,28 @@ fn shell_escape(s: &str) -> String {
 
 /// Extract the noun (resource identifier) from a tool input.
 ///
-/// For Bash: the command string.
-/// For Read/Write/Edit: the file path.
-/// For unknown tools: the JSON-serialized tool input.
+/// Checks common field names in priority order to extract a meaningful
+/// noun from any tool's input JSON. This handles both known tools
+/// (Bash, Read, Write, Edit) and arbitrary tools (Glob, Grep, WebSearch, etc.).
 #[instrument(level = Level::TRACE, skip(input))]
 fn extract_noun(input: &ToolUseHookInput) -> String {
-    match input.typed_tool_input() {
-        ToolInput::Bash(bash) => bash.command,
-        ToolInput::Write(write) => write.file_path,
-        ToolInput::Edit(edit) => edit.file_path,
-        ToolInput::Read(read) => read.file_path,
-        ToolInput::Unknown(value) => value.to_string(),
+    // Try common noun fields in priority order
+    let fields = [
+        "command",   // Bash
+        "file_path", // Read, Write, Edit, NotebookEdit
+        "pattern",   // Glob, Grep
+        "query",     // WebSearch
+        "url",       // WebFetch
+        "path",      // Glob, Grep (secondary field)
+        "prompt",    // Task
+    ];
+    for field in &fields {
+        if let Some(val) = input.tool_input.get(*field).and_then(|v| v.as_str()) {
+            return val.to_string();
+        }
     }
+    // Fallback: use the tool name as noun (better than serializing entire JSON)
+    input.tool_name.to_lowercase()
 }
 
 #[cfg(test)]

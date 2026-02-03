@@ -2,11 +2,11 @@
 name: dogfood
 description: Initialize clash with a safe default policy
 ---
-
+Explain to the user that you are going to initialize clash and that you will be asking for permission because clash doesn't have any rules set yet.
 Run the clash init command (without --force, so it won't overwrite an existing config):
 
 ```bash
-$PLUGIN_DIR/bin/clash init
+${CLAUDE_PLUGIN_DIR}/bin/clash init
 ```
 If this fails, ask the user if they want to re-run with "--force" to fully reinitilize
 

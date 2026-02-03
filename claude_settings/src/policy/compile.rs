@@ -77,6 +77,7 @@ fn statement_to_profile_rule(stmt: &Statement) -> Result<CompiledProfileRule, Co
     let verb = match &stmt.verb {
         VerbPattern::Any => "*".to_string(),
         VerbPattern::Exact(v) => v.rule_name().to_string(),
+        VerbPattern::Named(s) => s.clone(),
     };
 
     let entity_matcher = Some(CompiledPattern::compile(&stmt.entity)?);
