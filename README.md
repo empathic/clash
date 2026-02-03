@@ -255,7 +255,16 @@ clash sandbox exec --policy '<json>' --cwd /path -- bash -c "cargo build"
 
 ```
 clash/
-├── clash/              # Main CLI binary (hooks, sandbox, launch, migrate)
+├── clash/              # CLI binary + library (hooks, permissions, sandbox, handlers)
+│   ├── src/lib.rs      #   Library entry point (use clash as a dependency)
+│   ├── src/main.rs     #   Thin CLI wrapper
+│   ├── src/handlers.rs #   Pre-built hook handlers
+│   ├── src/hooks.rs    #   Hook I/O types (input/output for Claude Code protocol)
+│   ├── src/permissions.rs # Policy-based permission evaluation
+│   ├── src/settings.rs #   Settings loading + default policy template
+│   ├── src/sandbox/    #   Platform-specific sandbox backends
+│   ├── src/audit.rs    #   Audit logging
+│   └── src/notifications.rs # Desktop + Zulip notifications
 ├── clash-plugin/       # Claude Code plugin (hooks.json + skills)
 ├── claude_settings/    # Settings library (permissions, policy engine, sandbox types)
 ├── clester/            # End-to-end testing tool
@@ -263,6 +272,42 @@ clash/
 ```
 
 ## Library usage
+
+### Using clash as a library
+
+The `clash` crate can be used as a library for permission enforcement, hook handling, and sandbox management:
+
+```rust
+use clash::hooks::ToolUseHookInput;
+use clash::permissions::check_permission;
+use clash::settings::ClashSettings;
+
+// Load settings and evaluate a tool invocation
+let settings = ClashSettings::load_or_create()?;
+let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
+let output = check_permission(&input, &settings)?;
+output.write_stdout()?;
+```
+
+Use the pre-built handlers for full hook integration:
+
+```rust
+use clash::handlers;
+use clash::hooks::{ToolUseHookInput, SessionStartHookInput};
+use clash::settings::ClashSettings;
+
+let settings = ClashSettings::load_or_create()?;
+
+// Handle permission requests (integrates policy + Zulip + desktop notifications)
+let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
+let output = handlers::handle_permission_request(&input, &settings)?;
+
+// Handle session start (validates policy, settings, sandbox support)
+let session_input = SessionStartHookInput::from_reader(std::io::stdin().lock())?;
+let output = handlers::handle_session_start(&session_input)?;
+```
+
+### Using claude_settings
 
 The `claude_settings` crate can be used independently to read and write Claude Code settings:
 

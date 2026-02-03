@@ -11,17 +11,13 @@ use tracing::{Level, error, info, instrument};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 
-mod audit;
-mod hooks;
-mod notifications;
-mod permissions;
-mod sandbox;
-mod settings;
+use clash::handlers;
+use clash::hooks::{HookOutput, SessionStartHookInput, ToolUseHookInput, exit_code};
+use clash::permissions::check_permission;
+use clash::sandbox;
+use clash::settings::{ClashSettings, DEFAULT_POLICY};
 
-use claude_settings::PermissionRule;
 use claude_settings::sandbox::SandboxPolicy;
-use hooks::{HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput, exit_code};
-use permissions::check_permission;
 
 #[derive(Parser, Debug)]
 #[command(name = "clash")]
@@ -86,7 +82,7 @@ enum HooksCmd {
 impl HooksCmd {
     #[instrument(level = Level::TRACE, skip(self))]
     fn run(&self) -> anyhow::Result<()> {
-        let settings = settings::ClashSettings::load_or_create()?;
+        let settings = ClashSettings::load_or_create()?;
 
         let output = match self {
             Self::PreToolUse => {
@@ -96,228 +92,21 @@ impl HooksCmd {
             Self::PostToolUse => {
                 let _input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
                 // PostToolUse is informational - just continue
-                // Could be extended to log tool results, update state, etc.
                 HookOutput::continue_execution()
             }
             Self::PermissionRequest => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
-                // Decide whether to approve or deny the permission request
-                handle_permission_request(&input, &settings)?
+                handlers::handle_permission_request(&input, &settings)?
             }
             Self::SessionStart => {
                 let input = SessionStartHookInput::from_reader(std::io::stdin().lock())?;
-                handle_session_start(&input)?
+                handlers::handle_session_start(&input)?
             }
         };
 
         output.write_stdout()?;
         std::process::exit(exit_code::SUCCESS);
     }
-}
-
-/// Handle a permission request - decide whether to approve or deny on behalf of user.
-///
-/// When the policy evaluates to "ask" and a Zulip bot is configured, the request
-/// is forwarded to Zulip and we poll for a human response. If no Zulip config is
-/// present or the poll times out, we fall through to let the terminal user decide.
-#[instrument(level = Level::TRACE, skip(input, settings))]
-fn handle_permission_request(
-    input: &ToolUseHookInput,
-    settings: &settings::ClashSettings,
-) -> anyhow::Result<HookOutput> {
-    let pre_tool_result = check_permission(input, settings)?;
-
-    // Convert PreToolUse decision to PermissionRequest format.
-    // Claude Code validates that hookEventName matches the event type.
-    Ok(match pre_tool_result.hook_specific_output {
-        Some(HookSpecificOutput::PreToolUse(ref pre)) => match pre.permission_decision {
-            Some(PermissionRule::Allow) => HookOutput::approve_permission(None),
-            Some(PermissionRule::Deny) => {
-                let reason = pre
-                    .permission_decision_reason
-                    .clone()
-                    .unwrap_or_else(|| "denied by policy".into());
-                HookOutput::deny_permission(reason, false)
-            }
-            // Ask or no decision: notify and try Zulip resolution.
-            _ => {
-                send_permission_desktop_notification(input, settings);
-                resolve_via_zulip_or_continue(input, settings)
-            }
-        },
-        _ => pre_tool_result,
-    })
-}
-
-/// Send a desktop notification for a permission request, if enabled.
-fn send_permission_desktop_notification(
-    input: &ToolUseHookInput,
-    settings: &settings::ClashSettings,
-) {
-    if !settings.notifications.desktop {
-        return;
-    }
-    let summary = match input.tool_name.as_str() {
-        "Bash" => {
-            let cmd = input.tool_input["command"].as_str().unwrap_or("(unknown)");
-            format!("Permission needed: Bash `{}`", cmd)
-        }
-        _ => format!("Permission needed: {}", input.tool_name),
-    };
-    notifications::send_desktop_notification("Clash: Permission Request", &summary);
-}
-
-/// Attempt to resolve a permission ask via Zulip. Falls back to `continue_execution`.
-#[instrument(level = Level::TRACE, skip(input, settings))]
-fn resolve_via_zulip_or_continue(
-    input: &ToolUseHookInput,
-    settings: &settings::ClashSettings,
-) -> HookOutput {
-    let Some(ref zulip_config) = settings.notifications.zulip else {
-        return HookOutput::continue_execution();
-    };
-
-    let request = notifications::PermissionRequest {
-        tool_name: input.tool_name.clone(),
-        tool_input: input.tool_input.clone(),
-        session_id: input.session_id.clone(),
-        cwd: input.cwd.clone(),
-    };
-
-    let client = notifications::ZulipClient::new(zulip_config);
-    match client.resolve_permission(&request) {
-        Ok(Some(notifications::PermissionResponse::Approve)) => {
-            HookOutput::approve_permission(None)
-        }
-        Ok(Some(notifications::PermissionResponse::Deny(reason))) => {
-            HookOutput::deny_permission(reason, false)
-        }
-        Ok(None) => {
-            // Timeout — fall through to terminal.
-            info!("Zulip resolution timed out, falling through to terminal");
-            HookOutput::continue_execution()
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "Zulip resolution failed, falling through to terminal");
-            HookOutput::continue_execution()
-        }
-    }
-}
-
-/// Handle a session start event — validate policy/settings and report status to Claude.
-#[instrument(level = Level::TRACE, skip(input))]
-fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOutput> {
-    let mut lines: Vec<String> = Vec::new();
-
-    // 1. Check policy file
-    let policy_path = settings::ClashSettings::policy_file();
-    if policy_path.exists() {
-        match std::fs::read_to_string(&policy_path) {
-            Ok(contents) => match claude_settings::policy::parse::parse_yaml(&contents) {
-                Ok(doc) => {
-                    let rule_count = doc.statements.len()
-                        + doc
-                            .profile_defs
-                            .values()
-                            .map(|p| p.rules.len())
-                            .sum::<usize>();
-                    let format = if doc.profile_defs.is_empty() {
-                        "legacy"
-                    } else {
-                        "new"
-                    };
-                    match claude_settings::policy::CompiledPolicy::compile(&doc) {
-                        Ok(_) => {
-                            lines.push(format!(
-                                "policy.yaml: OK ({} rules, format={}, default={})",
-                                rule_count, format, doc.policy.default,
-                            ));
-                        }
-                        Err(e) => {
-                            lines.push(format!("ISSUE: policy.yaml compile error: {}", e));
-                        }
-                    }
-                }
-                Err(e) => {
-                    lines.push(format!("ISSUE: policy.yaml parse error: {}", e));
-                }
-            },
-            Err(e) => {
-                lines.push(format!("ISSUE: policy.yaml read error: {}", e));
-            }
-        }
-    } else {
-        lines.push("policy.yaml: not found (using legacy permissions)".into());
-    }
-
-    // 2. Validate notification config from the same policy file
-    if policy_path.exists()
-        && let Ok(contents) = std::fs::read_to_string(&policy_path)
-    {
-        let (notif_config, notif_warning) = settings::parse_notification_config(&contents);
-        if let Some(warning) = notif_warning {
-            lines.push(format!("ISSUE: {}", warning));
-        } else {
-            let zulip_status = if notif_config.zulip.is_some() {
-                "configured"
-            } else {
-                "not configured"
-            };
-            lines.push(format!(
-                "notifications: OK (desktop={}, zulip={})",
-                notif_config.desktop, zulip_status
-            ));
-        }
-    }
-
-    // 3. Check settings file
-    let settings_path = settings::ClashSettings::settings_file();
-    match settings::ClashSettings::load() {
-        Ok(s) => {
-            lines.push(format!("settings: OK (engine_mode={:?})", s.engine_mode));
-        }
-        Err(_) if !settings_path.exists() => {
-            lines.push("settings: using defaults (no settings.json)".into());
-        }
-        Err(e) => {
-            lines.push(format!("ISSUE: settings load error: {}", e));
-        }
-    }
-
-    // 4. Check sandbox support
-    let support = sandbox::check_support();
-    match support {
-        sandbox::SupportLevel::Full => {
-            lines.push("sandbox: fully supported".into());
-        }
-        sandbox::SupportLevel::Partial { ref missing } => {
-            lines.push(format!(
-                "sandbox: partial (missing: {})",
-                missing.join(", ")
-            ));
-        }
-        sandbox::SupportLevel::Unsupported { ref reason } => {
-            lines.push(format!("sandbox: unsupported ({})", reason));
-        }
-    }
-
-    // 5. Session metadata
-    if let Some(ref source) = input.source {
-        lines.push(format!("session source: {}", source));
-    }
-    if let Some(ref model) = input.model {
-        lines.push(format!("model: {}", model));
-    }
-
-    info!(context = %lines.join("; "), "SessionStart validation");
-
-    let context = if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
-    };
-
-    Ok(HookOutput::session_start(context))
 }
 
 #[derive(Subcommand, Debug)]
@@ -627,7 +416,7 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     });
 
     // Write hooks to a temp file that Claude Code can use
-    let hooks_dir = settings::ClashSettings::settings_dir().join("hooks");
+    let hooks_dir = ClashSettings::settings_dir().join("hooks");
     std::fs::create_dir_all(&hooks_dir)?;
     let hooks_file = hooks_dir.join("hooks.json");
     std::fs::write(&hooks_file, serde_json::to_string_pretty(&hooks_json)?)?;
@@ -721,7 +510,7 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
     if dry_run {
         print!("{}", output);
     } else {
-        let path = settings::ClashSettings::policy_file();
+        let path = ClashSettings::policy_file();
         if path.exists() {
             eprintln!(
                 "Warning: {} already exists. Use --dry-run to preview, or remove the file first.",
@@ -729,7 +518,7 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
             );
             anyhow::bail!("policy.yaml already exists at {}", path.display());
         }
-        std::fs::create_dir_all(settings::ClashSettings::settings_dir())?;
+        std::fs::create_dir_all(ClashSettings::settings_dir())?;
         std::fs::write(&path, &output)?;
         println!("Wrote policy to {}", path.display());
         println!(
@@ -770,7 +559,7 @@ fn run_explain(json_output: bool) -> Result<()> {
     )?;
 
     // Load settings and compile policy
-    let settings = settings::ClashSettings::load_or_create()?;
+    let settings = ClashSettings::load_or_create()?;
     let compiled = match settings.compiled_policy() {
         Some(c) => c,
         None => {
@@ -895,56 +684,10 @@ fn run_explain(json_output: bool) -> Result<()> {
     Ok(())
 }
 
-/// Default policy template written by `clash init`.
-const DEFAULT_POLICY: &str = r#"# Clash policy — safe defaults for local development.
-#
-# Evaluation: all matching statements are collected, then precedence applies:
-#   deny > ask > allow
-# If no statement matches, the default effect is used (ask).
-
-default:
-  permission: ask
-  profile: main
-
-profiles:
-  cwd:
-    rules:
-      allow * *: 
-        fs:
-          read + write + execute: subpath($CWD)
-  tmp:
-    rules:
-      allow * *:
-        fs:
-          read + write + execute: regex(^/tmp)
-  
-  global:
-    rules:
-      ask * *:
-        fs:
-          read: "!subpath($CWD)"
-      
-  main:
-    include: [cwd, global]
-    rules:
-      # ── Git: deny commit and push ─────────────────────────────
-      ask bash git commit*:
-      deny bash git push*:
-      deny bash git merge*:
-
-      # ── Git: deny destructive operations ──────────────────────
-      deny bash git reset --hard*:
-      deny bash git clean*:
-      deny bash git branch -D*:
-
-      # ── Dangerous commands ─────────────────────────────────────
-      deny bash sudo *:
-"#;
-
 /// Initialize a new clash policy.yaml with safe defaults.
 #[instrument(level = Level::TRACE)]
 fn run_init(force: bool) -> Result<()> {
-    let path = settings::ClashSettings::policy_file();
+    let path = ClashSettings::policy_file();
 
     if path.exists() && !force {
         anyhow::bail!(
@@ -953,7 +696,7 @@ fn run_init(force: bool) -> Result<()> {
         );
     }
 
-    std::fs::create_dir_all(settings::ClashSettings::settings_dir())?;
+    std::fs::create_dir_all(ClashSettings::settings_dir())?;
     std::fs::write(&path, DEFAULT_POLICY)?;
     println!("Wrote default policy to {}", path.display());
     println!("Edit the file to customize rules for your environment.");
@@ -964,49 +707,6 @@ fn run_init(force: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn default_session_start_input() -> SessionStartHookInput {
-        SessionStartHookInput {
-            session_id: "test-session".into(),
-            transcript_path: "/tmp/transcript.jsonl".into(),
-            cwd: "/tmp".into(),
-            permission_mode: Some("default".into()),
-            hook_event_name: "SessionStart".into(),
-            source: Some("startup".into()),
-            model: Some("claude-sonnet-4-20250514".into()),
-        }
-    }
-
-    #[test]
-    fn test_session_start_reports_sandbox_support() {
-        let input = default_session_start_input();
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
-        assert!(
-            ctx.contains("sandbox:"),
-            "should report sandbox status, got: {ctx}"
-        );
-    }
-
-    #[test]
-    fn test_session_start_reports_session_metadata() {
-        let input = default_session_start_input();
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
-        assert!(ctx.contains("session source: startup"), "got: {ctx}");
-        assert!(
-            ctx.contains("model: claude-sonnet-4-20250514"),
-            "got: {ctx}"
-        );
-    }
 
     #[test]
     fn test_session_start_output_serialization() {
