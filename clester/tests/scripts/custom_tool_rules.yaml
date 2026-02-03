@@ -3,13 +3,12 @@ meta:
   description: Test that arbitrary tool names can be matched by policy rules
 
 clash:
-  engine_mode: policy
-  policy:
+  policy_raw: |
     default: ask
     rules:
-      allow * task * : []
-      deny * websearch * : []
-      allow * glob *.rs : []
+      allow * task *:
+      deny * websearch *:
+      allow * glob *.rs:
 
 steps:
   - name: custom tool task allowed by rule

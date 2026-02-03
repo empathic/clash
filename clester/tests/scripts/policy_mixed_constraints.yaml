@@ -3,7 +3,6 @@ meta:
   description: Test new-format profiles with args constraints, fs constraints, and inheritance
 
 clash:
-  engine_mode: policy
   policy_raw: |
     default:
       permission: ask

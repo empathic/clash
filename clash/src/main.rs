@@ -6,6 +6,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use claude_settings::SettingsLevel;
 use claude_settings::policy::parse::{desugar_legacy, format_rule};
 use claude_settings::policy::{Effect, LegacyPermissions, PolicyConfig, PolicyDocument};
+// Note: desugar_legacy, format_rule, LegacyPermissions, PolicyConfig, PolicyDocument
+// are still used by the `migrate` command for one-time legacy-to-policy conversion.
 use tracing::level_filters::LevelFilter;
 use tracing::{Level, error, info, instrument};
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -222,9 +224,9 @@ fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOut
                             .map(|p| p.rules.len())
                             .sum::<usize>();
                     let format = if doc.profile_defs.is_empty() {
-                        "legacy"
+                        "flat"
                     } else {
-                        "new"
+                        "profile"
                     };
                     match claude_settings::policy::CompiledPolicy::compile(&doc) {
                         Ok(_) => {
@@ -247,7 +249,7 @@ fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOut
             }
         }
     } else {
-        lines.push("policy.yaml: not found (using legacy permissions)".into());
+        lines.push("policy.yaml: not found (run `clash init` to create one)".into());
     }
 
     // 2. Validate notification config from the same policy file
@@ -273,8 +275,8 @@ fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOut
     // 3. Check settings file
     let settings_path = settings::ClashSettings::settings_file();
     match settings::ClashSettings::load() {
-        Ok(s) => {
-            lines.push(format!("settings: OK (engine_mode={:?})", s.engine_mode));
+        Ok(_) => {
+            lines.push("settings: OK".into());
         }
         Err(_) if !settings_path.exists() => {
             lines.push("settings: using defaults (no settings.json)".into());

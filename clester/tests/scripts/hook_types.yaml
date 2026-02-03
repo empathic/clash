@@ -2,13 +2,12 @@ meta:
   name: all hook types
   description: Test that all hook event types are handled correctly
 
-settings:
-  user:
-    permissions:
-      allow:
-        - "Bash(git:*)"
-      deny:
-        - "Bash(rm:*)"
+clash:
+  policy_raw: |
+    default: ask
+    rules:
+      allow bash git *:
+      deny bash rm *:
 
 steps:
   - name: pre-tool-use allow

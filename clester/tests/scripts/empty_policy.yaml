@@ -3,10 +3,8 @@ meta:
   description: A policy file with no rules should fall through to the configured default
 
 clash:
-  engine_mode: policy
-  policy:
+  policy_raw: |
     default: ask
-    rules:
 
 steps:
   - name: bash falls to default ask

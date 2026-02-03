@@ -1,10 +1,8 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use claude_settings::ClaudeSettings;
 use claude_settings::policy::CompiledPolicy;
-use claude_settings::policy::parse::desugar_legacy;
-use claude_settings::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
+use claude_settings::policy::parse::parse_yaml;
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use tracing::{Level, info, instrument, warn};
@@ -12,28 +10,11 @@ use tracing::{Level, info, instrument, warn};
 use crate::audit::AuditConfig;
 use crate::notifications::NotificationConfig;
 
-/// Which permission engine to use.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum EngineMode {
-    /// Only use the new policy engine (policy.yaml rules).
-    Policy,
-    /// Only use the legacy Claude Code PermissionSet.
-    Legacy,
-    /// Try the policy engine first; fall back to legacy if no policy file exists.
-    #[default]
-    Auto,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ClashSettings {
-    /// Which permission engine to use.
-    #[serde(default)]
-    pub engine_mode: EngineMode,
-
-    /// Parsed policy document (not serialized — loaded at runtime from policy.yaml or compiled from Claude settings).
+    /// Parsed policy document (not serialized — loaded at runtime from policy.yaml).
     #[serde(skip)]
-    pub(crate) policy: Option<PolicyDocument>,
+    pub(crate) policy: Option<claude_settings::policy::PolicyDocument>,
 
     /// Notification and external service configuration, loaded from policy.yaml.
     #[serde(skip)]
@@ -66,7 +47,7 @@ impl ClashSettings {
 
     /// Try to load and compile the policy document from ~/.clash/policy.yaml.
     #[instrument(level = Level::TRACE, skip(self))]
-    fn load_policy_file(&mut self) -> Option<PolicyDocument> {
+    fn load_policy_file(&mut self) -> Option<claude_settings::policy::PolicyDocument> {
         let path = Self::policy_file();
         if path.exists() {
             match std::fs::read_to_string(&path) {
@@ -77,7 +58,7 @@ impl ClashSettings {
                     self.notification_warning = notif_warning;
                     self.audit = parse_audit_config(&contents);
 
-                    match claude_settings::policy::parse::parse_yaml(&contents) {
+                    match parse_yaml(&contents) {
                         Ok(doc) => {
                             info!(path = %path.display(), "Loaded policy document");
                             Some(doc)
@@ -98,56 +79,10 @@ impl ClashSettings {
         }
     }
 
-    /// Compile Claude Code's legacy permissions into a PolicyDocument.
-    ///
-    /// Reads Claude settings via ClaudeSettings::new().effective(), converts the
-    /// PermissionSet to LegacyPermissions, and desugars into policy Statements.
-    #[instrument(level = Level::TRACE)]
-    fn compile_claude_to_policy() -> Option<PolicyDocument> {
-        let effective = match ClaudeSettings::new().effective() {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "Failed to load Claude Code settings for policy compilation");
-                return None;
-            }
-        };
-
-        let perms = effective.permissions.to_permissions();
-        let legacy = LegacyPermissions {
-            allow: perms.allow,
-            deny: perms.deny,
-            ask: perms.ask,
-        };
-
-        let statements = desugar_legacy(&legacy);
-        if statements.is_empty() {
-            info!("No legacy Claude permissions found; compiled policy has no statements");
-        }
-
-        Some(PolicyDocument {
-            policy: PolicyConfig::default(),
-            permissions: None,
-            constraints: Default::default(),
-            profiles: Default::default(),
-            statements,
-            default_config: None,
-            profile_defs: Default::default(),
-        })
-    }
-
-    /// Resolve the policy based on engine_mode:
-    /// - Policy: load only from policy.yaml
-    /// - Legacy: compile Claude settings into a PolicyDocument
-    /// - Auto: use policy.yaml if it exists, else compile Claude settings
+    /// Load the policy from ~/.clash/policy.yaml.
     #[instrument(level = Level::TRACE, skip(self))]
     fn resolve_policy(&mut self) {
-        self.policy = match self.engine_mode {
-            EngineMode::Policy => self.load_policy_file(),
-            EngineMode::Legacy => Self::compile_claude_to_policy(),
-            EngineMode::Auto => self
-                .load_policy_file()
-                .or_else(Self::compile_claude_to_policy),
-        };
+        self.policy = self.load_policy_file();
     }
 
     /// Compile the loaded policy document into a CompiledPolicy for evaluation.

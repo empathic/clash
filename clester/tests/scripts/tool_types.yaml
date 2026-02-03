@@ -2,15 +2,14 @@ meta:
   name: all tool types
   description: Test permission checking for Bash, Read, Write, and Edit tools
 
-settings:
-  user:
-    permissions:
-      allow:
-        - "Bash(git:*)"
-        - Read
-        - "Write(/tmp/*)"
-      deny:
-        - "Edit(.env)"
+clash:
+  policy_raw: |
+    default: ask
+    rules:
+      allow bash git *:
+      allow read *:
+      allow write /tmp/*:
+      deny edit .env:
 
 steps:
   - name: bash allowed

@@ -2,15 +2,14 @@ meta:
   name: basic permission enforcement
   description: Test that allow/deny rules produce the correct decisions
 
-settings:
-  user:
-    permissions:
-      allow:
-        - "Bash(git:*)"
-        - Read
-      deny:
-        - "Read(.env)"
-        - "Bash(rm -rf:*)"
+clash:
+  policy_raw: |
+    default: ask
+    rules:
+      allow bash git *:
+      allow read *:
+      deny read .env:
+      deny bash rm -rf *:
 
 steps:
   - name: git status should be allowed

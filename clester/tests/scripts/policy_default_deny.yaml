@@ -3,12 +3,11 @@ meta:
   description: Test that default deny blocks everything not explicitly allowed
 
 clash:
-  engine_mode: policy
-  policy:
+  policy_raw: |
     default: deny
     rules:
-      allow bash git * : []
-      allow read /tmp/* : []
+      allow bash git *:
+      allow read /tmp/*:
 
 steps:
   - name: git status allowed

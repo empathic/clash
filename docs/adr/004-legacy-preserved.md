@@ -1,8 +1,8 @@
-# ADR-004: Legacy Format Preservation
+# ADR-004: Legacy Format Removal
 
 ## Status
 
-Accepted
+Superseded — legacy runtime support removed; `clash migrate` retained for one-time conversion.
 
 ## Context
 
@@ -19,28 +19,23 @@ Clash evolved from Claude Code's simple permission format:
 
 This was extended to a richer YAML format with (entity, verb, noun) triples, named constraints, profile expressions, and boolean composition. Later, a "new format" was added with profile-based rules and inline cap-scoped filesystem constraints.
 
-The question: should we break backward compatibility with the legacy formats?
+The original decision was to preserve backward compatibility with all previous formats and support an `engine_mode` setting (Policy, Legacy, Auto) to select between them at runtime.
 
 ## Decision
 
-Preserve backward compatibility with all previous formats:
+Remove runtime support for the legacy format and the `engine_mode` setting. The policy engine now always loads from `~/.clash/policy.yaml`. Two policy YAML formats remain:
 
-1. **Legacy `permissions` format**: desugared into `Statement`s at parse time by `legacy.rs`
-2. **Old YAML format** (flat rules + named constraints): parsed and compiled directly
-3. **New profile-based format**: detected by `default:` being a YAML mapping
+1. **Flat rules format**: `default:` as a scalar, top-level `rules:` list with optional named constraints and profiles
+2. **Profile-based format**: `default:` as a mapping with `permission` and `profile`, plus `profiles:` definitions
 
-At compile time, all formats are unified into `CompiledProfileRule` — a single IR type evaluated by a single code path. The format detection and conversion happens in the parsing/compilation pipeline, not at evaluation time.
+Users who still have Claude Code permission rules can run `clash migrate` to generate a `policy.yaml` file from their existing settings. The `legacy.rs` desugaring code is retained solely for this migration path.
 
 ## Consequences
 
 **Positive:**
-- Existing users don't need to rewrite their policies
-- Migration can happen incrementally — old and new formats are functionally equivalent
-- The unified IR means there's only one evaluation code path to test and maintain
-- Format auto-detection means users don't need to declare which format they're using
+- Simpler runtime: no `EngineMode` enum, no auto-detection of legacy Claude settings
+- Test scripts use `policy_raw:` directly, making the tested policy explicit
+- One fewer code path to maintain at evaluation time
 
 **Negative:**
-- Three input formats means three parsers to maintain
-- Legacy format has limited expressiveness (no entity dimension, no constraints, no profiles)
-- The `Statement` AST type and `LegacyPermissions` type exist solely for backward compatibility
-- Testing must cover all three formats to prevent regressions
+- Users who relied on `engine_mode: legacy` or `engine_mode: auto` must run `clash migrate` and switch to `policy.yaml`

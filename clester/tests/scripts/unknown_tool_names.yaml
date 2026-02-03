@@ -3,11 +3,10 @@ meta:
   description: Test that unrecognized tool names fall through to the default effect
 
 clash:
-  engine_mode: policy
-  policy:
+  policy_raw: |
     default: ask
     rules:
-      allow bash git * : []
+      allow bash git *:
 
 steps:
   - name: known tool bash with matching rule

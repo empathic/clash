@@ -18,7 +18,7 @@ pub struct TestScript {
     #[serde(default)]
     pub settings: SettingsConfig,
 
-    /// Clash-specific configuration (engine mode, policy).
+    /// Clash-specific configuration (policy document).
     #[serde(default)]
     pub clash: Option<ClashConfig>,
 
@@ -26,85 +26,12 @@ pub struct TestScript {
     pub steps: Vec<Step>,
 }
 
-/// Clash-specific settings: engine mode and policy document.
+/// Clash-specific settings: policy document for the test environment.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClashConfig {
-    /// Which permission engine to use: "policy", "legacy", or "auto".
-    #[serde(default)]
-    pub engine_mode: Option<String>,
-
-    /// Policy document to write to ~/.clash/policy.yaml (old format).
-    #[serde(default)]
-    pub policy: Option<PolicySpec>,
-
-    /// Raw YAML string written directly to ~/.clash/policy.yaml (new format).
-    /// When present, takes precedence over `policy`.
+    /// Raw YAML string written directly to ~/.clash/policy.yaml.
     #[serde(default)]
     pub policy_raw: Option<String>,
-}
-
-/// Policy document specification for ~/.clash/policy.yaml.
-#[derive(Debug, Clone, Deserialize)]
-pub struct PolicySpec {
-    /// Default effect when no rule matches: "allow", "deny", "ask", "delegate".
-    #[serde(default = "PolicySpec::default_effect")]
-    pub default: String,
-
-    /// Policy rules — supports both YAML list and mapping formats.
-    #[serde(default, deserialize_with = "deserialize_rules")]
-    pub rules: Vec<String>,
-}
-
-impl PolicySpec {
-    fn default_effect() -> String {
-        "ask".into()
-    }
-}
-
-/// Deserialize rules from either a YAML sequence or mapping.
-fn deserialize_rules<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::Error;
-    let value = serde_yaml::Value::deserialize(deserializer)?;
-    match value {
-        serde_yaml::Value::Sequence(seq) => seq
-            .into_iter()
-            .map(|v| match v {
-                serde_yaml::Value::String(s) => Ok(s),
-                _ => Err(Error::custom("rule must be a string")),
-            })
-            .collect(),
-        serde_yaml::Value::Mapping(map) => {
-            let mut rules = Vec::new();
-            for (key, value) in map {
-                let rule_key = match key {
-                    serde_yaml::Value::String(s) => s,
-                    _ => return Err(Error::custom("rule key must be a string")),
-                };
-                let constraint = match &value {
-                    serde_yaml::Value::String(s) => Some(s.clone()),
-                    serde_yaml::Value::Null => None,
-                    serde_yaml::Value::Sequence(seq) if seq.is_empty() => None,
-                    _ => {
-                        return Err(Error::custom(format!(
-                            "constraint for '{}' must be a string, null, or []",
-                            rule_key
-                        )));
-                    }
-                };
-                if let Some(constraint) = constraint {
-                    rules.push(format!("{} : {}", rule_key, constraint));
-                } else {
-                    rules.push(rule_key);
-                }
-            }
-            Ok(rules)
-        }
-        serde_yaml::Value::Null => Ok(Vec::new()),
-        _ => Err(Error::custom("rules must be a sequence or mapping")),
-    }
 }
 
 /// Test metadata.
@@ -297,12 +224,11 @@ meta:
   name: clash config test
 
 clash:
-  engine_mode: policy
-  policy:
+  policy_raw: |
     default: ask
     rules:
-      - "allow * bash git *"
-      - "deny * read .env"
+      allow bash git *:
+      deny read .env:
 
 steps:
   - name: test
@@ -316,11 +242,9 @@ steps:
 
         let script = TestScript::from_str(yaml).unwrap();
         let clash = script.clash.expect("clash config should be present");
-        assert_eq!(clash.engine_mode.as_deref(), Some("policy"));
-        let policy = clash.policy.expect("policy should be present");
-        assert_eq!(policy.default, "ask");
-        assert_eq!(policy.rules.len(), 2);
-        assert_eq!(policy.rules[0], "allow * bash git *");
+        let raw = clash.policy_raw.expect("policy_raw should be present");
+        assert!(raw.contains("default: ask"));
+        assert!(raw.contains("allow bash git *"));
     }
 
     #[test]

@@ -9,8 +9,7 @@ A permission enforcement tool for [Claude Code](https://docs.anthropic.com/en/do
 - **Policy engine** - Profile-based rules with inline constraints and deny > ask > allow precedence
 - **Unified sandbox** - `fs` constraints on bash rules automatically generate kernel-enforced sandbox via Landlock + seccomp (Linux) or Seatbelt (macOS)
 - **Plugin mode** - Run as a Claude Code plugin for seamless integration
-- **CLI mode** - Launch Claude Code with managed hooks, migrate legacy permissions, and test sandbox policies
-- **Legacy migration** - Convert existing Claude Code permission rules to the new policy format
+- **CLI mode** - Launch Claude Code with managed hooks and test sandbox policies
 
 ## Installation
 
@@ -86,39 +85,6 @@ clash migrate --default deny  # Set default effect (ask, deny, allow)
 ```
 
 ## Configuration
-
-### Legacy permissions (Claude Code settings)
-
-Configure permissions in your Claude Code settings files:
-
-- **User level**: `~/.claude/settings.json`
-- **Project local**: `.claude/settings.local.json` (not version controlled)
-- **Project**: `.claude/settings.json` (version controlled)
-- **System**: `/etc/claude-code/managed-settings.json` (read-only)
-
-Example permission configuration:
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(git:*)",
-      "Bash(cargo:*)",
-      "Read"
-    ],
-    "deny": [
-      "Bash(rm -rf:*)",
-      "Read(.env)"
-    ]
-  }
-}
-```
-
-**Permission patterns:**
-
-- `Tool` - Match any usage of a tool
-- `Tool(prefix:*)` - Match tool usage where the argument starts with prefix
-- `Tool(exact)` - Match exact argument
 
 ### Policy engine
 
