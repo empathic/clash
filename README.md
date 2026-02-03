@@ -6,8 +6,8 @@ A permission enforcement tool for [Claude Code](https://docs.anthropic.com/en/do
 
 - **Permission enforcement** - Control which tools Claude Code can use automatically
 - **Hierarchical settings** - Configure permissions at system, project, or user level
-- **Policy engine** - Expressive (entity, verb, noun) rules with deny > ask > allow precedence
-- **Kernel-enforced sandbox** - Runtime filesystem and network restrictions via Landlock + seccomp (Linux) or Seatbelt (macOS)
+- **Policy engine** - Profile-based rules with inline constraints and deny > ask > allow precedence
+- **Unified sandbox** - `fs` constraints on bash rules automatically generate kernel-enforced sandbox via Landlock + seccomp (Linux) or Seatbelt (macOS)
 - **Plugin mode** - Run as a Claude Code plugin for seamless integration
 - **CLI mode** - Launch Claude Code with managed hooks, migrate legacy permissions, and test sandbox policies
 - **Legacy migration** - Convert existing Claude Code permission rules to the new policy format
@@ -122,57 +122,134 @@ Example permission configuration:
 
 ### Policy engine
 
-The policy engine provides expressive (entity, verb, noun) rules for fine-grained control. Use `clash migrate` to convert legacy permissions to this format.
+The policy engine uses a profile-based syntax with inline constraints for fine-grained control over permissions and sandboxing. Use `clash migrate` to convert legacy permissions to this format.
 
-**Evaluation:** All matching statements are collected, then precedence applies: **deny > ask > allow**. If no statement matches, the configurable default effect is used.
+**Evaluation:** All matching rules in the active profile are collected, then precedence applies: **deny > ask > allow**. If no rule matches, the configurable default effect is used.
 
-Example policy (YAML):
+#### Policy file structure
 
 ```yaml
-default: ask
+default:
+  permission: ask        # Default effect: ask, deny, or allow
+  profile: main          # Active profile name
 
-rules:
-  - allow execute git *
-  - allow execute cargo *
-  - deny read .env
-  - deny execute rm -rf *
+profiles:
+  base:
+    rules:
+      deny bash rm *:
+
+  main:
+    include: [base]      # Inherit rules from other profiles
+    rules:
+      allow bash git *:
+        args: ["!--force"]       # Forbid --force flag
+      allow bash cargo *:
+      allow read *:
+      deny bash curl *:
 ```
 
-**Entities:** `*`, `user`, `agent`, `agent:claude`, `service:github-mcp`, etc.
+#### Rule syntax
 
-**Verbs:** `read`, `write`, `edit`, `execute`, `delegate`
+Rules use the format `effect verb noun:` with optional inline constraints:
 
-**Nouns:** File paths, command strings, globs (with `*` and `**`)
+```yaml
+allow bash git *:          # Allow all git commands
+deny bash rm *:            # Deny all rm commands
+allow read *:              # Allow reading any file
+ask * *:                   # Ask for everything else
+```
 
-**Negation:** `!` inverts entity and noun matching:
-- `deny(!user, read, ~/config/*)` - only users can read config
-- `deny(agent:*, write, !~/code/proj/**)` - agents can't write outside project
+- **Effect**: `allow`, `deny`, or `ask`
+- **Verb**: `bash`, `read`, `write`, `edit`, or `*` (wildcard)
+- **Noun**: A resource pattern — file path, command string, or glob (with `*` and `**`)
 
-### Sandbox policy
+#### Inline constraints
 
-The sandbox enforces kernel-level restrictions on processes spawned by Claude Code. Restrictions are inherited by child processes and cannot be removed at runtime.
+Rules can have inline constraints that further restrict when they match and how commands are sandboxed:
+
+```yaml
+allow bash cargo *:
+  args: ["!--force", "--dry-run"]  # Forbid --force, require --dry-run
+  fs:
+    read + execute: subpath(.)     # Sandbox: allow r+x in CWD
+  network: deny                    # Sandbox: block network access
+  pipe: false                      # Disallow pipe operators
+  redirect: false                  # Disallow I/O redirects
+```
+
+**`args`** — Argument constraints using a unified list:
+- `"!--force"` — Forbid this argument (rule won't match if present; falls to default)
+- `"--dry-run"` — Require this argument (rule won't match if absent)
+
+**`fs`** — Cap-scoped filesystem constraints. For `bash` rules, these generate kernel-enforced sandbox rules. For other verbs (`read`, `write`, `edit`), they act as permission guards.
+
+```yaml
+fs:
+  read + execute: subpath(.)          # Allow read+execute under CWD
+  read + write: subpath(~/.ssh)       # Allow read+write under ~/.ssh
+```
+
+Capabilities: `read`, `write`, `create`, `delete`, `execute` (combined with `+`)
+
+**`network`** — `deny` or `allow` (controls network access in the sandbox)
+
+**`pipe`** / **`redirect`** — `true` or `false` (control shell pipe and I/O redirect operators)
+
+#### Filter expressions
+
+Filter expressions specify filesystem path constraints:
+
+- `subpath(.)` — Path must be under this directory
+- `literal(.env)` — Exactly this path
+- `regex(\\.env\\.*)` — Regex pattern match
+- `!expr` — NOT (invert the expression)
+- `a & b` — AND (both must match)
+- `a | b` — OR (either can match)
+
+#### Profile inheritance
+
+Profiles can inherit rules from other profiles via `include`. Multiple includes are supported, and circular dependencies are detected:
+
+```yaml
+profiles:
+  safe-ssh:
+    rules:
+      deny * *:
+        fs:
+          read + write: subpath(~/.ssh)
+
+  safe-read:
+    rules:
+      allow read *:
+
+  research:
+    include: [safe-ssh, safe-read]
+    rules:
+      allow bash *:
+        args: ["!-delete"]
+```
+
+Parent rules are included first (lower precedence), then the profile's own rules. The standard **deny > ask > allow** precedence still applies across all collected rules.
+
+### Sandbox
+
+For `bash` rules with `fs` constraints, the policy engine automatically generates a kernel-enforced sandbox. The sandbox restrictions are inherited by child processes and cannot be removed at runtime.
 
 **Platform backends:**
 - **Linux**: Landlock LSM (filesystem) + seccomp-BPF (syscall filtering)
 - **macOS**: Seatbelt sandbox profiles (SBPL)
 
-Example sandbox policy:
+When a bash command matches an `allow` rule with `fs` or `network` constraints, the command is automatically wrapped in a sandbox:
 
-```yaml
-sandbox:
-  default: read + execute
-  network: deny
-  rules:
-    - allow read + write + create + delete in $CWD
-    - deny write + delete + create in $CWD/.git
-    - deny read in $CWD/.env
+```bash
+# Original command
+cargo build
+
+# Rewritten by clash as
+clash sandbox exec --policy '<json>' --cwd /path -- bash -c "cargo build"
 ```
 
-**Capabilities:** `read`, `write`, `create`, `delete`, `execute` (combined with `+`)
-
-**Path variables:** `$CWD`, `$HOME`, `$TMPDIR`
-
-**Network:** `deny` (default, blocks network access) or `allow`
+**Path variables in filter expressions:** `$CWD`, `$HOME`, `$TMPDIR`
 
 ## Project structure
 
