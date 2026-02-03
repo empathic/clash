@@ -52,23 +52,21 @@ fn default_timeout() -> u64 {
 pub fn send_desktop_notification(title: &str, message: &str) {
     info!(title, message, "Sending desktop notification");
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        match mac_notification_sys::send_notification(title, None, message, None) {
-            Ok(_) => {}
-            Err(e) => warn!(error = %e, "Failed to send macOS notification"),
-        }
-    }
+        use std::time::Duration;
 
-    #[cfg(target_os = "linux")]
-    {
         match notify_rust::Notification::new()
+            .auto_icon()
+            .action("allow", "allow")
+            .action("deny", "deny")
             .summary(title)
+            .timeout(Duration::from_secs(10))
             .body(message)
             .show()
         {
-            Ok(_) => {}
-            Err(e) => warn!(error = %e, "Failed to send Linux notification"),
+            Ok(resp) => {}
+            Err(e) => warn!(error = %e, "Failed to send desktop notification"),
         }
     }
 
@@ -105,12 +103,6 @@ pub struct ZulipClient<'a> {
 impl<'a> ZulipClient<'a> {
     pub fn new(config: &'a ZulipConfig) -> Self {
         Self { config }
-    }
-
-    /// Send an informational notification to Zulip (no response expected).
-    pub fn send_notification(&self, message: &str) -> anyhow::Result<()> {
-        self.send_message(message)?;
-        Ok(())
     }
 
     /// Send a permission request to Zulip and poll for a user response.

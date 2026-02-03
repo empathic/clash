@@ -10,8 +10,6 @@ use tracing::{Level, instrument};
 pub enum HookInput {
     /// PreToolUse, PostToolUse, PermissionRequest events
     ToolUse(ToolUseHookInput),
-    /// Notification events (permission_prompt, idle_prompt, etc.)
-    Notification(NotificationHookInput),
     /// SessionStart events
     SessionStart(SessionStartHookInput),
 }
@@ -30,36 +28,6 @@ pub struct ToolUseHookInput {
     /// Present in PostToolUse events
     #[serde(default)]
     pub tool_response: Option<serde_json::Value>,
-}
-
-/// Hook input for Notification events
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct NotificationHookInput {
-    pub session_id: String,
-    pub transcript_path: String,
-    pub cwd: String,
-    pub permission_mode: Option<String>,
-    pub hook_event_name: String,
-    pub message: String,
-    pub notification_type: NotificationType,
-}
-
-/// Types of notifications that Claude Code can send
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum NotificationType {
-    /// Permission requests from Claude Code
-    PermissionPrompt,
-    /// When Claude is waiting for user input (after 60+ seconds of idle time)
-    IdlePrompt,
-    /// Authentication success notifications
-    AuthSuccess,
-    /// When Claude Code needs input for MCP tool elicitation
-    ElicitationDialog,
-    /// Unknown notification type
-    #[serde(other)]
-    #[default]
-    Unknown,
 }
 
 /// Hook input for SessionStart events
@@ -103,7 +71,6 @@ impl HookInput {
     pub fn hook_event_name(&self) -> &str {
         match self {
             HookInput::ToolUse(input) => &input.hook_event_name,
-            HookInput::Notification(input) => &input.hook_event_name,
             HookInput::SessionStart(input) => &input.hook_event_name,
         }
     }
@@ -113,7 +80,6 @@ impl HookInput {
     pub fn session_id(&self) -> &str {
         match self {
             HookInput::ToolUse(input) => &input.session_id,
-            HookInput::Notification(input) => &input.session_id,
             HookInput::SessionStart(input) => &input.session_id,
         }
     }
@@ -123,15 +89,6 @@ impl HookInput {
     pub fn as_tool_use(&self) -> Option<&ToolUseHookInput> {
         match self {
             HookInput::ToolUse(input) => Some(input),
-            _ => None,
-        }
-    }
-
-    /// Check if this is a notification event
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn as_notification(&self) -> Option<&NotificationHookInput> {
-        match self {
-            HookInput::Notification(input) => Some(input),
             _ => None,
         }
     }
@@ -171,26 +128,6 @@ impl ToolUseHookInput {
                 .unwrap_or_else(|_| ToolInput::Unknown(self.tool_input.clone())),
             _ => ToolInput::Unknown(self.tool_input.clone()),
         }
-    }
-}
-
-impl NotificationHookInput {
-    /// Parse from any reader (for testability)
-    #[instrument(level = Level::TRACE, skip(reader))]
-    pub fn from_reader(reader: impl Read) -> anyhow::Result<Self> {
-        Ok(serde_json::from_reader(reader)?)
-    }
-
-    /// Check if this is a permission prompt notification
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn is_permission_prompt(&self) -> bool {
-        self.notification_type == NotificationType::PermissionPrompt
-    }
-
-    /// Check if this is an idle prompt notification
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn is_idle_prompt(&self) -> bool {
-        self.notification_type == NotificationType::IdlePrompt
     }
 }
 
@@ -510,18 +447,6 @@ mod tests {
         }"#
     }
 
-    fn sample_notification_json() -> &'static str {
-        r#"{
-            "session_id": "test-session",
-            "transcript_path": "/tmp/transcript.jsonl",
-            "cwd": "/home/user/project",
-            "permission_mode": "default",
-            "hook_event_name": "Notification",
-            "message": "Claude needs your permission to use Bash",
-            "notification_type": "permission_prompt"
-        }"#
-    }
-
     #[test]
     fn test_parse_tool_use_input() {
         let input = HookInput::from_reader(sample_tool_use_json().as_bytes()).unwrap();
@@ -530,26 +455,6 @@ mod tests {
 
         let tool_use = input.as_tool_use().expect("Should be ToolUse variant");
         assert_eq!(tool_use.tool_name, "Bash");
-    }
-
-    #[test]
-    fn test_parse_notification_input() {
-        let input = HookInput::from_reader(sample_notification_json().as_bytes()).unwrap();
-        assert_eq!(input.session_id(), "test-session");
-        assert_eq!(input.hook_event_name(), "Notification");
-
-        let notification = input
-            .as_notification()
-            .expect("Should be Notification variant");
-        assert_eq!(
-            notification.message,
-            "Claude needs your permission to use Bash"
-        );
-        assert_eq!(
-            notification.notification_type,
-            NotificationType::PermissionPrompt
-        );
-        assert!(notification.is_permission_prompt());
     }
 
     #[test]
@@ -583,38 +488,6 @@ mod tests {
                 assert_eq!(write.content, "hello world");
             }
             other => panic!("Expected Write input, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_notification_types() {
-        let types = [
-            ("permission_prompt", NotificationType::PermissionPrompt),
-            ("idle_prompt", NotificationType::IdlePrompt),
-            ("auth_success", NotificationType::AuthSuccess),
-            ("elicitation_dialog", NotificationType::ElicitationDialog),
-            ("unknown_type", NotificationType::Unknown),
-        ];
-
-        for (type_str, expected) in types {
-            let json = format!(
-                r#"{{
-                    "session_id": "test",
-                    "transcript_path": "/tmp/t.jsonl",
-                    "cwd": "/tmp",
-                    "permission_mode": "default",
-                    "hook_event_name": "Notification",
-                    "message": "test message",
-                    "notification_type": "{}"
-                }}"#,
-                type_str
-            );
-            let input = NotificationHookInput::from_reader(json.as_bytes()).unwrap();
-            assert_eq!(
-                input.notification_type, expected,
-                "Failed for type: {}",
-                type_str
-            );
         }
     }
 

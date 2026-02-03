@@ -348,7 +348,6 @@ dependencies = [
  "figment",
  "landlock",
  "libc",
- "mac-notification-sys",
  "notify-rust",
  "pest",
  "pest_derive",

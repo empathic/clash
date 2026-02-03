@@ -37,6 +37,10 @@ pub struct ClashSettings {
     /// Notification and external service configuration, loaded from policy.yaml.
     #[serde(skip)]
     pub notifications: NotificationConfig,
+
+    /// Warning message if parsing the notifications config failed or was incomplete.
+    #[serde(skip)]
+    pub notification_warning: Option<String>,
 }
 
 impl ClashSettings {
@@ -63,7 +67,9 @@ impl ClashSettings {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => {
                     // Parse notification config from the same YAML file.
-                    self.notifications = parse_notification_config(&contents);
+                    let (notif_config, notif_warning) = parse_notification_config(&contents);
+                    self.notifications = notif_config;
+                    self.notification_warning = notif_warning;
 
                     match claude_settings::policy::parse::parse_yaml(&contents) {
                         Ok(doc) => {
@@ -187,7 +193,10 @@ impl ClashSettings {
 ///
 /// This is parsed independently of the policy rules so that the notification
 /// config doesn't need to live in the `claude_settings` library.
-fn parse_notification_config(yaml_str: &str) -> NotificationConfig {
+///
+/// Returns the parsed config (falling back to defaults on error) and an
+/// optional warning message if parsing failed.
+pub fn parse_notification_config(yaml_str: &str) -> (NotificationConfig, Option<String>) {
     #[derive(Deserialize)]
     struct RawYaml {
         #[serde(default)]
@@ -195,10 +204,11 @@ fn parse_notification_config(yaml_str: &str) -> NotificationConfig {
     }
 
     match serde_yaml::from_str::<RawYaml>(yaml_str) {
-        Ok(raw) => raw.notifications.unwrap_or_default(),
+        Ok(raw) => (raw.notifications.unwrap_or_default(), None),
         Err(e) => {
+            let warning = format!("notifications config parse error: {}", e);
             warn!(error = %e, "Failed to parse notifications config from policy.yaml");
-            NotificationConfig::default()
+            (NotificationConfig::default(), Some(warning))
         }
     }
 }

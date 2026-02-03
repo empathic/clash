@@ -211,6 +211,7 @@ mod tests {
             engine_mode: crate::settings::EngineMode::Policy,
             policy: Some(doc),
             notifications: Default::default(),
+            notification_warning: None,
         }
     }
 
@@ -239,6 +240,7 @@ mod tests {
             engine_mode: crate::settings::EngineMode::Auto,
             policy: Some(doc),
             notifications: Default::default(),
+            notification_warning: None,
         }
     }
 
@@ -365,6 +367,7 @@ rules:
             engine_mode: crate::settings::EngineMode::Auto,
             policy: Some(doc),
             notifications: Default::default(),
+            notification_warning: None,
         };
         let result = check_permission(&bash_input("echo hello"), &settings)?;
         assert_decision(

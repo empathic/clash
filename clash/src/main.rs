@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use claude_settings::SettingsLevel;
 use claude_settings::policy::parse::{desugar_legacy, format_rule};
 use claude_settings::policy::{Effect, LegacyPermissions, PolicyConfig, PolicyDocument};
+use tracing::level_filters::LevelFilter;
 use tracing::{Level, error, info, instrument};
 use tracing_subscriber::fmt::FormatFields;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -19,10 +20,7 @@ mod settings;
 
 use claude_settings::PermissionRule;
 use claude_settings::sandbox::SandboxPolicy;
-use hooks::{
-    HookOutput, HookSpecificOutput, NotificationHookInput, SessionStartHookInput, ToolUseHookInput,
-    exit_code,
-};
+use hooks::{HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput, exit_code};
 use permissions::check_permission;
 
 #[derive(Parser, Debug)]
@@ -80,10 +78,6 @@ enum HooksCmd {
     #[command(name = "permission-request")]
     PermissionRequest,
 
-    /// Handle Notification hook - informational events from Claude Code
-    #[command(name = "notification")]
-    Notification,
-
     /// Handle SessionStart hook - validate settings and report status
     #[command(name = "session-start")]
     SessionStart,
@@ -110,10 +104,6 @@ impl HooksCmd {
                 // Decide whether to approve or deny the permission request
                 handle_permission_request(&input, &settings)?
             }
-            Self::Notification => {
-                let input = NotificationHookInput::from_reader(std::io::stdin().lock())?;
-                handle_notification(&input, &settings)
-            }
             Self::SessionStart => {
                 let input = SessionStartHookInput::from_reader(std::io::stdin().lock())?;
                 handle_session_start(&input)?
@@ -123,35 +113,6 @@ impl HooksCmd {
         output.write_stdout()?;
         std::process::exit(exit_code::SUCCESS);
     }
-}
-
-/// Handle a notification event — send desktop and/or Zulip notifications.
-#[instrument(level = Level::TRACE, skip(input, settings))]
-fn handle_notification(
-    input: &NotificationHookInput,
-    settings: &settings::ClashSettings,
-) -> HookOutput {
-    // Desktop notifications
-    if settings.notifications.desktop {
-        let title = match input.notification_type {
-            hooks::NotificationType::PermissionPrompt => "Clash: Permission Request",
-            hooks::NotificationType::IdlePrompt => "Clash: Waiting for Input",
-            hooks::NotificationType::AuthSuccess => "Clash: Auth Success",
-            hooks::NotificationType::ElicitationDialog => "Clash: Input Needed",
-            hooks::NotificationType::Unknown => "Clash",
-        };
-        notifications::send_desktop_notification(title, &input.message);
-    }
-
-    // Zulip notification (informational — not for resolving permissions)
-    if let Some(ref zulip_config) = settings.notifications.zulip {
-        let client = notifications::ZulipClient::new(zulip_config);
-        if let Err(e) = client.send_notification(&input.message) {
-            tracing::warn!(error = %e, "Failed to send Zulip notification");
-        }
-    }
-
-    HookOutput::continue_execution()
 }
 
 /// Handle a permission request - decide whether to approve or deny on behalf of user.
@@ -178,11 +139,32 @@ fn handle_permission_request(
                     .unwrap_or_else(|| "denied by policy".into());
                 HookOutput::deny_permission(reason, false)
             }
-            // Ask or no decision: try Zulip resolution, otherwise let the user decide.
-            _ => resolve_via_zulip_or_continue(input, settings),
+            // Ask or no decision: notify and try Zulip resolution.
+            _ => {
+                send_permission_desktop_notification(input, settings);
+                resolve_via_zulip_or_continue(input, settings)
+            }
         },
         _ => pre_tool_result,
     })
+}
+
+/// Send a desktop notification for a permission request, if enabled.
+fn send_permission_desktop_notification(
+    input: &ToolUseHookInput,
+    settings: &settings::ClashSettings,
+) {
+    if !settings.notifications.desktop {
+        return;
+    }
+    let summary = match input.tool_name.as_str() {
+        "Bash" => {
+            let cmd = input.tool_input["command"].as_str().unwrap_or("(unknown)");
+            format!("Permission needed: Bash `{}`", cmd)
+        }
+        _ => format!("Permission needed: {}", input.tool_name),
+    };
+    notifications::send_desktop_notification("Clash: Permission Request", &summary);
 }
 
 /// Attempt to resolve a permission ask via Zulip. Falls back to `continue_execution`.
@@ -194,18 +176,6 @@ fn resolve_via_zulip_or_continue(
     let Some(ref zulip_config) = settings.notifications.zulip else {
         return HookOutput::continue_execution();
     };
-
-    // Also fire a desktop notification so the user knows something is pending.
-    if settings.notifications.desktop {
-        let summary = match input.tool_name.as_str() {
-            "Bash" => {
-                let cmd = input.tool_input["command"].as_str().unwrap_or("(unknown)");
-                format!("Permission needed: Bash `{}`", cmd)
-            }
-            _ => format!("Permission needed: {}", input.tool_name),
-        };
-        notifications::send_desktop_notification("Clash: Permission Request", &summary);
-    }
 
     let request = notifications::PermissionRequest {
         tool_name: input.tool_name.clone(),
@@ -280,7 +250,27 @@ fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOut
         lines.push("policy.yaml: not found (using legacy permissions)".into());
     }
 
-    // 2. Check settings file
+    // 2. Validate notification config from the same policy file
+    if policy_path.exists()
+        && let Ok(contents) = std::fs::read_to_string(&policy_path)
+    {
+        let (notif_config, notif_warning) = settings::parse_notification_config(&contents);
+        if let Some(warning) = notif_warning {
+            lines.push(format!("ISSUE: {}", warning));
+        } else {
+            let zulip_status = if notif_config.zulip.is_some() {
+                "configured"
+            } else {
+                "not configured"
+            };
+            lines.push(format!(
+                "notifications: OK (desktop={}, zulip={})",
+                notif_config.desktop, zulip_status
+            ));
+        }
+    }
+
+    // 3. Check settings file
     let settings_path = settings::ClashSettings::settings_file();
     match settings::ClashSettings::load() {
         Ok(s) => {
@@ -294,7 +284,7 @@ fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOut
         }
     }
 
-    // 3. Check sandbox support
+    // 4. Check sandbox support
     let support = sandbox::check_support();
     match support {
         sandbox::SupportLevel::Full => {
@@ -311,7 +301,7 @@ fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOut
         }
     }
 
-    // 4. Session metadata
+    // 5. Session metadata
     if let Some(ref source) = input.source {
         lines.push(format!("session source: {}", source));
     }
@@ -415,7 +405,8 @@ fn init_tracing() {
                 .with_line_number(true)
                 .with_target(false)
                 .with_span_events(FmtSpan::CLOSE)
-                .with_ansi(true),
+                .with_ansi(true)
+                .with_filter(LevelFilter::from_level(Level::DEBUG)),
         )
         .init();
 }
@@ -564,13 +555,6 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
                 "hooks": [{
                     "type": "command",
                     "command": format!("{} hook permission-request", clash_bin_str),
-                    "matcher": "*"
-                }]
-            }],
-            "Notification": [{
-                "hooks": [{
-                    "type": "command",
-                    "command": format!("{} hook notification", clash_bin_str),
                     "matcher": "*"
                 }]
             }],

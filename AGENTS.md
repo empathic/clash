@@ -15,3 +15,5 @@
 
 ## Development
 * Create a new directory within the `plans` and put larger "project" level plans in there and update as you accomplish work.
+* Always check the documentation after your changes to ensure they are logically consistant with what you have done. This should be the last step after you have validated your changes work.
+* ALWAYS update the relivant documentation (readme/comments) when changes have a public facing impact.
