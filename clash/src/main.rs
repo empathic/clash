@@ -396,6 +396,13 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Initialize a new clash policy.yaml with a safe default configuration
+    Init {
+        /// Overwrite an existing policy.yaml file
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn init_tracing() {
@@ -485,6 +492,13 @@ fn main() -> Result<()> {
         Commands::Explain { json } => {
             if let Err(e) = run_explain(json) {
                 error!("Explain error: {}", e);
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Init { force } => {
+            if let Err(e) = run_init(force) {
+                error!("Init error: {}", e);
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
@@ -751,8 +765,9 @@ fn run_explain(json_output: bool) -> Result<()> {
     use claude_settings::policy::{EvalContext, Verb};
 
     // Read input from stdin
-    let input: ExplainInput = serde_json::from_reader(std::io::stdin().lock())
-        .context("failed to parse JSON from stdin (expected {\"tool_name\":..., \"tool_input\":...})")?;
+    let input: ExplainInput = serde_json::from_reader(std::io::stdin().lock()).context(
+        "failed to parse JSON from stdin (expected {\"tool_name\":..., \"tool_input\":...})",
+    )?;
 
     // Load settings and compile policy
     let settings = settings::ClashSettings::load_or_create()?;
@@ -760,7 +775,10 @@ fn run_explain(json_output: bool) -> Result<()> {
         Some(c) => c,
         None => {
             if json_output {
-                println!("{}", serde_json::json!({"error": "no compiled policy available"}));
+                println!(
+                    "{}",
+                    serde_json::json!({"error": "no compiled policy available"})
+                );
             } else {
                 eprintln!("No compiled policy available.");
                 eprintln!("Create ~/.clash/policy.yaml or configure Claude Code permissions.");
@@ -864,10 +882,93 @@ fn run_explain(json_output: bool) -> Result<()> {
             println!("  default: {}", sandbox.default.display());
             println!("  network: {:?}", sandbox.network);
             for rule in &sandbox.rules {
-                println!("  {:?} {} in {}", rule.effect, rule.caps.display(), rule.path);
+                println!(
+                    "  {:?} {} in {}",
+                    rule.effect,
+                    rule.caps.display(),
+                    rule.path
+                );
             }
         }
     }
+
+    Ok(())
+}
+
+/// Default policy template written by `clash init`.
+const DEFAULT_POLICY: &str = r#"# Clash policy — safe defaults for local development.
+#
+# Evaluation: all matching statements are collected, then precedence applies:
+#   deny > ask > allow
+# If no statement matches, the default effect is used (ask).
+
+default:
+  permission: ask
+  profile: main
+
+profiles:
+  main:
+    rules:
+      # ── SSH keys: hard deny for file tools ──────────────────────
+      # Note: if you use SSH remotes for git, pulls will also be
+      # blocked. Switch to HTTPS remotes or relax this rule.
+      # Bash is protected via the sandbox on `allow bash *` below
+      # (fs guards don't act as match filters for bash commands).
+      deny read *:
+        fs:
+          read: "subpath($HOME/.ssh)"
+      deny write *:
+        fs:
+          write + create: "subpath($HOME/.ssh)"
+      deny edit *:
+        fs:
+          write: "subpath($HOME/.ssh)"
+
+      # ── Git: deny commit and push ─────────────────────────────
+      deny bash git commit*:
+      deny bash git push*:
+      deny bash git merge*:
+
+      # ── Git: deny destructive operations ──────────────────────
+      deny bash git reset --hard*:
+      deny bash git clean*:
+      deny bash git branch -D*:
+
+      # ── Dangerous commands ─────────────────────────────────────
+      deny bash sudo *:
+
+      # ── General: allow with sensitive dir protection ──────────
+      # (deny > allow, so all denies above still take precedence)
+      allow bash *:
+        fs:
+          read + write + create + delete + execute: "!subpath($HOME/.ssh) & !subpath($HOME/.gnupg) & !subpath($HOME/.aws)"
+      allow read *:
+        fs:
+          read: "!subpath($HOME/.ssh) & !subpath($HOME/.gnupg) & !subpath($HOME/.aws)"
+      allow write *:
+        fs:
+          write + create: "!subpath($HOME/.ssh) & !subpath($HOME/.gnupg) & !subpath($HOME/.aws)"
+      allow edit *:
+        fs:
+          write: "!subpath($HOME/.ssh) & !subpath($HOME/.gnupg) & !subpath($HOME/.aws)"
+"#;
+
+/// Initialize a new clash policy.yaml with safe defaults.
+#[instrument(level = Level::TRACE)]
+fn run_init(force: bool) -> Result<()> {
+    let path = settings::ClashSettings::policy_file();
+
+    if path.exists() && !force {
+        anyhow::bail!(
+            "{} already exists. Use --force to overwrite.",
+            path.display()
+        );
+    }
+
+    std::fs::create_dir_all(settings::ClashSettings::settings_dir())?;
+    std::fs::write(&path, DEFAULT_POLICY)?;
+    println!("Wrote default policy to {}", path.display());
+    println!("Edit the file to customize rules for your environment.");
 
     Ok(())
 }

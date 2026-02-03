@@ -220,9 +220,12 @@ fn parse_filter_atom(
     }
 }
 
-/// Parse a filter function call like `subpath(./src)`, `literal(.env)`, `regex(.*\.rs$)`.
+/// Parse a filter function call like `subpath(./src)`, `literal(.env)`, `regex(.*\.rs$)`,
+/// or the wildcard `*` (equivalent to `subpath(/)`).
 fn parse_filter_function(s: &str) -> Result<FilterExpr, PolicyParseError> {
-    if let Some(arg) = s.strip_prefix("subpath(").and_then(|s| s.strip_suffix(')')) {
+    if s == "*" {
+        Ok(FilterExpr::Subpath("/".to_string()))
+    } else if let Some(arg) = s.strip_prefix("subpath(").and_then(|s| s.strip_suffix(')')) {
         Ok(FilterExpr::Subpath(arg.to_string()))
     } else if let Some(arg) = s.strip_prefix("literal(").and_then(|s| s.strip_suffix(')')) {
         Ok(FilterExpr::Literal(arg.to_string()))
@@ -230,7 +233,7 @@ fn parse_filter_function(s: &str) -> Result<FilterExpr, PolicyParseError> {
         Ok(FilterExpr::Regex(arg.to_string()))
     } else {
         Err(PolicyParseError::InvalidFilter(format!(
-            "expected subpath(), literal(), or regex(), got '{}'",
+            "expected *, subpath(), literal(), or regex(), got '{}'",
             s
         )))
     }

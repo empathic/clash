@@ -53,8 +53,19 @@ impl CompiledPolicy {
             filter_to_sandbox_rules(fs_expr, *effect, final_caps, cwd, &mut rules);
         }
 
+        // If all generated rules are Deny (from negation-only filters like
+        // `!subpath($HOME/.ssh)`), the intent is "allow everything except these
+        // paths". Grant the full requested caps as the default so writes/creates
+        // aren't blocked. When there are explicit Allow rules, keep the
+        // restrictive default so only allowlisted paths are writable.
+        let default = if rules.iter().all(|r| r.effect == RuleEffect::Deny) {
+            final_caps
+        } else {
+            Cap::READ | Cap::EXECUTE
+        };
+
         Some(SandboxPolicy {
-            default: Cap::READ | Cap::EXECUTE,
+            default,
             rules,
             network: merged_network,
         })
