@@ -191,6 +191,7 @@ mod tests {
         ClashSettings {
             engine_mode: crate::settings::EngineMode::Policy,
             policy: Some(doc),
+            notifications: Default::default(),
         }
     }
 
@@ -218,6 +219,7 @@ mod tests {
         ClashSettings {
             engine_mode: crate::settings::EngineMode::Auto,
             policy: Some(doc),
+            notifications: Default::default(),
         }
     }
 
@@ -315,6 +317,7 @@ rules:
         let settings = ClashSettings {
             engine_mode: crate::settings::EngineMode::Auto,
             policy: Some(doc),
+            notifications: Default::default(),
         };
         let result = check_permission(&bash_input("echo hello"), &settings)?;
         assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())),);

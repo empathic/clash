@@ -103,10 +103,8 @@ impl HooksCmd {
                 handle_permission_request(&input, &settings)?
             }
             Self::Notification => {
-                let _input = NotificationHookInput::from_reader(std::io::stdin().lock())?;
-                // Notifications are informational - just continue
-                // Could be extended to send desktop notifications, etc.
-                HookOutput::continue_execution()
+                let input = NotificationHookInput::from_reader(std::io::stdin().lock())?;
+                handle_notification(&input, &settings)
             }
         };
 
@@ -115,7 +113,39 @@ impl HooksCmd {
     }
 }
 
-/// Handle a permission request - decide whether to approve or deny on behalf of user
+/// Handle a notification event — send desktop and/or Zulip notifications.
+fn handle_notification(
+    input: &NotificationHookInput,
+    settings: &settings::ClashSettings,
+) -> HookOutput {
+    // Desktop notifications
+    if settings.notifications.desktop {
+        let title = match input.notification_type {
+            hooks::NotificationType::PermissionPrompt => "Clash: Permission Request",
+            hooks::NotificationType::IdlePrompt => "Clash: Waiting for Input",
+            hooks::NotificationType::AuthSuccess => "Clash: Auth Success",
+            hooks::NotificationType::ElicitationDialog => "Clash: Input Needed",
+            hooks::NotificationType::Unknown => "Clash",
+        };
+        notifications::send_desktop_notification(title, &input.message);
+    }
+
+    // Zulip notification (informational — not for resolving permissions)
+    if let Some(ref zulip_config) = settings.notifications.zulip {
+        let client = notifications::ZulipClient::new(zulip_config);
+        if let Err(e) = client.send_notification(&input.message) {
+            tracing::warn!(error = %e, "Failed to send Zulip notification");
+        }
+    }
+
+    HookOutput::continue_execution()
+}
+
+/// Handle a permission request - decide whether to approve or deny on behalf of user.
+///
+/// When the policy evaluates to "ask" and a Zulip bot is configured, the request
+/// is forwarded to Zulip and we poll for a human response. If no Zulip config is
+/// present or the poll times out, we fall through to let the terminal user decide.
 fn handle_permission_request(
     input: &ToolUseHookInput,
     settings: &settings::ClashSettings,
@@ -134,11 +164,59 @@ fn handle_permission_request(
                     .unwrap_or_else(|| "denied by policy".into());
                 HookOutput::deny_permission(reason, false)
             }
-            // Ask or no decision: don't respond, let the user decide
-            _ => HookOutput::continue_execution(),
+            // Ask or no decision: try Zulip resolution, otherwise let the user decide.
+            _ => resolve_via_zulip_or_continue(input, settings),
         },
         _ => pre_tool_result,
     })
+}
+
+/// Attempt to resolve a permission ask via Zulip. Falls back to `continue_execution`.
+fn resolve_via_zulip_or_continue(
+    input: &ToolUseHookInput,
+    settings: &settings::ClashSettings,
+) -> HookOutput {
+    let Some(ref zulip_config) = settings.notifications.zulip else {
+        return HookOutput::continue_execution();
+    };
+
+    // Also fire a desktop notification so the user knows something is pending.
+    if settings.notifications.desktop {
+        let summary = match input.tool_name.as_str() {
+            "Bash" => {
+                let cmd = input.tool_input["command"].as_str().unwrap_or("(unknown)");
+                format!("Permission needed: Bash `{}`", cmd)
+            }
+            _ => format!("Permission needed: {}", input.tool_name),
+        };
+        notifications::send_desktop_notification("Clash: Permission Request", &summary);
+    }
+
+    let request = notifications::PermissionRequest {
+        tool_name: input.tool_name.clone(),
+        tool_input: input.tool_input.clone(),
+        session_id: input.session_id.clone(),
+        cwd: input.cwd.clone(),
+    };
+
+    let client = notifications::ZulipClient::new(zulip_config);
+    match client.resolve_permission(&request) {
+        Ok(Some(notifications::PermissionResponse::Approve)) => {
+            HookOutput::approve_permission(None)
+        }
+        Ok(Some(notifications::PermissionResponse::Deny(reason))) => {
+            HookOutput::deny_permission(reason, false)
+        }
+        Ok(None) => {
+            // Timeout — fall through to terminal.
+            info!("Zulip resolution timed out, falling through to terminal");
+            HookOutput::continue_execution()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Zulip resolution failed, falling through to terminal");
+            HookOutput::continue_execution()
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]

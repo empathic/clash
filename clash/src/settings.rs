@@ -9,6 +9,8 @@ use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use crate::notifications::NotificationConfig;
+
 /// Which permission engine to use.
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -31,6 +33,10 @@ pub struct ClashSettings {
     /// Parsed policy document (not serialized — loaded at runtime from policy.yaml or compiled from Claude settings).
     #[serde(skip)]
     pub(crate) policy: Option<PolicyDocument>,
+
+    /// Notification and external service configuration, loaded from policy.yaml.
+    #[serde(skip)]
+    pub notifications: NotificationConfig,
 }
 
 impl ClashSettings {
@@ -51,16 +57,21 @@ impl ClashSettings {
         let path = Self::policy_file();
         if path.exists() {
             match std::fs::read_to_string(&path) {
-                Ok(contents) => match claude_settings::policy::parse::parse_yaml(&contents) {
-                    Ok(doc) => {
-                        info!(path = %path.display(), "Loaded policy document");
-                        Some(doc)
+                Ok(contents) => {
+                    // Parse notification config from the same YAML file.
+                    self.notifications = parse_notification_config(&contents);
+
+                    match claude_settings::policy::parse::parse_yaml(&contents) {
+                        Ok(doc) => {
+                            info!(path = %path.display(), "Loaded policy document");
+                            Some(doc)
+                        }
+                        Err(e) => {
+                            warn!(path = %path.display(), error = %e, "Failed to parse policy.yaml");
+                            None
+                        }
                     }
-                    Err(e) => {
-                        warn!(path = %path.display(), error = %e, "Failed to parse policy.yaml");
-                        None
-                    }
-                },
+                }
                 Err(e) => {
                     warn!(path = %path.display(), error = %e, "Failed to read policy.yaml");
                     None
@@ -158,5 +169,25 @@ impl ClashSettings {
 
     pub fn load_or_create() -> Result<Self> {
         Self::load().or_else(|_| Self::create())
+    }
+}
+
+/// Extract the `notifications:` section from a policy YAML string.
+///
+/// This is parsed independently of the policy rules so that the notification
+/// config doesn't need to live in the `claude_settings` library.
+fn parse_notification_config(yaml_str: &str) -> NotificationConfig {
+    #[derive(Deserialize)]
+    struct RawYaml {
+        #[serde(default)]
+        notifications: Option<NotificationConfig>,
+    }
+
+    match serde_yaml::from_str::<RawYaml>(yaml_str) {
+        Ok(raw) => raw.notifications.unwrap_or_default(),
+        Err(e) => {
+            warn!(error = %e, "Failed to parse notifications config from policy.yaml");
+            NotificationConfig::default()
+        }
     }
 }
