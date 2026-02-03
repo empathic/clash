@@ -49,6 +49,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use tracing::{Level, instrument};
 
 use crate::sandbox::{Cap, NetworkPolicy};
 
@@ -206,6 +207,7 @@ impl Pattern {
     }
 
     /// Returns true if this pattern matches the given value.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn matches(&self, value: &str) -> bool {
         match self {
             Pattern::Match(expr) => expr.matches(value),
@@ -215,6 +217,7 @@ impl Pattern {
 
     /// Returns true if this pattern matches the given entity,
     /// considering entity type hierarchy (e.g., `agent` matches `agent:claude`).
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn matches_entity(&self, entity: &str) -> bool {
         match self {
             Pattern::Match(expr) => expr.matches_entity(entity),
@@ -242,6 +245,7 @@ pub enum MatchExpr {
 impl MatchExpr {
     /// Returns true if this expression matches the given string value.
     /// For noun matching (file paths, command strings).
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn matches(&self, value: &str) -> bool {
         match self {
             MatchExpr::Any => true,
@@ -262,6 +266,7 @@ impl MatchExpr {
     /// - `agent` matches `agent`, `agent:claude`, `agent:codex`, etc.
     /// - `agent:claude` matches only `agent:claude`
     /// - `user` matches only `user`
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn matches_entity(&self, entity: &str) -> bool {
         match self {
             MatchExpr::Any => true,
@@ -300,6 +305,7 @@ impl VerbPattern {
     }
 
     /// Returns true if this pattern matches the given verb.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn matches(&self, verb: &Verb) -> bool {
         match self {
             VerbPattern::Any => true,
@@ -321,6 +327,7 @@ pub enum Verb {
 
 impl Verb {
     /// Map a Claude Code tool name to a verb.
+    #[instrument(level = Level::TRACE)]
     pub fn from_tool_name(tool: &str) -> Option<Self> {
         match tool {
             "Read" => Some(Verb::Read),
@@ -332,6 +339,7 @@ impl Verb {
     }
 
     /// Return the short tool name used in YAML rule syntax.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn rule_name(&self) -> &'static str {
         match self {
             Verb::Read => "read",
@@ -492,6 +500,7 @@ impl<'de> Deserialize<'de> for ProfileExpr {
 }
 
 /// Context for evaluating constraints against a specific request.
+#[derive(Debug)]
 pub struct EvalContext<'a> {
     /// The entity making the request.
     pub entity: &'a str,
@@ -609,6 +618,7 @@ pub enum DelegateType {
 
 impl Statement {
     /// Returns true if this statement matches the given request.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn matches(&self, entity: &str, verb: &Verb, noun: &str) -> bool {
         self.entity.matches_entity(entity) && self.verb.matches(verb) && self.noun.matches(noun)
     }

@@ -16,10 +16,12 @@ use seccompiler::{
     BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
     SeccompRule, TargetArch,
 };
+use tracing::{Level, instrument};
 
 use super::{SandboxError, SupportLevel, do_exec};
 
 /// Apply sandbox policy and exec the command.
+#[instrument(level = Level::TRACE, skip(policy))]
 pub fn exec_sandboxed(
     policy: &SandboxPolicy,
     cwd: &Path,
@@ -43,6 +45,7 @@ pub fn exec_sandboxed(
 }
 
 /// Check if the current kernel supports sandboxing.
+#[instrument(level = Level::TRACE)]
 pub fn check_support() -> SupportLevel {
     // Try to detect Landlock ABI support
     let abi_result = std::panic::catch_unwind(|| {
@@ -64,6 +67,7 @@ pub fn check_support() -> SupportLevel {
 }
 
 /// Prevent privilege escalation via setuid/setgid binaries.
+#[instrument(level = Level::TRACE)]
 fn set_no_new_privs() -> Result<(), SandboxError> {
     let result = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
     if result != 0 {
@@ -76,6 +80,7 @@ fn set_no_new_privs() -> Result<(), SandboxError> {
 }
 
 /// Map Cap flags to Landlock AccessFs bitflags.
+#[instrument(level = Level::TRACE)]
 fn cap_to_access_fs(caps: Cap) -> landlock::BitFlags<AccessFs> {
     let mut access = landlock::BitFlags::<AccessFs>::empty();
 
@@ -108,6 +113,7 @@ fn cap_to_access_fs(caps: Cap) -> landlock::BitFlags<AccessFs> {
 /// deny-all for the handled access types), we need to:
 /// 1. Determine which access types we want to restrict (handle)
 /// 2. For each rule path, compute effective caps and add Landlock rules
+#[instrument(level = Level::TRACE, skip(policy))]
 fn install_landlock_rules(policy: &SandboxPolicy, cwd: &str) -> Result<(), SandboxError> {
     let abi = ABI::V5;
     let all_access = AccessFs::from_all(abi);
@@ -169,6 +175,7 @@ fn install_landlock_rules(policy: &SandboxPolicy, cwd: &str) -> Result<(), Sandb
 /// Add a path-based rule to the Landlock ruleset.
 /// Silently ignores paths that don't exist (the sandbox shouldn't fail because
 /// an optional path like $TMPDIR doesn't exist).
+#[instrument(level = Level::TRACE)]
 fn add_path_rule(
     ruleset: landlock::RulesetCreated,
     path: &str,
@@ -190,6 +197,7 @@ fn add_path_rule(
 /// Blocks socket creation for non-AF_UNIX domains, and blocks most
 /// network-related syscalls outright. AF_UNIX is preserved for IPC
 /// (tools like cargo use socketpair internally).
+#[instrument(level = Level::TRACE)]
 fn install_seccomp_network_filter() -> Result<(), SandboxError> {
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 

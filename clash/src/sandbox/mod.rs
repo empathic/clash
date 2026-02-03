@@ -7,6 +7,7 @@
 use std::path::Path;
 
 use claude_settings::sandbox::SandboxPolicy;
+use tracing::{Level, instrument};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -39,6 +40,7 @@ pub enum SandboxError {
 ///
 /// This function does not return on success — it replaces the current
 /// process with the target command via `execvp`.
+#[instrument(level = Level::TRACE, skip(policy))]
 pub fn exec_sandboxed(
     policy: &SandboxPolicy,
     cwd: &Path,
@@ -67,6 +69,7 @@ pub fn exec_sandboxed(
 }
 
 /// Check whether sandboxing is supported on the current platform.
+#[instrument(level = Level::TRACE)]
 pub fn check_support() -> SupportLevel {
     #[cfg(target_os = "linux")]
     {
@@ -88,6 +91,7 @@ pub fn check_support() -> SupportLevel {
 
 /// Exec a command (without sandbox), replacing the current process.
 /// Used as the final step after sandbox setup.
+#[instrument(level = Level::TRACE)]
 pub(crate) fn do_exec(command: &[String]) -> Result<std::convert::Infallible, SandboxError> {
     use std::ffi::CString;
 

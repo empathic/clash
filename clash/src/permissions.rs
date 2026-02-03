@@ -6,7 +6,7 @@ use crate::hooks::{HookOutput, ToolInput, ToolUseHookInput};
 use crate::settings::ClashSettings;
 
 /// Check if a tool invocation should be allowed, denied, or require user confirmation.
-#[instrument(level=Level::DEBUG, ret)]
+#[instrument(level = Level::TRACE, ret)]
 pub fn check_permission(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
@@ -16,7 +16,7 @@ pub fn check_permission(
 }
 
 /// Check permission using the policy engine (entity, verb, noun triples).
-#[instrument(level=Level::DEBUG, ret)]
+#[instrument(level = Level::TRACE, ret, skip(settings))]
 fn check_permission_policy(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
@@ -80,9 +80,18 @@ fn check_permission_policy(
         "Policy decision"
     );
 
+    let additional_context = if decision.explanation.is_empty() {
+        None
+    } else {
+        Some(decision.explanation.join("\n"))
+    };
+
     Ok(match decision.effect {
         Effect::Allow => {
-            let mut output = HookOutput::allow(decision.reason.or(Some("policy: allowed".into())));
+            let mut output = HookOutput::allow_with_context(
+                decision.reason.or(Some("policy: allowed".into())),
+                additional_context,
+            );
             // If the policy decision includes a per-command sandbox, rewrite the
             // command to run through `clash sandbox exec`.
             if let Some(ref sandbox_policy) = decision.sandbox
@@ -93,14 +102,21 @@ fn check_permission_policy(
             }
             output
         }
-        Effect::Deny => {
-            HookOutput::deny(decision.reason.unwrap_or_else(|| "policy: denied".into()))
-        }
-        Effect::Ask => HookOutput::ask(decision.reason.or(Some("policy: ask".into()))),
+        Effect::Deny => HookOutput::deny_with_context(
+            decision.reason.unwrap_or_else(|| "policy: denied".into()),
+            additional_context,
+        ),
+        Effect::Ask => HookOutput::ask_with_context(
+            decision.reason.or(Some("policy: ask".into())),
+            additional_context,
+        ),
         Effect::Delegate => {
             // Delegation is not yet implemented; fall back to ask.
             warn!("Delegate effect not yet implemented; falling back to ask");
-            HookOutput::ask(Some("policy: delegation not yet implemented".into()))
+            HookOutput::ask_with_context(
+                Some("policy: delegation not yet implemented".into()),
+                additional_context,
+            )
         }
     })
 }
@@ -109,6 +125,7 @@ fn check_permission_policy(
 /// rewrite the command to run through `clash sandbox exec`.
 ///
 /// Returns the updated `tool_input` JSON if rewriting is applicable, or None.
+#[instrument(level = Level::TRACE, skip(input, sandbox_policy))]
 fn wrap_bash_with_sandbox(
     input: &ToolUseHookInput,
     sandbox_policy: &SandboxPolicy,
@@ -142,6 +159,7 @@ fn wrap_bash_with_sandbox(
 }
 
 /// Simple shell escaping: wrap in single quotes, escaping embedded single quotes.
+#[instrument(level = Level::TRACE)]
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -151,6 +169,7 @@ fn shell_escape(s: &str) -> String {
 /// For Bash: the command string.
 /// For Read/Write/Edit: the file path.
 /// For unknown tools: the JSON-serialized tool input.
+#[instrument(level = Level::TRACE, skip(input))]
 fn extract_noun(input: &ToolUseHookInput) -> String {
     match input.typed_tool_input() {
         ToolInput::Bash(bash) => bash.command,
@@ -228,36 +247,44 @@ mod tests {
     #[test]
     fn test_allow_npm_exact() -> Result<()> {
         let settings = settings_with_legacy_perms(vec!["Bash(npm run test)"], vec![], vec![]);
-        assert_eq!(
-            check_permission(&bash_input("npm run test"), &settings)?,
-            HookOutput::allow(Some("policy: allowed".into())),
+        let result = check_permission(&bash_input("npm run test"), &settings)?;
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
         );
         Ok(())
     }
     #[test]
     fn test_allow_npm_glob() -> Result<()> {
         let settings = settings_with_legacy_perms(vec!["Bash(npm run test *)"], vec![], vec![]);
-        assert_eq!(
-            check_permission(&bash_input("npm run test any"), &settings)?,
-            HookOutput::allow(Some("policy: allowed".into())),
+        let result = check_permission(&bash_input("npm run test any"), &settings)?;
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
         );
         Ok(())
     }
     #[test]
     fn test_allow_empty() -> Result<()> {
         let settings = settings_with_legacy_perms(vec![], vec![], vec![]);
-        assert_eq!(
-            check_permission(&bash_input("npm run test any"), &settings)?,
-            HookOutput::ask(Some("policy: ask".into())),
+        let result = check_permission(&bash_input("npm run test any"), &settings)?;
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Ask,
+            Some("policy: ask"),
         );
         Ok(())
     }
     #[test]
     fn test_deny_glob() -> Result<()> {
         let settings = settings_with_legacy_perms(vec![], vec!["Bash(*)"], vec![]);
-        assert_eq!(
-            check_permission(&bash_input("npm run test any"), &settings)?,
-            HookOutput::deny("policy: denied".into()),
+        let result = check_permission(&bash_input("npm run test any"), &settings)?;
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Deny,
+            Some("policy: denied"),
         );
         Ok(())
     }
@@ -268,7 +295,11 @@ mod tests {
     fn test_policy_allow_bash() -> Result<()> {
         let settings = settings_with_policy("rules:\n  - allow * bash git *\n");
         let result = check_permission(&bash_input("git status"), &settings)?;
-        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())),);
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
+        );
         Ok(())
     }
 
@@ -276,7 +307,11 @@ mod tests {
     fn test_policy_deny_bash() -> Result<()> {
         let settings = settings_with_policy("rules:\n  - deny * bash rm *\n");
         let result = check_permission(&bash_input("rm -rf /"), &settings)?;
-        assert_eq!(result, HookOutput::deny("policy: denied".into()),);
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Deny,
+            Some("policy: denied"),
+        );
         Ok(())
     }
 
@@ -285,7 +320,11 @@ mod tests {
         let settings = settings_with_policy("rules:\n  - allow user bash *\n");
         // entity is "agent" by default, so this allow for "user" won't match
         let result = check_permission(&bash_input("ls"), &settings)?;
-        assert_eq!(result, HookOutput::ask(Some("policy: ask".into())),);
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Ask,
+            Some("policy: ask"),
+        );
         Ok(())
     }
 
@@ -293,7 +332,11 @@ mod tests {
     fn test_policy_read_file() -> Result<()> {
         let settings = settings_with_policy("rules:\n  - allow * read *.rs\n");
         let result = check_permission(&read_input("src/main.rs"), &settings)?;
-        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())),);
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
+        );
         Ok(())
     }
 
@@ -307,7 +350,11 @@ rules:
 ",
         );
         let result = check_permission(&read_input(".env"), &settings)?;
-        assert_eq!(result, HookOutput::deny("policy: denied".into()),);
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Deny,
+            Some("policy: denied"),
+        );
         Ok(())
     }
 
@@ -320,7 +367,11 @@ rules:
             notifications: Default::default(),
         };
         let result = check_permission(&bash_input("echo hello"), &settings)?;
-        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())),);
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
+        );
         Ok(())
     }
 
@@ -328,9 +379,11 @@ rules:
     fn test_auto_mode_legacy_compiled_to_policy() -> Result<()> {
         // Legacy permissions compiled into a policy document
         let settings = settings_with_legacy_perms(vec!["Bash(npm run test)"], vec![], vec![]);
-        assert_eq!(
-            check_permission(&bash_input("npm run test"), &settings)?,
-            HookOutput::allow(Some("policy: allowed".into())),
+        let result = check_permission(&bash_input("npm run test"), &settings)?;
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
         );
         Ok(())
     }
@@ -368,11 +421,19 @@ rules:
         );
         // Command without pipe → allowed
         let result = check_permission(&bash_input("ls -la"), &settings)?;
-        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())));
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
+        );
 
         // Command with pipe → constraint fails → falls through to default (ask)
         let result = check_permission(&bash_input("cat foo | grep bar"), &settings)?;
-        assert_eq!(result, HookOutput::ask(Some("policy: ask".into())));
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Ask,
+            Some("policy: ask"),
+        );
         Ok(())
     }
 
@@ -391,11 +452,19 @@ rules:
         );
         // git push without --force → allowed
         let result = check_permission(&bash_input("git push origin main"), &settings)?;
-        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())));
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
+        );
 
         // git push --force → constraint fails
         let result = check_permission(&bash_input("git push --force origin main"), &settings)?;
-        assert_eq!(result, HookOutput::ask(Some("policy: ask".into())));
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Ask,
+            Some("policy: ask"),
+        );
         Ok(())
     }
 
@@ -415,14 +484,22 @@ rules:
             &read_input_with_cwd("/home/user/project/src/main.rs", "/home/user/project"),
             &settings,
         )?;
-        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())));
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
+        );
 
         // File outside cwd → constraint fails
         let result = check_permission(
             &read_input_with_cwd("/etc/passwd", "/home/user/project"),
             &settings,
         )?;
-        assert_eq!(result, HookOutput::ask(Some("policy: ask".into())));
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Ask,
+            Some("policy: ask"),
+        );
         Ok(())
     }
 
@@ -442,6 +519,33 @@ rules:
             Some(crate::hooks::HookSpecificOutput::PreToolUse(pre)) => pre.updated_input.is_some(),
             _ => false,
         }
+    }
+
+    /// Get the additional context from a HookOutput (for explanation testing).
+    fn get_additional_context(output: &HookOutput) -> Option<String> {
+        match &output.hook_specific_output {
+            Some(crate::hooks::HookSpecificOutput::PreToolUse(pre)) => {
+                pre.additional_context.clone()
+            }
+            _ => None,
+        }
+    }
+
+    /// Assert that a HookOutput has the expected decision and reason, ignoring additional_context.
+    fn assert_decision(
+        output: &HookOutput,
+        expected_decision: claude_settings::PermissionRule,
+        expected_reason: Option<&str>,
+    ) {
+        let decision = get_decision(output);
+        assert_eq!(decision, Some(expected_decision), "unexpected decision");
+        let reason = match &output.hook_specific_output {
+            Some(crate::hooks::HookSpecificOutput::PreToolUse(pre)) => {
+                pre.permission_decision_reason.as_deref()
+            }
+            _ => None,
+        };
+        assert_eq!(reason, expected_reason, "unexpected reason");
     }
 
     #[test]
@@ -486,26 +590,111 @@ rules:
             &bash_input_with_cwd("git push --force origin main", "/home/user/project"),
             &settings,
         )?;
-        assert_eq!(result, HookOutput::ask(Some("policy: ask".into())));
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Ask,
+            Some("policy: ask"),
+        );
 
         // rm -rf / → unconditional deny
         let result = check_permission(&bash_input("rm -rf /"), &settings)?;
-        assert_eq!(result, HookOutput::deny("policy: denied".into()));
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Deny,
+            Some("policy: denied"),
+        );
 
         // read file under cwd → allowed (fs acts as permission guard, no sandbox)
         let result = check_permission(
             &read_input_with_cwd("/home/user/project/Cargo.toml", "/home/user/project"),
             &settings,
         )?;
-        assert_eq!(result, HookOutput::allow(Some("policy: allowed".into())));
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
+        );
 
         // read file outside cwd → default
         let result = check_permission(
             &read_input_with_cwd("/etc/passwd", "/home/user/project"),
             &settings,
         )?;
-        assert_eq!(result, HookOutput::ask(Some("policy: ask".into())));
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Ask,
+            Some("policy: ask"),
+        );
 
+        Ok(())
+    }
+
+    // --- Explanation content tests ---
+
+    #[test]
+    fn test_explanation_contains_matched_rule() -> Result<()> {
+        let settings = settings_with_policy("rules:\n  - allow * bash git *\n");
+        let result = check_permission(&bash_input("git status"), &settings)?;
+        let ctx = get_additional_context(&result).expect("should have additional_context");
+        assert!(
+            ctx.contains("matched:"),
+            "explanation should contain 'matched:' but got: {ctx}"
+        );
+        assert!(
+            ctx.contains("allow"),
+            "explanation should mention allow but got: {ctx}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_explanation_deny_overrides_allow_detail() -> Result<()> {
+        let settings = settings_with_policy(
+            "\
+rules:
+  - allow * read *
+  - deny * read .env
+",
+        );
+        let result = check_permission(&read_input(".env"), &settings)?;
+        let ctx = get_additional_context(&result).expect("should have additional_context");
+        assert!(
+            ctx.contains("deny"),
+            "explanation should mention deny but got: {ctx}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_explanation_constraint_failure() -> Result<()> {
+        let settings = settings_with_policy(
+            "\
+constraints:
+  safe-io:
+    pipe: false
+rules:
+  - \"allow * bash * : safe-io\"
+",
+        );
+        // Command with pipe → constraint fails
+        let result = check_permission(&bash_input("cat foo | grep bar"), &settings)?;
+        let ctx = get_additional_context(&result).expect("should have additional_context");
+        assert!(
+            ctx.contains("pipe"),
+            "explanation should mention pipe constraint but got: {ctx}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_explanation_no_rules_matched() -> Result<()> {
+        let settings = settings_with_policy("rules:\n  - allow user bash *\n");
+        let result = check_permission(&bash_input("ls"), &settings)?;
+        let ctx = get_additional_context(&result).expect("should have additional_context");
+        assert!(
+            ctx.contains("no rules matched"),
+            "explanation should say 'no rules matched' but got: {ctx}"
+        );
         Ok(())
     }
 }

@@ -37,6 +37,8 @@ use std::str::FromStr;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use tracing::{Level, instrument};
+
 use crate::error::{Result, SettingsError};
 use crate::types::Permissions;
 
@@ -82,6 +84,7 @@ pub enum PermissionPattern {
 
 impl Permission {
     /// Creates a new permission for a tool with no pattern (matches all uses).
+    #[instrument(level = Level::TRACE, skip(name))]
     pub fn for_tool(name: impl Into<String>) -> Self {
         Self {
             tool: name.into(),
@@ -90,6 +93,7 @@ impl Permission {
     }
 
     /// Creates a new permission with an exact pattern match.
+    #[instrument(level = Level::TRACE, skip(tool, pattern))]
     pub fn exact(tool: impl Into<String>, pattern: impl Into<String>) -> Self {
         Self {
             tool: tool.into(),
@@ -98,6 +102,7 @@ impl Permission {
     }
 
     /// Creates a new permission with a prefix wildcard match.
+    #[instrument(level = Level::TRACE, skip(tool, prefix))]
     pub fn prefix(tool: impl Into<String>, prefix: impl Into<String>) -> Self {
         Self {
             tool: tool.into(),
@@ -106,6 +111,7 @@ impl Permission {
     }
 
     /// Creates a new permission with a glob pattern match.
+    #[instrument(level = Level::TRACE, skip(tool, glob))]
     pub fn glob(tool: impl Into<String>, glob: impl Into<String>) -> Self {
         Self {
             tool: tool.into(),
@@ -120,6 +126,7 @@ impl Permission {
     /// - `ToolName(pattern)` - exact pattern match
     /// - `ToolName(prefix:*)` - prefix wildcard match
     /// - `ToolName(glob:**/*.rs)` - glob pattern match
+    #[instrument(level = Level::TRACE)]
     pub fn parse(s: &str) -> Result<Self> {
         let s = s.trim();
 
@@ -168,16 +175,19 @@ impl Permission {
     }
 
     /// Returns the tool name.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn tool(&self) -> &str {
         &self.tool
     }
 
     /// Returns the pattern, if any.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn pattern(&self) -> Option<&PermissionPattern> {
         self.pattern.as_ref()
     }
 
     /// Returns true if this permission matches the given tool and argument.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn matches(&self, tool: &str, arg: Option<&str>) -> bool {
         if self.tool != tool {
             return false;
@@ -194,6 +204,7 @@ impl Permission {
     }
 
     /// Converts this permission back to its string representation.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn to_pattern_string(&self) -> String {
         match &self.pattern {
             None => self.tool.clone(),
@@ -206,6 +217,7 @@ impl Permission {
 
 impl PermissionPattern {
     /// Returns true if this pattern matches the given argument.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn matches(&self, arg: &str) -> bool {
         match self {
             PermissionPattern::Exact(pattern) => arg == pattern,
@@ -279,15 +291,18 @@ pub struct PermissionSet {
 
 impl PermissionSet {
     /// Creates a new empty permission set.
+    #[instrument(level = Level::TRACE)]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn is_empty(&self) -> bool {
         self.allow.is_empty() && self.deny.is_empty() && self.ask.is_empty()
     }
 
     /// Creates a permission set from a Permissions struct.
+    #[instrument(level = Level::TRACE)]
     pub fn from_permissions(perms: &Permissions) -> Result<Self> {
         let mut set = Self::new();
 
@@ -305,6 +320,7 @@ impl PermissionSet {
     }
 
     /// Converts this permission set to a Permissions struct.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn to_permissions(&self) -> Permissions {
         Permissions {
             allow: self.allow.iter().map(|p| p.to_pattern_string()).collect(),
@@ -314,6 +330,7 @@ impl PermissionSet {
     }
 
     /// Adds a permission to the allow list.
+    #[instrument(level = Level::TRACE, skip(self, perm))]
     pub fn allow(mut self, perm: impl Into<Permission>) -> Self {
         let perm = perm.into();
         if !self.allow.contains(&perm) {
@@ -323,6 +340,7 @@ impl PermissionSet {
     }
 
     /// Adds a permission to the ask list.
+    #[instrument(level = Level::TRACE, skip(self, perm))]
     pub fn ask(mut self, perm: impl Into<Permission>) -> Self {
         let perm = perm.into();
         if !self.ask.contains(&perm) {
@@ -332,6 +350,7 @@ impl PermissionSet {
     }
 
     /// Adds a permission to the deny list.
+    #[instrument(level = Level::TRACE, skip(self, perm))]
     pub fn deny(mut self, perm: impl Into<Permission>) -> Self {
         let perm = perm.into();
         if !self.deny.contains(&perm) {
@@ -341,6 +360,7 @@ impl PermissionSet {
     }
 
     /// Adds a permission to the allow list in place.
+    #[instrument(level = Level::TRACE, skip(self, perm))]
     pub fn insert_allow(&mut self, perm: impl Into<Permission>) -> &mut Self {
         let perm = perm.into();
         if !self.allow.contains(&perm) {
@@ -350,6 +370,7 @@ impl PermissionSet {
     }
 
     /// Adds a permission to the ask list in place.
+    #[instrument(level = Level::TRACE, skip(self, perm))]
     pub fn insert_ask(&mut self, perm: impl Into<Permission>) -> &mut Self {
         let perm = perm.into();
         if !self.ask.contains(&perm) {
@@ -359,6 +380,7 @@ impl PermissionSet {
     }
 
     /// Adds a permission to the deny list in place.
+    #[instrument(level = Level::TRACE, skip(self, perm))]
     pub fn insert_deny(&mut self, perm: impl Into<Permission>) -> &mut Self {
         let perm = perm.into();
         if !self.deny.contains(&perm) {
@@ -368,24 +390,28 @@ impl PermissionSet {
     }
 
     /// Removes a permission from the allow list.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn remove_allow(&mut self, perm: &Permission) -> &mut Self {
         self.allow.retain(|p| p != perm);
         self
     }
 
     /// Removes a permission from the ask list.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn remove_ask(&mut self, perm: &Permission) -> &mut Self {
         self.ask.retain(|p| p != perm);
         self
     }
 
     /// Removes a permission from the deny list.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn remove_deny(&mut self, perm: &Permission) -> &mut Self {
         self.deny.retain(|p| p != perm);
         self
     }
 
     /// Removes a permission from all lists.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn remove(&mut self, perm: &Permission) -> &mut Self {
         self.remove_allow(perm).remove_ask(perm).remove_deny(perm)
     }
@@ -393,6 +419,7 @@ impl PermissionSet {
     /// Checks the permission rule for a given tool and argument.
     ///
     /// Returns the first matching rule in order: Deny > Ask > Allow > Unset
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn check(&self, tool: &str, arg: Option<&str>) -> PermissionRule {
         // Deny takes highest precedence
         for perm in &self.deny {
@@ -419,36 +446,43 @@ impl PermissionSet {
     }
 
     /// Returns true if the given tool/arg is explicitly allowed.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn is_allowed(&self, tool: &str, arg: Option<&str>) -> bool {
         self.check(tool, arg) == PermissionRule::Allow
     }
 
     /// Returns true if the given tool/arg is explicitly denied.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn is_denied(&self, tool: &str, arg: Option<&str>) -> bool {
         self.check(tool, arg) == PermissionRule::Deny
     }
 
     /// Returns true if the given tool/arg requires asking.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn requires_ask(&self, tool: &str, arg: Option<&str>) -> bool {
         self.check(tool, arg) == PermissionRule::Ask
     }
 
     /// Returns all allow permissions.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn allowed(&self) -> &[Permission] {
         &self.allow
     }
 
     /// Returns all ask permissions.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn asking(&self) -> &[Permission] {
         &self.ask
     }
 
     /// Returns all deny permissions.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn denied(&self) -> &[Permission] {
         &self.deny
     }
 
     /// Returns all permissions for a specific tool.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn for_tool(&self, tool: &str) -> ToolPermissions {
         ToolPermissions {
             tool: tool.to_string(),
@@ -474,6 +508,7 @@ impl PermissionSet {
     }
 
     /// Clears all permissions.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear(&mut self) {
         self.allow.clear();
         self.ask.clear();
@@ -483,6 +518,7 @@ impl PermissionSet {
     /// Merges another permission set into this one.
     ///
     /// The `other` set takes precedence (its rules are added first in each list).
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn merge(&self, other: &Self) -> Self {
         let mut this = self.clone();
         // Add other's permissions, avoiding duplicates
@@ -520,6 +556,7 @@ pub struct ToolPermissions {
 
 impl ToolPermissions {
     /// Checks the permission rule for a given argument.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn check(&self, arg: Option<&str>) -> PermissionRule {
         for perm in &self.deny {
             if perm.matches(&self.tool, arg) {
@@ -541,6 +578,7 @@ impl ToolPermissions {
 }
 
 /// Simple glob matching for file paths (public API for use by policy module).
+#[instrument(level = Level::TRACE)]
 pub fn glob_matches_public(pattern: &str, path: &str) -> bool {
     glob_matches(pattern, path)
 }

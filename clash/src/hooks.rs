@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 
 use claude_settings::PermissionRule;
 use serde::{Deserialize, Serialize};
+use tracing::{Level, instrument};
 
 /// The complete hook input received from Claude Code via stdin
 #[derive(Debug, Clone, Deserialize)]
@@ -11,6 +12,8 @@ pub enum HookInput {
     ToolUse(ToolUseHookInput),
     /// Notification events (permission_prompt, idle_prompt, etc.)
     Notification(NotificationHookInput),
+    /// SessionStart events
+    SessionStart(SessionStartHookInput),
 }
 
 /// Hook input for tool-related events (PreToolUse, PostToolUse, PermissionRequest)
@@ -59,57 +62,99 @@ pub enum NotificationType {
     Unknown,
 }
 
+/// Hook input for SessionStart events
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SessionStartHookInput {
+    pub session_id: String,
+    pub transcript_path: String,
+    pub cwd: String,
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    pub hook_event_name: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+impl SessionStartHookInput {
+    /// Parse from any reader (for testability)
+    #[instrument(level = Level::TRACE, skip(reader))]
+    pub fn from_reader(reader: impl Read) -> anyhow::Result<Self> {
+        Ok(serde_json::from_reader(reader)?)
+    }
+}
+
 impl HookInput {
     /// Parse from any reader (for testability)
+    #[instrument(level = Level::TRACE, skip(reader))]
     pub fn from_reader(reader: impl Read) -> anyhow::Result<Self> {
         Ok(serde_json::from_reader(reader)?)
     }
 
     /// Parse from stdin (convenience wrapper for production)
+    #[instrument(level = Level::TRACE)]
     pub fn from_stdin() -> anyhow::Result<Self> {
         Self::from_reader(std::io::stdin().lock())
     }
 
     /// Get the hook event name
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn hook_event_name(&self) -> &str {
         match self {
             HookInput::ToolUse(input) => &input.hook_event_name,
             HookInput::Notification(input) => &input.hook_event_name,
+            HookInput::SessionStart(input) => &input.hook_event_name,
         }
     }
 
     /// Get the session ID
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn session_id(&self) -> &str {
         match self {
             HookInput::ToolUse(input) => &input.session_id,
             HookInput::Notification(input) => &input.session_id,
+            HookInput::SessionStart(input) => &input.session_id,
         }
     }
 
     /// Check if this is a tool use event
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn as_tool_use(&self) -> Option<&ToolUseHookInput> {
         match self {
             HookInput::ToolUse(input) => Some(input),
-            HookInput::Notification(_) => None,
+            _ => None,
         }
     }
 
     /// Check if this is a notification event
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn as_notification(&self) -> Option<&NotificationHookInput> {
         match self {
-            HookInput::ToolUse(_) => None,
             HookInput::Notification(input) => Some(input),
+            _ => None,
+        }
+    }
+
+    /// Check if this is a session start event
+    #[instrument(level = Level::TRACE, skip(self))]
+    pub fn as_session_start(&self) -> Option<&SessionStartHookInput> {
+        match self {
+            HookInput::SessionStart(input) => Some(input),
+            _ => None,
         }
     }
 }
 
 impl ToolUseHookInput {
     /// Parse from any reader (for testability)
+    #[instrument(level = Level::TRACE, skip(reader))]
     pub fn from_reader(reader: impl Read) -> anyhow::Result<Self> {
         Ok(serde_json::from_reader(reader)?)
     }
 
     /// Get typed tool input based on tool_name
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn typed_tool_input(&self) -> ToolInput {
         match self.tool_name.as_str() {
             "Bash" => serde_json::from_value(self.tool_input.clone())
@@ -131,16 +176,19 @@ impl ToolUseHookInput {
 
 impl NotificationHookInput {
     /// Parse from any reader (for testability)
+    #[instrument(level = Level::TRACE, skip(reader))]
     pub fn from_reader(reader: impl Read) -> anyhow::Result<Self> {
         Ok(serde_json::from_reader(reader)?)
     }
 
     /// Check if this is a permission prompt notification
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn is_permission_prompt(&self) -> bool {
         self.notification_type == NotificationType::PermissionPrompt
     }
 
     /// Check if this is an idle prompt notification
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn is_idle_prompt(&self) -> bool {
         self.notification_type == NotificationType::IdlePrompt
     }
@@ -235,12 +283,22 @@ pub struct PermissionRequestOutput {
     pub decision: PermissionDecision,
 }
 
+/// Hook-specific output for SessionStart
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStartOutput {
+    pub hook_event_name: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+}
+
 /// Hook-specific output variants
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum HookSpecificOutput {
     PreToolUse(PreToolUseOutput),
     PermissionRequest(PermissionRequestOutput),
+    SessionStart(SessionStartOutput),
 }
 
 /// The complete hook output sent to Claude Code via stdout
@@ -255,6 +313,7 @@ pub struct HookOutput {
 
 impl HookOutput {
     /// Create an "allow" response for PreToolUse - bypasses permission system
+    #[instrument(level = Level::TRACE)]
     pub fn allow(reason: Option<String>) -> Self {
         Self {
             should_continue: true,
@@ -268,7 +327,23 @@ impl HookOutput {
         }
     }
 
+    /// Create an "allow" response with additional context explaining the decision.
+    #[instrument(level = Level::TRACE)]
+    pub fn allow_with_context(reason: Option<String>, additional_context: Option<String>) -> Self {
+        Self {
+            should_continue: true,
+            hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
+                hook_event_name: "PreToolUse",
+                permission_decision: Some(PermissionRule::Allow),
+                permission_decision_reason: reason,
+                updated_input: None,
+                additional_context,
+            })),
+        }
+    }
+
     /// Create a "deny" response for PreToolUse - prevents tool execution
+    #[instrument(level = Level::TRACE)]
     pub fn deny(reason: String) -> Self {
         Self {
             should_continue: true,
@@ -282,7 +357,23 @@ impl HookOutput {
         }
     }
 
+    /// Create a "deny" response with additional context explaining the decision.
+    #[instrument(level = Level::TRACE)]
+    pub fn deny_with_context(reason: String, additional_context: Option<String>) -> Self {
+        Self {
+            should_continue: true,
+            hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
+                hook_event_name: "PreToolUse",
+                permission_decision: Some(PermissionRule::Deny),
+                permission_decision_reason: Some(reason),
+                updated_input: None,
+                additional_context,
+            })),
+        }
+    }
+
     /// Create an "ask" response for PreToolUse - prompts user for confirmation
+    #[instrument(level = Level::TRACE)]
     pub fn ask(reason: Option<String>) -> Self {
         Self {
             should_continue: true,
@@ -296,7 +387,23 @@ impl HookOutput {
         }
     }
 
+    /// Create an "ask" response with additional context explaining the decision.
+    #[instrument(level = Level::TRACE)]
+    pub fn ask_with_context(reason: Option<String>, additional_context: Option<String>) -> Self {
+        Self {
+            should_continue: true,
+            hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
+                hook_event_name: "PreToolUse",
+                permission_decision: Some(PermissionRule::Ask),
+                permission_decision_reason: reason,
+                updated_input: None,
+                additional_context,
+            })),
+        }
+    }
+
     /// Approve a permission request on behalf of the user
+    #[instrument(level = Level::TRACE)]
     pub fn approve_permission(updated_input: Option<serde_json::Value>) -> Self {
         Self {
             should_continue: true,
@@ -315,6 +422,7 @@ impl HookOutput {
     }
 
     /// Deny a permission request on behalf of the user
+    #[instrument(level = Level::TRACE)]
     pub fn deny_permission(message: String, interrupt: bool) -> Self {
         Self {
             should_continue: true,
@@ -334,13 +442,27 @@ impl HookOutput {
 
     /// Set the updated_input field on a PreToolUse response.
     /// This rewrites the tool input before Claude Code executes it.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_updated_input(&mut self, updated_input: serde_json::Value) {
         if let Some(HookSpecificOutput::PreToolUse(ref mut pre)) = self.hook_specific_output {
             pre.updated_input = Some(updated_input);
         }
     }
 
+    /// Create a SessionStart response with optional context about the session setup.
+    #[instrument(level = Level::TRACE)]
+    pub fn session_start(additional_context: Option<String>) -> Self {
+        Self {
+            should_continue: true,
+            hook_specific_output: Some(HookSpecificOutput::SessionStart(SessionStartOutput {
+                hook_event_name: "SessionStart",
+                additional_context,
+            })),
+        }
+    }
+
     /// Continue execution without making a decision (for informational hooks)
+    #[instrument(level = Level::TRACE)]
     pub fn continue_execution() -> Self {
         Self {
             should_continue: true,
@@ -349,6 +471,7 @@ impl HookOutput {
     }
 
     /// Write response to any writer (for testability)
+    #[instrument(level = Level::TRACE, skip(self, writer))]
     pub fn write_to(&self, mut writer: impl Write) -> anyhow::Result<()> {
         serde_json::to_writer(&mut writer, self)?;
         writeln!(writer)?;
@@ -356,6 +479,7 @@ impl HookOutput {
     }
 
     /// Write response to stdout (convenience wrapper for production)
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn write_stdout(&self) -> anyhow::Result<()> {
         self.write_to(std::io::stdout().lock())
     }

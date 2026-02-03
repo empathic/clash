@@ -6,10 +6,12 @@
 use std::path::Path;
 
 use claude_settings::sandbox::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy};
+use tracing::{Level, instrument};
 
 use super::{SandboxError, SupportLevel};
 
 /// Apply sandbox policy and exec the command via sandbox-exec.
+#[instrument(level = Level::TRACE, skip(policy))]
 pub fn exec_sandboxed(
     policy: &SandboxPolicy,
     cwd: &Path,
@@ -31,6 +33,7 @@ pub fn exec_sandboxed(
 }
 
 /// Check if sandbox-exec is available.
+#[instrument(level = Level::TRACE)]
 pub fn check_support() -> SupportLevel {
     if Path::new("/usr/bin/sandbox-exec").exists() {
         SupportLevel::Full
@@ -42,6 +45,7 @@ pub fn check_support() -> SupportLevel {
 }
 
 /// Compile a SandboxPolicy into a Seatbelt SBPL profile string.
+#[instrument(level = Level::TRACE)]
 fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     let mut p = String::from("(version 1)\n(deny default)\n");
 
@@ -85,6 +89,7 @@ fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
 }
 
 /// Build an SBPL path filter from a path and match type.
+#[instrument(level = Level::TRACE)]
 fn sbpl_filter(path: &str, path_match: PathMatch) -> String {
     match path_match {
         PathMatch::Subpath => format!("(subpath \"{}\")", path),
@@ -94,6 +99,7 @@ fn sbpl_filter(path: &str, path_match: PathMatch) -> String {
 }
 
 /// Emit SBPL allow statements for the given caps on a path.
+#[instrument(level = Level::TRACE)]
 fn emit_caps_for_path(profile: &mut String, path: &str, caps: Cap, path_match: PathMatch) {
     let filter = sbpl_filter(path, path_match);
 
@@ -115,6 +121,7 @@ fn emit_caps_for_path(profile: &mut String, path: &str, caps: Cap, path_match: P
 }
 
 /// Emit SBPL deny statements for the given caps on a path.
+#[instrument(level = Level::TRACE)]
 fn emit_deny_for_path(profile: &mut String, path: &str, caps: Cap, path_match: PathMatch) {
     let filter = sbpl_filter(path, path_match);
 

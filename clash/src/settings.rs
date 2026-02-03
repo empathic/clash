@@ -7,7 +7,7 @@ use claude_settings::policy::parse::desugar_legacy;
 use claude_settings::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::{Level, info, instrument, warn};
 
 use crate::notifications::NotificationConfig;
 
@@ -40,19 +40,23 @@ pub struct ClashSettings {
 }
 
 impl ClashSettings {
+    #[instrument(level = Level::TRACE)]
     pub fn settings_dir() -> PathBuf {
         home_dir()
             .expect("user must have $HOME set in environment")
             .join(".clash")
     }
+    #[instrument(level = Level::TRACE)]
     pub fn settings_file() -> PathBuf {
         Self::settings_dir().join("settings.json")
     }
+    #[instrument(level = Level::TRACE)]
     pub fn policy_file() -> PathBuf {
         Self::settings_dir().join("policy.yaml")
     }
 
     /// Try to load and compile the policy document from ~/.clash/policy.yaml.
+    #[instrument(level = Level::TRACE, skip(self))]
     fn load_policy_file(&mut self) -> Option<PolicyDocument> {
         let path = Self::policy_file();
         if path.exists() {
@@ -86,6 +90,7 @@ impl ClashSettings {
     ///
     /// Reads Claude settings via ClaudeSettings::new().effective(), converts the
     /// PermissionSet to LegacyPermissions, and desugars into policy Statements.
+    #[instrument(level = Level::TRACE)]
     fn compile_claude_to_policy() -> Option<PolicyDocument> {
         let effective = match ClaudeSettings::new().effective() {
             Ok(s) => s,
@@ -122,6 +127,7 @@ impl ClashSettings {
     /// - Policy: load only from policy.yaml
     /// - Legacy: compile Claude settings into a PolicyDocument
     /// - Auto: use policy.yaml if it exists, else compile Claude settings
+    #[instrument(level = Level::TRACE, skip(self))]
     fn resolve_policy(&mut self) {
         self.policy = match self.engine_mode {
             EngineMode::Policy => self.load_policy_file(),
@@ -133,6 +139,7 @@ impl ClashSettings {
     }
 
     /// Compile the loaded policy document into a CompiledPolicy for evaluation.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn compiled_policy(&self) -> Option<CompiledPolicy> {
         self.policy
             .as_ref()
@@ -145,6 +152,7 @@ impl ClashSettings {
             })
     }
 
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn save(&self) -> Result<()> {
         std::fs::create_dir_all(Self::settings_dir())?;
         Ok(std::fs::write(
@@ -153,6 +161,7 @@ impl ClashSettings {
         )?)
     }
 
+    #[instrument(level = Level::TRACE)]
     pub fn load() -> Result<Self> {
         let mut loaded: Self =
             serde_json::from_str(&std::fs::read_to_string(Self::settings_file())?)?;
@@ -160,6 +169,7 @@ impl ClashSettings {
         Ok(loaded)
     }
 
+    #[instrument(level = Level::TRACE)]
     pub fn create() -> Result<Self> {
         let mut this = Self::default();
         this.resolve_policy();
@@ -167,6 +177,7 @@ impl ClashSettings {
         Ok(this)
     }
 
+    #[instrument(level = Level::TRACE)]
     pub fn load_or_create() -> Result<Self> {
         Self::load().or_else(|_| Self::create())
     }

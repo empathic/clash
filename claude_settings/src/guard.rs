@@ -29,6 +29,8 @@
 
 use std::ops::{Deref, DerefMut};
 
+use tracing::{Level, instrument};
+
 use crate::error::Result;
 use crate::permission::PermissionSet;
 use crate::types::{Hook, HookConfig, HookMatcher, Hooks, Sandbox, Settings, SettingsLevel};
@@ -54,6 +56,7 @@ impl<'a> SettingsGuard<'a> {
     ///
     /// Saves the current settings (if any) and initializes with a copy
     /// for modification.
+    #[instrument(level = Level::TRACE, skip(manager))]
     pub(crate) fn new(manager: &'a ClaudeSettings, level: SettingsLevel) -> Result<Self> {
         let original = manager.read(level)?;
         let current = original.clone().unwrap_or_default();
@@ -68,11 +71,13 @@ impl<'a> SettingsGuard<'a> {
     }
 
     /// Returns the settings level this guard operates on.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn level(&self) -> SettingsLevel {
         self.level
     }
 
     /// Returns the original settings (before any modifications).
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn original(&self) -> Option<&Settings> {
         self.original.as_ref()
     }
@@ -82,6 +87,7 @@ impl<'a> SettingsGuard<'a> {
     /// This writes the current state to the settings file but does NOT
     /// prevent restoration on drop. Call [`commit`](Self::commit) to
     /// persist changes permanently.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn apply(&self) -> Result<()> {
         self.manager.write(self.level, &self.current)
     }
@@ -90,6 +96,7 @@ impl<'a> SettingsGuard<'a> {
     ///
     /// After calling this, the guard will NOT restore the original settings
     /// when dropped.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn commit(mut self) -> Result<()> {
         self.apply()?;
         self.committed = true;
@@ -99,6 +106,7 @@ impl<'a> SettingsGuard<'a> {
     /// Discards changes and restores original settings immediately.
     ///
     /// This is equivalent to dropping the guard, but explicit.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn restore(self) -> Result<()> {
         // Drop will handle restoration
         drop(self);
@@ -108,6 +116,7 @@ impl<'a> SettingsGuard<'a> {
     /// Resets the current state to the original settings.
     ///
     /// This undoes all in-memory changes but does NOT write to disk.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn reset(&mut self) {
         self.current = self.original.clone().unwrap_or_default();
     }
@@ -117,66 +126,77 @@ impl<'a> SettingsGuard<'a> {
     // =========================================================================
 
     /// Sets the model.
+    #[instrument(level = Level::TRACE, skip(self, model))]
     pub fn set_model(&mut self, model: impl Into<String>) -> &mut Self {
         self.current.model = Some(model.into());
         self
     }
 
     /// Clears the model.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear_model(&mut self) -> &mut Self {
         self.current.model = None;
         self
     }
 
     /// Sets the language.
+    #[instrument(level = Level::TRACE, skip(self, language))]
     pub fn set_language(&mut self, language: impl Into<String>) -> &mut Self {
         self.current.language = Some(language.into());
         self
     }
 
     /// Sets the cleanup period in days.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_cleanup_period(&mut self, days: u32) -> &mut Self {
         self.current.cleanup_period_days = Some(days);
         self
     }
 
     /// Adds a permission to the allow list.
+    #[instrument(level = Level::TRACE, skip(self, pattern))]
     pub fn add_allow(&mut self, pattern: impl Into<Permission>) -> &mut Self {
         self.current.permissions.insert_allow(pattern);
         self
     }
 
     /// Adds a permission to the ask list.
+    #[instrument(level = Level::TRACE, skip(self, pattern))]
     pub fn add_ask(&mut self, pattern: impl Into<Permission>) -> &mut Self {
         self.current.permissions.insert_ask(pattern);
         self
     }
 
     /// Adds a permission to the deny list.
+    #[instrument(level = Level::TRACE, skip(self, pattern))]
     pub fn add_deny(&mut self, pattern: impl Into<Permission>) -> &mut Self {
         self.current.permissions.insert_deny(pattern);
         self
     }
 
     /// Removes a permission from all lists.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn remove_permission(&mut self, pattern: &str) -> &mut Self {
         self.current.permissions.remove(&pattern.into());
         self
     }
 
     /// Clears all permissions.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear_permissions(&mut self) -> &mut Self {
         self.current.permissions.clear();
         self
     }
 
     /// Sets permissions from a PermissionSet.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_permissions(&mut self, perms: PermissionSet) -> &mut Self {
         self.current.permissions = perms;
         self
     }
 
     /// Sets an environment variable.
+    #[instrument(level = Level::TRACE, skip(self, key, value))]
     pub fn set_env(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
         let env = self.current.env.get_or_insert_with(Default::default);
         env.insert(key.into(), value.into());
@@ -184,6 +204,7 @@ impl<'a> SettingsGuard<'a> {
     }
 
     /// Removes an environment variable.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn remove_env(&mut self, key: &str) -> &mut Self {
         if let Some(ref mut env) = self.current.env {
             env.remove(key);
@@ -192,12 +213,14 @@ impl<'a> SettingsGuard<'a> {
     }
 
     /// Clears all environment variables.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear_env(&mut self) -> &mut Self {
         self.current.env = None;
         self
     }
 
     /// Sets sandbox enabled/disabled.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_sandbox_enabled(&mut self, enabled: bool) -> &mut Self {
         let sandbox = self.current.sandbox.get_or_insert_with(Sandbox::default);
         sandbox.enabled = Some(enabled);
@@ -205,6 +228,7 @@ impl<'a> SettingsGuard<'a> {
     }
 
     /// Enables or disables a plugin.
+    #[instrument(level = Level::TRACE, skip(self, plugin))]
     pub fn set_plugin_enabled(&mut self, plugin: impl Into<String>, enabled: bool) -> &mut Self {
         let plugins = self
             .current
@@ -215,6 +239,7 @@ impl<'a> SettingsGuard<'a> {
     }
 
     /// Applies a custom mutation function.
+    #[instrument(level = Level::TRACE, skip(self, f))]
     pub fn mutate<F>(&mut self, f: F) -> &mut Self
     where
         F: FnOnce(&mut Settings),
@@ -230,6 +255,7 @@ impl<'a> SettingsGuard<'a> {
     /// Adds a pre-tool-use hook with a matcher pattern.
     ///
     /// The matcher pattern can be empty to match all tools, or a specific tool name.
+    #[instrument(level = Level::TRACE, skip(self, matcher))]
     pub fn add_pre_tool_use_hook(&mut self, matcher: impl Into<String>, hook: Hook) -> &mut Self {
         let hooks = self.current.hooks.get_or_insert_with(Hooks::default);
         let config = hooks
@@ -277,6 +303,7 @@ impl<'a> SettingsGuard<'a> {
     /// Adds a post-tool-use hook with a matcher pattern.
     ///
     /// The matcher pattern can be empty to match all tools, or a specific tool name.
+    #[instrument(level = Level::TRACE, skip(self, matcher))]
     pub fn add_post_tool_use_hook(&mut self, matcher: impl Into<String>, hook: Hook) -> &mut Self {
         let hooks = self.current.hooks.get_or_insert_with(Hooks::default);
         let config = hooks
@@ -320,6 +347,7 @@ impl<'a> SettingsGuard<'a> {
     }
 
     /// Adds a stop hook with a matcher pattern.
+    #[instrument(level = Level::TRACE, skip(self, matcher))]
     pub fn add_stop_hook(&mut self, matcher: impl Into<String>, hook: Hook) -> &mut Self {
         let hooks = self.current.hooks.get_or_insert_with(Hooks::default);
         let stop_hooks = hooks.stop.get_or_insert_with(Vec::new);
@@ -337,6 +365,7 @@ impl<'a> SettingsGuard<'a> {
     }
 
     /// Adds a notification hook with a matcher pattern.
+    #[instrument(level = Level::TRACE, skip(self, matcher))]
     pub fn add_notification_hook(&mut self, matcher: impl Into<String>, hook: Hook) -> &mut Self {
         let hooks = self.current.hooks.get_or_insert_with(Hooks::default);
         let config = hooks
@@ -380,12 +409,14 @@ impl<'a> SettingsGuard<'a> {
     }
 
     /// Clears all hooks.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear_hooks(&mut self) -> &mut Self {
         self.current.hooks = None;
         self
     }
 
     /// Clears pre-tool-use hooks.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear_pre_tool_use_hooks(&mut self) -> &mut Self {
         if let Some(ref mut hooks) = self.current.hooks {
             hooks.pre_tool_use = None;
@@ -394,6 +425,7 @@ impl<'a> SettingsGuard<'a> {
     }
 
     /// Clears post-tool-use hooks.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear_post_tool_use_hooks(&mut self) -> &mut Self {
         if let Some(ref mut hooks) = self.current.hooks {
             hooks.post_tool_use = None;
@@ -402,6 +434,7 @@ impl<'a> SettingsGuard<'a> {
     }
 
     /// Clears stop hooks.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear_stop_hooks(&mut self) -> &mut Self {
         if let Some(ref mut hooks) = self.current.hooks {
             hooks.stop = None;
@@ -410,6 +443,7 @@ impl<'a> SettingsGuard<'a> {
     }
 
     /// Clears notification hooks.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear_notification_hooks(&mut self) -> &mut Self {
         if let Some(ref mut hooks) = self.current.hooks {
             hooks.notification = None;
@@ -464,6 +498,7 @@ pub struct MultiLevelGuard<'a> {
 
 impl<'a> MultiLevelGuard<'a> {
     /// Creates a new multi-level guard for the given levels.
+    #[instrument(level = Level::TRACE, skip(manager))]
     pub(crate) fn new(manager: &'a ClaudeSettings, levels: &[SettingsLevel]) -> Result<Self> {
         let mut guards = Vec::with_capacity(levels.len());
         for &level in levels {
@@ -473,16 +508,19 @@ impl<'a> MultiLevelGuard<'a> {
     }
 
     /// Returns a mutable reference to the guard for a specific level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn level_mut(&mut self, level: SettingsLevel) -> Option<&mut SettingsGuard<'a>> {
         self.guards.iter_mut().find(|g| g.level() == level)
     }
 
     /// Returns a reference to the guard for a specific level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn level(&self, level: SettingsLevel) -> Option<&SettingsGuard<'a>> {
         self.guards.iter().find(|g| g.level() == level)
     }
 
     /// Applies all changes to disk.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn apply(&self) -> Result<()> {
         for guard in &self.guards {
             guard.apply()?;
@@ -491,6 +529,7 @@ impl<'a> MultiLevelGuard<'a> {
     }
 
     /// Commits all changes permanently.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn commit(self) -> Result<()> {
         for guard in self.guards {
             guard.commit()?;

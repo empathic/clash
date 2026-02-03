@@ -7,11 +7,14 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use tracing::{Level, instrument};
+
 use crate::error::{Result, SettingsError};
 use crate::paths::PathResolver;
 use crate::types::{Settings, SettingsLevel};
 
 /// Reads settings from a specific file path.
+#[instrument(level = Level::TRACE)]
 pub fn read_settings_from_path(path: &Path) -> Result<Settings> {
     let content = fs::read_to_string(path).map_err(|e| match e.kind() {
         ErrorKind::NotFound => SettingsError::NotFound(path.to_path_buf()),
@@ -32,6 +35,7 @@ pub fn read_settings_from_path(path: &Path) -> Result<Settings> {
 }
 
 /// Reads settings from a specific file path, returning None if not found.
+#[instrument(level = Level::TRACE)]
 pub fn read_settings_from_path_optional(path: &Path) -> Result<Option<Settings>> {
     match read_settings_from_path(path) {
         Ok(settings) => Ok(Some(settings)),
@@ -43,6 +47,7 @@ pub fn read_settings_from_path_optional(path: &Path) -> Result<Option<Settings>>
 /// Writes settings to a specific file path.
 ///
 /// Creates parent directories if they don't exist.
+#[instrument(level = Level::TRACE)]
 pub fn write_settings_to_path(path: &Path, settings: &Settings) -> Result<()> {
     // Create parent directories if needed
     if let Some(parent) = path.parent()
@@ -81,6 +86,7 @@ fn backup_path_for(path: &Path, suffix: &str) -> PathBuf {
 /// Backs up a settings file by copying it to `{path}.{suffix}`.
 ///
 /// Returns the backup path on success, or `Ok(None)` if the source file doesn't exist.
+#[instrument(level = Level::TRACE)]
 pub fn backup_settings_file(path: &Path, suffix: &str) -> Result<Option<PathBuf>> {
     if !path.exists() {
         return Ok(None);
@@ -106,6 +112,7 @@ pub fn backup_settings_file(path: &Path, suffix: &str) -> Result<Option<PathBuf>
 ///
 /// If the file exists, it will be copied to `{path}.{suffix}` before writing.
 /// Returns the backup path if a backup was created, or `None` if the file didn't exist.
+#[instrument(level = Level::TRACE)]
 pub fn write_settings_to_path_with_backup(
     path: &Path,
     settings: &Settings,
@@ -120,6 +127,7 @@ pub fn write_settings_to_path_with_backup(
 ///
 /// Copies `{path}.{suffix}` back to `{path}`.
 /// Returns `Ok(true)` if restored, `Ok(false)` if the backup doesn't exist.
+#[instrument(level = Level::TRACE)]
 pub fn restore_settings_from_backup(path: &Path, suffix: &str) -> Result<bool> {
     let backup_path = backup_path_for(path, suffix);
 
@@ -155,6 +163,7 @@ impl Default for SettingsIO {
 
 impl SettingsIO {
     /// Creates a new SettingsIO with default path resolution.
+    #[instrument(level = Level::TRACE)]
     pub fn new() -> Self {
         Self {
             resolver: PathResolver::new(),
@@ -162,11 +171,13 @@ impl SettingsIO {
     }
 
     /// Creates a SettingsIO with a custom PathResolver.
+    #[instrument(level = Level::TRACE)]
     pub fn with_resolver(resolver: PathResolver) -> Self {
         Self { resolver }
     }
 
     /// Returns a reference to the path resolver.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn resolver(&self) -> &PathResolver {
         &self.resolver
     }
@@ -174,12 +185,14 @@ impl SettingsIO {
     /// Reads settings from the specified level.
     ///
     /// Returns an error if the file doesn't exist.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn read(&self, level: SettingsLevel) -> Result<Settings> {
         let path = self.resolver.settings_path(level)?;
         read_settings_from_path(&path)
     }
 
     /// Reads settings from the specified level, returning None if not found.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn read_optional(&self, level: SettingsLevel) -> Result<Option<Settings>> {
         let path = self.resolver.settings_path(level)?;
         read_settings_from_path_optional(&path)
@@ -188,6 +201,7 @@ impl SettingsIO {
     /// Writes settings to the specified level.
     ///
     /// Note: Writing to System level will return an error as those are read-only.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn write(&self, level: SettingsLevel, settings: &Settings) -> Result<()> {
         if level == SettingsLevel::System {
             return Err(SettingsError::SystemSettingsReadOnly);
@@ -198,6 +212,7 @@ impl SettingsIO {
     }
 
     /// Checks if settings exist at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn exists(&self, level: SettingsLevel) -> Result<bool> {
         let path = self.resolver.settings_path(level)?;
         Ok(path.exists())
@@ -206,6 +221,7 @@ impl SettingsIO {
     /// Deletes the settings file at the specified level.
     ///
     /// Note: Deleting System level will return an error as those are read-only.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn delete(&self, level: SettingsLevel) -> Result<()> {
         if level == SettingsLevel::System {
             return Err(SettingsError::SystemSettingsReadOnly);
@@ -226,6 +242,7 @@ impl SettingsIO {
     /// Reads all existing settings files and returns them with their levels.
     ///
     /// Returns settings in order of precedence (highest first).
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn read_all(&self) -> Result<Vec<(SettingsLevel, Settings)>> {
         let mut results = Vec::new();
 
@@ -243,6 +260,7 @@ impl SettingsIO {
     /// Returns the backup path on success, or `Ok(None)` if the settings file doesn't exist.
     ///
     /// Note: Backing up System level will return an error as those are read-only.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn backup(&self, level: SettingsLevel, suffix: &str) -> Result<Option<PathBuf>> {
         if level == SettingsLevel::System {
             return Err(SettingsError::SystemSettingsReadOnly);
@@ -258,6 +276,7 @@ impl SettingsIO {
     /// Returns the backup path if a backup was created, or `None` if no file existed.
     ///
     /// Note: Writing to System level will return an error as those are read-only.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn write_with_backup(
         &self,
         level: SettingsLevel,
@@ -278,6 +297,7 @@ impl SettingsIO {
     /// Returns `Ok(true)` if restored, `Ok(false)` if the backup doesn't exist.
     ///
     /// Note: Restoring System level will return an error as those are read-only.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn restore_from_backup(&self, level: SettingsLevel, suffix: &str) -> Result<bool> {
         if level == SettingsLevel::System {
             return Err(SettingsError::SystemSettingsReadOnly);
@@ -290,6 +310,7 @@ impl SettingsIO {
     /// Checks if a backup exists for the specified level and suffix.
     ///
     /// Returns `Ok(true)` if the backup file exists, `Ok(false)` otherwise.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn backup_exists(&self, level: SettingsLevel, suffix: &str) -> Result<bool> {
         let path = self.resolver.settings_path(level)?;
         let backup_path = backup_path_for(&path, suffix);

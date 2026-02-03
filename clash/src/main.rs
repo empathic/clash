@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use claude_settings::SettingsLevel;
 use claude_settings::policy::parse::{desugar_legacy, format_rule};
 use claude_settings::policy::{Effect, LegacyPermissions, PolicyConfig, PolicyDocument};
-use tracing::{error, info};
+use tracing::{Level, error, info, instrument};
 use tracing_subscriber::fmt::FormatFields;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
@@ -19,7 +19,10 @@ mod settings;
 
 use claude_settings::PermissionRule;
 use claude_settings::sandbox::SandboxPolicy;
-use hooks::{HookOutput, HookSpecificOutput, NotificationHookInput, ToolUseHookInput, exit_code};
+use hooks::{
+    HookOutput, HookSpecificOutput, NotificationHookInput, SessionStartHookInput, ToolUseHookInput,
+    exit_code,
+};
 use permissions::check_permission;
 
 #[derive(Parser, Debug)]
@@ -80,9 +83,14 @@ enum HooksCmd {
     /// Handle Notification hook - informational events from Claude Code
     #[command(name = "notification")]
     Notification,
+
+    /// Handle SessionStart hook - validate settings and report status
+    #[command(name = "session-start")]
+    SessionStart,
 }
 
 impl HooksCmd {
+    #[instrument(level = Level::TRACE, skip(self))]
     fn run(&self) -> anyhow::Result<()> {
         let settings = settings::ClashSettings::load_or_create()?;
 
@@ -106,6 +114,10 @@ impl HooksCmd {
                 let input = NotificationHookInput::from_reader(std::io::stdin().lock())?;
                 handle_notification(&input, &settings)
             }
+            Self::SessionStart => {
+                let input = SessionStartHookInput::from_reader(std::io::stdin().lock())?;
+                handle_session_start(&input)?
+            }
         };
 
         output.write_stdout()?;
@@ -114,6 +126,7 @@ impl HooksCmd {
 }
 
 /// Handle a notification event — send desktop and/or Zulip notifications.
+#[instrument(level = Level::TRACE, skip(input, settings))]
 fn handle_notification(
     input: &NotificationHookInput,
     settings: &settings::ClashSettings,
@@ -146,6 +159,7 @@ fn handle_notification(
 /// When the policy evaluates to "ask" and a Zulip bot is configured, the request
 /// is forwarded to Zulip and we poll for a human response. If no Zulip config is
 /// present or the poll times out, we fall through to let the terminal user decide.
+#[instrument(level = Level::TRACE, skip(input, settings))]
 fn handle_permission_request(
     input: &ToolUseHookInput,
     settings: &settings::ClashSettings,
@@ -172,6 +186,7 @@ fn handle_permission_request(
 }
 
 /// Attempt to resolve a permission ask via Zulip. Falls back to `continue_execution`.
+#[instrument(level = Level::TRACE, skip(input, settings))]
 fn resolve_via_zulip_or_continue(
     input: &ToolUseHookInput,
     settings: &settings::ClashSettings,
@@ -217,6 +232,102 @@ fn resolve_via_zulip_or_continue(
             HookOutput::continue_execution()
         }
     }
+}
+
+/// Handle a session start event — validate policy/settings and report status to Claude.
+#[instrument(level = Level::TRACE, skip(input))]
+fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOutput> {
+    let mut lines: Vec<String> = Vec::new();
+
+    // 1. Check policy file
+    let policy_path = settings::ClashSettings::policy_file();
+    if policy_path.exists() {
+        match std::fs::read_to_string(&policy_path) {
+            Ok(contents) => match claude_settings::policy::parse::parse_yaml(&contents) {
+                Ok(doc) => {
+                    let rule_count = doc.statements.len()
+                        + doc
+                            .profile_defs
+                            .values()
+                            .map(|p| p.rules.len())
+                            .sum::<usize>();
+                    let format = if doc.profile_defs.is_empty() {
+                        "legacy"
+                    } else {
+                        "new"
+                    };
+                    match claude_settings::policy::compile::CompiledPolicy::compile(&doc) {
+                        Ok(_) => {
+                            lines.push(format!(
+                                "policy.yaml: OK ({} rules, format={}, default={})",
+                                rule_count, format, doc.policy.default,
+                            ));
+                        }
+                        Err(e) => {
+                            lines.push(format!("ISSUE: policy.yaml compile error: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    lines.push(format!("ISSUE: policy.yaml parse error: {}", e));
+                }
+            },
+            Err(e) => {
+                lines.push(format!("ISSUE: policy.yaml read error: {}", e));
+            }
+        }
+    } else {
+        lines.push("policy.yaml: not found (using legacy permissions)".into());
+    }
+
+    // 2. Check settings file
+    let settings_path = settings::ClashSettings::settings_file();
+    match settings::ClashSettings::load() {
+        Ok(s) => {
+            lines.push(format!("settings: OK (engine_mode={:?})", s.engine_mode));
+        }
+        Err(_) if !settings_path.exists() => {
+            lines.push("settings: using defaults (no settings.json)".into());
+        }
+        Err(e) => {
+            lines.push(format!("ISSUE: settings load error: {}", e));
+        }
+    }
+
+    // 3. Check sandbox support
+    let support = sandbox::check_support();
+    match support {
+        sandbox::SupportLevel::Full => {
+            lines.push("sandbox: fully supported".into());
+        }
+        sandbox::SupportLevel::Partial { ref missing } => {
+            lines.push(format!(
+                "sandbox: partial (missing: {})",
+                missing.join(", ")
+            ));
+        }
+        sandbox::SupportLevel::Unsupported { ref reason } => {
+            lines.push(format!("sandbox: unsupported ({})", reason));
+        }
+    }
+
+    // 4. Session metadata
+    if let Some(ref source) = input.source {
+        lines.push(format!("session source: {}", source));
+    }
+    if let Some(ref model) = input.model {
+        lines.push(format!("model: {}", model));
+    }
+
+    info!(context = %lines.join("; "), "SessionStart validation");
+
+    let context = if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    };
+
+    Ok(HookOutput::session_start(context))
 }
 
 #[derive(Subcommand, Debug)]
@@ -348,6 +459,7 @@ fn main() -> Result<()> {
 }
 
 /// Run a command inside a sandbox.
+#[instrument(level = Level::TRACE)]
 fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
     match cmd {
         SandboxCmd::Exec {
@@ -415,6 +527,7 @@ fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
 }
 
 /// Launch Claude Code with clash managing hooks and sandbox enforcement.
+#[instrument(level = Level::TRACE)]
 fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     // Resolve the clash binary path for hook commands
     let clash_bin = std::env::current_exe().context("failed to determine clash binary path")?;
@@ -460,6 +573,12 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
                     "command": format!("{} hook notification", clash_bin_str),
                     "matcher": "*"
                 }]
+            }],
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("{} hook session-start", clash_bin_str)
+                }]
             }]
         }
     });
@@ -494,6 +613,7 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
 ///
 /// Reads the effective Claude Code settings, desugars the permission rules
 /// into policy statements, and writes a `policy.yaml` file.
+#[instrument(level = Level::TRACE)]
 fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
     let default = match default_effect {
         "ask" => Effect::Ask,
@@ -576,4 +696,66 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_session_start_input() -> SessionStartHookInput {
+        SessionStartHookInput {
+            session_id: "test-session".into(),
+            transcript_path: "/tmp/transcript.jsonl".into(),
+            cwd: "/tmp".into(),
+            permission_mode: Some("default".into()),
+            hook_event_name: "SessionStart".into(),
+            source: Some("startup".into()),
+            model: Some("claude-sonnet-4-20250514".into()),
+        }
+    }
+
+    #[test]
+    fn test_session_start_reports_sandbox_support() {
+        let input = default_session_start_input();
+        let output = handle_session_start(&input).unwrap();
+        let context = match &output.hook_specific_output {
+            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
+            _ => panic!("expected SessionStart output"),
+        };
+        let ctx = context.expect("should have context");
+        assert!(
+            ctx.contains("sandbox:"),
+            "should report sandbox status, got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn test_session_start_reports_session_metadata() {
+        let input = default_session_start_input();
+        let output = handle_session_start(&input).unwrap();
+        let context = match &output.hook_specific_output {
+            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
+            _ => panic!("expected SessionStart output"),
+        };
+        let ctx = context.expect("should have context");
+        assert!(ctx.contains("session source: startup"), "got: {ctx}");
+        assert!(
+            ctx.contains("model: claude-sonnet-4-20250514"),
+            "got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn test_session_start_output_serialization() {
+        let output = HookOutput::session_start(Some("test context".into()));
+        let mut buf = Vec::new();
+        output.write_to(&mut buf).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(json["hookSpecificOutput"]["hookEventName"], "SessionStart");
+        assert_eq!(
+            json["hookSpecificOutput"]["additionalContext"],
+            "test context"
+        );
+        assert_eq!(json["continue"], true);
+    }
 }

@@ -11,6 +11,7 @@ use pest::Parser;
 use pest_derive::Parser;
 use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
+use tracing::{Level, instrument};
 
 use super::*;
 
@@ -192,6 +193,7 @@ where
 /// Auto-detects old vs new format:
 /// - New format: `default:` is a YAML mapping `{ permission: ..., profile: ... }`
 /// - Old format: `default:` is a scalar string like `"ask"`
+#[instrument(level = Level::TRACE, skip(input))]
 pub fn parse_yaml(input: &str) -> Result<PolicyDocument, PolicyParseError> {
     // Parse as generic Value first to detect format.
     let value: serde_yaml::Value = serde_yaml::from_str(input)?;
@@ -582,6 +584,7 @@ fn parse_args_list(value: &serde_yaml::Value) -> Result<Vec<ArgSpec>, PolicyPars
 /// Flatten a profile by resolving its `include:` chain.
 ///
 /// Returns rules from the included parent first, then the profile's own rules.
+#[instrument(level = Level::TRACE)]
 pub fn flatten_profile(
     name: &str,
     profiles: &HashMap<String, ProfileDef>,
@@ -651,6 +654,7 @@ fn detect_circular_include(
 /// - `allow agent:claude bash git *`  — explicit entity
 /// - `deny !user read ~/config/*`     — explicit negated entity
 /// - `ask * * *`                       — explicit wildcard entity
+#[instrument(level = Level::TRACE)]
 pub fn parse_rule(input: &str) -> Result<Statement, PolicyParseError> {
     let input = input.trim();
 
@@ -767,6 +771,7 @@ fn find_constraint_separator(input: &str) -> Option<usize> {
 ///   and_expr = unary ( '&' unary )*
 ///   unary    = '!' unary | atom
 ///   atom     = 'subpath(' path ')' | 'literal(' path ')' | 'regex(' pattern ')' | '(' expr ')'
+#[instrument(level = Level::TRACE)]
 pub fn parse_filter_expr(input: &str) -> Result<FilterExpr, PolicyParseError> {
     let input = input.trim();
     let tokens = tokenize_expr(input).map_err(PolicyParseError::InvalidFilter)?;
@@ -790,6 +795,7 @@ pub fn parse_filter_expr(input: &str) -> Result<FilterExpr, PolicyParseError> {
 ///   and_expr = unary ( '&' unary )*
 ///   unary    = '!' unary | atom
 ///   atom     = identifier | '(' expr ')'
+#[instrument(level = Level::TRACE)]
 pub fn parse_profile_expr(input: &str) -> Result<ProfileExpr, PolicyParseError> {
     let input = input.trim();
     let tokens = tokenize_expr(input).map_err(PolicyParseError::InvalidProfile)?;
@@ -1053,6 +1059,7 @@ fn parse_profile_atom(
 }
 
 /// Serialize a `PolicyDocument` back to YAML.
+#[instrument(level = Level::TRACE)]
 pub fn to_yaml(doc: &PolicyDocument) -> Result<String, serde_yaml::Error> {
     let raw = RawPolicyYaml {
         default: doc.policy.default.to_string(),
@@ -1067,6 +1074,7 @@ pub fn to_yaml(doc: &PolicyDocument) -> Result<String, serde_yaml::Error> {
 /// Format a `Statement` as a compact rule string.
 ///
 /// When the entity is the default (any agent), it is omitted from the output.
+#[instrument(level = Level::TRACE)]
 pub fn format_rule(stmt: &Statement) -> String {
     let effect = stmt.effect.to_string();
     let tool = match &stmt.verb {
@@ -1111,6 +1119,7 @@ fn is_default_entity(entity: &Pattern) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Parse a policy document from a TOML string.
+#[instrument(level = Level::TRACE)]
 pub fn parse_toml(input: &str) -> Result<PolicyDocument, toml::de::Error> {
     toml::from_str(input)
 }
@@ -1126,6 +1135,7 @@ pub fn parse_toml(input: &str) -> Result<PolicyDocument, toml::de::Error> {
 /// - `!*` → `Pattern::Not(MatchExpr::Any)`
 /// - `!pattern` → `Pattern::Not(parse_match_expr(pattern))`
 /// - `pattern` → `Pattern::Match(parse_match_expr(pattern))`
+#[instrument(level = Level::TRACE)]
 pub fn parse_pattern(s: &str) -> Pattern {
     let s = s.trim();
     if let Some(inner) = s.strip_prefix('!') {
@@ -1143,6 +1153,7 @@ pub fn parse_pattern(s: &str) -> Pattern {
 /// - `type:*` → `MatchExpr::Typed { entity_type, name: None }`
 /// - contains `*` or `**` or `?` → `MatchExpr::Glob`
 /// - otherwise → `MatchExpr::Exact`
+#[instrument(level = Level::TRACE)]
 pub fn parse_match_expr(s: &str) -> MatchExpr {
     let s = s.trim();
     if s == "*" {
@@ -1185,6 +1196,7 @@ pub fn parse_match_expr(s: &str) -> MatchExpr {
 /// Syntax:
 /// - `*` → `VerbPattern::Any`
 /// - `read` / `write` / `edit` / `execute` / `delegate` → `VerbPattern::Exact(Verb)`
+#[instrument(level = Level::TRACE)]
 pub fn parse_verb_pattern(s: &str) -> Result<VerbPattern, String> {
     let s = s.trim();
     if s == "*" {
@@ -1211,6 +1223,7 @@ pub fn parse_verb_pattern(s: &str) -> Result<VerbPattern, String> {
 /// ```
 ///
 /// Into equivalent statements with `entity = "agent"`.
+#[instrument(level = Level::TRACE, skip(perms))]
 pub fn desugar_legacy(perms: &LegacyPermissions) -> Vec<Statement> {
     let mut statements = Vec::new();
 

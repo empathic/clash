@@ -135,6 +135,8 @@ pub use types::{
     SettingsLevel,
 };
 
+use tracing::{Level, instrument};
+
 /// High-level interface for managing Claude Code settings.
 ///
 /// This is the primary entry point for most use cases. It provides
@@ -172,6 +174,7 @@ impl Default for ClaudeSettings {
 
 impl ClaudeSettings {
     /// Creates a new ClaudeSettings manager with default path resolution.
+    #[instrument(level = Level::TRACE)]
     pub fn new() -> Self {
         Self {
             io: SettingsIO::new(),
@@ -193,6 +196,7 @@ impl ClaudeSettings {
     ///
     /// let manager = ClaudeSettings::with_resolver(resolver);
     /// ```
+    #[instrument(level = Level::TRACE)]
     pub fn with_resolver(resolver: PathResolver) -> Self {
         Self {
             io: SettingsIO::with_resolver(resolver),
@@ -200,11 +204,13 @@ impl ClaudeSettings {
     }
 
     /// Returns a reference to the underlying SettingsIO.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn io(&self) -> &SettingsIO {
         &self.io
     }
 
     /// Returns a reference to the path resolver.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn resolver(&self) -> &PathResolver {
         self.io.resolver()
     }
@@ -213,11 +219,13 @@ impl ClaudeSettings {
     ///
     /// Returns `Ok(None)` if the settings file doesn't exist.
     /// Returns `Err` if there's a read or parse error.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn read(&self, level: SettingsLevel) -> Result<Option<Settings>> {
         self.io.read_optional(level)
     }
 
     /// Reads settings from the specified level, returning default if not found.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn read_or_default(&self, level: SettingsLevel) -> Result<Settings> {
         Ok(self.io.read_optional(level)?.unwrap_or_default())
     }
@@ -226,11 +234,13 @@ impl ClaudeSettings {
     ///
     /// Creates the settings directory if it doesn't exist.
     /// Returns an error if trying to write to the System level (read-only).
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn write(&self, level: SettingsLevel, settings: &Settings) -> Result<()> {
         self.io.write(level, settings)
     }
 
     /// Checks if settings exist at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn exists(&self, level: SettingsLevel) -> Result<bool> {
         self.io.exists(level)
     }
@@ -239,6 +249,7 @@ impl ClaudeSettings {
     ///
     /// Returns an error if trying to delete System level settings.
     /// Returns Ok(()) if the file doesn't exist.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn delete(&self, level: SettingsLevel) -> Result<()> {
         self.io.delete(level)
     }
@@ -249,6 +260,7 @@ impl ClaudeSettings {
     /// System > Project Local > Project > User
     ///
     /// Higher precedence settings override lower precedence ones.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn effective(&self) -> Result<Settings> {
         let all = self.io.read_all()?;
         Ok(merge::merge_all(&all))
@@ -257,6 +269,7 @@ impl ClaudeSettings {
     /// Returns settings from all existing levels along with their paths.
     ///
     /// Useful for debugging or displaying which settings files are active.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn list_all(&self) -> Result<Vec<(SettingsLevel, std::path::PathBuf, Settings)>> {
         let mut results = Vec::new();
 
@@ -288,6 +301,7 @@ impl ClaudeSettings {
     /// })?;
     /// # Ok::<(), claude_settings::SettingsError>(())
     /// ```
+    #[instrument(level = Level::TRACE, skip(self, f))]
     pub fn update<F>(&self, level: SettingsLevel, f: F) -> Result<()>
     where
         F: FnOnce(&mut Settings),
@@ -298,6 +312,7 @@ impl ClaudeSettings {
     }
 
     /// Adds a permission to the allow list at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn add_allow_permission(&self, level: SettingsLevel, pattern: &str) -> Result<()> {
         self.update(level, |settings| {
             settings.permissions.insert_allow(pattern);
@@ -305,6 +320,7 @@ impl ClaudeSettings {
     }
 
     /// Adds a permission to the deny list at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn add_deny_permission(&self, level: SettingsLevel, pattern: &str) -> Result<()> {
         self.update(level, |settings| {
             settings.permissions.insert_deny(pattern);
@@ -312,6 +328,7 @@ impl ClaudeSettings {
     }
 
     /// Sets the model at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_model(&self, level: SettingsLevel, model: &str) -> Result<()> {
         self.update(level, |settings| {
             settings.model = Some(model.to_string());
@@ -319,6 +336,7 @@ impl ClaudeSettings {
     }
 
     /// Sets an environment variable at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_env(&self, level: SettingsLevel, key: &str, value: &str) -> Result<()> {
         self.update(level, |settings| {
             let env = settings.env.get_or_insert_with(Default::default);
@@ -327,6 +345,7 @@ impl ClaudeSettings {
     }
 
     /// Removes an environment variable at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn remove_env(&self, level: SettingsLevel, key: &str) -> Result<()> {
         self.update(level, |settings| {
             if let Some(ref mut env) = settings.env {
@@ -336,6 +355,7 @@ impl ClaudeSettings {
     }
 
     /// Adds a permission to the ask list at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn add_ask_permission(&self, level: SettingsLevel, pattern: &str) -> Result<()> {
         self.update(level, |settings| {
             settings.permissions.insert_ask(pattern);
@@ -343,6 +363,7 @@ impl ClaudeSettings {
     }
 
     /// Removes a permission from all lists at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn remove_permission(&self, level: SettingsLevel, pattern: &str) -> Result<()> {
         self.update(level, |settings| {
             settings.permissions.remove(&pattern.into());
@@ -366,12 +387,14 @@ impl ClaudeSettings {
     /// }
     /// # Ok::<(), claude_settings::SettingsError>(())
     /// ```
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn effective_permissions(&self) -> Result<PermissionSet> {
         let settings = self.effective()?;
         Ok(settings.permissions.clone())
     }
 
     /// Returns a structured PermissionSet from settings at a specific level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn permissions_at(&self, level: SettingsLevel) -> Result<Option<PermissionSet>> {
         match self.read(level)? {
             Some(settings) => Ok(Some(settings.permissions.clone())),
@@ -382,6 +405,7 @@ impl ClaudeSettings {
     /// Updates permissions at a level using a PermissionSet.
     ///
     /// This replaces all existing permissions at that level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_permissions(&self, level: SettingsLevel, perms: &PermissionSet) -> Result<()> {
         self.update(level, |settings| {
             settings.permissions = perms.clone();
@@ -389,6 +413,7 @@ impl ClaudeSettings {
     }
 
     /// Clears the model setting at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear_model(&self, level: SettingsLevel) -> Result<()> {
         self.update(level, |settings| {
             settings.model = None;
@@ -396,6 +421,7 @@ impl ClaudeSettings {
     }
 
     /// Clears all permissions at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear_permissions(&self, level: SettingsLevel) -> Result<()> {
         self.update(level, |settings| {
             settings.permissions.clear();
@@ -403,6 +429,7 @@ impl ClaudeSettings {
     }
 
     /// Clears all environment variables at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear_env(&self, level: SettingsLevel) -> Result<()> {
         self.update(level, |settings| {
             settings.env = None;
@@ -410,6 +437,7 @@ impl ClaudeSettings {
     }
 
     /// Sets the language at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_language(&self, level: SettingsLevel, language: &str) -> Result<()> {
         self.update(level, |settings| {
             settings.language = Some(language.to_string());
@@ -417,6 +445,7 @@ impl ClaudeSettings {
     }
 
     /// Sets sandbox enabled/disabled at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_sandbox_enabled(&self, level: SettingsLevel, enabled: bool) -> Result<()> {
         self.update(level, |settings| {
             let sandbox = settings.sandbox.get_or_insert_with(Sandbox::default);
@@ -425,6 +454,7 @@ impl ClaudeSettings {
     }
 
     /// Sets the cleanup period in days at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_cleanup_period(&self, level: SettingsLevel, days: u32) -> Result<()> {
         self.update(level, |settings| {
             settings.cleanup_period_days = Some(days);
@@ -432,6 +462,7 @@ impl ClaudeSettings {
     }
 
     /// Enables or disables a plugin at the specified level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_plugin_enabled(
         &self,
         level: SettingsLevel,
@@ -463,6 +494,7 @@ impl ClaudeSettings {
     /// }
     /// # Ok::<(), claude_settings::SettingsError>(())
     /// ```
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn backup(&self, level: SettingsLevel, suffix: &str) -> Result<Option<std::path::PathBuf>> {
         self.io.backup(level, suffix)
     }
@@ -485,6 +517,7 @@ impl ClaudeSettings {
     /// manager.write_with_backup(SettingsLevel::User, &new_settings, "bak")?;
     /// # Ok::<(), claude_settings::SettingsError>(())
     /// ```
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn write_with_backup(
         &self,
         level: SettingsLevel,
@@ -516,6 +549,7 @@ impl ClaudeSettings {
     /// }
     /// # Ok::<(), claude_settings::SettingsError>(())
     /// ```
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn restore_from_backup(&self, level: SettingsLevel, suffix: &str) -> Result<bool> {
         self.io.restore_from_backup(level, suffix)
     }
@@ -537,6 +571,7 @@ impl ClaudeSettings {
     /// }
     /// # Ok::<(), claude_settings::SettingsError>(())
     /// ```
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn backup_exists(&self, level: SettingsLevel, suffix: &str) -> Result<bool> {
         self.io.backup_exists(level, suffix)
     }
@@ -583,6 +618,7 @@ impl ClaudeSettings {
     ///
     /// - `apply()` writes changes to disk but still restores on drop
     /// - `commit()` writes changes and prevents restoration (changes become permanent)
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn scoped(&self, level: SettingsLevel) -> Result<SettingsGuard<'_>> {
         SettingsGuard::new(self, level)
     }
@@ -617,6 +653,7 @@ impl ClaudeSettings {
     /// } // Both levels restored
     /// # Ok::<(), claude_settings::SettingsError>(())
     /// ```
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn scoped_multi(&self, levels: &[SettingsLevel]) -> Result<MultiLevelGuard<'_>> {
         MultiLevelGuard::new(self, levels)
     }

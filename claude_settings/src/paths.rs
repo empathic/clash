@@ -6,6 +6,8 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+use tracing::{Level, instrument};
+
 use crate::error::{Result, SettingsError};
 use crate::types::SettingsLevel;
 
@@ -39,6 +41,7 @@ impl Default for PathResolver {
 
 impl PathResolver {
     /// Creates a new PathResolver with default paths.
+    #[instrument(level = Level::TRACE)]
     pub fn new() -> Self {
         Self {
             home_override: None,
@@ -47,18 +50,21 @@ impl PathResolver {
     }
 
     /// Creates a PathResolver with a custom home directory.
+    #[instrument(level = Level::TRACE, skip(self, home))]
     pub fn with_home(mut self, home: impl Into<PathBuf>) -> Self {
         self.home_override = Some(home.into());
         self
     }
 
     /// Creates a PathResolver with a custom project directory.
+    #[instrument(level = Level::TRACE, skip(self, project))]
     pub fn with_project(mut self, project: impl Into<PathBuf>) -> Self {
         self.project_override = Some(project.into());
         self
     }
 
     /// Returns the home directory path.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn home_dir(&self) -> Result<PathBuf> {
         if let Some(ref home) = self.home_override {
             return Ok(home.clone());
@@ -74,6 +80,7 @@ impl PathResolver {
     /// If not explicitly set, attempts to find the project root by looking
     /// for a .claude directory or .git directory in the current directory
     /// or its parents.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn project_dir(&self) -> Result<PathBuf> {
         if let Some(ref project) = self.project_override {
             return Ok(project.clone());
@@ -97,6 +104,7 @@ impl PathResolver {
     }
 
     /// Returns the path for the settings file at the given level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn settings_path(&self, level: SettingsLevel) -> Result<PathBuf> {
         match level {
             SettingsLevel::System => Ok(PathBuf::from(SYSTEM_SETTINGS_PATH)),
@@ -119,6 +127,7 @@ impl PathResolver {
     }
 
     /// Returns all settings paths in order of precedence (highest first).
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn all_settings_paths(&self) -> Result<Vec<(SettingsLevel, PathBuf)>> {
         let mut paths = Vec::new();
 
@@ -134,6 +143,7 @@ impl PathResolver {
     }
 
     /// Returns the path to the .claude directory for a given level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn claude_dir(&self, level: SettingsLevel) -> Result<PathBuf> {
         match level {
             SettingsLevel::System => Ok(PathBuf::from("/etc/claude-code")),

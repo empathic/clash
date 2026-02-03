@@ -24,6 +24,7 @@ use std::path::Path;
 
 use figment::Figment;
 use figment::providers::{Format, Json, Serialized};
+use tracing::{Level, instrument};
 
 use crate::error::Result;
 use crate::paths::PathResolver;
@@ -163,6 +164,7 @@ fn merge_vecs<T: Clone + PartialEq>(lower: &[T], higher: &[T]) -> Vec<T> {
 /// Merges multiple settings in order of precedence.
 ///
 /// Settings are expected to be ordered from highest to lowest precedence.
+#[instrument(level = Level::TRACE)]
 pub fn merge_all(settings: &[(SettingsLevel, Settings)]) -> Settings {
     if settings.is_empty() {
         return Settings::default();
@@ -188,17 +190,20 @@ pub struct SettingsMerger {
 
 impl SettingsMerger {
     /// Creates a new empty SettingsMerger.
+    #[instrument(level = Level::TRACE)]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Adds settings at a specific level.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn add(mut self, level: SettingsLevel, settings: Settings) -> Self {
         self.settings.push((level, settings));
         self
     }
 
     /// Adds settings if present (Some).
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn add_optional(self, level: SettingsLevel, settings: Option<Settings>) -> Self {
         match settings {
             Some(s) => self.add(level, s),
@@ -209,6 +214,7 @@ impl SettingsMerger {
     /// Merges all added settings and returns the result.
     ///
     /// Settings are sorted by precedence before merging.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn merge(mut self) -> Settings {
         // Sort by precedence (system > project-local > project > user)
         self.settings.sort_by_key(|(level, _)| match level {
@@ -241,11 +247,13 @@ pub struct FigmentLoader {
 
 impl FigmentLoader {
     /// Creates a new FigmentLoader with the given path resolver.
+    #[instrument(level = Level::TRACE)]
     pub fn new(resolver: PathResolver) -> Self {
         Self { resolver }
     }
 
     /// Creates a new FigmentLoader with default path resolution.
+    #[instrument(level = Level::TRACE)]
     pub fn with_defaults() -> Self {
         Self::new(PathResolver::new())
     }
@@ -253,6 +261,7 @@ impl FigmentLoader {
     /// Returns the underlying figment with all providers configured.
     ///
     /// This allows you to add additional providers or customize the merge.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn figment(&self) -> Result<Figment> {
         let mut figment = Figment::from(Serialized::defaults(Settings::default()));
 
@@ -289,12 +298,14 @@ impl FigmentLoader {
     }
 
     /// Loads and merges all settings, returning the effective configuration.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn load(&self) -> Result<Settings> {
         let figment = self.figment()?;
         Ok(figment.extract()?)
     }
 
     /// Loads settings with an additional JSON file merged on top.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn load_with_file(&self, path: &Path) -> Result<Settings> {
         let mut figment = self.figment()?;
         figment = figment.merge(Json::file(path));
@@ -302,6 +313,7 @@ impl FigmentLoader {
     }
 
     /// Loads settings with additional runtime overrides.
+    #[instrument(level = Level::TRACE, skip(self))]
     pub fn load_with_overrides(&self, overrides: Settings) -> Result<Settings> {
         let mut figment = self.figment()?;
         figment = figment.merge(Serialized::defaults(overrides));
