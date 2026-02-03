@@ -8,6 +8,7 @@ Run the clash init command (without --force, so it won't overwrite an existing c
 ```bash
 $PLUGIN_DIR/bin/clash init
 ```
+If this fails, ask the user if they want to re-run with "--force" to fully reinitilize
 
 After running the command, explain to the user:
 
@@ -24,3 +25,4 @@ After running the command, explain to the user:
    - Adjust the sensitive directory list in the `allow` rules
    - Add project-specific deny rules for commands they want blocked
 5. Run `clash launch` to start Claude Code with clash enforcing the policy
+6. For local development run `just dev` to rebuild the clash plugin and start a new Claude Code session with that plugin enabled.
