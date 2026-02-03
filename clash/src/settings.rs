@@ -102,6 +102,8 @@ impl ClashSettings {
             constraints: Default::default(),
             profiles: Default::default(),
             statements,
+            default_config: None,
+            profile_defs: Default::default(),
         })
     }
 

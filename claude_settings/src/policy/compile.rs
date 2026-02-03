@@ -6,21 +6,24 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use regex::Regex;
 use super::*;
 use crate::sandbox::{Cap, NetworkPolicy, RuleEffect, SandboxPolicy, SandboxRule};
+use regex::Regex;
 
 /// A compiled policy ready for fast evaluation.
 #[derive(Debug)]
 pub struct CompiledPolicy {
     /// Default effect when no statement matches.
     pub default: Effect,
-    /// Compiled statements in evaluation order.
+    /// Compiled statements in evaluation order (legacy format).
     pub statements: Vec<CompiledStatement>,
-    /// Compiled constraint definitions (name → compiled constraint).
+    /// Compiled constraint definitions (name → compiled constraint) — legacy format.
     constraints: HashMap<String, CompiledConstraintDef>,
-    /// Profile definitions (name → profile expression).
+    /// Profile definitions (name → profile expression) — legacy format.
     profiles: HashMap<String, ProfileExpr>,
+    /// Flattened rules from the active profile (new format).
+    /// When non-empty, evaluation uses this path instead of legacy statements.
+    active_profile_rules: Vec<CompiledProfileRule>,
 }
 
 /// A compiled statement with pre-compiled matchers.
@@ -59,6 +62,28 @@ enum CompiledFilterExpr {
     Not(Box<CompiledFilterExpr>),
 }
 
+/// A compiled rule from the new profile-based format.
+#[derive(Debug)]
+struct CompiledProfileRule {
+    effect: Effect,
+    /// Raw verb string for matching (e.g. "bash", "safe-read", "*").
+    verb: String,
+    noun_matcher: CompiledPattern,
+    constraints: Option<CompiledInlineConstraints>,
+}
+
+/// Compiled inline constraints for a new-format profile rule.
+#[derive(Debug)]
+struct CompiledInlineConstraints {
+    /// Cap-scoped filesystem entries.
+    fs: Option<Vec<(Cap, CompiledFilterExpr)>>,
+    forbid_args: Vec<String>,
+    require_args: Vec<String>,
+    network: Option<NetworkPolicy>,
+    pipe: Option<bool>,
+    redirect: Option<bool>,
+}
+
 /// A compiled pattern (potentially negated).
 #[derive(Debug)]
 pub enum CompiledPattern {
@@ -94,9 +119,16 @@ pub enum CompileError {
         pattern: String,
         source: regex::Error,
     },
+    #[error("profile flattening error: {0}")]
+    ProfileError(String),
 }
 
 impl CompiledPolicy {
+    /// Returns true if this policy uses the new profile-based format.
+    pub fn has_profile_rules(&self) -> bool {
+        !self.active_profile_rules.is_empty()
+    }
+
     /// Compile a `PolicyDocument` into a `CompiledPolicy`.
     ///
     /// This pre-compiles all glob patterns into regexes and
@@ -125,11 +157,25 @@ impl CompiledPolicy {
             constraints.insert(name.clone(), CompiledConstraintDef::compile(def)?);
         }
 
+        // Compile new-format profile rules if present.
+        let active_profile_rules = if let Some(ref default_config) = doc.default_config {
+            let flat_rules = parse::flatten_profile(&default_config.profile, &doc.profile_defs)
+                .map_err(|e| CompileError::ProfileError(e.to_string()))?;
+            let mut compiled = Vec::new();
+            for rule in &flat_rules {
+                compiled.push(CompiledProfileRule::compile(rule)?);
+            }
+            compiled
+        } else {
+            Vec::new()
+        };
+
         Ok(CompiledPolicy {
             default: doc.policy.default,
             statements,
             constraints,
             profiles: doc.profiles.clone(),
+            active_profile_rules,
         })
     }
 
@@ -143,12 +189,14 @@ impl CompiledPolicy {
     /// This version creates a minimal `EvalContext` without cwd or tool_input.
     /// For full constraint evaluation, use `evaluate_with_context`.
     pub fn evaluate(&self, entity: &str, verb: &Verb, noun: &str) -> PolicyDecision {
+        let verb_str = verb.rule_name();
         let ctx = EvalContext {
             entity,
             verb,
             noun,
             cwd: "",
             tool_input: &serde_json::Value::Null,
+            verb_str,
         };
         self.evaluate_with_context(&ctx)
     }
@@ -156,7 +204,12 @@ impl CompiledPolicy {
     /// Evaluate a request against this policy with full context.
     ///
     /// The `EvalContext` provides cwd and tool_input for constraint evaluation.
+    /// Dispatches to new-format evaluation if active_profile_rules is non-empty.
     pub fn evaluate_with_context(&self, ctx: &EvalContext) -> PolicyDecision {
+        if !self.active_profile_rules.is_empty() {
+            return self.evaluate_new_format(ctx);
+        }
+
         let mut has_allow = false;
         let mut has_ask = false;
         let mut has_deny = false;
@@ -390,6 +443,227 @@ impl CompiledPolicy {
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // New-format evaluation
+    // -----------------------------------------------------------------------
+
+    /// Evaluate using the new profile-based format.
+    ///
+    /// For each rule in the flattened active profile:
+    /// - Match verb string against `ctx.verb_str`
+    /// - Match noun pattern
+    /// - Check inline constraints (pipe, redirect, args)
+    /// - Cap-scoped fs: for non-bash verbs, check as permission guard;
+    ///   for bash, collect for sandbox generation
+    ///
+    /// Precedence: deny > ask > allow (same as legacy).
+    fn evaluate_new_format(&self, ctx: &EvalContext) -> PolicyDecision {
+        let mut has_allow = false;
+        let mut has_ask = false;
+        let mut has_deny = false;
+
+        // Collect cap-scoped fs entries from matched allow rules (for sandbox).
+        let mut allow_fs_entries: Vec<(&CompiledFilterExpr, Cap)> = Vec::new();
+        let mut merged_network = NetworkPolicy::Allow;
+
+        for rule in &self.active_profile_rules {
+            // Match verb: "*" matches anything, otherwise exact match
+            let verb_matches = rule.verb == "*" || rule.verb == ctx.verb_str;
+            if !verb_matches {
+                continue;
+            }
+
+            // Match noun
+            if !rule.noun_matcher.matches_noun(ctx.noun) {
+                continue;
+            }
+
+            // Check inline constraints
+            if !self.check_new_constraints(&rule.constraints, ctx) {
+                continue;
+            }
+
+            // Cap-scoped fs permission guard for non-bash verbs
+            if *ctx.verb != Verb::Execute {
+                if !self.check_cap_scoped_fs_guard(&rule.constraints, ctx) {
+                    continue;
+                }
+            }
+
+            match rule.effect {
+                Effect::Deny => {
+                    has_deny = true;
+                }
+                Effect::Ask => {
+                    has_ask = true;
+                }
+                Effect::Allow => {
+                    has_allow = true;
+                    // Collect fs entries for sandbox generation (bash only)
+                    if *ctx.verb == Verb::Execute {
+                        if let Some(ref constraints) = rule.constraints {
+                            if let Some(ref fs_entries) = constraints.fs {
+                                for (caps, compiled_fs) in fs_entries {
+                                    allow_fs_entries.push((compiled_fs, *caps));
+                                }
+                            }
+                            if let Some(net) = constraints.network {
+                                if net == NetworkPolicy::Deny {
+                                    merged_network = NetworkPolicy::Deny;
+                                }
+                            }
+                        }
+                    }
+                }
+                Effect::Delegate => {
+                    // Not supported in new format
+                }
+            }
+        }
+
+        // Precedence: deny > ask > allow
+        if has_deny {
+            return PolicyDecision {
+                effect: Effect::Deny,
+                reason: None,
+                delegate: None,
+                sandbox: None,
+            };
+        }
+        if has_ask {
+            return PolicyDecision {
+                effect: Effect::Ask,
+                reason: None,
+                delegate: None,
+                sandbox: None,
+            };
+        }
+        if has_allow {
+            let sandbox = if *ctx.verb == Verb::Execute && !allow_fs_entries.is_empty() {
+                let mut rules = Vec::new();
+                for (fs_expr, caps) in &allow_fs_entries {
+                    filter_to_sandbox_rules(fs_expr, RuleEffect::Allow, *caps, ctx.cwd, &mut rules);
+                }
+                Some(SandboxPolicy {
+                    default: Cap::READ | Cap::EXECUTE,
+                    rules,
+                    network: merged_network,
+                })
+            } else {
+                None
+            };
+            return PolicyDecision {
+                effect: Effect::Allow,
+                reason: None,
+                delegate: None,
+                sandbox,
+            };
+        }
+
+        // No match → default
+        PolicyDecision {
+            effect: self.default,
+            reason: None,
+            delegate: None,
+            sandbox: None,
+        }
+    }
+
+    /// Check non-fs inline constraints (pipe, redirect, args).
+    fn check_new_constraints(
+        &self,
+        constraints: &Option<CompiledInlineConstraints>,
+        ctx: &EvalContext,
+    ) -> bool {
+        let constraints = match constraints {
+            Some(c) => c,
+            None => return true,
+        };
+
+        // Check pipe
+        if let Some(allow_pipe) = constraints.pipe
+            && !allow_pipe
+            && command_has_pipe(ctx.noun)
+        {
+            return false;
+        }
+
+        // Check redirect
+        if let Some(allow_redirect) = constraints.redirect
+            && !allow_redirect
+            && command_has_redirect(ctx.noun)
+        {
+            return false;
+        }
+
+        // Check forbidden args
+        if !constraints.forbid_args.is_empty() {
+            let args = tokenize_command(ctx.noun);
+            for forbidden in &constraints.forbid_args {
+                if args.iter().any(|a| *a == forbidden) {
+                    return false;
+                }
+            }
+        }
+
+        // Check required args (at least one must be present)
+        if !constraints.require_args.is_empty() {
+            let args = tokenize_command(ctx.noun);
+            if !constraints
+                .require_args
+                .iter()
+                .any(|req| args.iter().any(|a| *a == req))
+            {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Cap-scoped fs permission guard for non-bash verbs.
+    ///
+    /// Maps the verb to a capability, then checks if any fs entry's caps
+    /// intersect with the verb's cap. If they do, the noun must match
+    /// that filter expression.
+    fn check_cap_scoped_fs_guard(
+        &self,
+        constraints: &Option<CompiledInlineConstraints>,
+        ctx: &EvalContext,
+    ) -> bool {
+        let constraints = match constraints {
+            Some(c) => c,
+            None => return true,
+        };
+
+        let fs_entries = match &constraints.fs {
+            Some(entries) => entries,
+            None => return true,
+        };
+
+        // Map verb to cap
+        let verb_cap = match ctx.verb {
+            Verb::Read => Cap::READ,
+            Verb::Write => Cap::WRITE | Cap::CREATE,
+            Verb::Edit => Cap::WRITE,
+            Verb::Execute => return true, // bash uses sandbox path
+            Verb::Delegate => return true,
+        };
+
+        // Check if any fs entry's caps intersect with the verb's cap.
+        // If so, the noun must match that filter.
+        for (caps, filter) in fs_entries {
+            if caps.intersects(verb_cap) {
+                // This fs entry is relevant — noun must match
+                if !filter.matches(ctx.noun, ctx.cwd) {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
 }
 
 /// Walk a `CompiledFilterExpr` tree and produce sandbox rules.
@@ -479,6 +753,57 @@ impl CompiledStatement {
         self.entity_matcher.matches_entity(entity)
             && self.verb_matcher.matches(verb)
             && self.noun_matcher.matches_noun(noun)
+    }
+}
+
+impl CompiledProfileRule {
+    fn compile(rule: &ProfileRule) -> Result<Self, CompileError> {
+        let noun_matcher = CompiledPattern::compile(&rule.noun)?;
+        let constraints = match &rule.constraints {
+            Some(ic) => Some(CompiledInlineConstraints::compile(ic)?),
+            None => None,
+        };
+        Ok(CompiledProfileRule {
+            effect: rule.effect,
+            verb: rule.verb.clone(),
+            noun_matcher,
+            constraints,
+        })
+    }
+}
+
+impl CompiledInlineConstraints {
+    fn compile(ic: &InlineConstraints) -> Result<Self, CompileError> {
+        let fs = match &ic.fs {
+            Some(entries) => {
+                let mut compiled = Vec::new();
+                for (caps, filter) in entries {
+                    compiled.push((*caps, CompiledFilterExpr::compile(filter)?));
+                }
+                Some(compiled)
+            }
+            None => None,
+        };
+
+        let mut forbid_args = Vec::new();
+        let mut require_args = Vec::new();
+        if let Some(ref args) = ic.args {
+            for spec in args {
+                match spec {
+                    ArgSpec::Forbid(s) => forbid_args.push(s.clone()),
+                    ArgSpec::Require(s) => require_args.push(s.clone()),
+                }
+            }
+        }
+
+        Ok(CompiledInlineConstraints {
+            fs,
+            forbid_args,
+            require_args,
+            network: ic.network,
+            pipe: ic.pipe,
+            redirect: ic.redirect,
+        })
     }
 }
 
@@ -790,6 +1115,24 @@ mod tests {
         CompiledPolicy::compile(&doc).unwrap()
     }
 
+    fn make_ctx<'a>(
+        entity: &'a str,
+        verb: &'a Verb,
+        noun: &'a str,
+        cwd: &'a str,
+        tool_input: &'a serde_json::Value,
+        verb_str: &'a str,
+    ) -> EvalContext<'a> {
+        EvalContext {
+            entity,
+            verb,
+            noun,
+            cwd,
+            tool_input,
+            verb_str,
+        }
+    }
+
     #[test]
     fn test_simple_allow() {
         let policy = compile_yaml("rules:\n  - allow agent:claude bash git *\n");
@@ -985,6 +1328,7 @@ rules:
             noun: "/home/user/project/src/main.rs",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "read",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -996,6 +1340,7 @@ rules:
             noun: "/etc/passwd",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "read",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Ask); // default
@@ -1020,6 +1365,7 @@ rules:
             noun: "/home/user/project/src/main.rs",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "read",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1031,6 +1377,7 @@ rules:
             noun: "/etc/passwd",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "read",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Ask);
@@ -1055,6 +1402,7 @@ rules:
             noun: "/home/user/project/src/main.rs",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "read",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1066,6 +1414,7 @@ rules:
             noun: "/home/user/project/.env",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "read",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Ask);
@@ -1090,6 +1439,7 @@ rules:
             noun: "ls -la",
             cwd: "/home/user",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1101,6 +1451,7 @@ rules:
             noun: "cat foo | grep bar",
             cwd: "/home/user",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Ask);
@@ -1125,6 +1476,7 @@ rules:
             noun: "ls -la",
             cwd: "/home/user",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1136,6 +1488,7 @@ rules:
             noun: "echo hello > file.txt",
             cwd: "/home/user",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Ask);
@@ -1162,6 +1515,7 @@ rules:
             noun: "git push origin main",
             cwd: "/home/user",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1173,6 +1527,7 @@ rules:
             noun: "git push --force origin main",
             cwd: "/home/user",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Ask);
@@ -1198,6 +1553,7 @@ rules:
             noun: "cargo publish --dry-run",
             cwd: "/home/user",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1209,6 +1565,7 @@ rules:
             noun: "cargo publish",
             cwd: "/home/user",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Ask);
@@ -1238,6 +1595,7 @@ rules:
             noun: "ls -la",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1249,6 +1607,7 @@ rules:
             noun: "ls | grep foo",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Ask);
@@ -1283,6 +1642,7 @@ rules:
             noun: "git status",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1294,6 +1654,7 @@ rules:
             noun: "git push --force origin main",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Ask);
@@ -1320,6 +1681,7 @@ rules:
             noun: "/home/user/project/src/main.rs",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "read",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1331,6 +1693,7 @@ rules:
             noun: "/home/user/project/.env",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "read",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Ask);
@@ -1385,6 +1748,7 @@ rules:
             noun: "git push --force origin main",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         // The deny has constraint has-force which has forbid-args: [--force]
@@ -1399,6 +1763,7 @@ rules:
             noun: "git push origin main",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Deny);
@@ -1467,6 +1832,7 @@ rules:
             noun: "/home/user/project/src/main.rs",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "read",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1478,6 +1844,7 @@ rules:
             noun: "/home/user/project/test/test_main.rs",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "read",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1489,6 +1856,7 @@ rules:
             noun: "/etc/passwd",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "read",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Ask);
@@ -1514,6 +1882,7 @@ rules:
             noun: "ls -la",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1525,7 +1894,10 @@ rules:
         assert_eq!(sandbox.rules[0].effect, RuleEffect::Allow);
         assert_eq!(sandbox.rules[0].caps, Cap::all()); // no caps constraint → all
         assert_eq!(sandbox.rules[0].path, "/home/user/project");
-        assert_eq!(sandbox.rules[0].path_match, crate::sandbox::PathMatch::Subpath);
+        assert_eq!(
+            sandbox.rules[0].path_match,
+            crate::sandbox::PathMatch::Subpath
+        );
     }
 
     #[test]
@@ -1548,6 +1920,7 @@ rules:
             noun: "ls -la",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1577,6 +1950,7 @@ rules:
             noun: "ls -la",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         let sandbox = decision.sandbox.expect("expected sandbox policy");
@@ -1602,6 +1976,7 @@ rules:
             noun: "/home/user/project/src/main.rs",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "read",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1626,6 +2001,7 @@ rules:
             noun: "ls -la",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1651,6 +2027,7 @@ rules:
             noun: "ls -la",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1660,7 +2037,10 @@ rules:
         assert_eq!(sandbox.rules.len(), 1);
         assert_eq!(sandbox.rules[0].effect, RuleEffect::Deny);
         assert_eq!(sandbox.rules[0].path, "/home/user/project/.git");
-        assert_eq!(sandbox.rules[0].path_match, crate::sandbox::PathMatch::Subpath);
+        assert_eq!(
+            sandbox.rules[0].path_match,
+            crate::sandbox::PathMatch::Subpath
+        );
     }
 
     #[test]
@@ -1681,6 +2061,7 @@ rules:
             noun: "ls",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1689,7 +2070,10 @@ rules:
         // (enforced on macOS via Seatbelt SBPL, skipped on Linux)
         let sandbox = decision.sandbox.expect("expected sandbox policy");
         assert_eq!(sandbox.rules.len(), 1);
-        assert_eq!(sandbox.rules[0].path_match, crate::sandbox::PathMatch::Regex);
+        assert_eq!(
+            sandbox.rules[0].path_match,
+            crate::sandbox::PathMatch::Regex
+        );
         assert_eq!(sandbox.rules[0].path, "\\.env");
     }
 
@@ -1716,6 +2100,7 @@ rules:
             noun: "ls -la",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1740,6 +2125,7 @@ rules:
             noun: "cat .env",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1747,7 +2133,10 @@ rules:
         let sandbox = decision.sandbox.expect("expected sandbox policy");
         assert_eq!(sandbox.rules.len(), 1);
         assert_eq!(sandbox.rules[0].path, "/home/user/project/.env");
-        assert_eq!(sandbox.rules[0].path_match, crate::sandbox::PathMatch::Literal);
+        assert_eq!(
+            sandbox.rules[0].path_match,
+            crate::sandbox::PathMatch::Literal
+        );
     }
 
     #[test]
@@ -1765,6 +2154,7 @@ rules:
             noun: "ls -la",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
@@ -1791,9 +2181,303 @@ rules:
             noun: "ls",
             cwd: "/home/user/project",
             tool_input: &serde_json::Value::Null,
+            verb_str: "bash",
         };
         let decision = policy.evaluate_with_context(&ctx);
         let sandbox = decision.sandbox.expect("expected sandbox policy");
         assert_eq!(sandbox.network, NetworkPolicy::Allow);
+    }
+
+    // -----------------------------------------------------------------------
+    // New-format evaluation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_new_format_deny_overrides_allow() {
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow bash *:
+      deny bash rm *:
+"#;
+        let policy = compile_yaml(yaml);
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "git status",
+            "",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Allow);
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "rm -rf /",
+            "",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Deny);
+    }
+
+    #[test]
+    fn test_new_format_cap_scoped_fs_permission_guard() {
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow read *:
+        fs:
+          read: subpath(/home/user/project)
+"#;
+        let policy = compile_yaml(yaml);
+
+        // File under project → allowed (read cap intersects fs entry)
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Read,
+            "/home/user/project/src/main.rs",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "read",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Allow);
+
+        // File outside project → fs guard fails → default
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Read,
+            "/etc/passwd",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "read",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Ask);
+    }
+
+    #[test]
+    fn test_new_format_cap_scoped_fs_sandbox() {
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow bash *:
+        fs:
+          read + write + create: subpath(.)
+        network: deny
+"#;
+        let policy = compile_yaml(yaml);
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "ls -la",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+
+        let sandbox = decision.sandbox.expect("expected sandbox");
+        assert_eq!(sandbox.rules.len(), 1);
+        assert_eq!(sandbox.rules[0].caps, Cap::READ | Cap::WRITE | Cap::CREATE);
+        assert_eq!(sandbox.rules[0].path, "/home/user/project");
+        assert_eq!(sandbox.network, NetworkPolicy::Deny);
+    }
+
+    #[test]
+    fn test_new_format_args_forbid() {
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow bash *:
+        args: ["!-delete"]
+"#;
+        let policy = compile_yaml(yaml);
+
+        // Command without -delete → allowed
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "git push origin main",
+            "",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Allow);
+
+        // Command with -delete → forbidden arg → constraint fails → default
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "find . -delete",
+            "",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Ask);
+    }
+
+    #[test]
+    fn test_new_format_arbitrary_verb() {
+        let yaml = r#"
+default:
+  permission: deny
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow safe-read *:
+        args: []
+"#;
+        let policy = compile_yaml(yaml);
+
+        // Matching verb_str
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "anything",
+            "",
+            &serde_json::Value::Null,
+            "safe-read",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Allow);
+
+        // Non-matching verb_str
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "anything",
+            "",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Deny);
+    }
+
+    #[test]
+    fn test_new_format_include_rules_merged() {
+        let yaml = r#"
+default:
+  permission: ask
+  profile: child
+
+profiles:
+  parent:
+    rules:
+      deny bash rm *:
+  child:
+    include: parent
+    rules:
+      allow bash *:
+"#;
+        let policy = compile_yaml(yaml);
+
+        // "git status" matches child's allow bash * → allowed
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "git status",
+            "",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Allow);
+
+        // "rm -rf /" matches parent's deny AND child's allow → deny wins
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "rm -rf /",
+            "",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Deny);
+    }
+
+    #[test]
+    fn test_new_format_no_match_returns_default() {
+        let yaml = r#"
+default:
+  permission: deny
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow bash *:
+"#;
+        let policy = compile_yaml(yaml);
+
+        // "read" verb_str doesn't match "bash" rule → no match → default (deny)
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Read,
+            "test.txt",
+            "",
+            &serde_json::Value::Null,
+            "read",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Deny);
+    }
+
+    #[test]
+    fn test_new_format_wildcard_verb() {
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      deny * *:
+        fs:
+          read + write: "subpath(~/.ssh)"
+      allow bash *:
+"#;
+        let policy = compile_yaml(yaml);
+
+        // bash command → matches both deny * * and allow bash *
+        // But the deny has an fs guard which is cap-scoped — for bash/execute,
+        // fs generates sandbox not permission guard, so deny matches unconditionally
+        // if the noun matches. Since noun is "*", and "ls" matches, deny applies.
+        // Actually: the deny rule has verb "*" which matches "bash",
+        // and noun "*" which matches "ls". The fs constraint is on the deny rule.
+        // For bash, fs is NOT a permission guard — it generates sandbox.
+        // So the deny matches. deny > allow → Deny.
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "ls",
+            "/home/user",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Deny);
     }
 }

@@ -31,17 +31,21 @@ fn check_permission_policy(
         }
     };
 
-    // Map tool_name → Verb
-    let verb = match Verb::from_tool_name(&input.tool_name) {
-        Some(v) => v,
-        None => {
-            info!(tool = %input.tool_name, "Unknown tool name for policy evaluation");
-            return Ok(HookOutput::ask(Some(format!(
-                "unknown tool '{}' for policy evaluation",
-                input.tool_name
-            ))));
-        }
-    };
+    // Map tool_name → Verb. For known tools, use the canonical verb.
+    // For unknown tools with old-format policies, fall back to ask.
+    // For new-format policies, the raw tool name is matched via verb_str.
+    let verb = Verb::from_tool_name(&input.tool_name);
+    let fallback_verb = Verb::Execute; // used when verb is None for new-format
+    let verb_ref = verb.as_ref().unwrap_or(&fallback_verb);
+
+    // For old-format policies with unknown tools, bail early.
+    if verb.is_none() && !compiled.has_profile_rules() {
+        info!(tool = %input.tool_name, "Unknown tool name for policy evaluation");
+        return Ok(HookOutput::ask(Some(format!(
+            "unknown tool '{}' for policy evaluation",
+            input.tool_name
+        ))));
+    }
 
     // Extract the noun (the resource being acted on) from the tool input.
     let noun = extract_noun(input);
@@ -51,18 +55,25 @@ fn check_permission_policy(
     let entity = "agent";
 
     // Build evaluation context with cwd and tool_input for constraint evaluation.
+    // verb_str uses the tool_name lowercased for new-format matching.
+    let verb_str_owned = if let Some(ref v) = verb {
+        v.rule_name().to_string()
+    } else {
+        input.tool_name.to_lowercase()
+    };
     let ctx = EvalContext {
         entity,
-        verb: &verb,
+        verb: verb_ref,
         noun: &noun,
         cwd: &input.cwd,
         tool_input: &input.tool_input,
+        verb_str: &verb_str_owned,
     };
 
     let decision = compiled.evaluate_with_context(&ctx);
     info!(
         entity,
-        verb = %verb,
+        verb = %verb_str_owned,
         noun = %noun,
         effect = %decision.effect,
         reason = ?decision.reason,
@@ -201,6 +212,8 @@ mod tests {
             constraints: Default::default(),
             profiles: Default::default(),
             statements,
+            default_config: None,
+            profile_defs: Default::default(),
         };
         ClashSettings {
             engine_mode: crate::settings::EngineMode::Auto,

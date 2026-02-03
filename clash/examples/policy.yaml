@@ -1,49 +1,32 @@
-# Example policy for clash.
+# Clash policy for Eliot's dev environment.
 #
 # Evaluation: all matching statements are collected, then precedence applies:
 #   deny > ask > allow
 # If no statement matches, the default effect is used.
-#
-# Constraints provide additional guards on rules. A rule with a constraint
-# only matches when the constraint is satisfied.
-#
-# For bash rules, `fs` constraints generate per-command sandbox policies
-# instead of acting as permission guards. The `caps` and `network` fields
-# control what the sandbox allows.
-#
-# The "agent" entity is implicit — rules without an entity apply to all agents.
-# Use "agent:<name>" to target a specific agent.
 
-default: ask
+default:
+  permission: ask
+  profile: research
 
-# Named constraint primitives
-constraints:
-  local:
-    fs: subpath(.)
-    network: deny
-
-  safe-io:
-    pipe: false
-    redirect: false
-
-  git-safe-args:
-    forbid-args: [--force, --hard, --force-with-lease]
-
-  no-secrets:
-    fs: "!literal(.env) & !regex(\\.env\\..*)"
-
-  read-only:
-    caps: read + execute
-
-# Named profiles (boolean expressions over constraints)
 profiles:
-  sandboxed: local & safe-io
-  strict-git: sandboxed & git-safe-args
+  safe-ssh:
+    rules:
+      deny * *:
+        fs:
+          read + write: subpath(~/.ssh)
+  
+  safe-read:
+    rules:  
+      allow safe-read *:
 
-# Rules reference profiles with `: profile` suffix
-rules:
-  allow bash git * : strict-git & read-only  # read+execute in CWD, no net
-  allow bash cargo *    : sandboxed           # all caps in CWD, no net
-  allow read *          : local               # permission guard (no sandbox)
-  allow edit *          : local & no-secrets
-  deny  bash rm * : []
+  research:
+    include: [safe-ssh, safe-read]
+    rules:
+      allow bash *:
+        args: ["!-delete"]
+        fs:
+          read: "!regex(\\./)" # no hidden files
+      allow read *:
+        fs:
+          read: "!(regex(\\./))"
+  

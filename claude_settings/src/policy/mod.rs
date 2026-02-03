@@ -52,10 +52,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::sandbox::{Cap, NetworkPolicy};
 
-/// A complete policy document, as loaded from a TOML file.
+/// A complete policy document, as loaded from a YAML/TOML file.
+///
+/// Supports two formats:
+/// - **Legacy/old format**: uses `policy`, `constraints`, `profiles` (boolean exprs),
+///   `statements`, and optional `permissions`.
+/// - **New format**: uses `default_config` and `profile_defs` with inline rules.
+///
+/// Both formats are produced by `parse_yaml()` which auto-detects the format.
+/// `CompiledPolicy::compile()` dispatches based on which fields are populated.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyDocument {
-    /// Policy-level configuration.
+    /// Policy-level configuration (legacy format).
     #[serde(default)]
     pub policy: PolicyConfig,
 
@@ -63,17 +71,26 @@ pub struct PolicyDocument {
     #[serde(default)]
     pub permissions: Option<LegacyPermissions>,
 
-    /// Named constraint primitives (typed maps with fs, pipe, redirect, etc.).
+    /// Named constraint primitives (typed maps with fs, pipe, redirect, etc.) — legacy format.
     #[serde(default)]
     pub constraints: HashMap<String, ConstraintDef>,
 
-    /// Named profiles (boolean expressions over constraint/profile names).
+    /// Named profiles (boolean expressions over constraint/profile names) — legacy format.
     #[serde(default)]
     pub profiles: HashMap<String, ProfileExpr>,
 
-    /// The list of policy statements.
+    /// The list of policy statements — legacy format.
     #[serde(default)]
     pub statements: Vec<Statement>,
+
+    // --- New format fields ---
+    /// New-format default configuration (permission + active profile name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_config: Option<DefaultConfig>,
+
+    /// New-format profile definitions (name → ProfileDef with inline rules).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub profile_defs: HashMap<String, ProfileDef>,
 }
 
 /// Top-level policy configuration.
@@ -486,6 +503,57 @@ pub struct EvalContext<'a> {
     pub cwd: &'a str,
     /// The raw tool input JSON (for extracting command strings, file paths, etc.).
     pub tool_input: &'a serde_json::Value,
+    /// The raw tool name string for arbitrary verb matching (new format).
+    pub verb_str: &'a str,
+}
+
+// ---------------------------------------------------------------------------
+// New-format types (profile-based policy syntax)
+// ---------------------------------------------------------------------------
+
+/// Top-level `default:` config in the new format.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DefaultConfig {
+    pub permission: Effect,
+    pub profile: String,
+}
+
+/// A named profile definition with optional single inheritance and inline rules.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileDef {
+    pub include: Option<Vec<String>>,
+    pub rules: Vec<ProfileRule>,
+}
+
+/// A single rule inside a profile: `effect verb noun` with optional inline constraints.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileRule {
+    pub effect: Effect,
+    /// Arbitrary tool name or `"*"`.
+    pub verb: String,
+    pub noun: Pattern,
+    pub constraints: Option<InlineConstraints>,
+}
+
+/// Inline constraints on a profile rule (cap-scoped fs, unified args, etc.).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InlineConstraints {
+    /// Cap-scoped filesystem constraints: each entry maps caps → filter expression.
+    pub fs: Option<Vec<(Cap, FilterExpr)>>,
+    /// Unified args list: `"!x"` → Forbid(x), `"x"` → Require(x).
+    pub args: Option<Vec<ArgSpec>>,
+    pub network: Option<NetworkPolicy>,
+    pub pipe: Option<bool>,
+    pub redirect: Option<bool>,
+}
+
+/// An argument specification in the unified `args:` list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArgSpec {
+    /// `"!-delete"` → Forbid("-delete")
+    Forbid(String),
+    /// `"--dry-run"` → Require("--dry-run")
+    Require(String),
 }
 
 /// Configuration for delegating a permission decision to an external evaluator.

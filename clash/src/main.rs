@@ -455,6 +455,8 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
         constraints: Default::default(),
         profiles: Default::default(),
         statements,
+        default_config: None,
+        profile_defs: Default::default(),
     };
 
     // Build YAML output with header comment

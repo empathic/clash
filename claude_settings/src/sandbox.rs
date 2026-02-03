@@ -334,7 +334,7 @@ mod tests {
                 effect: RuleEffect::Allow,
                 caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE,
                 path: "$CWD".into(),
-                recursive: true,
+                path_match: PathMatch::Subpath,
             }],
             network: NetworkPolicy::Deny,
         };

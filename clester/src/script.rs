@@ -33,9 +33,14 @@ pub struct ClashConfig {
     #[serde(default)]
     pub engine_mode: Option<String>,
 
-    /// Policy document to write to ~/.clash/policy.yaml.
+    /// Policy document to write to ~/.clash/policy.yaml (old format).
     #[serde(default)]
     pub policy: Option<PolicySpec>,
+
+    /// Raw YAML string written directly to ~/.clash/policy.yaml (new format).
+    /// When present, takes precedence over `policy`.
+    #[serde(default)]
+    pub policy_raw: Option<String>,
 }
 
 /// Policy document specification for ~/.clash/policy.yaml.

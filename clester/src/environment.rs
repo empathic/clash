@@ -57,8 +57,11 @@ impl TestEnvironment {
         // Write ~/.clash/settings.json with engine_mode (if specified).
         write_clash_settings(&home_dir, clash)?;
 
-        // Write ~/.clash/policy.yaml if policy is specified.
-        if let Some(policy) = clash.and_then(|c| c.policy.as_ref()) {
+        // Write ~/.clash/policy.yaml — raw YAML takes precedence over PolicySpec.
+        if let Some(raw) = clash.and_then(|c| c.policy_raw.as_ref()) {
+            let path = home_dir.join(".clash/policy.yaml");
+            std::fs::write(&path, raw).context("failed to write policy.yaml (raw)")?;
+        } else if let Some(policy) = clash.and_then(|c| c.policy.as_ref()) {
             write_policy_file(&home_dir, policy)?;
         }
 
@@ -244,6 +247,7 @@ mod tests {
         let clash = ClashConfig {
             engine_mode: Some("policy".into()),
             policy: None,
+            policy_raw: None,
         };
 
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
@@ -272,6 +276,7 @@ mod tests {
                 default: "ask".into(),
                 rules: vec!["allow * bash git *".into(), "deny * read .env".into()],
             }),
+            policy_raw: None,
         };
 
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
@@ -288,6 +293,7 @@ mod tests {
         let clash = ClashConfig {
             engine_mode: Some("legacy".into()),
             policy: None,
+            policy_raw: None,
         };
 
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
