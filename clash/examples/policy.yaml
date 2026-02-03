@@ -4,6 +4,19 @@
 #   deny > ask > allow
 # If no statement matches, the default effect is used.
 
+# Notifications: desktop alerts and Zulip bot for remote permission resolution.
+# When a permission request evaluates to "ask", clash can forward it to Zulip
+# and poll for a human response (approve/deny).
+notifications:
+  desktop: true
+  zulip:
+    server_url: "https://your-org.zulipchat.com"
+    bot_email: "clash-bot@your-org.zulipchat.com"
+    bot_api_key: "your-bot-api-key"
+    stream: "clash-permissions"
+    topic: "requests"
+    timeout_secs: 120
+
 default:
   permission: ask
   profile: research

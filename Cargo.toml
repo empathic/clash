@@ -33,5 +33,9 @@ landlock = "0.4"
 seccompiler = "0.4"
 libc = "0.2"
 
+ureq = "2"
+base64 = "0.22"
+notify-rust = "4"
+
 # Dev dependencies
 tempfile = "3"
