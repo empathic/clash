@@ -10,13 +10,13 @@ use tracing::{Level, instrument};
 use super::error::CompileError;
 use super::ir::{
     CompiledConstraintDef, CompiledFilterExpr, CompiledInlineConstraints, CompiledMatchExpr,
-    CompiledPattern, CompiledPolicy, CompiledProfileRule, CompiledStatement,
+    CompiledPattern, CompiledPolicy, CompiledProfileRule,
 };
 use super::*;
 use regex::Regex;
 
 impl CompiledPolicy {
-    /// Returns true if this policy uses the new profile-based format.
+    /// Returns true if this policy has any compiled rules.
     #[instrument(level = Level::TRACE, skip(self))]
     pub fn has_profile_rules(&self) -> bool {
         !self.active_profile_rules.is_empty()
@@ -28,45 +28,36 @@ impl CompiledPolicy {
     /// merges legacy permissions into the statement list.
     #[instrument(level = Level::TRACE)]
     pub fn compile(doc: &PolicyDocument) -> Result<Self, CompileError> {
-        let mut statements = Vec::new();
-
-        // First, desugar legacy permissions if present
-        if let Some(ref perms) = doc.permissions {
-            let legacy = parse::desugar_legacy(perms);
-            for stmt in &legacy {
-                statements.push(CompiledStatement::compile(stmt)?);
-            }
-        }
-
-        // Then add explicit statements (these take precedence via evaluation order,
-        // but since we use deny > ask > allow, order within the same effect
-        // doesn't matter)
-        for stmt in &doc.statements {
-            statements.push(CompiledStatement::compile(stmt)?);
-        }
-
         // Compile constraint definitions
         let mut constraints = HashMap::new();
         for (name, def) in &doc.constraints {
             constraints.insert(name.clone(), CompiledConstraintDef::compile(def)?);
         }
 
-        // Compile new-format profile rules if present.
-        let active_profile_rules = if let Some(ref default_config) = doc.default_config {
+        // Build the unified rule list: desugared legacy permissions first,
+        // then explicit `rules:` statements, then new-format profile rules.
+        let mut active_profile_rules: Vec<CompiledProfileRule> = Vec::new();
+        if let Some(ref perms) = doc.permissions {
+            let legacy = parse::desugar_legacy(perms);
+            for stmt in &legacy {
+                active_profile_rules.push(statement_to_profile_rule(stmt)?);
+            }
+        }
+        for stmt in &doc.statements {
+            active_profile_rules.push(statement_to_profile_rule(stmt)?);
+        }
+
+        // Compile new-format profile rules if present and append after legacy rules.
+        if let Some(ref default_config) = doc.default_config {
             let flat_rules = parse::flatten_profile(&default_config.profile, &doc.profile_defs)
                 .map_err(|e| CompileError::ProfileError(e.to_string()))?;
-            let mut compiled = Vec::new();
             for rule in &flat_rules {
-                compiled.push(CompiledProfileRule::compile(rule)?);
+                active_profile_rules.push(CompiledProfileRule::compile(rule)?);
             }
-            compiled
-        } else {
-            Vec::new()
-        };
+        }
 
         Ok(CompiledPolicy {
             default: doc.policy.default,
-            statements,
             constraints,
             profiles: doc.profiles.clone(),
             active_profile_rules,
@@ -74,18 +65,33 @@ impl CompiledPolicy {
     }
 }
 
-impl CompiledStatement {
-    pub(crate) fn compile(stmt: &Statement) -> Result<Self, CompileError> {
-        Ok(CompiledStatement {
-            effect: stmt.effect,
-            entity_matcher: CompiledPattern::compile(&stmt.entity)?,
-            verb_matcher: stmt.verb.clone(),
-            noun_matcher: CompiledPattern::compile(&stmt.noun)?,
-            reason: stmt.reason.clone(),
-            delegate: stmt.delegate.clone(),
-            profile: stmt.profile.clone(),
-        })
-    }
+/// Convert a legacy `Statement` into a `CompiledProfileRule`.
+///
+/// This bridges the legacy format into the unified evaluation path:
+/// - `VerbPattern::Any` → `"*"`
+/// - `VerbPattern::Exact(v)` → `v.rule_name()`
+/// - Entity pattern → `entity_matcher: Some(...)`
+/// - Profile expression → `profile_guard` (evaluated at runtime via constraint/profile maps)
+/// - No inline constraints (legacy uses profile_guard for all constraint logic)
+fn statement_to_profile_rule(stmt: &Statement) -> Result<CompiledProfileRule, CompileError> {
+    let verb = match &stmt.verb {
+        VerbPattern::Any => "*".to_string(),
+        VerbPattern::Exact(v) => v.rule_name().to_string(),
+    };
+
+    let entity_matcher = Some(CompiledPattern::compile(&stmt.entity)?);
+    let noun_matcher = CompiledPattern::compile(&stmt.noun)?;
+
+    Ok(CompiledProfileRule {
+        effect: stmt.effect,
+        verb,
+        noun_matcher,
+        constraints: None,
+        entity_matcher,
+        reason: stmt.reason.clone(),
+        delegate: stmt.delegate.clone(),
+        profile_guard: stmt.profile.clone(),
+    })
 }
 
 impl CompiledProfileRule {
@@ -100,6 +106,10 @@ impl CompiledProfileRule {
             verb: rule.verb.clone(),
             noun_matcher,
             constraints,
+            entity_matcher: None,
+            reason: None,
+            delegate: None,
+            profile_guard: None,
         })
     }
 }
@@ -236,7 +246,6 @@ fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::ir::PolicyDecision;
     use super::*;
     use crate::sandbox::{Cap, NetworkPolicy, RuleEffect};
 
@@ -1613,5 +1622,382 @@ profiles:
             "bash",
         );
         assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Deny);
+    }
+
+    // ---- Property-based tests (proptest) ----
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Strategy for generating a random verb.
+        fn arb_verb() -> impl Strategy<Value = (&'static str, Verb)> {
+            prop_oneof![
+                Just(("bash", Verb::Execute)),
+                Just(("read", Verb::Read)),
+                Just(("write", Verb::Write)),
+                Just(("edit", Verb::Edit)),
+            ]
+        }
+
+        /// Strategy for generating entity strings.
+        fn arb_entity() -> impl Strategy<Value = String> {
+            prop_oneof![
+                Just("agent:claude".to_string()),
+                Just("agent:codex".to_string()),
+                Just("user".to_string()),
+                Just("*".to_string()),
+            ]
+        }
+
+        /// Strategy for generating noun/pattern strings.
+        fn arb_noun() -> impl Strategy<Value = String> {
+            prop_oneof![
+                Just("*".to_string()),
+                Just("git *".to_string()),
+                Just("rm *".to_string()),
+                Just("ls".to_string()),
+                Just("/tmp/*".to_string()),
+                Just("src/main.rs".to_string()),
+                Just(".env".to_string()),
+            ]
+        }
+
+        /// Strategy for generating an effect.
+        fn arb_effect() -> impl Strategy<Value = &'static str> {
+            prop_oneof![Just("allow"), Just("deny"), Just("ask"),]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(200))]
+
+            /// Deny always beats allow regardless of rule order.
+            #[test]
+            fn deny_overrides_allow(
+                entity in arb_entity(),
+                (verb_str, verb) in arb_verb(),
+                noun in arb_noun(),
+            ) {
+                // Policy with allow first, then deny on the same triple
+                let yaml = format!(
+                    "rules:\n  - allow {} {} {}\n  - deny {} {} {}\n",
+                    entity, verb_str, noun, entity, verb_str, noun
+                );
+                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                    if let Ok(policy) = CompiledPolicy::compile(&doc) {
+                        let decision = policy.evaluate(&entity, &verb, &noun);
+                        prop_assert_eq!(decision.effect, Effect::Deny,
+                            "deny should override allow for {} {} {}", entity, verb_str, noun);
+                    }
+                }
+
+                // Reverse order: deny first, then allow
+                let yaml = format!(
+                    "rules:\n  - deny {} {} {}\n  - allow {} {} {}\n",
+                    entity, verb_str, noun, entity, verb_str, noun
+                );
+                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                    if let Ok(policy) = CompiledPolicy::compile(&doc) {
+                        let decision = policy.evaluate(&entity, &verb, &noun);
+                        prop_assert_eq!(decision.effect, Effect::Deny,
+                            "deny should override allow (reversed) for {} {} {}", entity, verb_str, noun);
+                    }
+                }
+            }
+
+            /// Ask overrides allow regardless of rule order.
+            #[test]
+            fn ask_overrides_allow(
+                entity in arb_entity(),
+                (verb_str, verb) in arb_verb(),
+                noun in arb_noun(),
+            ) {
+                let yaml = format!(
+                    "rules:\n  - allow {} {} {}\n  - ask {} {} {}\n",
+                    entity, verb_str, noun, entity, verb_str, noun
+                );
+                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                    if let Ok(policy) = CompiledPolicy::compile(&doc) {
+                        let decision = policy.evaluate(&entity, &verb, &noun);
+                        prop_assert_eq!(decision.effect, Effect::Ask,
+                            "ask should override allow for {} {} {}", entity, verb_str, noun);
+                    }
+                }
+            }
+
+            /// Deny overrides ask regardless of rule order.
+            #[test]
+            fn deny_overrides_ask(
+                entity in arb_entity(),
+                (verb_str, verb) in arb_verb(),
+                noun in arb_noun(),
+            ) {
+                let yaml = format!(
+                    "rules:\n  - ask {} {} {}\n  - deny {} {} {}\n",
+                    entity, verb_str, noun, entity, verb_str, noun
+                );
+                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                    if let Ok(policy) = CompiledPolicy::compile(&doc) {
+                        let decision = policy.evaluate(&entity, &verb, &noun);
+                        prop_assert_eq!(decision.effect, Effect::Deny,
+                            "deny should override ask for {} {} {}", entity, verb_str, noun);
+                    }
+                }
+            }
+
+            /// Determinism: same policy + same input → same output.
+            #[test]
+            fn deterministic_evaluation(
+                entity in arb_entity(),
+                (verb_str, verb) in arb_verb(),
+                noun in arb_noun(),
+                effect1 in arb_effect(),
+                effect2 in arb_effect(),
+            ) {
+                let yaml = format!(
+                    "rules:\n  - {} {} {} {}\n  - {} {} {} {}\n",
+                    effect1, entity, verb_str, noun,
+                    effect2, entity, verb_str, noun,
+                );
+                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                    if let Ok(policy) = CompiledPolicy::compile(&doc) {
+                        let d1 = policy.evaluate(&entity, &verb, &noun);
+                        let d2 = policy.evaluate(&entity, &verb, &noun);
+                        prop_assert_eq!(d1.effect, d2.effect,
+                            "same policy + input should give same result");
+                    }
+                }
+            }
+
+            /// Monotonicity: adding a deny rule never produces a less-restrictive result.
+            #[test]
+            fn monotonicity_deny_addition(
+                entity in arb_entity(),
+                (verb_str, verb) in arb_verb(),
+                noun in arb_noun(),
+                base_effect in arb_effect(),
+            ) {
+                // Evaluate with just the base rule
+                let yaml_base = format!(
+                    "rules:\n  - {} {} {} {}\n",
+                    base_effect, entity, verb_str, noun,
+                );
+                // Evaluate with base + deny
+                let yaml_deny = format!(
+                    "rules:\n  - {} {} {} {}\n  - deny {} {} {}\n",
+                    base_effect, entity, verb_str, noun,
+                    entity, verb_str, noun,
+                );
+
+                if let (Ok(doc_base), Ok(doc_deny)) =
+                    (parse::parse_yaml(&yaml_base), parse::parse_yaml(&yaml_deny))
+                {
+                    if let (Ok(p_base), Ok(p_deny)) =
+                        (CompiledPolicy::compile(&doc_base), CompiledPolicy::compile(&doc_deny))
+                    {
+                        let d_base = p_base.evaluate(&entity, &verb, &noun);
+                        let d_deny = p_deny.evaluate(&entity, &verb, &noun);
+
+                        // Restrictiveness: Deny > Ask > Allow > Delegate
+                        let restrictiveness = |e: Effect| -> u8 {
+                            match e {
+                                Effect::Deny => 3,
+                                Effect::Ask => 2,
+                                Effect::Allow => 1,
+                                Effect::Delegate => 0,
+                            }
+                        };
+
+                        prop_assert!(
+                            restrictiveness(d_deny.effect) >= restrictiveness(d_base.effect),
+                            "adding deny rule should not make result less restrictive: base={:?}, with_deny={:?}",
+                            d_base.effect, d_deny.effect,
+                        );
+                    }
+                }
+            }
+
+            /// Default fallback: when no rules match, the configured default applies.
+            #[test]
+            fn default_fallback(
+                (verb_str, verb) in arb_verb(),
+            ) {
+                // Policy with rules that only match a specific entity/noun, default: deny
+                let yaml = format!(
+                    "default: deny\nrules:\n  - allow agent:special {} specific_file\n",
+                    verb_str,
+                );
+                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                    if let Ok(policy) = CompiledPolicy::compile(&doc) {
+                        // Query with non-matching entity/noun
+                        let decision = policy.evaluate("agent:other", &verb, "other_file");
+                        prop_assert_eq!(decision.effect, Effect::Deny,
+                            "no match should fall back to configured default (deny)");
+                    }
+                }
+
+                // Same test with default: ask (the default default)
+                let yaml = format!(
+                    "default: ask\nrules:\n  - allow agent:special {} specific_file\n",
+                    verb_str,
+                );
+                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                    if let Ok(policy) = CompiledPolicy::compile(&doc) {
+                        let decision = policy.evaluate("agent:other", &verb, "other_file");
+                        prop_assert_eq!(decision.effect, Effect::Ask,
+                            "no match should fall back to default (ask)");
+                    }
+                }
+            }
+        }
+
+        /// Negation symmetry: `!pattern` matches iff `pattern` doesn't match.
+        /// This is a regular test using targeted cases since proptest can't easily
+        /// generate the internal types.
+        #[test]
+        fn negation_symmetry() {
+            // Allow everything, deny not-user (i.e., only user can read)
+            let yaml = "\
+rules:
+  - allow * read *
+  - deny !user read ~/config/*
+";
+            let policy = compile_yaml(yaml);
+
+            // user should be allowed (deny !user doesn't match user)
+            let decision = policy.evaluate("user", &Verb::Read, "~/config/settings");
+            assert_eq!(decision.effect, Effect::Allow);
+
+            // agent:claude should be denied (deny !user matches agent:claude)
+            let decision = policy.evaluate("agent:claude", &Verb::Read, "~/config/settings");
+            assert_eq!(decision.effect, Effect::Deny);
+        }
+
+        /// Negation symmetry on nouns.
+        #[test]
+        fn noun_negation_symmetry() {
+            let yaml = "\
+rules:
+  - allow * bash *
+  - deny * bash !git *
+";
+            let policy = compile_yaml(yaml);
+
+            // git status should be allowed (deny !git* doesn't match git commands)
+            let decision = policy.evaluate("agent:claude", &Verb::Execute, "git status");
+            assert_eq!(decision.effect, Effect::Allow);
+
+            // rm -rf should be denied (deny !git* matches rm)
+            let decision = policy.evaluate("agent:claude", &Verb::Execute, "rm -rf /");
+            assert_eq!(decision.effect, Effect::Deny);
+        }
+
+        // ---- Metamorphic tests ----
+        //
+        // These verify that adding an unreachable rule doesn't change the outcome.
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(200))]
+
+            /// Adding an unreachable rule (for a different entity) doesn't change the result.
+            #[test]
+            fn unreachable_entity_rule_is_inert(
+                (verb_str, verb) in arb_verb(),
+                effect in arb_effect(),
+                extra_effect in arb_effect(),
+                noun in arb_noun(),
+            ) {
+                // Base policy: one rule for agent:claude
+                let yaml_base = format!(
+                    "rules:\n  - {} agent:claude {} {}\n",
+                    effect, verb_str, noun,
+                );
+                // Extended: same + an extra rule for agent:unreachable (never queried)
+                let yaml_ext = format!(
+                    "rules:\n  - {} agent:claude {} {}\n  - {} agent:unreachable {} {}\n",
+                    effect, verb_str, noun,
+                    extra_effect, verb_str, noun,
+                );
+
+                if let (Ok(doc_base), Ok(doc_ext)) =
+                    (parse::parse_yaml(&yaml_base), parse::parse_yaml(&yaml_ext))
+                {
+                    if let (Ok(p_base), Ok(p_ext)) =
+                        (CompiledPolicy::compile(&doc_base), CompiledPolicy::compile(&doc_ext))
+                    {
+                        let d_base = p_base.evaluate("agent:claude", &verb, &noun);
+                        let d_ext = p_ext.evaluate("agent:claude", &verb, &noun);
+                        prop_assert_eq!(d_base.effect, d_ext.effect,
+                            "unreachable entity rule should not change result");
+                    }
+                }
+            }
+
+            /// Adding a rule for a non-matching noun doesn't change the result.
+            #[test]
+            fn unreachable_noun_rule_is_inert(
+                (verb_str, verb) in arb_verb(),
+                effect in arb_effect(),
+                extra_effect in arb_effect(),
+            ) {
+                // Base: rule for "git *"
+                let yaml_base = format!(
+                    "rules:\n  - {} * {} git *\n",
+                    effect, verb_str,
+                );
+                // Extended: same + rule for "npm *" (never queried with npm)
+                let yaml_ext = format!(
+                    "rules:\n  - {} * {} git *\n  - {} * {} npm *\n",
+                    effect, verb_str,
+                    extra_effect, verb_str,
+                );
+
+                if let (Ok(doc_base), Ok(doc_ext)) =
+                    (parse::parse_yaml(&yaml_base), parse::parse_yaml(&yaml_ext))
+                {
+                    if let (Ok(p_base), Ok(p_ext)) =
+                        (CompiledPolicy::compile(&doc_base), CompiledPolicy::compile(&doc_ext))
+                    {
+                        let d_base = p_base.evaluate("agent:claude", &verb, "git status");
+                        let d_ext = p_ext.evaluate("agent:claude", &verb, "git status");
+                        prop_assert_eq!(d_base.effect, d_ext.effect,
+                            "unreachable noun rule should not change result");
+                    }
+                }
+            }
+
+            /// Adding a rule for a non-matching verb doesn't change the result.
+            #[test]
+            fn unreachable_verb_rule_is_inert(
+                effect in arb_effect(),
+                extra_effect in arb_effect(),
+                noun in arb_noun(),
+            ) {
+                // Base: rule for bash
+                let yaml_base = format!(
+                    "rules:\n  - {} * bash {}\n",
+                    effect, noun,
+                );
+                // Extended: same + rule for read (never queried with read)
+                let yaml_ext = format!(
+                    "rules:\n  - {} * bash {}\n  - {} * read some_other_file\n",
+                    effect, noun,
+                    extra_effect,
+                );
+
+                if let (Ok(doc_base), Ok(doc_ext)) =
+                    (parse::parse_yaml(&yaml_base), parse::parse_yaml(&yaml_ext))
+                {
+                    if let (Ok(p_base), Ok(p_ext)) =
+                        (CompiledPolicy::compile(&doc_base), CompiledPolicy::compile(&doc_ext))
+                    {
+                        let d_base = p_base.evaluate("agent:claude", &Verb::Execute, &noun);
+                        let d_ext = p_ext.evaluate("agent:claude", &Verb::Execute, &noun);
+                        prop_assert_eq!(d_base.effect, d_ext.effect,
+                            "unreachable verb rule should not change result");
+                    }
+                }
+            }
+        }
     }
 }

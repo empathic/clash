@@ -15,7 +15,7 @@ use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use tracing::{Level, instrument};
 
-use super::error::PolicyParseError;
+use super::error::{PolicyParseError, suggest_closest};
 use super::*;
 use crate::sandbox::{Cap, NetworkPolicy};
 
@@ -269,20 +269,23 @@ fn parse_new_format(value: serde_yaml::Value) -> Result<PolicyDocument, PolicyPa
 
     // Validate that the active profile exists
     if !profile_defs.contains_key(&default_config.profile) {
-        return Err(PolicyParseError::UnknownInclude(
-            default_config.profile.clone(),
-        ));
+        let candidates: Vec<&str> = profile_defs.keys().map(|s| s.as_str()).collect();
+        return Err(PolicyParseError::UnknownInclude {
+            name: default_config.profile.clone(),
+            suggestion: suggest_closest(&default_config.profile, &candidates),
+        });
     }
 
     // Validate all includes
-    for (name, def) in &profile_defs {
+    for (_name, def) in &profile_defs {
         if let Some(ref includes) = def.include {
             for include in includes {
                 if !profile_defs.contains_key(include) {
-                    return Err(PolicyParseError::UnknownInclude(format!(
-                        "'{}' includes unknown profile '{}'",
-                        name, include
-                    )));
+                    let candidates: Vec<&str> = profile_defs.keys().map(|s| s.as_str()).collect();
+                    return Err(PolicyParseError::UnknownInclude {
+                        name: include.clone(),
+                        suggestion: suggest_closest(include, &candidates),
+                    });
                 }
             }
         }
@@ -291,7 +294,8 @@ fn parse_new_format(value: serde_yaml::Value) -> Result<PolicyDocument, PolicyPa
     // Detect circular includes
     for name in profile_defs.keys() {
         let mut visited = std::collections::HashSet::new();
-        detect_circular_include(name, &profile_defs, &mut visited)?;
+        let mut path = Vec::new();
+        detect_circular_include(name, &profile_defs, &mut visited, &mut path)?;
     }
 
     Ok(PolicyDocument {
@@ -560,12 +564,19 @@ fn flatten_profile_inner(
     visited: &mut std::collections::HashSet<String>,
 ) -> Result<Vec<ProfileRule>, PolicyParseError> {
     if !visited.insert(name.to_string()) {
-        return Err(PolicyParseError::CircularInclude(name.to_string()));
+        return Err(PolicyParseError::CircularInclude {
+            cycle: name.to_string(),
+            path: None, // flatten doesn't track path; cycle detection does
+        });
     }
 
-    let def = profiles
-        .get(name)
-        .ok_or_else(|| PolicyParseError::UnknownInclude(name.to_string()))?;
+    let def = profiles.get(name).ok_or_else(|| {
+        let candidates: Vec<&str> = profiles.keys().map(|s| s.as_str()).collect();
+        PolicyParseError::UnknownInclude {
+            name: name.to_string(),
+            suggestion: suggest_closest(name, &candidates),
+        }
+    })?;
 
     let mut rules = Vec::new();
 
@@ -588,17 +599,25 @@ fn detect_circular_include(
     name: &str,
     profiles: &HashMap<String, ProfileDef>,
     visited: &mut std::collections::HashSet<String>,
+    path: &mut Vec<String>,
 ) -> Result<(), PolicyParseError> {
     if !visited.insert(name.to_string()) {
-        return Err(PolicyParseError::CircularInclude(name.to_string()));
+        path.push(name.to_string());
+        let cycle_path = path.join(" -> ");
+        return Err(PolicyParseError::CircularInclude {
+            cycle: name.to_string(),
+            path: Some(cycle_path),
+        });
     }
+    path.push(name.to_string());
     if let Some(def) = profiles.get(name) {
         if let Some(ref includes) = def.include {
             for include in includes {
-                detect_circular_include(include, profiles, visited)?;
+                detect_circular_include(include, profiles, visited, path)?;
             }
         }
     }
+    path.pop();
     Ok(())
 }
 

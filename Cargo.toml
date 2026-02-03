@@ -38,3 +38,4 @@ notify-rust = "4"
 
 # Dev dependencies
 tempfile = "3"
+proptest = "1"

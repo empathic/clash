@@ -8,10 +8,10 @@ use claude_settings::policy::parse::{desugar_legacy, format_rule};
 use claude_settings::policy::{Effect, LegacyPermissions, PolicyConfig, PolicyDocument};
 use tracing::level_filters::LevelFilter;
 use tracing::{Level, error, info, instrument};
-use tracing_subscriber::fmt::FormatFields;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 
+mod audit;
 mod hooks;
 mod notifications;
 mod permissions;
@@ -386,29 +386,67 @@ enum Commands {
         #[arg(long, default_value = "ask")]
         default: String,
     },
+
+    /// Explain which policy rule would match a given tool invocation
+    ///
+    /// Reads JSON from stdin with tool_name and tool_input fields,
+    /// evaluates against the loaded policy, and shows the decision trace.
+    Explain {
+        /// Output as JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn init_tracing() {
-    let log_file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/clash.log")
-        .expect("failed to open /tmp/clash.log");
+    // Log path: CLASH_LOG env var > ~/.clash/clash.log > stderr fallback.
+    let log_path = std::env::var("CLASH_LOG").ok().unwrap_or_else(|| {
+        dirs::home_dir()
+            .map(|h| h.join(".clash").join("clash.log"))
+            .unwrap_or_else(|| std::path::PathBuf::from("clash.log"))
+            .to_string_lossy()
+            .into_owned()
+    });
 
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .pretty()
-                .with_level(true)
-                .with_writer(log_file)
-                .with_file(true)
-                .with_line_number(true)
-                .with_target(false)
-                .with_span_events(FmtSpan::CLOSE)
-                .with_ansi(true)
-                .with_filter(LevelFilter::from_level(Level::DEBUG)),
-        )
-        .init();
+    // Ensure parent directory exists.
+    if let Some(parent) = std::path::Path::new(&log_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let log_file = OpenOptions::new().create(true).append(true).open(&log_path);
+
+    match log_file {
+        Ok(file) => {
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .pretty()
+                        .with_level(true)
+                        .with_writer(file)
+                        .with_file(true)
+                        .with_line_number(true)
+                        .with_target(false)
+                        .with_span_events(FmtSpan::CLOSE)
+                        .with_ansi(true)
+                        .with_filter(LevelFilter::from_level(Level::DEBUG)),
+                )
+                .init();
+        }
+        Err(_) => {
+            // Fallback to stderr if log file can't be opened.
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_level(true)
+                        .with_writer(std::io::stderr)
+                        .with_file(true)
+                        .with_line_number(true)
+                        .with_target(false)
+                        .with_filter(LevelFilter::from_level(Level::WARN)),
+                )
+                .init();
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -440,6 +478,13 @@ fn main() -> Result<()> {
         Commands::Migrate { dry_run, default } => {
             if let Err(e) = run_migrate(dry_run, &default) {
                 error!("Migration error: {}", e);
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Explain { json } => {
+            if let Err(e) = run_explain(json) {
+                error!("Explain error: {}", e);
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
@@ -677,6 +722,151 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
             "Migrated {} rule(s) from legacy Claude Code permissions.",
             doc.statements.len()
         );
+    }
+
+    Ok(())
+}
+
+/// Lightweight input for the explain command — only requires tool_name and tool_input.
+#[derive(serde::Deserialize)]
+struct ExplainInput {
+    tool_name: String,
+    tool_input: serde_json::Value,
+    #[serde(default = "default_cwd")]
+    cwd: String,
+}
+
+fn default_cwd() -> String {
+    std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Explain which policy rule would match a given tool invocation.
+///
+/// Reads JSON from stdin: `{"tool_name":"Bash","tool_input":{"command":"git push"}}`
+/// Evaluates against the loaded policy and prints the decision trace.
+#[instrument(level = Level::TRACE)]
+fn run_explain(json_output: bool) -> Result<()> {
+    use claude_settings::policy::{EvalContext, Verb};
+
+    // Read input from stdin
+    let input: ExplainInput = serde_json::from_reader(std::io::stdin().lock())
+        .context("failed to parse JSON from stdin (expected {\"tool_name\":..., \"tool_input\":...})")?;
+
+    // Load settings and compile policy
+    let settings = settings::ClashSettings::load_or_create()?;
+    let compiled = match settings.compiled_policy() {
+        Some(c) => c,
+        None => {
+            if json_output {
+                println!("{}", serde_json::json!({"error": "no compiled policy available"}));
+            } else {
+                eprintln!("No compiled policy available.");
+                eprintln!("Create ~/.clash/policy.yaml or configure Claude Code permissions.");
+            }
+            return Ok(());
+        }
+    };
+
+    // Map tool_name → verb (same logic as permissions.rs)
+    let verb = Verb::from_tool_name(&input.tool_name);
+    let fallback_verb = Verb::Execute;
+    let verb_ref = verb.as_ref().unwrap_or(&fallback_verb);
+    let verb_str_owned = if let Some(ref v) = verb {
+        v.rule_name().to_string()
+    } else {
+        input.tool_name.to_lowercase()
+    };
+
+    // Extract noun from tool_input (same logic as permissions.rs)
+    let noun = match input.tool_name.as_str() {
+        "Bash" => input.tool_input["command"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        "Read" | "Write" | "Edit" => input.tool_input["file_path"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        _ => input.tool_input.to_string(),
+    };
+    let entity = "agent";
+
+    let ctx = EvalContext {
+        entity,
+        verb: verb_ref,
+        noun: &noun,
+        cwd: &input.cwd,
+        tool_input: &input.tool_input,
+        verb_str: &verb_str_owned,
+    };
+
+    let decision = compiled.evaluate_with_context(&ctx);
+
+    if json_output {
+        let output = serde_json::json!({
+            "effect": format!("{}", decision.effect),
+            "reason": decision.reason,
+            "matched_rules": decision.trace.matched_rules.iter().map(|m| {
+                serde_json::json!({
+                    "rule_index": m.rule_index,
+                    "description": m.description,
+                    "effect": format!("{}", m.effect),
+                })
+            }).collect::<Vec<_>>(),
+            "skipped_rules": decision.trace.skipped_rules.iter().map(|s| {
+                serde_json::json!({
+                    "rule_index": s.rule_index,
+                    "description": s.description,
+                    "reason": s.reason,
+                })
+            }).collect::<Vec<_>>(),
+            "resolution": decision.trace.final_resolution,
+            "sandbox": decision.sandbox.as_ref().map(|s| serde_json::to_value(s).ok()),
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("Input:");
+        println!("  tool:   {}", input.tool_name);
+        println!("  entity: {}", entity);
+        println!("  verb:   {}", verb_str_owned);
+        println!("  noun:   {}", noun);
+        println!();
+
+        println!("Decision: {}", decision.effect);
+        if let Some(ref reason) = decision.reason {
+            println!("Reason:   {}", reason);
+        }
+        println!();
+
+        if !decision.trace.matched_rules.is_empty() {
+            println!("Matched rules:");
+            for m in &decision.trace.matched_rules {
+                println!("  [{}] {} -> {}", m.rule_index, m.description, m.effect);
+            }
+            println!();
+        }
+
+        if !decision.trace.skipped_rules.is_empty() {
+            println!("Skipped rules:");
+            for s in &decision.trace.skipped_rules {
+                println!("  [{}] {} ({})", s.rule_index, s.description, s.reason);
+            }
+            println!();
+        }
+
+        println!("Resolution: {}", decision.trace.final_resolution);
+
+        if let Some(ref sandbox) = decision.sandbox {
+            println!();
+            println!("Sandbox policy:");
+            println!("  default: {}", sandbox.default.display());
+            println!("  network: {:?}", sandbox.network);
+            for rule in &sandbox.rules {
+                println!("  {:?} {} in {}", rule.effect, rule.caps.display(), rule.path);
+            }
+        }
     }
 
     Ok(())

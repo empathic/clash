@@ -80,10 +80,21 @@ fn check_permission_policy(
         "Policy decision"
     );
 
-    let additional_context = if decision.explanation.is_empty() {
+    // Write audit log entry if enabled.
+    crate::audit::log_decision(
+        &settings.audit,
+        &input.tool_name,
+        &input.tool_input,
+        decision.effect,
+        decision.reason.as_deref(),
+        &decision.trace,
+    );
+
+    let explanation = decision.explanation();
+    let additional_context = if explanation.is_empty() {
         None
     } else {
-        Some(decision.explanation.join("\n"))
+        Some(explanation.join("\n"))
     };
 
     Ok(match decision.effect {
@@ -212,6 +223,7 @@ mod tests {
             policy: Some(doc),
             notifications: Default::default(),
             notification_warning: None,
+            audit: Default::default(),
         }
     }
 
@@ -241,6 +253,7 @@ mod tests {
             policy: Some(doc),
             notifications: Default::default(),
             notification_warning: None,
+            audit: Default::default(),
         }
     }
 
@@ -368,6 +381,7 @@ rules:
             policy: Some(doc),
             notifications: Default::default(),
             notification_warning: None,
+            audit: Default::default(),
         };
         let result = check_permission(&bash_input("echo hello"), &settings)?;
         assert_decision(

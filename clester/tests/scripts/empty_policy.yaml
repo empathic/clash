@@ -1,0 +1,35 @@
+meta:
+  name: empty policy document
+  description: A policy file with no rules should fall through to the configured default
+
+clash:
+  engine_mode: policy
+  policy:
+    default: ask
+    rules:
+
+steps:
+  - name: bash falls to default ask
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: ls
+    expect:
+      decision: ask
+
+  - name: read falls to default ask
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/file.txt
+    expect:
+      decision: ask
+
+  - name: write falls to default ask
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/file.txt
+      content: test
+    expect:
+      decision: ask

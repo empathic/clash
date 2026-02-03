@@ -9,6 +9,7 @@ use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use tracing::{Level, info, instrument, warn};
 
+use crate::audit::AuditConfig;
 use crate::notifications::NotificationConfig;
 
 /// Which permission engine to use.
@@ -41,6 +42,10 @@ pub struct ClashSettings {
     /// Warning message if parsing the notifications config failed or was incomplete.
     #[serde(skip)]
     pub notification_warning: Option<String>,
+
+    /// Audit logging configuration, loaded from policy.yaml.
+    #[serde(skip)]
+    pub audit: AuditConfig,
 }
 
 impl ClashSettings {
@@ -66,10 +71,11 @@ impl ClashSettings {
         if path.exists() {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => {
-                    // Parse notification config from the same YAML file.
+                    // Parse notification and audit configs from the same YAML file.
                     let (notif_config, notif_warning) = parse_notification_config(&contents);
                     self.notifications = notif_config;
                     self.notification_warning = notif_warning;
+                    self.audit = parse_audit_config(&contents);
 
                     match claude_settings::policy::parse::parse_yaml(&contents) {
                         Ok(doc) => {
@@ -210,5 +216,21 @@ pub fn parse_notification_config(yaml_str: &str) -> (NotificationConfig, Option<
             warn!(error = %e, "Failed to parse notifications config from policy.yaml");
             (NotificationConfig::default(), Some(warning))
         }
+    }
+}
+
+/// Extract the `audit:` section from a policy YAML string.
+///
+/// Returns the parsed config, falling back to defaults on error.
+fn parse_audit_config(yaml_str: &str) -> AuditConfig {
+    #[derive(Deserialize)]
+    struct RawYaml {
+        #[serde(default)]
+        audit: Option<AuditConfig>,
+    }
+
+    match serde_yaml::from_str::<RawYaml>(yaml_str) {
+        Ok(raw) => raw.audit.unwrap_or_default(),
+        Err(_) => AuditConfig::default(),
     }
 }

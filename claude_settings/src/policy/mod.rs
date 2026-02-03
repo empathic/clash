@@ -56,7 +56,8 @@ pub mod sandbox_gen;
 pub use ast::*;
 pub use error::{CompileError, PolicyError, PolicyParseError};
 pub use ir::{
-    CompiledMatchExpr, CompiledPattern, CompiledPolicy, CompiledStatement, PolicyDecision,
+    CompiledMatchExpr, CompiledPattern, CompiledPolicy, DecisionTrace, PolicyDecision, RuleMatch,
+    RuleSkip,
 };
 
 use std::fmt;
