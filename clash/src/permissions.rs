@@ -24,11 +24,12 @@ fn check_permission_policy(
     let compiled = match settings.compiled_policy() {
         Some(c) => c,
         None => {
-            warn!("Policy engine selected but no policy could be compiled; falling back to ask");
-            return Ok(HookOutput::ask(
-                Some("policy engine: no compiled policy available".into()),
-                None,
-            ));
+            let reason = match settings.policy_error() {
+                Some(err) => format!("{}. All tool uses will require approval.", err),
+                None => "policy engine: no compiled policy available".into(),
+            };
+            warn!("{}", reason);
+            return Ok(HookOutput::ask(Some(reason), None));
         }
     };
 
@@ -65,7 +66,7 @@ fn check_permission_policy(
         &decision.trace,
     );
 
-    let explanation = decision.explanation();
+    let explanation = decision.human_explanation();
     let additional_context = if explanation.is_empty() {
         None
     } else {
@@ -650,12 +651,12 @@ rules:
         let result = check_permission(&bash_input("git status"), &settings)?;
         let ctx = get_additional_context(&result).expect("should have additional_context");
         assert!(
-            ctx.contains("matched:"),
-            "explanation should contain 'matched:' but got: {ctx}"
+            ctx.contains("matched"),
+            "explanation should contain 'matched' but got: {ctx}"
         );
         assert!(
-            ctx.contains("allow"),
-            "explanation should mention allow but got: {ctx}"
+            ctx.contains("allowed"),
+            "explanation should mention allowed but got: {ctx}"
         );
         Ok(())
     }
@@ -705,8 +706,8 @@ rules:
         let result = check_permission(&bash_input("ls"), &settings)?;
         let ctx = get_additional_context(&result).expect("should have additional_context");
         assert!(
-            ctx.contains("no rules matched"),
-            "explanation should say 'no rules matched' but got: {ctx}"
+            ctx.contains("No rules matched"),
+            "explanation should say 'No rules matched' but got: {ctx}"
         );
         Ok(())
     }

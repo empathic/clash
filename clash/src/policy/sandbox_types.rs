@@ -38,6 +38,7 @@ impl Cap {
                 "create" => caps |= Cap::CREATE,
                 "delete" => caps |= Cap::DELETE,
                 "execute" => caps |= Cap::EXECUTE,
+                "full" => caps |= Cap::all(),
                 other => return Err(format!("unknown capability: '{}'", other)),
             }
         }
@@ -249,6 +250,8 @@ mod tests {
             Cap::parse("read + write + create + delete + execute").unwrap(),
             Cap::all()
         );
+        assert_eq!(Cap::parse("full").unwrap(), Cap::all());
+        assert_eq!(Cap::parse("full + read").unwrap(), Cap::all()); // redundant but valid
         assert!(Cap::parse("unknown").is_err());
         assert!(Cap::parse("").is_err());
     }
