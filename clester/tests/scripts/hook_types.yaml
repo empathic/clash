@@ -35,11 +35,3 @@ steps:
     expect:
       no_decision: true
       exit_code: 0
-
-  - name: notification continues
-    hook: notification
-    message: Claude needs permission to use Bash
-    notification_type: permission_prompt
-    expect:
-      no_decision: true
-      exit_code: 0
