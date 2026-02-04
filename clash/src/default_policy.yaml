@@ -25,9 +25,15 @@ profiles:
         fs:
           read + write + execute + create + delete: regex(^/tmp)
   
+  sensitive:
+    rules:
+      ask * *:
+        fs:
+          read + write + create + delete: subpath(~/.ssh) | subpath(~/.aws)
+  
       
   main:
-    include: [cwd, claude-internal, tmp]
+    include: [cwd, claude-internal, tmp, sensitive]
     rules:
       # ── Git: deny commit and push ─────────────────────────────
       ask bash git commit*:

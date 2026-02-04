@@ -61,7 +61,7 @@ ci:
     just clester
 
 clash *ARGS:
-    cargo run -p clash {{ARGS}}
+    cargo run -p clash -- {{ARGS}}
 
 fix:
     cargo fix --allow-dirty

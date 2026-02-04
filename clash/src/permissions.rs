@@ -68,6 +68,7 @@ fn check_permission_policy(
         noun = %noun,
         effect = %decision.effect,
         reason = ?decision.reason,
+        trace = ?decision.trace,
         "Policy decision"
     );
 
