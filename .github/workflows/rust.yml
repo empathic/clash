@@ -17,6 +17,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install just
-      run: apt install just
+      run: cargo install just
     - name: Run Tests
       run: just ci
