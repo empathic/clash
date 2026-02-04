@@ -120,8 +120,6 @@ pub mod io;
 pub mod merge;
 pub mod paths;
 pub mod permission;
-pub mod policy;
-pub mod sandbox;
 pub mod types;
 
 pub use error::{Result, SettingsError};

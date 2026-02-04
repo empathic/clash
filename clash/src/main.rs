@@ -3,9 +3,9 @@ use std::fs::OpenOptions;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use clash::policy::parse::{desugar_legacy, format_rule};
+use clash::policy::{Effect, LegacyPermissions, PolicyConfig, PolicyDocument};
 use claude_settings::SettingsLevel;
-use claude_settings::policy::parse::{desugar_legacy, format_rule};
-use claude_settings::policy::{Effect, LegacyPermissions, PolicyConfig, PolicyDocument};
 use tracing::level_filters::LevelFilter;
 use tracing::{Level, error, info, instrument};
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -17,7 +17,7 @@ use clash::permissions::check_permission;
 use clash::sandbox;
 use clash::settings::{ClashSettings, DEFAULT_POLICY};
 
-use claude_settings::sandbox::SandboxPolicy;
+use clash::policy::sandbox_types::SandboxPolicy;
 
 #[derive(Parser, Debug)]
 #[command(name = "clash")]
@@ -105,7 +105,7 @@ impl HooksCmd {
         };
 
         output.write_stdout()?;
-        std::process::exit(exit_code::SUCCESS);
+        Ok(())
     }
 }
 
@@ -197,9 +197,9 @@ enum Commands {
 fn init_tracing() {
     // Log path: CLASH_LOG env var > ~/.clash/clash.log > stderr fallback.
     let log_path = std::env::var("CLASH_LOG").ok().unwrap_or_else(|| {
-        dirs::home_dir()
-            .map(|h| h.join(".clash").join("clash.log"))
-            .unwrap_or_else(|| std::path::PathBuf::from("clash.log"))
+        ClashSettings::settings_dir()
+            .map(|d| d.join("clash.log"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("clash.log"))
             .to_string_lossy()
             .into_owned()
     });
@@ -245,6 +245,15 @@ fn init_tracing() {
     }
 }
 
+/// Log an error and exit with code 1. Used for all non-hook subcommands.
+fn run_or_exit(label: &str, result: Result<()>) {
+    if let Err(e) = result {
+        error!("{} error: {}", label, e);
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
 fn main() -> Result<()> {
     init_tracing();
     let cli = Cli::parse();
@@ -257,44 +266,23 @@ fn main() -> Result<()> {
                 std::process::exit(exit_code::BLOCKING_ERROR);
             }
         }
-        Commands::Sandbox(sandbox_cmd) => {
-            if let Err(e) = run_sandbox(sandbox_cmd) {
-                error!("Sandbox error: {}", e);
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
-        }
-        Commands::Launch { policy, args } => {
-            if let Err(e) = run_launch(policy, args) {
-                error!("Launch error: {}", e);
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
-        }
+        Commands::Sandbox(cmd) => run_or_exit("Sandbox", run_sandbox(cmd)),
+        Commands::Launch { policy, args } => run_or_exit("Launch", run_launch(policy, args)),
         Commands::Migrate { dry_run, default } => {
-            if let Err(e) = run_migrate(dry_run, &default) {
-                error!("Migration error: {}", e);
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
+            run_or_exit("Migration", run_migrate(dry_run, &default))
         }
-        Commands::Explain { json } => {
-            if let Err(e) = run_explain(json) {
-                error!("Explain error: {}", e);
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
-        }
-        Commands::Init { force } => {
-            if let Err(e) = run_init(force) {
-                error!("Init error: {}", e);
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
-        }
+        Commands::Explain { json } => run_or_exit("Explain", run_explain(json)),
+        Commands::Init { force } => run_or_exit("Init", run_init(force)),
     }
 
     Ok(())
+}
+
+/// Parse shared sandbox arguments (policy JSON + cwd).
+fn parse_sandbox_args(policy_json: &str, cwd: &str) -> Result<(SandboxPolicy, std::path::PathBuf)> {
+    let policy: SandboxPolicy =
+        serde_json::from_str(policy_json).context("failed to parse --policy JSON")?;
+    Ok((policy, std::path::PathBuf::from(cwd)))
 }
 
 /// Run a command inside a sandbox.
@@ -306,14 +294,10 @@ fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
             cwd,
             command,
         } => {
-            let policy: SandboxPolicy =
-                serde_json::from_str(&policy).context("failed to parse --policy JSON")?;
-            let cwd_path = std::path::Path::new(&cwd);
-
+            let (policy, cwd_path) = parse_sandbox_args(&policy, &cwd)?;
             // This does not return on success (replaces the process via execvp)
-            match sandbox::exec_sandboxed(&policy, cwd_path, &command) {
+            match sandbox::exec_sandboxed(&policy, &cwd_path, &command) {
                 Err(e) => anyhow::bail!("sandbox exec failed: {}", e),
-                // exec_sandboxed returns Infallible on success, so Ok is unreachable
             }
         }
         SandboxCmd::Test {
@@ -321,9 +305,7 @@ fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
             cwd,
             command,
         } => {
-            let policy: SandboxPolicy =
-                serde_json::from_str(&policy).context("failed to parse --policy JSON")?;
-            let cwd_path = std::path::Path::new(&cwd);
+            let (policy, cwd_path) = parse_sandbox_args(&policy, &cwd)?;
 
             eprintln!("Testing sandbox with policy:");
             eprintln!("  default: {}", policy.default.display());
@@ -339,7 +321,7 @@ fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
             eprintln!("  command: {:?}", command);
             eprintln!("---");
 
-            match sandbox::exec_sandboxed(&policy, cwd_path, &command) {
+            match sandbox::exec_sandboxed(&policy, &cwd_path, &command) {
                 Err(e) => anyhow::bail!("sandbox test failed: {}", e),
             }
         }
@@ -377,7 +359,7 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read policy file: {}", path))?;
         // Validate it parses
-        claude_settings::policy::parse::parse_yaml(&contents)
+        clash::policy::parse::parse_yaml(&contents)
             .with_context(|| format!("failed to parse policy file: {}", path))?;
         info!(path, "Using policy file");
     }
@@ -416,7 +398,7 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     });
 
     // Write hooks to a temp file that Claude Code can use
-    let hooks_dir = ClashSettings::settings_dir().join("hooks");
+    let hooks_dir = ClashSettings::settings_dir()?.join("hooks");
     std::fs::create_dir_all(&hooks_dir)?;
     let hooks_file = hooks_dir.join("hooks.json");
     std::fs::write(&hooks_file, serde_json::to_string_pretty(&hooks_json)?)?;
@@ -510,7 +492,7 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
     if dry_run {
         print!("{}", output);
     } else {
-        let path = ClashSettings::policy_file();
+        let path = ClashSettings::policy_file()?;
         if path.exists() {
             eprintln!(
                 "Warning: {} already exists. Use --dry-run to preview, or remove the file first.",
@@ -518,7 +500,7 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
             );
             anyhow::bail!("policy.yaml already exists at {}", path.display());
         }
-        std::fs::create_dir_all(ClashSettings::settings_dir())?;
+        std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
         std::fs::write(&path, &output)?;
         println!("Wrote policy to {}", path.display());
         println!(
@@ -551,7 +533,7 @@ fn default_cwd() -> String {
 /// Evaluates against the loaded policy and prints the decision trace.
 #[instrument(level = Level::TRACE)]
 fn run_explain(json_output: bool) -> Result<()> {
-    use claude_settings::policy::{EvalContext, Verb};
+    use clash::permissions::{build_eval_context, extract_noun, resolve_verb};
 
     // Read input from stdin
     let input: ExplainInput = serde_json::from_reader(std::io::stdin().lock()).context(
@@ -576,38 +558,17 @@ fn run_explain(json_output: bool) -> Result<()> {
         }
     };
 
-    // Map tool_name → verb (same logic as permissions.rs)
-    let verb = Verb::from_tool_name(&input.tool_name);
-    let fallback_verb = Verb::Execute;
-    let verb_ref = verb.as_ref().unwrap_or(&fallback_verb);
-    let verb_str_owned = if let Some(ref v) = verb {
-        v.rule_name().to_string()
-    } else {
-        input.tool_name.to_lowercase()
-    };
-
-    // Extract noun from tool_input (same logic as permissions.rs)
-    let noun = match input.tool_name.as_str() {
-        "Bash" => input.tool_input["command"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
-        "Read" | "Write" | "Edit" => input.tool_input["file_path"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
-        _ => input.tool_input.to_string(),
-    };
+    let (verb, verb_str_owned) = resolve_verb(&input.tool_name);
+    let noun = extract_noun(&input.tool_name, &input.tool_input);
     let entity = "agent";
-
-    let ctx = EvalContext {
+    let ctx = build_eval_context(
         entity,
-        verb: verb_ref,
-        noun: &noun,
-        cwd: &input.cwd,
-        tool_input: &input.tool_input,
-        verb_str: &verb_str_owned,
-    };
+        &verb,
+        &verb_str_owned,
+        &noun,
+        &input.cwd,
+        &input.tool_input,
+    );
 
     let decision = compiled.evaluate_with_context(&ctx);
 
@@ -687,7 +648,7 @@ fn run_explain(json_output: bool) -> Result<()> {
 /// Initialize a new clash policy.yaml with safe defaults.
 #[instrument(level = Level::TRACE)]
 fn run_init(force: bool) -> Result<()> {
-    let path = ClashSettings::policy_file();
+    let path = ClashSettings::policy_file()?;
 
     if path.exists() && !force {
         anyhow::bail!(
@@ -696,7 +657,7 @@ fn run_init(force: bool) -> Result<()> {
         );
     }
 
-    std::fs::create_dir_all(ClashSettings::settings_dir())?;
+    std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
     std::fs::write(&path, DEFAULT_POLICY)?;
     println!("Wrote default policy to {}", path.display());
     println!("Edit the file to customize rules for your environment.");

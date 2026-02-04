@@ -105,51 +105,57 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
     let mut lines: Vec<String> = Vec::new();
 
     // 1. Check policy file
-    let policy_path = ClashSettings::policy_file();
-    if policy_path.exists() {
-        match std::fs::read_to_string(&policy_path) {
-            Ok(contents) => match claude_settings::policy::parse::parse_yaml(&contents) {
-                Ok(doc) => {
-                    let rule_count = doc.statements.len()
-                        + doc
-                            .profile_defs
-                            .values()
-                            .map(|p| p.rules.len())
-                            .sum::<usize>();
-                    let format = if doc.profile_defs.is_empty() {
-                        "legacy"
-                    } else {
-                        "new"
-                    };
-                    match claude_settings::policy::CompiledPolicy::compile(&doc) {
-                        Ok(_) => {
-                            lines.push(format!(
-                                "policy.yaml: OK ({} rules, format={}, default={})",
-                                rule_count, format, doc.policy.default,
-                            ));
-                        }
-                        Err(e) => {
-                            lines.push(format!("ISSUE: policy.yaml compile error: {}", e));
-                        }
-                    }
-                }
-                Err(e) => {
-                    lines.push(format!("ISSUE: policy.yaml parse error: {}", e));
-                }
-            },
+    let policy_contents = match ClashSettings::policy_file() {
+        Ok(policy_path) if policy_path.exists() => match std::fs::read_to_string(&policy_path) {
+            Ok(contents) => Some(contents),
             Err(e) => {
                 lines.push(format!("ISSUE: policy.yaml read error: {}", e));
+                None
+            }
+        },
+        Ok(_) => {
+            lines.push("policy.yaml: not found (using legacy permissions)".into());
+            None
+        }
+        Err(e) => {
+            lines.push(format!("ISSUE: policy.yaml path error: {}", e));
+            None
+        }
+    };
+
+    if let Some(ref contents) = policy_contents {
+        match crate::policy::parse::parse_yaml(contents) {
+            Ok(doc) => {
+                let rule_count = doc.statements.len()
+                    + doc
+                        .profile_defs
+                        .values()
+                        .map(|p| p.rules.len())
+                        .sum::<usize>();
+                let format = if doc.profile_defs.is_empty() {
+                    "legacy"
+                } else {
+                    "new"
+                };
+                match crate::policy::CompiledPolicy::compile(&doc) {
+                    Ok(_) => {
+                        lines.push(format!(
+                            "policy.yaml: OK ({} rules, format={}, default={})",
+                            rule_count, format, doc.policy.default,
+                        ));
+                    }
+                    Err(e) => {
+                        lines.push(format!("ISSUE: policy.yaml compile error: {}", e));
+                    }
+                }
+            }
+            Err(e) => {
+                lines.push(format!("ISSUE: policy.yaml parse error: {}", e));
             }
         }
-    } else {
-        lines.push("policy.yaml: not found (using legacy permissions)".into());
-    }
 
-    // 2. Validate notification config from the same policy file
-    if policy_path.exists()
-        && let Ok(contents) = std::fs::read_to_string(&policy_path)
-    {
-        let (notif_config, notif_warning) = settings::parse_notification_config(&contents);
+        // 2. Validate notification config from the same policy file
+        let (notif_config, notif_warning) = settings::parse_notification_config(contents);
         if let Some(warning) = notif_warning {
             lines.push(format!("ISSUE: {}", warning));
         } else {
@@ -182,7 +188,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
         }
     }
 
-    // 5. Session metadata
+    // 4. Session metadata
     if let Some(ref source) = input.source {
         lines.push(format!("session source: {}", source));
     }

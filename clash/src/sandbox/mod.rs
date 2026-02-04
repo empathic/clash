@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use claude_settings::sandbox::SandboxPolicy;
+use crate::policy::sandbox_types::SandboxPolicy;
 use tracing::{Level, instrument};
 
 #[cfg(target_os = "linux")]
@@ -206,7 +206,7 @@ pub(crate) fn do_exec(command: &[String]) -> Result<std::convert::Infallible, Sa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use claude_settings::sandbox::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxRule};
+    use crate::policy::sandbox_types::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxRule};
 
     fn simple_policy() -> SandboxPolicy {
         SandboxPolicy {

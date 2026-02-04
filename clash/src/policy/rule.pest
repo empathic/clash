@@ -5,7 +5,7 @@
 
 rule = { SOI ~ effect ~ sep ~ entity ~ sep ~ tool ~ sep ~ pattern ~ EOI }
 
-effect = { "allow" | "deny" | "ask" | "delegate" }
+effect = { "allow" | "deny" | "ask" }
 
 entity = { negation? ~ entity_value }
 negation = { "!" }

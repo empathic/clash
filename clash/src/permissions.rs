@@ -1,5 +1,5 @@
-use claude_settings::policy::{Effect, EvalContext, Verb};
-use claude_settings::sandbox::SandboxPolicy;
+use crate::policy::sandbox_types::SandboxPolicy;
+use crate::policy::{Effect, EvalContext, Verb};
 use tracing::{Level, info, instrument, warn};
 
 use crate::hooks::{HookOutput, ToolInput, ToolUseHookInput};
@@ -25,41 +25,24 @@ fn check_permission_policy(
         Some(c) => c,
         None => {
             warn!("Policy engine selected but no policy could be compiled; falling back to ask");
-            return Ok(HookOutput::ask(Some(
-                "policy engine: no compiled policy available".into(),
-            )));
+            return Ok(HookOutput::ask(
+                Some("policy engine: no compiled policy available".into()),
+                None,
+            ));
         }
     };
 
-    // Map tool_name → Verb. For known tools, use the canonical verb.
-    // For unknown tools with old-format policies, fall back to ask.
-    // For new-format policies, the raw tool name is matched via verb_str.
-    let verb = Verb::from_tool_name(&input.tool_name);
-    let fallback_verb = Verb::Execute; // used when verb is None for new-format
-    let verb_ref = verb.as_ref().unwrap_or(&fallback_verb);
-
-    // Extract the noun (the resource being acted on) from the tool input.
-    let noun = extract_noun(input);
-
-    // Default entity — the hook input doesn't carry entity info yet,
-    // so we treat all invocations as coming from "agent".
+    let (verb, verb_str_owned) = resolve_verb(&input.tool_name);
+    let noun = extract_noun(&input.tool_name, &input.tool_input);
     let entity = "agent";
-
-    // Build evaluation context with cwd and tool_input for constraint evaluation.
-    // verb_str uses the tool_name lowercased for new-format matching.
-    let verb_str_owned = if let Some(ref v) = verb {
-        v.rule_name().to_string()
-    } else {
-        input.tool_name.to_lowercase()
-    };
-    let ctx = EvalContext {
+    let ctx = build_eval_context(
         entity,
-        verb: verb_ref,
-        noun: &noun,
-        cwd: &input.cwd,
-        tool_input: &input.tool_input,
-        verb_str: &verb_str_owned,
-    };
+        &verb,
+        &verb_str_owned,
+        &noun,
+        &input.cwd,
+        &input.tool_input,
+    );
 
     let decision = compiled.evaluate_with_context(&ctx);
     info!(
@@ -91,7 +74,7 @@ fn check_permission_policy(
 
     Ok(match decision.effect {
         Effect::Allow => {
-            let mut output = HookOutput::allow_with_context(
+            let mut output = HookOutput::allow(
                 decision.reason.or(Some("policy: allowed".into())),
                 additional_context,
             );
@@ -105,22 +88,14 @@ fn check_permission_policy(
             }
             output
         }
-        Effect::Deny => HookOutput::deny_with_context(
+        Effect::Deny => HookOutput::deny(
             decision.reason.unwrap_or_else(|| "policy: denied".into()),
             additional_context,
         ),
-        Effect::Ask => HookOutput::ask_with_context(
+        Effect::Ask => HookOutput::ask(
             decision.reason.or(Some("policy: ask".into())),
             additional_context,
         ),
-        Effect::Delegate => {
-            // Delegation is not yet implemented; fall back to ask.
-            warn!("Delegate effect not yet implemented; falling back to ask");
-            HookOutput::ask_with_context(
-                Some("policy: delegation not yet implemented".into()),
-                additional_context,
-            )
-        }
     })
 }
 
@@ -167,14 +142,13 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Extract the noun (resource identifier) from a tool input.
+/// Extract the noun (resource identifier) from tool input JSON.
 ///
 /// Checks common field names in priority order to extract a meaningful
 /// noun from any tool's input JSON. This handles both known tools
 /// (Bash, Read, Write, Edit) and arbitrary tools (Glob, Grep, WebSearch, etc.).
-#[instrument(level = Level::TRACE, skip(input))]
-fn extract_noun(input: &ToolUseHookInput) -> String {
-    // Try common noun fields in priority order
+#[instrument(level = Level::TRACE, skip(tool_input))]
+pub fn extract_noun(tool_name: &str, tool_input: &serde_json::Value) -> String {
     let fields = [
         "command",   // Bash
         "file_path", // Read, Write, Edit, NotebookEdit
@@ -185,22 +159,55 @@ fn extract_noun(input: &ToolUseHookInput) -> String {
         "prompt",    // Task
     ];
     for field in &fields {
-        if let Some(val) = input.tool_input.get(*field).and_then(|v| v.as_str()) {
+        if let Some(val) = tool_input.get(*field).and_then(|v| v.as_str()) {
             return val.to_string();
         }
     }
     // Fallback: use the tool name as noun (better than serializing entire JSON)
-    input.tool_name.to_lowercase()
+    tool_name.to_lowercase()
+}
+
+/// Resolve the verb and verb string for a tool name.
+///
+/// Returns the canonical `Verb` (or `Execute` as fallback) and the string
+/// representation used for policy matching.
+pub fn resolve_verb(tool_name: &str) -> (Verb, String) {
+    match Verb::from_tool_name(tool_name) {
+        Some(v) => {
+            let s = v.rule_name().to_string();
+            (v, s)
+        }
+        None => (Verb::Execute, tool_name.to_lowercase()),
+    }
+}
+
+/// Build an `EvalContext` from common request parameters.
+pub fn build_eval_context<'a>(
+    entity: &'a str,
+    verb: &'a Verb,
+    verb_str: &'a str,
+    noun: &'a str,
+    cwd: &'a str,
+    tool_input: &'a serde_json::Value,
+) -> EvalContext<'a> {
+    EvalContext {
+        entity,
+        verb,
+        noun,
+        cwd,
+        tool_input,
+        verb_str,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hooks::ToolUseHookInput;
+    use crate::policy::parse::desugar_legacy;
+    use crate::policy::parse::parse_yaml;
+    use crate::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
     use anyhow::Result;
-    use claude_settings::policy::parse::desugar_legacy;
-    use claude_settings::policy::parse::parse_yaml;
-    use claude_settings::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
     use serde_json::json;
 
     fn bash_input(command: &str) -> ToolUseHookInput {
@@ -220,12 +227,9 @@ mod tests {
 
     fn settings_with_policy(yaml: &str) -> ClashSettings {
         let doc = parse_yaml(yaml).expect("valid YAML");
-        ClashSettings {
-            policy: Some(doc),
-            notifications: Default::default(),
-            notification_warning: None,
-            audit: Default::default(),
-        }
+        let mut settings = ClashSettings::default();
+        settings.set_policy(doc);
+        settings
     }
 
     /// Build ClashSettings from legacy permission strings, compiled into a PolicyDocument.
@@ -249,12 +253,9 @@ mod tests {
             default_config: None,
             profile_defs: Default::default(),
         };
-        ClashSettings {
-            policy: Some(doc),
-            notifications: Default::default(),
-            notification_warning: None,
-            audit: Default::default(),
-        }
+        let mut settings = ClashSettings::default();
+        settings.set_policy(doc);
+        settings
     }
 
     // --- Legacy permissions compiled to policy ---
@@ -376,12 +377,8 @@ rules:
     #[test]
     fn test_auto_mode_uses_policy_when_available() -> Result<()> {
         let doc = parse_yaml("rules:\n  - allow * bash echo *\n").unwrap();
-        let settings = ClashSettings {
-            policy: Some(doc),
-            notifications: Default::default(),
-            notification_warning: None,
-            audit: Default::default(),
-        };
+        let mut settings = ClashSettings::default();
+        settings.set_policy(doc);
         let result = check_permission(&bash_input("echo hello"), &settings)?;
         assert_decision(
             &result,
@@ -712,5 +709,293 @@ rules:
             "explanation should say 'no rules matched' but got: {ctx}"
         );
         Ok(())
+    }
+
+    // --- shell_escape tests ---
+
+    #[test]
+    fn test_shell_escape_simple_string() {
+        assert_eq!(shell_escape("hello"), "'hello'");
+    }
+
+    #[test]
+    fn test_shell_escape_string_with_spaces() {
+        assert_eq!(shell_escape("hello world"), "'hello world'");
+    }
+
+    #[test]
+    fn test_shell_escape_empty_string() {
+        assert_eq!(shell_escape(""), "''");
+    }
+
+    #[test]
+    fn test_shell_escape_embedded_single_quotes() {
+        // A single quote inside the string must be escaped as: end quote, backslash-quote, re-open quote
+        assert_eq!(shell_escape("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn test_shell_escape_multiple_single_quotes() {
+        assert_eq!(shell_escape("a'b'c"), "'a'\\''b'\\''c'");
+    }
+
+    #[test]
+    fn test_shell_escape_special_characters() {
+        // Dollar signs, backticks, backslashes should all be preserved literally inside single quotes
+        assert_eq!(shell_escape("$HOME"), "'$HOME'");
+        assert_eq!(shell_escape("`whoami`"), "'`whoami`'");
+        assert_eq!(shell_escape("a\\b"), "'a\\b'");
+    }
+
+    #[test]
+    fn test_shell_escape_double_quotes() {
+        assert_eq!(shell_escape("say \"hi\""), "'say \"hi\"'");
+    }
+
+    // --- wrap_bash_with_sandbox tests ---
+
+    /// Helper: create a minimal SandboxPolicy for testing.
+    fn test_sandbox_policy() -> SandboxPolicy {
+        use crate::policy::sandbox_types::{Cap, NetworkPolicy};
+        SandboxPolicy {
+            default: Cap::READ | Cap::EXECUTE,
+            rules: vec![],
+            network: NetworkPolicy::Deny,
+        }
+    }
+
+    /// Helper: create a ToolUseHookInput for a Bash command with a specified cwd.
+    fn bash_input_for_sandbox(command: &str, cwd: &str) -> ToolUseHookInput {
+        ToolUseHookInput {
+            tool_name: "Bash".into(),
+            tool_input: json!({"command": command}),
+            cwd: cwd.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Helper: extract the rewritten command string from wrap_bash_with_sandbox output.
+    fn extract_wrapped_command(result: &serde_json::Value) -> &str {
+        result
+            .get("command")
+            .and_then(|v| v.as_str())
+            .expect("wrapped result should have a 'command' string field")
+    }
+
+    #[test]
+    fn test_wrap_bash_basic_command() {
+        let input = bash_input_for_sandbox("ls -la", "/home/user/project");
+        let policy = test_sandbox_policy();
+
+        let result = wrap_bash_with_sandbox(&input, &policy);
+        assert!(
+            result.is_some(),
+            "wrap_bash_with_sandbox should return Some for Bash input"
+        );
+
+        let wrapped = result.unwrap();
+        let cmd = extract_wrapped_command(&wrapped);
+
+        // The wrapped command should contain the sandbox exec invocation
+        assert!(
+            cmd.contains("sandbox exec"),
+            "should contain 'sandbox exec'"
+        );
+        // Should contain --policy with the serialized policy
+        assert!(cmd.contains("--policy"), "should contain '--policy'");
+        // Should contain --cwd with the working directory
+        assert!(cmd.contains("--cwd"), "should contain '--cwd'");
+        // Should end with: -- bash -c '<original command>'
+        assert!(
+            cmd.contains("-- bash -c 'ls -la'"),
+            "should wrap the original command with bash -c, got: {cmd}"
+        );
+        // The cwd should be shell-escaped
+        assert!(
+            cmd.contains("--cwd '/home/user/project'"),
+            "cwd should be shell-escaped, got: {cmd}"
+        );
+    }
+
+    #[test]
+    fn test_wrap_bash_command_with_single_quotes() {
+        let input = bash_input_for_sandbox("echo 'hello world'", "/tmp");
+        let policy = test_sandbox_policy();
+
+        let result = wrap_bash_with_sandbox(&input, &policy).unwrap();
+        let cmd = extract_wrapped_command(&result);
+
+        // Single quotes inside the command must be escaped properly.
+        // The original command echo 'hello world' should become:
+        //   bash -c 'echo '\''hello world'\'''
+        assert!(
+            cmd.contains("bash -c 'echo '\\''hello world'\\'''"),
+            "single quotes in command must be escaped, got: {cmd}"
+        );
+    }
+
+    #[test]
+    fn test_wrap_bash_command_with_double_quotes() {
+        let input = bash_input_for_sandbox("echo \"hello world\"", "/tmp");
+        let policy = test_sandbox_policy();
+
+        let result = wrap_bash_with_sandbox(&input, &policy).unwrap();
+        let cmd = extract_wrapped_command(&result);
+
+        // Double quotes are safe inside single quotes, should be passed through literally
+        assert!(
+            cmd.contains("bash -c 'echo \"hello world\"'"),
+            "double quotes in command should be preserved, got: {cmd}"
+        );
+    }
+
+    #[test]
+    fn test_wrap_bash_command_with_dollar_sign() {
+        let input = bash_input_for_sandbox("echo $HOME", "/tmp");
+        let policy = test_sandbox_policy();
+
+        let result = wrap_bash_with_sandbox(&input, &policy).unwrap();
+        let cmd = extract_wrapped_command(&result);
+
+        // Dollar signs inside single quotes are literal, not expanded
+        assert!(
+            cmd.contains("bash -c 'echo $HOME'"),
+            "dollar sign should be preserved literally, got: {cmd}"
+        );
+    }
+
+    #[test]
+    fn test_wrap_bash_command_with_backticks() {
+        let input = bash_input_for_sandbox("echo `whoami`", "/tmp");
+        let policy = test_sandbox_policy();
+
+        let result = wrap_bash_with_sandbox(&input, &policy).unwrap();
+        let cmd = extract_wrapped_command(&result);
+
+        assert!(
+            cmd.contains("bash -c 'echo `whoami`'"),
+            "backticks should be preserved literally, got: {cmd}"
+        );
+    }
+
+    #[test]
+    fn test_wrap_bash_command_with_backslashes() {
+        let input = bash_input_for_sandbox("echo a\\nb", "/tmp");
+        let policy = test_sandbox_policy();
+
+        let result = wrap_bash_with_sandbox(&input, &policy).unwrap();
+        let cmd = extract_wrapped_command(&result);
+
+        assert!(
+            cmd.contains("bash -c 'echo a\\nb'"),
+            "backslashes should be preserved literally, got: {cmd}"
+        );
+    }
+
+    #[test]
+    fn test_wrap_bash_policy_json_is_escaped() {
+        let input = bash_input_for_sandbox("ls", "/tmp");
+        let policy = test_sandbox_policy();
+
+        let result = wrap_bash_with_sandbox(&input, &policy).unwrap();
+        let cmd = extract_wrapped_command(&result);
+
+        // The policy JSON is serialized and shell-escaped. It should be wrapped
+        // in single quotes after --policy.
+        let policy_json = serde_json::to_string(&policy).unwrap();
+        let escaped_policy = shell_escape(&policy_json);
+        assert!(
+            cmd.contains(&format!("--policy {escaped_policy}")),
+            "policy JSON should be shell-escaped, got: {cmd}"
+        );
+    }
+
+    #[test]
+    fn test_wrap_bash_returns_none_for_read_tool() {
+        let input = ToolUseHookInput {
+            tool_name: "Read".into(),
+            tool_input: json!({"file_path": "/tmp/test.txt"}),
+            ..Default::default()
+        };
+        let policy = test_sandbox_policy();
+
+        let result = wrap_bash_with_sandbox(&input, &policy);
+        assert!(
+            result.is_none(),
+            "wrap_bash_with_sandbox should return None for Read tool"
+        );
+    }
+
+    #[test]
+    fn test_wrap_bash_returns_none_for_write_tool() {
+        let input = ToolUseHookInput {
+            tool_name: "Write".into(),
+            tool_input: json!({"file_path": "/tmp/test.txt", "content": "data"}),
+            ..Default::default()
+        };
+        let policy = test_sandbox_policy();
+
+        let result = wrap_bash_with_sandbox(&input, &policy);
+        assert!(
+            result.is_none(),
+            "wrap_bash_with_sandbox should return None for Write tool"
+        );
+    }
+
+    #[test]
+    fn test_wrap_bash_returns_none_for_edit_tool() {
+        let input = ToolUseHookInput {
+            tool_name: "Edit".into(),
+            tool_input: json!({"file_path": "/tmp/test.txt", "old_string": "a", "new_string": "b"}),
+            ..Default::default()
+        };
+        let policy = test_sandbox_policy();
+
+        let result = wrap_bash_with_sandbox(&input, &policy);
+        assert!(
+            result.is_none(),
+            "wrap_bash_with_sandbox should return None for Edit tool"
+        );
+    }
+
+    #[test]
+    fn test_wrap_bash_returns_none_for_unknown_tool() {
+        let input = ToolUseHookInput {
+            tool_name: "WebSearch".into(),
+            tool_input: json!({"query": "test"}),
+            ..Default::default()
+        };
+        let policy = test_sandbox_policy();
+
+        let result = wrap_bash_with_sandbox(&input, &policy);
+        assert!(
+            result.is_none(),
+            "wrap_bash_with_sandbox should return None for unknown tools"
+        );
+    }
+
+    #[test]
+    fn test_wrap_bash_preserves_original_structure() {
+        // Verify the returned JSON preserves non-command fields from the original tool_input
+        let input = ToolUseHookInput {
+            tool_name: "Bash".into(),
+            tool_input: json!({"command": "ls", "timeout": 5000}),
+            cwd: "/tmp".into(),
+            ..Default::default()
+        };
+        let policy = test_sandbox_policy();
+
+        let result = wrap_bash_with_sandbox(&input, &policy).unwrap();
+
+        // The timeout field from the original input should still be present
+        assert_eq!(
+            result.get("timeout").and_then(|v| v.as_u64()),
+            Some(5000),
+            "non-command fields should be preserved in the output"
+        );
+
+        // The command field should be the rewritten sandbox command
+        let cmd = extract_wrapped_command(&result);
+        assert!(cmd.contains("sandbox exec"), "command should be rewritten");
     }
 }

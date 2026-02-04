@@ -7,7 +7,9 @@
 use super::eval::resolve_path;
 use super::ir::{CompiledFilterExpr, CompiledPolicy};
 use super::*;
-use crate::sandbox::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy, SandboxRule};
+use crate::policy::sandbox_types::{
+    Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy, SandboxRule,
+};
 
 impl CompiledPolicy {
     /// Generate a sandbox policy from the profiles of matched allow statements.

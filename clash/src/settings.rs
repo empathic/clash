@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
+use crate::policy::CompiledPolicy;
+use crate::policy::parse::desugar_legacy;
+use crate::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
 use anyhow::Result;
 use claude_settings::ClaudeSettings;
-use claude_settings::policy::CompiledPolicy;
-use claude_settings::policy::parse::desugar_legacy;
-use claude_settings::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
 use dirs::home_dir;
 use serde::Deserialize;
 use tracing::{Level, info, instrument, warn};
@@ -12,10 +12,13 @@ use tracing::{Level, info, instrument, warn};
 use crate::audit::AuditConfig;
 use crate::notifications::NotificationConfig;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct ClashSettings {
     /// Parsed policy document loaded at runtime from policy.yaml or compiled from Claude settings.
     pub(crate) policy: Option<PolicyDocument>,
+
+    /// Pre-compiled policy for fast evaluation. Compiled once during `load_or_create()`.
+    compiled: Option<CompiledPolicy>,
 
     /// Notification and external service configuration, loaded from policy.yaml.
     pub notifications: NotificationConfig,
@@ -28,28 +31,35 @@ pub struct ClashSettings {
 }
 
 impl ClashSettings {
-    pub fn settings_dir() -> PathBuf {
+    pub fn settings_dir() -> Result<PathBuf> {
         home_dir()
-            .expect("user must have $HOME set in environment")
-            .join(".clash")
+            .map(|h| h.join(".clash"))
+            .ok_or_else(|| anyhow::anyhow!("$HOME is not set; cannot determine settings directory"))
     }
 
-    pub fn policy_file() -> PathBuf {
-        Self::settings_dir().join("policy.yaml")
+    pub fn policy_file() -> Result<PathBuf> {
+        Self::settings_dir().map(|d| d.join("policy.yaml"))
     }
 
-    /// Set the policy document directly.
+    /// Set the policy document directly and recompile.
     ///
     /// This is useful for library consumers who want to construct settings
     /// programmatically without loading from disk.
     pub fn set_policy(&mut self, doc: PolicyDocument) {
         self.policy = Some(doc);
+        self.compile_policy();
     }
 
     /// Try to load and compile the policy document from ~/.clash/policy.yaml.
     #[instrument(level = Level::TRACE, skip(self))]
     fn load_policy_file(&mut self) -> Option<PolicyDocument> {
-        let path = Self::policy_file();
+        let path = match Self::policy_file() {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(error = %e, "Cannot determine policy file path");
+                return None;
+            }
+        };
         if path.exists() {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => {
@@ -59,7 +69,7 @@ impl ClashSettings {
                     self.notification_warning = notif_warning;
                     self.audit = parse_audit_config(&contents);
 
-                    match claude_settings::policy::parse::parse_yaml(&contents) {
+                    match crate::policy::parse::parse_yaml(&contents) {
                         Ok(doc) => {
                             info!(path = %path.display(), "Loaded policy document");
                             Some(doc)
@@ -125,10 +135,15 @@ impl ClashSettings {
             .or_else(Self::compile_claude_to_policy);
     }
 
-    /// Compile the loaded policy document into a CompiledPolicy for evaluation.
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn compiled_policy(&self) -> Option<CompiledPolicy> {
-        self.policy
+    /// Return the pre-compiled policy, if one was successfully compiled during loading.
+    pub fn compiled_policy(&self) -> Option<&CompiledPolicy> {
+        self.compiled.as_ref()
+    }
+
+    /// Compile the policy document (if present) and cache the result.
+    fn compile_policy(&mut self) {
+        self.compiled = self
+            .policy
             .as_ref()
             .and_then(|doc| match CompiledPolicy::compile(doc) {
                 Ok(compiled) => Some(compiled),
@@ -136,14 +151,15 @@ impl ClashSettings {
                     warn!(error = %e, "Failed to compile policy document");
                     None
                 }
-            })
+            });
     }
 
-    /// Load settings by resolving the policy from disk.
+    /// Load settings by resolving the policy from disk and compiling it.
     #[instrument(level = Level::TRACE)]
     pub fn load_or_create() -> Result<Self> {
         let mut this = Self::default();
         this.resolve_policy();
+        this.compile_policy();
         Ok(this)
     }
 }
@@ -195,7 +211,7 @@ fn parse_audit_config(yaml_str: &str) -> AuditConfig {
 mod test {
     #[test]
     fn default_policy_parses() -> anyhow::Result<()> {
-        let pol = claude_settings::policy::parse::parse_yaml(super::DEFAULT_POLICY)?;
+        let pol = crate::policy::parse::parse_yaml(super::DEFAULT_POLICY)?;
         assert!(pol.profile_defs.len() > 0, "{pol:#?}");
         Ok(())
     }

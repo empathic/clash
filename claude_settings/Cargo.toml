@@ -8,19 +8,14 @@ authors = ["Empathic Team"]
 
 [dependencies]
 anyhow = { workspace = true }
-bitflags = { workspace = true }
 dirs = { workspace = true }
 figment = { workspace = true }
 regex = { workspace = true }
-pest = { workspace = true }
-pest_derive = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-proptest = { workspace = true }

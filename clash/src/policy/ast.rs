@@ -9,8 +9,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use tracing::{Level, instrument};
 
+use regex::Regex;
+
 use super::{Effect, Verb};
-use crate::sandbox::{Cap, NetworkPolicy};
+use crate::policy::sandbox_types::{Cap, NetworkPolicy};
 
 /// A complete policy document, as loaded from a YAML/TOML file.
 ///
@@ -114,10 +116,6 @@ pub struct Statement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 
-    /// Delegation configuration (required when effect = delegate).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delegate: Option<DelegateConfig>,
-
     /// Optional constraint binding (profile expression).
     /// When present, the rule only matches if the constraint is satisfied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -205,7 +203,7 @@ impl MatchExpr {
         match self {
             MatchExpr::Any => true,
             MatchExpr::Exact(s) => entity == s,
-            MatchExpr::Glob(pattern) => crate::permission::glob_matches_public(pattern, entity),
+            MatchExpr::Glob(pattern) => glob_matches(pattern, entity),
             MatchExpr::Typed {
                 entity_type,
                 name: None,
@@ -446,57 +444,6 @@ pub enum ArgSpec {
     Require(String),
 }
 
-/// Configuration for delegating a permission decision to an external evaluator.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DelegateConfig {
-    /// The type of delegation endpoint.
-    #[serde(rename = "type", default = "DelegateConfig::default_type")]
-    pub delegate_type: DelegateType,
-
-    /// The endpoint to call.
-    /// - HTTP: a URL like `http://localhost:9090/evaluate`
-    /// - Command: a shell command like `/usr/local/bin/policy-eval`
-    pub endpoint: String,
-
-    /// Timeout in milliseconds.
-    #[serde(default = "DelegateConfig::default_timeout")]
-    pub timeout_ms: u64,
-
-    /// Action to take if the delegate is unavailable or times out.
-    #[serde(default = "DelegateConfig::default_fallback")]
-    pub fallback: Effect,
-
-    /// How long to cache a delegate's response (0 = no caching).
-    #[serde(default)]
-    pub cache_ttl_secs: u64,
-
-    /// Additional headers for HTTP delegates.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub headers: HashMap<String, String>,
-}
-
-impl DelegateConfig {
-    fn default_type() -> DelegateType {
-        DelegateType::Http
-    }
-    fn default_timeout() -> u64 {
-        5000
-    }
-    fn default_fallback() -> Effect {
-        Effect::Ask
-    }
-}
-
-/// Type of delegation endpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DelegateType {
-    /// HTTP/HTTPS POST request.
-    Http,
-    /// Shell command (stdin/stdout JSON protocol).
-    Command,
-}
-
 // ---------------------------------------------------------------------------
 // Private helper
 // ---------------------------------------------------------------------------
@@ -603,4 +550,20 @@ pub(crate) fn format_match_expr(expr: &MatchExpr) -> String {
             name: Some(name),
         } => format!("{}:{}", entity_type, name),
     }
+}
+
+/// Simple glob matching for patterns.
+fn glob_matches(pattern: &str, path: &str) -> bool {
+    let regex_pattern = pattern
+        .replace('.', "\\.")
+        .replace("**", "<<<DOUBLESTAR>>>")
+        .replace('*', "[^/]*")
+        .replace("<<<DOUBLESTAR>>>", ".*")
+        .replace('?', ".");
+
+    let regex_pattern = format!("^{}$", regex_pattern);
+
+    Regex::new(&regex_pattern)
+        .map(|re| re.is_match(path))
+        .unwrap_or(false)
 }

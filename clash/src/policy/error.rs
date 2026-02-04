@@ -54,7 +54,7 @@ impl PolicyParseError {
     pub fn help(&self) -> Option<String> {
         match self {
             PolicyParseError::InvalidEffect(eff) => Some(format!(
-                "valid effects are: allow, deny, ask, delegate (got '{}')",
+                "valid effects are: allow, deny, ask (got '{}')",
                 eff
             )),
             PolicyParseError::InvalidTool(tool) => Some(format!(

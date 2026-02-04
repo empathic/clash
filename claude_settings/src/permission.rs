@@ -577,12 +577,6 @@ impl ToolPermissions {
     }
 }
 
-/// Simple glob matching for file paths (public API for use by policy module).
-#[instrument(level = Level::TRACE)]
-pub fn glob_matches_public(pattern: &str, path: &str) -> bool {
-    glob_matches(pattern, path)
-}
-
 /// Simple glob matching for file paths.
 fn glob_matches(pattern: &str, path: &str) -> bool {
     // Convert glob to regex

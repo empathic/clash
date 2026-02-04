@@ -8,8 +8,8 @@ use std::collections::HashMap;
 
 use regex::Regex;
 
-use super::{DelegateConfig, Effect, ProfileExpr};
-use crate::sandbox::{Cap, NetworkPolicy, SandboxPolicy};
+use super::{Effect, ProfileExpr};
+use crate::policy::sandbox_types::{Cap, NetworkPolicy, SandboxPolicy};
 
 /// A compiled policy ready for fast evaluation.
 #[derive(Debug)]
@@ -64,8 +64,6 @@ pub(crate) struct CompiledProfileRule {
     pub(crate) entity_matcher: Option<CompiledPattern>,
     /// Human-readable reason (from legacy rules, included in deny/ask decisions).
     pub(crate) reason: Option<String>,
-    /// Delegation config (from legacy rules with effect=delegate).
-    pub(crate) delegate: Option<DelegateConfig>,
     /// Profile guard expression (from legacy rules with constraint bindings).
     /// Evaluated at runtime via `check_profile()` against `constraints`/`profiles` maps.
     pub(crate) profile_guard: Option<ProfileExpr>,
@@ -112,7 +110,6 @@ pub struct PolicyDecision {
     pub reason: Option<String>,
     /// Structured trace of how this decision was reached.
     pub trace: DecisionTrace,
-    pub delegate: Option<DelegateConfig>,
     /// Per-command sandbox policy generated from `fs`/`caps`/`network` constraints.
     /// Only present for bash (Execute) commands that matched allow rules with `fs` constraints.
     pub sandbox: Option<SandboxPolicy>,
