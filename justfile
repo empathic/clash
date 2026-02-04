@@ -1,3 +1,7 @@
+
+plugin_target := "./target/clash-dev"
+plugin_dir := plugin_target + "/clash-plugin/"
+
 default:
     @just -l
 
@@ -11,10 +15,21 @@ build-plugin-in target_dir:
     cp -r clash-plugin/ $plugin
     cp target/debug/clash "$plugin/bin/clash"
     echo $plugin
-build-plugin: (build-plugin-in "/tmp/clash-dev")
-dev:
+
+build-plugin: (build-plugin-in plugin_target)
+
+dev *ARGS:
     just build-plugin
-    claude --plugin-dir /tmp/clash-dev/clash-plugin/ --debug-file /tmp/clash-debug --allow-dangerously-skip-permissions
+    claude --plugin-dir {{plugin_dir}} --debug-file /tmp/clash-debug --allow-dangerously-skip-permissions {{ARGS}}
+
+install: uninstall
+    just build-plugin
+    claude plugin marketplace add ./
+    claude plugin install clash
+
+uninstall:
+    -claude plugin uninstall clash
+    -claude plugin marketplace remove clash
 
 check:
     cargo fmt

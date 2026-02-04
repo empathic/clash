@@ -907,25 +907,28 @@ default:
   profile: main
 
 profiles:
-  main:
+  cwd:
     rules:
-      # ── SSH keys: hard deny for file tools ──────────────────────
-      # Note: if you use SSH remotes for git, pulls will also be
-      # blocked. Switch to HTTPS remotes or relax this rule.
-      # Bash is protected via the sandbox on `allow bash *` below
-      # (fs guards don't act as match filters for bash commands).
-      deny read *:
+      allow * *: 
         fs:
-          read: "subpath($HOME/.ssh)"
-      deny write *:
+          read + write + execute: subpath($CWD)
+  tmp:
+    rules:
+      allow * *:
         fs:
-          write + create: "subpath($HOME/.ssh)"
-      deny edit *:
+          read + write + execute: regex(^/tmp)
+  
+  global:
+    rules:
+      ask * *:
         fs:
-          write: "subpath($HOME/.ssh)"
-
+          read: "!subpath($CWD)"
+      
+  main:
+    include: [cwd, global]
+    rules:
       # ── Git: deny commit and push ─────────────────────────────
-      deny bash git commit*:
+      ask bash git commit*:
       deny bash git push*:
       deny bash git merge*:
 
@@ -936,21 +939,6 @@ profiles:
 
       # ── Dangerous commands ─────────────────────────────────────
       deny bash sudo *:
-
-      # ── General: allow with sensitive dir protection ──────────
-      # (deny > allow, so all denies above still take precedence)
-      allow bash *:
-        fs:
-          read + write + create + delete + execute: "!subpath($HOME/.ssh) & !subpath($HOME/.gnupg) & !subpath($HOME/.aws)"
-      allow read *:
-        fs:
-          read: "!subpath($HOME/.ssh) & !subpath($HOME/.gnupg) & !subpath($HOME/.aws)"
-      allow write *:
-        fs:
-          write + create: "!subpath($HOME/.ssh) & !subpath($HOME/.gnupg) & !subpath($HOME/.aws)"
-      allow edit *:
-        fs:
-          write: "!subpath($HOME/.ssh) & !subpath($HOME/.gnupg) & !subpath($HOME/.aws)"
 "#;
 
 /// Initialize a new clash policy.yaml with safe defaults.
