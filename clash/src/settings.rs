@@ -28,6 +28,9 @@ pub struct ClashSettings {
 
     /// Audit logging configuration, loaded from policy.yaml.
     pub audit: AuditConfig,
+
+    /// Error message if policy.yaml failed to parse or compile.
+    policy_error: Option<String>,
 }
 
 impl ClashSettings {
@@ -39,6 +42,11 @@ impl ClashSettings {
 
     pub fn policy_file() -> Result<PathBuf> {
         Self::settings_dir().map(|d| d.join("policy.yaml"))
+    }
+
+    /// Return the policy parse/compile error, if any.
+    pub fn policy_error(&self) -> Option<&str> {
+        self.policy_error.as_deref()
     }
 
     /// Set the policy document directly and recompile.
@@ -75,7 +83,9 @@ impl ClashSettings {
                             Some(doc)
                         }
                         Err(e) => {
+                            let msg = format!("Failed to parse policy.yaml: {}", e);
                             warn!(path = %path.display(), error = %e, "Failed to parse policy.yaml");
+                            self.policy_error = Some(msg);
                             None
                         }
                     }
@@ -148,7 +158,9 @@ impl ClashSettings {
             .and_then(|doc| match CompiledPolicy::compile(doc) {
                 Ok(compiled) => Some(compiled),
                 Err(e) => {
+                    let msg = format!("Failed to compile policy: {}", e);
                     warn!(error = %e, "Failed to compile policy document");
+                    self.policy_error = Some(msg);
                     None
                 }
             });

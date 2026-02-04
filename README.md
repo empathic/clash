@@ -189,7 +189,7 @@ fs:
   read + write: subpath(~/.ssh)       # Allow read+write under ~/.ssh
 ```
 
-Capabilities: `read`, `write`, `create`, `delete`, `execute` (combined with `+`)
+Capabilities: `read`, `write`, `create`, `delete`, `execute` (combined with `+`), or `full` as shorthand for all five
 
 **`network`** — `deny` or `allow` (controls network access in the sandbox)
 

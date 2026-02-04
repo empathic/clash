@@ -29,5 +29,3 @@ After running the command, explain to the user:
    - Add `deny bash git checkout main:` / `deny bash git switch main:` to prevent switching to main
    - Add project-specific deny rules for commands they want blocked
    - Adjust the filesystem access profiles for their workflow
-6. Run `clash launch` to start Claude Code with clash enforcing the policy
-7. For local development run `just dev` to rebuild the clash plugin and start a new Claude Code session with that plugin enabled.

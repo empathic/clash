@@ -198,6 +198,13 @@ fs:
 
 Each entry maps a capability set to a filter expression. For bash commands, these become sandbox rules. For non-bash verbs, they act as permission guards (the verb is mapped to a capability and checked against matching entries).
 
+The shorthand `full` can be used in place of `read + write + create + delete + execute`:
+
+```yaml
+fs:
+  full: subpath(.)    # All capabilities under CWD
+```
+
 ---
 
 ## Profile Inheritance

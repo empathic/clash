@@ -145,7 +145,14 @@ fn emit_caps_for_path(profile: &mut String, path: &str, caps: Cap, path_match: P
     } else {
         // Without WRITE, emit only the specific sub-operations requested.
         if caps.contains(Cap::CREATE) {
+            // CREATE needs file-write-create plus data/xattr/mode operations
+            // because tools like `cp` must write content and metadata to
+            // newly created files (not just the creation syscall).
             profile.push_str(&format!("(allow file-write-create {})\n", filter));
+            profile.push_str(&format!("(allow file-write-data {})\n", filter));
+            profile.push_str(&format!("(allow file-write-xattr {})\n", filter));
+            profile.push_str(&format!("(allow file-write-mode {})\n", filter));
+            profile.push_str(&format!("(allow file-write-flags {})\n", filter));
         }
         if caps.contains(Cap::DELETE) {
             profile.push_str(&format!("(allow file-write-unlink {})\n", filter));
@@ -169,6 +176,10 @@ fn emit_deny_for_path(profile: &mut String, path: &str, caps: Cap, path_match: P
     } else {
         if caps.contains(Cap::CREATE) {
             profile.push_str(&format!("(deny file-write-create {})\n", filter));
+            profile.push_str(&format!("(deny file-write-data {})\n", filter));
+            profile.push_str(&format!("(deny file-write-xattr {})\n", filter));
+            profile.push_str(&format!("(deny file-write-mode {})\n", filter));
+            profile.push_str(&format!("(deny file-write-flags {})\n", filter));
         }
         if caps.contains(Cap::DELETE) {
             profile.push_str(&format!("(deny file-write-unlink {})\n", filter));

@@ -145,12 +145,18 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
                         ));
                     }
                     Err(e) => {
-                        lines.push(format!("ISSUE: policy.yaml compile error: {}", e));
+                        lines.push(format!(
+                            "ISSUE: policy.yaml compile error: {}. All actions will default to 'ask'.",
+                            e
+                        ));
                     }
                 }
             }
             Err(e) => {
-                lines.push(format!("ISSUE: policy.yaml parse error: {}", e));
+                lines.push(format!(
+                    "ISSUE: policy.yaml parse error: {}. All actions will default to 'ask'.",
+                    e
+                ));
             }
         }
 

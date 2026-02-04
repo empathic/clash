@@ -118,8 +118,15 @@ pub struct PolicyDecision {
 impl PolicyDecision {
     /// Render the decision trace as a list of human-readable strings.
     /// Backward-compatible with the old `explanation: Vec<String>` field.
+    /// Used for audit logs and structured tracing.
     pub fn explanation(&self) -> Vec<String> {
         self.trace.render()
+    }
+
+    /// Render the decision trace as human-readable English.
+    /// Intended for display to users and AI agents via `additional_context`.
+    pub fn human_explanation(&self) -> Vec<String> {
+        self.trace.render_human()
     }
 }
 
@@ -161,6 +168,7 @@ pub struct DecisionTrace {
 
 impl DecisionTrace {
     /// Render the trace as a list of human-readable strings.
+    /// Used for audit logs and structured tracing.
     pub fn render(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for skip in &self.skipped_rules {
@@ -171,5 +179,108 @@ impl DecisionTrace {
         }
         lines.push(self.final_resolution.clone());
         lines
+    }
+
+    /// Render the trace as clear, human-readable English.
+    /// Intended for display to users and AI agents.
+    pub fn render_human(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+
+        for skip in &self.skipped_rules {
+            let human_reason = humanize_skip_reason(&skip.description, &skip.reason);
+            lines.push(human_reason);
+        }
+
+        for m in &self.matched_rules {
+            lines.push(format!(
+                "Rule '{}' matched — action {}",
+                m.description,
+                match m.effect {
+                    Effect::Allow => "allowed",
+                    Effect::Deny => "denied",
+                    Effect::Ask => "requires approval",
+                }
+            ));
+        }
+
+        lines.push(humanize_resolution(&self.final_resolution));
+        lines
+    }
+}
+
+/// Convert a skip reason into human-readable English.
+fn humanize_skip_reason(rule_desc: &str, reason: &str) -> String {
+    if reason.contains("fs guard:") && reason.contains("does not match filter for") {
+        // Extract cap name from "fs guard: '/path' does not match filter for X cap"
+        let cap = reason
+            .rsplit("for ")
+            .next()
+            .and_then(|s| s.strip_suffix(" cap"))
+            .unwrap_or("the requested");
+        let path = reason.split('\'').nth(1).unwrap_or("the path");
+        format!(
+            "Rule '{}' was skipped: '{}' is outside the allowed filesystem scope for {} operations",
+            rule_desc, path, cap
+        )
+    } else if reason.contains("verb mismatch") {
+        format!(
+            "Rule '{}' was skipped: does not apply to this tool",
+            rule_desc
+        )
+    } else if reason.contains("entity mismatch") {
+        format!(
+            "Rule '{}' was skipped: does not apply to this entity",
+            rule_desc
+        )
+    } else if reason.contains("noun mismatch") {
+        format!(
+            "Rule '{}' was skipped: pattern does not match this command/path",
+            rule_desc
+        )
+    } else if reason.contains("pipe constraint") {
+        format!(
+            "Rule '{}' was skipped: command contains a pipe operator which is not allowed",
+            rule_desc
+        )
+    } else if reason.contains("redirect constraint") {
+        format!(
+            "Rule '{}' was skipped: command contains a redirect operator which is not allowed",
+            rule_desc
+        )
+    } else if reason.contains("forbid-args") {
+        format!(
+            "Rule '{}' was skipped: command contains a forbidden argument",
+            rule_desc
+        )
+    } else if reason.contains("require-args") {
+        format!(
+            "Rule '{}' was skipped: command is missing a required argument",
+            rule_desc
+        )
+    } else if reason.starts_with("constraint failed:") {
+        let detail = reason.strip_prefix("constraint failed: ").unwrap_or(reason);
+        format!(
+            "Rule '{}' was skipped: constraint not satisfied ({})",
+            rule_desc, detail
+        )
+    } else {
+        format!("Rule '{}' was skipped: {}", rule_desc, reason)
+    }
+}
+
+/// Convert a final resolution string into human-readable English.
+fn humanize_resolution(resolution: &str) -> String {
+    if resolution.contains("deny") && resolution.contains("deny > ask > allow") {
+        "Final decision: deny (deny rules take precedence over allow/ask)".into()
+    } else if resolution.contains("ask") && resolution.contains("ask > allow") {
+        "Final decision: ask (ask rules take precedence over allow)".into()
+    } else if resolution == "result: allow" {
+        "Final decision: allow".into()
+    } else if resolution.starts_with("no rules matched") {
+        let default = resolution.rsplit("default: ").next().unwrap_or("ask");
+        format!("No rules matched this action. Defaulting to {}.", default)
+    } else {
+        // Fallback: pass through
+        resolution.to_string()
     }
 }
