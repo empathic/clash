@@ -249,9 +249,9 @@ pub struct HookOutput {
 }
 
 impl HookOutput {
-    /// Create an "allow" response for PreToolUse - bypasses permission system
+    /// Create an "allow" response for PreToolUse - bypasses permission system.
     #[instrument(level = Level::TRACE)]
-    pub fn allow(reason: Option<String>) -> Self {
+    pub fn allow(reason: Option<String>, context: Option<String>) -> Self {
         Self {
             should_continue: true,
             hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
@@ -259,29 +259,14 @@ impl HookOutput {
                 permission_decision: Some(PermissionRule::Allow),
                 permission_decision_reason: reason,
                 updated_input: None,
-                additional_context: None,
+                additional_context: context,
             })),
         }
     }
 
-    /// Create an "allow" response with additional context explaining the decision.
+    /// Create a "deny" response for PreToolUse - prevents tool execution.
     #[instrument(level = Level::TRACE)]
-    pub fn allow_with_context(reason: Option<String>, additional_context: Option<String>) -> Self {
-        Self {
-            should_continue: true,
-            hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
-                hook_event_name: "PreToolUse",
-                permission_decision: Some(PermissionRule::Allow),
-                permission_decision_reason: reason,
-                updated_input: None,
-                additional_context,
-            })),
-        }
-    }
-
-    /// Create a "deny" response for PreToolUse - prevents tool execution
-    #[instrument(level = Level::TRACE)]
-    pub fn deny(reason: String) -> Self {
+    pub fn deny(reason: String, context: Option<String>) -> Self {
         Self {
             should_continue: true,
             hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
@@ -289,29 +274,14 @@ impl HookOutput {
                 permission_decision: Some(PermissionRule::Deny),
                 permission_decision_reason: Some(reason),
                 updated_input: None,
-                additional_context: None,
+                additional_context: context,
             })),
         }
     }
 
-    /// Create a "deny" response with additional context explaining the decision.
+    /// Create an "ask" response for PreToolUse - prompts user for confirmation.
     #[instrument(level = Level::TRACE)]
-    pub fn deny_with_context(reason: String, additional_context: Option<String>) -> Self {
-        Self {
-            should_continue: true,
-            hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
-                hook_event_name: "PreToolUse",
-                permission_decision: Some(PermissionRule::Deny),
-                permission_decision_reason: Some(reason),
-                updated_input: None,
-                additional_context,
-            })),
-        }
-    }
-
-    /// Create an "ask" response for PreToolUse - prompts user for confirmation
-    #[instrument(level = Level::TRACE)]
-    pub fn ask(reason: Option<String>) -> Self {
+    pub fn ask(reason: Option<String>, context: Option<String>) -> Self {
         Self {
             should_continue: true,
             hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
@@ -319,22 +289,7 @@ impl HookOutput {
                 permission_decision: Some(PermissionRule::Ask),
                 permission_decision_reason: reason,
                 updated_input: None,
-                additional_context: None,
-            })),
-        }
-    }
-
-    /// Create an "ask" response with additional context explaining the decision.
-    #[instrument(level = Level::TRACE)]
-    pub fn ask_with_context(reason: Option<String>, additional_context: Option<String>) -> Self {
-        Self {
-            should_continue: true,
-            hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
-                hook_event_name: "PreToolUse",
-                permission_decision: Some(PermissionRule::Ask),
-                permission_decision_reason: reason,
-                updated_input: None,
-                additional_context,
+                additional_context: context,
             })),
         }
     }
@@ -493,7 +448,7 @@ mod tests {
 
     #[test]
     fn test_output_allow() {
-        let output = HookOutput::allow(Some("Safe command".into()));
+        let output = HookOutput::allow(Some("Safe command".into()), None);
         let mut buf = Vec::new();
         output.write_to(&mut buf).unwrap();
 
@@ -507,7 +462,7 @@ mod tests {
 
     #[test]
     fn test_output_deny() {
-        let output = HookOutput::deny("Dangerous command".into());
+        let output = HookOutput::deny("Dangerous command".into(), None);
         let mut buf = Vec::new();
         output.write_to(&mut buf).unwrap();
 
@@ -521,7 +476,7 @@ mod tests {
 
     #[test]
     fn test_output_ask() {
-        let output = HookOutput::ask(None);
+        let output = HookOutput::ask(None, None);
         let mut buf = Vec::new();
         output.write_to(&mut buf).unwrap();
 

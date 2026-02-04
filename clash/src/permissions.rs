@@ -1,5 +1,5 @@
-use claude_settings::policy::{Effect, EvalContext, Verb};
-use claude_settings::sandbox::SandboxPolicy;
+use crate::policy::sandbox_types::SandboxPolicy;
+use crate::policy::{Effect, EvalContext, Verb};
 use tracing::{Level, info, instrument, warn};
 
 use crate::hooks::{HookOutput, ToolInput, ToolUseHookInput};
@@ -25,41 +25,24 @@ fn check_permission_policy(
         Some(c) => c,
         None => {
             warn!("Policy engine selected but no policy could be compiled; falling back to ask");
-            return Ok(HookOutput::ask(Some(
-                "policy engine: no compiled policy available".into(),
-            )));
+            return Ok(HookOutput::ask(
+                Some("policy engine: no compiled policy available".into()),
+                None,
+            ));
         }
     };
 
-    // Map tool_name → Verb. For known tools, use the canonical verb.
-    // For unknown tools with old-format policies, fall back to ask.
-    // For new-format policies, the raw tool name is matched via verb_str.
-    let verb = Verb::from_tool_name(&input.tool_name);
-    let fallback_verb = Verb::Execute; // used when verb is None for new-format
-    let verb_ref = verb.as_ref().unwrap_or(&fallback_verb);
-
-    // Extract the noun (the resource being acted on) from the tool input.
-    let noun = extract_noun(input);
-
-    // Default entity — the hook input doesn't carry entity info yet,
-    // so we treat all invocations as coming from "agent".
+    let (verb, verb_str_owned) = resolve_verb(&input.tool_name);
+    let noun = extract_noun(&input.tool_name, &input.tool_input);
     let entity = "agent";
-
-    // Build evaluation context with cwd and tool_input for constraint evaluation.
-    // verb_str uses the tool_name lowercased for new-format matching.
-    let verb_str_owned = if let Some(ref v) = verb {
-        v.rule_name().to_string()
-    } else {
-        input.tool_name.to_lowercase()
-    };
-    let ctx = EvalContext {
+    let ctx = build_eval_context(
         entity,
-        verb: verb_ref,
-        noun: &noun,
-        cwd: &input.cwd,
-        tool_input: &input.tool_input,
-        verb_str: &verb_str_owned,
-    };
+        &verb,
+        &verb_str_owned,
+        &noun,
+        &input.cwd,
+        &input.tool_input,
+    );
 
     let decision = compiled.evaluate_with_context(&ctx);
     info!(
@@ -91,7 +74,7 @@ fn check_permission_policy(
 
     Ok(match decision.effect {
         Effect::Allow => {
-            let mut output = HookOutput::allow_with_context(
+            let mut output = HookOutput::allow(
                 decision.reason.or(Some("policy: allowed".into())),
                 additional_context,
             );
@@ -105,18 +88,18 @@ fn check_permission_policy(
             }
             output
         }
-        Effect::Deny => HookOutput::deny_with_context(
+        Effect::Deny => HookOutput::deny(
             decision.reason.unwrap_or_else(|| "policy: denied".into()),
             additional_context,
         ),
-        Effect::Ask => HookOutput::ask_with_context(
+        Effect::Ask => HookOutput::ask(
             decision.reason.or(Some("policy: ask".into())),
             additional_context,
         ),
         Effect::Delegate => {
             // Delegation is not yet implemented; fall back to ask.
             warn!("Delegate effect not yet implemented; falling back to ask");
-            HookOutput::ask_with_context(
+            HookOutput::ask(
                 Some("policy: delegation not yet implemented".into()),
                 additional_context,
             )
@@ -167,14 +150,13 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Extract the noun (resource identifier) from a tool input.
+/// Extract the noun (resource identifier) from tool input JSON.
 ///
 /// Checks common field names in priority order to extract a meaningful
 /// noun from any tool's input JSON. This handles both known tools
 /// (Bash, Read, Write, Edit) and arbitrary tools (Glob, Grep, WebSearch, etc.).
-#[instrument(level = Level::TRACE, skip(input))]
-fn extract_noun(input: &ToolUseHookInput) -> String {
-    // Try common noun fields in priority order
+#[instrument(level = Level::TRACE, skip(tool_input))]
+pub fn extract_noun(tool_name: &str, tool_input: &serde_json::Value) -> String {
     let fields = [
         "command",   // Bash
         "file_path", // Read, Write, Edit, NotebookEdit
@@ -185,22 +167,55 @@ fn extract_noun(input: &ToolUseHookInput) -> String {
         "prompt",    // Task
     ];
     for field in &fields {
-        if let Some(val) = input.tool_input.get(*field).and_then(|v| v.as_str()) {
+        if let Some(val) = tool_input.get(*field).and_then(|v| v.as_str()) {
             return val.to_string();
         }
     }
     // Fallback: use the tool name as noun (better than serializing entire JSON)
-    input.tool_name.to_lowercase()
+    tool_name.to_lowercase()
+}
+
+/// Resolve the verb and verb string for a tool name.
+///
+/// Returns the canonical `Verb` (or `Execute` as fallback) and the string
+/// representation used for policy matching.
+pub fn resolve_verb(tool_name: &str) -> (Verb, String) {
+    match Verb::from_tool_name(tool_name) {
+        Some(v) => {
+            let s = v.rule_name().to_string();
+            (v, s)
+        }
+        None => (Verb::Execute, tool_name.to_lowercase()),
+    }
+}
+
+/// Build an `EvalContext` from common request parameters.
+pub fn build_eval_context<'a>(
+    entity: &'a str,
+    verb: &'a Verb,
+    verb_str: &'a str,
+    noun: &'a str,
+    cwd: &'a str,
+    tool_input: &'a serde_json::Value,
+) -> EvalContext<'a> {
+    EvalContext {
+        entity,
+        verb,
+        noun,
+        cwd,
+        tool_input,
+        verb_str,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hooks::ToolUseHookInput;
+    use crate::policy::parse::desugar_legacy;
+    use crate::policy::parse::parse_yaml;
+    use crate::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
     use anyhow::Result;
-    use claude_settings::policy::parse::desugar_legacy;
-    use claude_settings::policy::parse::parse_yaml;
-    use claude_settings::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
     use serde_json::json;
 
     fn bash_input(command: &str) -> ToolUseHookInput {

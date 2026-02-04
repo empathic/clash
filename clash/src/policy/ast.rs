@@ -12,7 +12,7 @@ use tracing::{Level, instrument};
 use regex::Regex;
 
 use super::{Effect, Verb};
-use crate::sandbox::{Cap, NetworkPolicy};
+use crate::policy::sandbox_types::{Cap, NetworkPolicy};
 
 /// A complete policy document, as loaded from a YAML/TOML file.
 ///

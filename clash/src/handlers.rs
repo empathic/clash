@@ -108,7 +108,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
     let policy_path = ClashSettings::policy_file();
     if policy_path.exists() {
         match std::fs::read_to_string(&policy_path) {
-            Ok(contents) => match claude_settings::policy::parse::parse_yaml(&contents) {
+            Ok(contents) => match crate::policy::parse::parse_yaml(&contents) {
                 Ok(doc) => {
                     let rule_count = doc.statements.len()
                         + doc
@@ -121,7 +121,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
                     } else {
                         "new"
                     };
-                    match claude_settings::policy::CompiledPolicy::compile(&doc) {
+                    match crate::policy::CompiledPolicy::compile(&doc) {
                         Ok(_) => {
                             lines.push(format!(
                                 "policy.yaml: OK ({} rules, format={}, default={})",

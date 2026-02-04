@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use claude_settings::sandbox::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy};
+use crate::policy::sandbox_types::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy};
 use tracing::{Level, instrument};
 
 use super::{SandboxError, SupportLevel};

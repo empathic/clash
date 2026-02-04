@@ -248,7 +248,7 @@ fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sandbox::{Cap, NetworkPolicy, RuleEffect};
+    use crate::policy::sandbox_types::{Cap, NetworkPolicy, RuleEffect};
 
     fn compile_yaml(yaml: &str) -> CompiledPolicy {
         let doc = parse::parse_yaml(yaml).unwrap();
@@ -1040,7 +1040,7 @@ rules:
         assert_eq!(sandbox.rules[0].path, "/home/user/project");
         assert_eq!(
             sandbox.rules[0].path_match,
-            crate::sandbox::PathMatch::Subpath
+            crate::policy::sandbox_types::PathMatch::Subpath
         );
     }
 
@@ -1183,7 +1183,7 @@ rules:
         assert_eq!(sandbox.rules[0].path, "/home/user/project/.git");
         assert_eq!(
             sandbox.rules[0].path_match,
-            crate::sandbox::PathMatch::Subpath
+            crate::policy::sandbox_types::PathMatch::Subpath
         );
     }
 
@@ -1216,7 +1216,7 @@ rules:
         assert_eq!(sandbox.rules.len(), 1);
         assert_eq!(
             sandbox.rules[0].path_match,
-            crate::sandbox::PathMatch::Regex
+            crate::policy::sandbox_types::PathMatch::Regex
         );
         assert_eq!(sandbox.rules[0].path, "\\.env");
     }
@@ -1279,7 +1279,7 @@ rules:
         assert_eq!(sandbox.rules[0].path, "/home/user/project/.env");
         assert_eq!(
             sandbox.rules[0].path_match,
-            crate::sandbox::PathMatch::Literal
+            crate::policy::sandbox_types::PathMatch::Literal
         );
     }
 

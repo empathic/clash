@@ -7,6 +7,7 @@
 //!
 //! - [`hooks`] — Input/output types for the Claude Code hook protocol.
 //! - [`permissions`] — Policy-based permission evaluation for tool invocations.
+//! - [`policy`] — Policy YAML language, compilation, and evaluation engine.
 //! - [`handlers`] — Pre-built hook handlers that wire permissions, notifications,
 //!   and session validation together.
 //! - [`settings`] — Loading and resolving clash configuration and policy files.

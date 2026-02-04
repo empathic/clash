@@ -14,7 +14,7 @@ use super::ir::{
 };
 use super::sandbox_gen::filter_to_sandbox_rules;
 use super::*;
-use crate::sandbox::{Cap, NetworkPolicy, RuleEffect, SandboxPolicy};
+use crate::policy::sandbox_types::{Cap, NetworkPolicy, RuleEffect, SandboxPolicy};
 
 impl CompiledPolicy {
     /// Evaluate a request against this policy (backward-compatible version).

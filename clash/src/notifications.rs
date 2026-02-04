@@ -252,25 +252,12 @@ impl<'a> ZulipClient<'a> {
 
 /// Format a permission request as a Zulip-friendly markdown message.
 fn format_permission_message(request: &PermissionRequest) -> String {
+    let noun = crate::permissions::extract_noun(&request.tool_name, &request.tool_input);
+
     let tool_detail = match request.tool_name.as_str() {
-        "Bash" => {
-            let command = request.tool_input["command"]
-                .as_str()
-                .unwrap_or("(unknown)");
-            format!("**Command:** `{}`", command)
-        }
-        "Read" | "Write" | "Edit" => {
-            let path = request.tool_input["file_path"]
-                .as_str()
-                .unwrap_or("(unknown)");
-            format!("**File:** `{}`", path)
-        }
-        _ => {
-            format!(
-                "**Input:**\n```json\n{}\n```",
-                serde_json::to_string_pretty(&request.tool_input).unwrap_or_default()
-            )
-        }
+        "Bash" => format!("**Command:** `{}`", noun),
+        "Read" | "Write" | "Edit" => format!("**File:** `{}`", noun),
+        _ => format!("**Resource:** `{}`", noun),
     };
 
     format!(
@@ -333,7 +320,7 @@ mod tests {
         };
         let msg = format_permission_message(&req);
         assert!(msg.contains("**Tool:** CustomTool"));
-        assert!(msg.contains("**Input:**"));
+        assert!(msg.contains("**Resource:** `customtool`"));
     }
 
     #[test]

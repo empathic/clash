@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use serde::Serialize;
 use tracing::{Level, instrument, warn};
 
-use claude_settings::policy::Effect;
-use claude_settings::policy::ir::DecisionTrace;
+use crate::policy::Effect;
+use crate::policy::ir::DecisionTrace;
 
 /// A single audit log entry.
 #[derive(Debug, Serialize)]

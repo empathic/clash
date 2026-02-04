@@ -17,7 +17,7 @@ use tracing::{Level, instrument};
 
 use super::error::{PolicyParseError, suggest_closest};
 use super::*;
-use crate::sandbox::{Cap, NetworkPolicy};
+use crate::policy::sandbox_types::{Cap, NetworkPolicy};
 
 // ---------------------------------------------------------------------------
 // Pest grammar

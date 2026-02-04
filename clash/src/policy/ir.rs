@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use regex::Regex;
 
 use super::{DelegateConfig, Effect, ProfileExpr};
-use crate::sandbox::{Cap, NetworkPolicy, SandboxPolicy};
+use crate::policy::sandbox_types::{Cap, NetworkPolicy, SandboxPolicy};
 
 /// A compiled policy ready for fast evaluation.
 #[derive(Debug)]

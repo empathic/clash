@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
+use crate::policy::CompiledPolicy;
+use crate::policy::parse::desugar_legacy;
+use crate::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
 use anyhow::Result;
 use claude_settings::ClaudeSettings;
-use claude_settings::policy::CompiledPolicy;
-use claude_settings::policy::parse::desugar_legacy;
-use claude_settings::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
 use dirs::home_dir;
 use serde::Deserialize;
 use tracing::{Level, info, instrument, warn};
@@ -59,7 +59,7 @@ impl ClashSettings {
                     self.notification_warning = notif_warning;
                     self.audit = parse_audit_config(&contents);
 
-                    match claude_settings::policy::parse::parse_yaml(&contents) {
+                    match crate::policy::parse::parse_yaml(&contents) {
                         Ok(doc) => {
                             info!(path = %path.display(), "Loaded policy document");
                             Some(doc)
@@ -195,7 +195,7 @@ fn parse_audit_config(yaml_str: &str) -> AuditConfig {
 mod test {
     #[test]
     fn default_policy_parses() -> anyhow::Result<()> {
-        let pol = claude_settings::policy::parse::parse_yaml(super::DEFAULT_POLICY)?;
+        let pol = crate::policy::parse::parse_yaml(super::DEFAULT_POLICY)?;
         assert!(pol.profile_defs.len() > 0, "{pol:#?}");
         Ok(())
     }
