@@ -67,7 +67,6 @@ impl HookInput {
     }
 
     /// Get the hook event name
-    #[instrument(level = Level::TRACE, skip(self))]
     pub fn hook_event_name(&self) -> &str {
         match self {
             HookInput::ToolUse(input) => &input.hook_event_name,
@@ -76,7 +75,6 @@ impl HookInput {
     }
 
     /// Get the session ID
-    #[instrument(level = Level::TRACE, skip(self))]
     pub fn session_id(&self) -> &str {
         match self {
             HookInput::ToolUse(input) => &input.session_id,
@@ -85,7 +83,6 @@ impl HookInput {
     }
 
     /// Check if this is a tool use event
-    #[instrument(level = Level::TRACE, skip(self))]
     pub fn as_tool_use(&self) -> Option<&ToolUseHookInput> {
         match self {
             HookInput::ToolUse(input) => Some(input),
@@ -94,7 +91,6 @@ impl HookInput {
     }
 
     /// Check if this is a session start event
-    #[instrument(level = Level::TRACE, skip(self))]
     pub fn as_session_start(&self) -> Option<&SessionStartHookInput> {
         match self {
             HookInput::SessionStart(input) => Some(input),

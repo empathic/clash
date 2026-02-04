@@ -23,7 +23,7 @@ profiles:
     rules:
       allow * *:
         fs:
-          read + write + execute + create + delete: regex(^/tmp)
+          read + write + execute + create + delete: regex(^(/private)?/tmp) | regex(^(/private)?/var/folders/)
   
   sensitive:
     rules:

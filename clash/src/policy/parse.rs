@@ -695,7 +695,6 @@ pub fn parse_rule(input: &str) -> Result<Statement, PolicyParseError> {
         verb,
         noun,
         reason: None,
-        delegate: None,
         profile: profile_expr,
     })
 }
@@ -880,7 +879,7 @@ pub fn parse_match_expr(s: &str) -> MatchExpr {
 ///
 /// Syntax:
 /// - `*` → `VerbPattern::Any`
-/// - `read` / `write` / `edit` / `execute` / `delegate` → `VerbPattern::Exact(Verb)`
+/// - `read` / `write` / `edit` / `execute` → `VerbPattern::Exact(Verb)`
 #[instrument(level = Level::TRACE)]
 pub fn parse_verb_pattern(s: &str) -> Result<VerbPattern, String> {
     let s = s.trim();
@@ -892,7 +891,6 @@ pub fn parse_verb_pattern(s: &str) -> Result<VerbPattern, String> {
         "write" => Ok(VerbPattern::Exact(Verb::Write)),
         "edit" => Ok(VerbPattern::Exact(Verb::Edit)),
         "execute" => Ok(VerbPattern::Exact(Verb::Execute)),
-        "delegate" => Ok(VerbPattern::Exact(Verb::Delegate)),
         other => Ok(VerbPattern::Named(other.to_string())),
     }
 }
@@ -909,7 +907,6 @@ fn parse_effect_str(s: &str) -> Result<Effect, PolicyParseError> {
         "allow" => Ok(Effect::Allow),
         "deny" => Ok(Effect::Deny),
         "ask" => Ok(Effect::Ask),
-        "delegate" => Ok(Effect::Delegate),
         other => Err(PolicyParseError::InvalidEffect(other.into())),
     }
 }

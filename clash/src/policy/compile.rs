@@ -90,7 +90,6 @@ fn statement_to_profile_rule(stmt: &Statement) -> Result<CompiledProfileRule, Co
         constraints: None,
         entity_matcher,
         reason: stmt.reason.clone(),
-        delegate: stmt.delegate.clone(),
         profile_guard: stmt.profile.clone(),
     })
 }
@@ -109,7 +108,6 @@ impl CompiledProfileRule {
             constraints,
             entity_matcher: None,
             reason: None,
-            delegate: None,
             profile_guard: None,
         })
     }
@@ -1799,13 +1797,12 @@ profiles:
                         let d_base = p_base.evaluate(&entity, &verb, &noun);
                         let d_deny = p_deny.evaluate(&entity, &verb, &noun);
 
-                        // Restrictiveness: Deny > Ask > Allow > Delegate
+                        // Restrictiveness: Deny > Ask > Allow
                         let restrictiveness = |e: Effect| -> u8 {
                             match e {
                                 Effect::Deny => 3,
                                 Effect::Ask => 2,
                                 Effect::Allow => 1,
-                                Effect::Delegate => 0,
                             }
                         };
 

@@ -1,7 +1,7 @@
 //! Policy evaluation engine.
 //!
-//! Evaluates requests against compiled policies using the deny > ask > allow > delegate
-//! precedence model. Sandbox generation is delegated to `sandbox_gen`.
+//! Evaluates requests against compiled policies using the deny > ask > allow
+//! precedence model. Sandbox generation is handled by `sandbox_gen`.
 
 use std::path::{Path, PathBuf};
 
@@ -20,7 +20,7 @@ impl CompiledPolicy {
     /// Evaluate a request against this policy (backward-compatible version).
     ///
     /// Returns the resulting effect after applying all matching statements
-    /// with precedence: deny > ask > allow > delegate.
+    /// with precedence: deny > ask > allow.
     ///
     /// If no statement matches, returns the configured default effect.
     ///
@@ -53,17 +53,15 @@ impl CompiledPolicy {
     /// 5. Cap-scoped fs permission guard (non-bash, new-format rules)
     /// 6. Profile guard evaluation (legacy-converted rules)
     ///
-    /// Precedence: deny > ask > allow > delegate.
+    /// Precedence: deny > ask > allow.
     #[instrument(level = Level::TRACE, skip(self))]
     pub fn evaluate_with_context(&self, ctx: &EvalContext) -> PolicyDecision {
         let mut has_allow = false;
         let mut has_ask = false;
         let mut has_deny = false;
-        let mut has_delegate = false;
 
         let mut deny_reason: Option<&str> = None;
         let mut ask_reason: Option<&str> = None;
-        let mut delegate_config: Option<&DelegateConfig> = None;
 
         // Collect cap-scoped fs entries from matched allow rules (for sandbox, new-format).
         let mut allow_fs_entries: Vec<(&CompiledFilterExpr, Cap)> = Vec::new();
@@ -106,7 +104,7 @@ impl CompiledPolicy {
             }
 
             // 5. Cap-scoped fs permission guard for non-bash verbs (new-format rules)
-            if *ctx.verb != Verb::Execute
+            if ctx.verb_str != "bash"
                 && let Err(reason) = check_cap_scoped_fs_guard(&rule.constraints, ctx)
             {
                 skipped_rules.push(RuleSkip {
@@ -149,7 +147,7 @@ impl CompiledPolicy {
                 Effect::Allow => {
                     has_allow = true;
                     // Collect inline constraint fs entries (new-format, bash only)
-                    if *ctx.verb == Verb::Execute
+                    if ctx.verb_str == "bash"
                         && let Some(ref constraints) = rule.constraints
                     {
                         if let Some(ref fs_entries) = constraints.fs {
@@ -166,16 +164,10 @@ impl CompiledPolicy {
                         allow_profile_guards.push(profile_guard);
                     }
                 }
-                Effect::Delegate => {
-                    has_delegate = true;
-                    if delegate_config.is_none() {
-                        delegate_config = rule.delegate.as_ref();
-                    }
-                }
             }
         }
 
-        // Precedence: deny > ask > allow > delegate
+        // Precedence: deny > ask > allow
         if has_deny {
             let trace = DecisionTrace {
                 matched_rules,
@@ -186,7 +178,6 @@ impl CompiledPolicy {
                 effect: Effect::Deny,
                 reason: deny_reason.map(|s| s.to_string()),
                 trace,
-                delegate: None,
                 sandbox: None,
             };
         }
@@ -200,12 +191,11 @@ impl CompiledPolicy {
                 effect: Effect::Ask,
                 reason: ask_reason.map(|s| s.to_string()),
                 trace,
-                delegate: None,
                 sandbox: None,
             };
         }
         if has_allow {
-            let sandbox = if *ctx.verb == Verb::Execute {
+            let sandbox = if ctx.verb_str == "bash" {
                 self.generate_unified_sandbox(
                     &allow_fs_entries,
                     merged_network,
@@ -224,22 +214,7 @@ impl CompiledPolicy {
                 effect: Effect::Allow,
                 reason: None,
                 trace,
-                delegate: None,
                 sandbox,
-            };
-        }
-        if has_delegate {
-            let trace = DecisionTrace {
-                matched_rules,
-                skipped_rules,
-                final_resolution: "result: delegate".into(),
-            };
-            return PolicyDecision {
-                effect: Effect::Delegate,
-                reason: None,
-                trace,
-                delegate: delegate_config.cloned(),
-                sandbox: None,
             };
         }
 
@@ -253,7 +228,6 @@ impl CompiledPolicy {
             effect: self.default,
             reason: None,
             trace,
-            delegate: None,
             sandbox: None,
         }
     }
@@ -426,7 +400,7 @@ impl CompiledConstraintDef {
     pub(crate) fn eval(&self, ctx: &EvalContext) -> Result<(), String> {
         // For bash commands, skip fs check — fs generates sandbox rules instead.
         // For other verbs (read/write/edit), fs acts as a permission guard.
-        if *ctx.verb != Verb::Execute {
+        if ctx.verb_str != "bash" {
             if let Some(ref fs) = self.fs
                 && !fs.matches(ctx.noun, ctx.cwd)
             {
@@ -584,8 +558,7 @@ fn check_cap_scoped_fs_guard(
         Verb::Read => Cap::READ,
         Verb::Write => Cap::WRITE | Cap::CREATE,
         Verb::Edit => Cap::WRITE,
-        Verb::Execute => return Ok(()), // bash uses sandbox path
-        Verb::Delegate => return Ok(()),
+        Verb::Execute => return Ok(()), // unknown tools (bash filtered upstream)
     };
 
     // Check if any fs entry's caps intersect with the verb's cap.

@@ -58,8 +58,6 @@ pub fn send_desktop_notification(title: &str, message: &str) {
 
         match notify_rust::Notification::new()
             .auto_icon()
-            .action("allow", "allow")
-            .action("deny", "deny")
             .summary(title)
             .timeout(Duration::from_secs(10))
             .body(message)
@@ -382,5 +380,506 @@ mod tests {
         let config: ZulipConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.topic, "permissions");
         assert_eq!(config.timeout_secs, 120);
+    }
+
+    // -----------------------------------------------------------------------
+    // HTTP integration tests using mockito
+    // -----------------------------------------------------------------------
+
+    /// Create a ZulipConfig pointing at the given mock server URL.
+    fn mock_zulip_config(server_url: &str, timeout_secs: u64) -> ZulipConfig {
+        ZulipConfig {
+            server_url: server_url.to_string(),
+            bot_email: "bot@example.com".to_string(),
+            bot_api_key: "test-api-key".to_string(),
+            stream: "test-stream".to_string(),
+            topic: "permissions".to_string(),
+            timeout_secs,
+        }
+    }
+
+    /// Create a sample permission request for tests.
+    fn sample_permission_request() -> PermissionRequest {
+        PermissionRequest {
+            tool_name: "Bash".into(),
+            tool_input: serde_json::json!({"command": "ls -la"}),
+            session_id: "test-session-123".into(),
+            cwd: "/tmp/test".into(),
+        }
+    }
+
+    #[test]
+    fn test_send_message_returns_message_id() {
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 120);
+        let client = ZulipClient::new(&config);
+
+        let mock = server
+            .mock("POST", "/api/v1/messages")
+            .match_header(
+                "Authorization",
+                mockito::Matcher::Regex("^Basic .+".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id": 42, "result": "success"}"#)
+            .create();
+
+        let msg_id = client.send_message("Hello, world!").unwrap();
+        assert_eq!(msg_id, 42);
+        mock.assert();
+    }
+
+    #[test]
+    fn test_send_message_propagates_http_error() {
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 120);
+        let client = ZulipClient::new(&config);
+
+        let mock = server
+            .mock("POST", "/api/v1/messages")
+            .with_status(401)
+            .with_body(r#"{"result": "error", "msg": "Invalid API key"}"#)
+            .create();
+
+        let result = client.send_message("Hello");
+        assert!(result.is_err());
+        mock.assert();
+    }
+
+    #[test]
+    fn test_send_message_errors_on_missing_id() {
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 120);
+        let client = ZulipClient::new(&config);
+
+        let mock = server
+            .mock("POST", "/api/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"result": "success"}"#)
+            .create();
+
+        let result = client.send_message("Hello");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("did not return a message id"),
+            "unexpected error: {}",
+            err_msg
+        );
+        mock.assert();
+    }
+
+    #[test]
+    fn test_check_for_response_approve() {
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 120);
+        let client = ZulipClient::new(&config);
+
+        let mock = server
+            .mock("GET", "/api/v1/messages")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("anchor".to_string(), "100".to_string()),
+                mockito::Matcher::UrlEncoded("num_before".to_string(), "0".to_string()),
+                mockito::Matcher::UrlEncoded("num_after".to_string(), "100".to_string()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "result": "success",
+                    "messages": [
+                        {
+                            "id": 101,
+                            "sender_email": "user@example.com",
+                            "content": "approve"
+                        }
+                    ]
+                })
+                .to_string(),
+            )
+            .create();
+
+        let response = client.check_for_response(100).unwrap();
+        assert!(response.is_some());
+        assert!(matches!(response.unwrap(), PermissionResponse::Approve));
+        mock.assert();
+    }
+
+    #[test]
+    fn test_check_for_response_deny() {
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 120);
+        let client = ZulipClient::new(&config);
+
+        let mock = server
+            .mock("GET", "/api/v1/messages")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("anchor".to_string(), "100".to_string()),
+                mockito::Matcher::UrlEncoded("num_before".to_string(), "0".to_string()),
+                mockito::Matcher::UrlEncoded("num_after".to_string(), "100".to_string()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "result": "success",
+                    "messages": [
+                        {
+                            "id": 101,
+                            "sender_email": "user@example.com",
+                            "content": "deny"
+                        }
+                    ]
+                })
+                .to_string(),
+            )
+            .create();
+
+        let response = client.check_for_response(100).unwrap();
+        assert!(response.is_some());
+        match response.unwrap() {
+            PermissionResponse::Deny(reason) => {
+                assert!(
+                    reason.contains("user@example.com"),
+                    "deny reason should include sender: {}",
+                    reason
+                );
+            }
+            PermissionResponse::Approve => panic!("Expected Deny, got Approve"),
+        }
+        mock.assert();
+    }
+
+    #[test]
+    fn test_check_for_response_no_relevant_messages() {
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 120);
+        let client = ZulipClient::new(&config);
+
+        // Return messages, but only from the bot itself (should be skipped)
+        // and messages at or before the anchor (should be skipped).
+        let mock = server
+            .mock("GET", "/api/v1/messages")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "result": "success",
+                    "messages": [
+                        {
+                            "id": 100,
+                            "sender_email": "bot@example.com",
+                            "content": "Permission Request..."
+                        },
+                        {
+                            "id": 99,
+                            "sender_email": "user@example.com",
+                            "content": "approve"
+                        }
+                    ]
+                })
+                .to_string(),
+            )
+            .create();
+
+        let response = client.check_for_response(100).unwrap();
+        assert!(response.is_none());
+        mock.assert();
+    }
+
+    #[test]
+    fn test_check_for_response_empty_messages() {
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 120);
+        let client = ZulipClient::new(&config);
+
+        let mock = server
+            .mock("GET", "/api/v1/messages")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "result": "success",
+                    "messages": []
+                })
+                .to_string(),
+            )
+            .create();
+
+        let response = client.check_for_response(100).unwrap();
+        assert!(response.is_none());
+        mock.assert();
+    }
+
+    #[test]
+    fn test_check_for_response_skips_bot_messages() {
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 120);
+        let client = ZulipClient::new(&config);
+
+        // Bot message with "approve" should be ignored; only user messages count.
+        let mock = server
+            .mock("GET", "/api/v1/messages")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "result": "success",
+                    "messages": [
+                        {
+                            "id": 101,
+                            "sender_email": "bot@example.com",
+                            "content": "approve"
+                        }
+                    ]
+                })
+                .to_string(),
+            )
+            .create();
+
+        let response = client.check_for_response(100).unwrap();
+        assert!(response.is_none());
+        mock.assert();
+    }
+
+    #[test]
+    fn test_check_for_response_ignores_irrelevant_content() {
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 120);
+        let client = ZulipClient::new(&config);
+
+        // A user message that doesn't match any approve/deny keywords.
+        let mock = server
+            .mock("GET", "/api/v1/messages")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "result": "success",
+                    "messages": [
+                        {
+                            "id": 101,
+                            "sender_email": "user@example.com",
+                            "content": "What is this about?"
+                        }
+                    ]
+                })
+                .to_string(),
+            )
+            .create();
+
+        let response = client.check_for_response(100).unwrap();
+        assert!(response.is_none());
+        mock.assert();
+    }
+
+    #[test]
+    fn test_check_for_response_various_approve_keywords() {
+        // Test all the different approval keywords: "approve", "allow", "yes", "y"
+        for keyword in &["approve", "allow", "yes", "y"] {
+            let mut server = mockito::Server::new();
+            let config = mock_zulip_config(&server.url(), 120);
+            let client = ZulipClient::new(&config);
+
+            let mock = server
+                .mock("GET", "/api/v1/messages")
+                .match_query(mockito::Matcher::Any)
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "result": "success",
+                        "messages": [
+                            {
+                                "id": 101,
+                                "sender_email": "user@example.com",
+                                "content": keyword
+                            }
+                        ]
+                    })
+                    .to_string(),
+                )
+                .create();
+
+            let response = client.check_for_response(100).unwrap();
+            assert!(
+                matches!(response, Some(PermissionResponse::Approve)),
+                "keyword '{}' should be recognized as approval",
+                keyword
+            );
+            mock.assert();
+        }
+    }
+
+    #[test]
+    fn test_check_for_response_various_deny_keywords() {
+        // Test all the different denial keywords: "deny", "reject", "no", "n"
+        for keyword in &["deny", "reject", "no", "n"] {
+            let mut server = mockito::Server::new();
+            let config = mock_zulip_config(&server.url(), 120);
+            let client = ZulipClient::new(&config);
+
+            let mock = server
+                .mock("GET", "/api/v1/messages")
+                .match_query(mockito::Matcher::Any)
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "result": "success",
+                        "messages": [
+                            {
+                                "id": 101,
+                                "sender_email": "user@example.com",
+                                "content": keyword
+                            }
+                        ]
+                    })
+                    .to_string(),
+                )
+                .create();
+
+            let response = client.check_for_response(100).unwrap();
+            assert!(
+                matches!(response, Some(PermissionResponse::Deny(_))),
+                "keyword '{}' should be recognized as denial",
+                keyword
+            );
+            mock.assert();
+        }
+    }
+
+    #[test]
+    fn test_resolve_permission_timeout() {
+        // Use timeout_secs=0 so resolve_permission returns None immediately
+        // without entering the polling loop.
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 0);
+        let client = ZulipClient::new(&config);
+
+        let mock_post = server
+            .mock("POST", "/api/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id": 42, "result": "success"}"#)
+            .create();
+
+        let request = sample_permission_request();
+        let result = client.resolve_permission(&request).unwrap();
+        assert!(result.is_none(), "Expected None (timeout), got a response");
+        mock_post.assert();
+    }
+
+    #[test]
+    fn test_resolve_permission_approve_end_to_end() {
+        // Use timeout_secs=10 to allow one poll cycle (sleep 2s then poll).
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 10);
+        let client = ZulipClient::new(&config);
+
+        // Mock the initial POST to send the message.
+        let mock_post = server
+            .mock("POST", "/api/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id": 42, "result": "success"}"#)
+            .create();
+
+        // Mock the GET poll to return an approval.
+        let mock_get = server
+            .mock("GET", "/api/v1/messages")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "result": "success",
+                    "messages": [
+                        {
+                            "id": 43,
+                            "sender_email": "reviewer@example.com",
+                            "content": "approve"
+                        }
+                    ]
+                })
+                .to_string(),
+            )
+            .create();
+
+        let request = sample_permission_request();
+        let result = client.resolve_permission(&request).unwrap();
+        assert!(matches!(result, Some(PermissionResponse::Approve)));
+        mock_post.assert();
+        mock_get.assert();
+    }
+
+    #[test]
+    fn test_resolve_permission_deny_end_to_end() {
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 10);
+        let client = ZulipClient::new(&config);
+
+        let mock_post = server
+            .mock("POST", "/api/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id": 42, "result": "success"}"#)
+            .create();
+
+        let mock_get = server
+            .mock("GET", "/api/v1/messages")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "result": "success",
+                    "messages": [
+                        {
+                            "id": 43,
+                            "sender_email": "reviewer@example.com",
+                            "content": "deny"
+                        }
+                    ]
+                })
+                .to_string(),
+            )
+            .create();
+
+        let request = sample_permission_request();
+        let result = client.resolve_permission(&request).unwrap();
+        match result {
+            Some(PermissionResponse::Deny(reason)) => {
+                assert!(reason.contains("reviewer@example.com"));
+            }
+            other => panic!("Expected Some(Deny), got {:?}", other.map(|_| "something")),
+        }
+        mock_post.assert();
+        mock_get.assert();
+    }
+
+    #[test]
+    fn test_resolve_permission_send_failure() {
+        let mut server = mockito::Server::new();
+        let config = mock_zulip_config(&server.url(), 10);
+        let client = ZulipClient::new(&config);
+
+        // The POST fails, so resolve_permission should propagate the error.
+        let mock_post = server
+            .mock("POST", "/api/v1/messages")
+            .with_status(500)
+            .with_body(r#"{"result": "error", "msg": "Internal error"}"#)
+            .create();
+
+        let request = sample_permission_request();
+        let result = client.resolve_permission(&request);
+        assert!(result.is_err());
+        mock_post.assert();
     }
 }

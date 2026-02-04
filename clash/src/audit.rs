@@ -77,7 +77,13 @@ pub fn log_decision(
     // Truncate tool_input for the log entry.
     let input_str = tool_input.to_string();
     let tool_input_summary = if input_str.len() > 200 {
-        format!("{}...", &input_str[..200])
+        let truncate_at = input_str
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i <= 200)
+            .last()
+            .unwrap_or(0);
+        format!("{}...", &input_str[..truncate_at])
     } else {
         input_str
     };
@@ -103,7 +109,6 @@ fn effect_str(effect: Effect) -> &'static str {
         Effect::Allow => "allow",
         Effect::Deny => "deny",
         Effect::Ask => "ask",
-        Effect::Delegate => "delegate",
     }
 }
 

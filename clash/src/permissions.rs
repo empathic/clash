@@ -1,6 +1,6 @@
 use crate::policy::sandbox_types::SandboxPolicy;
 use crate::policy::{Effect, EvalContext, Verb};
-use tracing::{Level, debug, info, instrument, warn};
+use tracing::{Level, info, instrument, warn};
 
 use crate::hooks::{HookOutput, ToolInput, ToolUseHookInput};
 use crate::settings::ClashSettings;
@@ -96,15 +96,6 @@ fn check_permission_policy(
             decision.reason.or(Some("policy: ask".into())),
             additional_context,
         ),
-        Effect::Delegate => {
-            // TODO: Delegate is reserved for future external evaluator support.
-            // Until implemented, we fail safe by falling back to ask.
-            debug!("Delegate effect not yet implemented; falling back to ask");
-            HookOutput::ask(
-                Some("policy: delegation not yet implemented".into()),
-                additional_context,
-            )
-        }
     })
 }
 

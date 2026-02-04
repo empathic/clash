@@ -75,7 +75,6 @@ fn legacy_pattern_to_statement(pattern: &str, effect: Effect) -> Option<Statemen
         verb: verb_pattern,
         noun,
         reason: None,
-        delegate: None,
         profile: None,
     })
 }

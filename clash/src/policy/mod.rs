@@ -37,7 +37,6 @@
 //!     verb: VerbPattern::Exact(Verb::Execute),
 //!     noun: Pattern::Match(MatchExpr::Glob("git *".into())),
 //!     reason: None,
-//!     delegate: None,
 //!     profile: None,
 //! };
 //! ```
@@ -55,9 +54,9 @@ pub mod sandbox_types;
 
 // Re-export AST types for backward compatibility.
 pub use ast::{
-    ArgSpec, ConstraintDef, DefaultConfig, DelegateConfig, DelegateType, FilterExpr,
-    InlineConstraints, LegacyPermissions, MatchExpr, Pattern, PolicyConfig, PolicyDocument,
-    ProfileDef, ProfileExpr, ProfileRule, Statement, VerbPattern,
+    ArgSpec, ConstraintDef, DefaultConfig, FilterExpr, InlineConstraints, LegacyPermissions,
+    MatchExpr, Pattern, PolicyConfig, PolicyDocument, ProfileDef, ProfileExpr, ProfileRule,
+    Statement, VerbPattern,
 };
 pub use error::{CompileError, PolicyError, PolicyParseError};
 pub use ir::{
@@ -80,8 +79,6 @@ pub enum Effect {
     Deny,
     /// Prompt the user for confirmation.
     Ask,
-    /// Delegate the decision to an external evaluator.
-    Delegate,
 }
 
 impl fmt::Display for Effect {
@@ -90,7 +87,6 @@ impl fmt::Display for Effect {
             Effect::Allow => write!(f, "allow"),
             Effect::Deny => write!(f, "deny"),
             Effect::Ask => write!(f, "ask"),
-            Effect::Delegate => write!(f, "delegate"),
         }
     }
 }
@@ -103,7 +99,6 @@ pub enum Verb {
     Write,
     Edit,
     Execute,
-    Delegate,
 }
 
 impl Verb {
@@ -127,7 +122,6 @@ impl Verb {
             Verb::Write => "write",
             Verb::Edit => "edit",
             Verb::Execute => "bash",
-            Verb::Delegate => "delegate",
         }
     }
 }
@@ -139,7 +133,6 @@ impl fmt::Display for Verb {
             Verb::Write => write!(f, "write"),
             Verb::Edit => write!(f, "edit"),
             Verb::Execute => write!(f, "execute"),
-            Verb::Delegate => write!(f, "delegate"),
         }
     }
 }
@@ -260,7 +253,6 @@ mod tests {
             verb: VerbPattern::Exact(Verb::Execute),
             noun: Pattern::Match(MatchExpr::Glob("git *".into())),
             reason: None,
-            delegate: None,
             profile: None,
         };
 
@@ -283,7 +275,6 @@ mod tests {
             verb: VerbPattern::Exact(Verb::Read),
             noun: Pattern::Match(MatchExpr::Glob("~/config/*".into())),
             reason: Some("Only users can read config".into()),
-            delegate: None,
             profile: None,
         };
 
@@ -300,6 +291,5 @@ mod tests {
         assert_eq!(Effect::Allow.to_string(), "allow");
         assert_eq!(Effect::Deny.to_string(), "deny");
         assert_eq!(Effect::Ask.to_string(), "ask");
-        assert_eq!(Effect::Delegate.to_string(), "delegate");
     }
 }

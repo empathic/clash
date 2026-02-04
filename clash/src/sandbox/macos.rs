@@ -62,15 +62,23 @@ fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     p += "(allow file-write* (literal \"/dev/null\"))\n";
     p += "(allow file-read-data (literal \"/dev/null\"))\n";
 
-    // Process allow rules first, then deny rules override
+    // Process allow rules first, then deny rules override.
+    // For Subpath/Literal rules, canonicalize the path to resolve symlinks
+    // (e.g., /var → /private/var, /tmp → /private/tmp on macOS) so that
+    // Seatbelt matches against the real filesystem path.
     for rule in &policy.rules {
         let resolved = SandboxPolicy::resolve_path(&rule.path, cwd);
+        let canonical = if rule.path_match != PathMatch::Regex {
+            canonicalize_or_keep(&resolved)
+        } else {
+            resolved
+        };
         match rule.effect {
             RuleEffect::Allow => {
-                emit_caps_for_path(&mut p, &resolved, rule.caps, rule.path_match);
+                emit_caps_for_path(&mut p, &canonical, rule.caps, rule.path_match);
             }
             RuleEffect::Deny => {
-                emit_deny_for_path(&mut p, &resolved, rule.caps, rule.path_match);
+                emit_deny_for_path(&mut p, &canonical, rule.caps, rule.path_match);
             }
         }
     }
@@ -86,6 +94,14 @@ fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     }
 
     p
+}
+
+/// Resolve symlinks in a path for Seatbelt matching. Falls back to the
+/// original string if canonicalization fails (e.g., path doesn't exist yet).
+fn canonicalize_or_keep(path: &str) -> String {
+    std::fs::canonicalize(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string())
 }
 
 /// Escape a path string for use inside an SBPL string literal.
@@ -122,13 +138,18 @@ fn emit_caps_for_path(profile: &mut String, path: &str, caps: Cap, path_match: P
         profile.push_str(&format!("(allow file-read* {})\n", filter));
     }
     if caps.contains(Cap::WRITE) {
-        profile.push_str(&format!("(allow file-write-data {})\n", filter));
-    }
-    if caps.contains(Cap::CREATE) {
-        profile.push_str(&format!("(allow file-write-create {})\n", filter));
-    }
-    if caps.contains(Cap::DELETE) {
-        profile.push_str(&format!("(allow file-write-unlink {})\n", filter));
+        // WRITE grants all file-write sub-operations (data, mode, flags,
+        // setattr, xattr, times, create, unlink, mkdir, etc.) — matching
+        // the wildcard approach used by READ → file-read*.
+        profile.push_str(&format!("(allow file-write* {})\n", filter));
+    } else {
+        // Without WRITE, emit only the specific sub-operations requested.
+        if caps.contains(Cap::CREATE) {
+            profile.push_str(&format!("(allow file-write-create {})\n", filter));
+        }
+        if caps.contains(Cap::DELETE) {
+            profile.push_str(&format!("(allow file-write-unlink {})\n", filter));
+        }
     }
     if caps.contains(Cap::EXECUTE) {
         profile.push_str(&format!("(allow process-exec {})\n", filter));
@@ -144,13 +165,14 @@ fn emit_deny_for_path(profile: &mut String, path: &str, caps: Cap, path_match: P
         profile.push_str(&format!("(deny file-read* {})\n", filter));
     }
     if caps.contains(Cap::WRITE) {
-        profile.push_str(&format!("(deny file-write-data {})\n", filter));
-    }
-    if caps.contains(Cap::CREATE) {
-        profile.push_str(&format!("(deny file-write-create {})\n", filter));
-    }
-    if caps.contains(Cap::DELETE) {
-        profile.push_str(&format!("(deny file-write-unlink {})\n", filter));
+        profile.push_str(&format!("(deny file-write* {})\n", filter));
+    } else {
+        if caps.contains(Cap::CREATE) {
+            profile.push_str(&format!("(deny file-write-create {})\n", filter));
+        }
+        if caps.contains(Cap::DELETE) {
+            profile.push_str(&format!("(deny file-write-unlink {})\n", filter));
+        }
     }
     if caps.contains(Cap::EXECUTE) {
         profile.push_str(&format!("(deny process-exec {})\n", filter));
