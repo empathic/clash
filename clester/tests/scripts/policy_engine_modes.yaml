@@ -1,9 +1,8 @@
 meta:
-  name: policy engine mode selection
-  description: Test that engine_mode=policy uses policy rules instead of legacy permissions
+  name: policy takes precedence over legacy
+  description: Test that policy.yaml rules take precedence over legacy Claude Code permissions
 
 clash:
-  engine_mode: policy
   policy:
     default: deny
     rules:

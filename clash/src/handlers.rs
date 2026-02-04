@@ -165,21 +165,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
         }
     }
 
-    // 3. Check settings file
-    let settings_path = ClashSettings::settings_file();
-    match ClashSettings::load() {
-        Ok(s) => {
-            lines.push(format!("settings: OK (engine_mode={:?})", s.engine_mode));
-        }
-        Err(_) if !settings_path.exists() => {
-            lines.push("settings: using defaults (no settings.json)".into());
-        }
-        Err(e) => {
-            lines.push(format!("ISSUE: settings load error: {}", e));
-        }
-    }
-
-    // 4. Check sandbox support
+    // 3. Check sandbox support
     let support = crate::sandbox::check_support();
     match support {
         crate::sandbox::SupportLevel::Full => {

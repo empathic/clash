@@ -18,7 +18,7 @@ pub struct TestScript {
     #[serde(default)]
     pub settings: SettingsConfig,
 
-    /// Clash-specific configuration (engine mode, policy).
+    /// Clash-specific configuration (policy).
     #[serde(default)]
     pub clash: Option<ClashConfig>,
 
@@ -26,13 +26,9 @@ pub struct TestScript {
     pub steps: Vec<Step>,
 }
 
-/// Clash-specific settings: engine mode and policy document.
+/// Clash-specific settings: policy document.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClashConfig {
-    /// Which permission engine to use: "policy", "legacy", or "auto".
-    #[serde(default)]
-    pub engine_mode: Option<String>,
-
     /// Policy document to write to ~/.clash/policy.yaml (old format).
     #[serde(default)]
     pub policy: Option<PolicySpec>,
@@ -297,7 +293,6 @@ meta:
   name: clash config test
 
 clash:
-  engine_mode: policy
   policy:
     default: ask
     rules:
@@ -316,7 +311,6 @@ steps:
 
         let script = TestScript::from_str(yaml).unwrap();
         let clash = script.clash.expect("clash config should be present");
-        assert_eq!(clash.engine_mode.as_deref(), Some("policy"));
         let policy = clash.policy.expect("policy should be present");
         assert_eq!(policy.default, "ask");
         assert_eq!(policy.rules.len(), 2);

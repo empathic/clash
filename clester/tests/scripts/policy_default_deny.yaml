@@ -3,7 +3,6 @@ meta:
   description: Test that default deny blocks everything not explicitly allowed
 
 clash:
-  engine_mode: policy
   policy:
     default: deny
     rules:

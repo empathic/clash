@@ -3,7 +3,6 @@ meta:
   description: Test that unrecognized tool names fall through to the default effect
 
 clash:
-  engine_mode: policy
   policy:
     default: ask
     rules:
