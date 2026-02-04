@@ -32,5 +32,6 @@ pub mod handlers;
 pub mod hooks;
 pub mod notifications;
 pub mod permissions;
+pub mod policy;
 pub mod sandbox;
 pub mod settings;
