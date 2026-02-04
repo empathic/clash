@@ -48,10 +48,7 @@ pub fn handle_permission_request(
 }
 
 /// Send a desktop notification for a permission request, if enabled.
-pub fn send_permission_desktop_notification(
-    input: &ToolUseHookInput,
-    settings: &ClashSettings,
-) {
+pub fn send_permission_desktop_notification(input: &ToolUseHookInput, settings: &ClashSettings) {
     if !settings.notifications.desktop {
         return;
     }

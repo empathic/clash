@@ -65,7 +65,7 @@ pub fn send_desktop_notification(title: &str, message: &str) {
             .body(message)
             .show()
         {
-            Ok(resp) => {}
+            Ok(_resp) => {}
             Err(e) => warn!(error = %e, "Failed to send desktop notification"),
         }
     }
