@@ -6,60 +6,34 @@ use claude_settings::policy::CompiledPolicy;
 use claude_settings::policy::parse::desugar_legacy;
 use claude_settings::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
 use dirs::home_dir;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tracing::{Level, info, instrument, warn};
 
 use crate::audit::AuditConfig;
 use crate::notifications::NotificationConfig;
 
-/// Which permission engine to use.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum EngineMode {
-    /// Only use the new policy engine (policy.yaml rules).
-    Policy,
-    /// Only use the legacy Claude Code PermissionSet.
-    Legacy,
-    /// Try the policy engine first; fall back to legacy if no policy file exists.
-    #[default]
-    Auto,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ClashSettings {
-    /// Which permission engine to use.
-    #[serde(default)]
-    pub engine_mode: EngineMode,
-
-    /// Parsed policy document (not serialized — loaded at runtime from policy.yaml or compiled from Claude settings).
-    #[serde(skip)]
+    /// Parsed policy document loaded at runtime from policy.yaml or compiled from Claude settings.
     pub(crate) policy: Option<PolicyDocument>,
 
     /// Notification and external service configuration, loaded from policy.yaml.
-    #[serde(skip)]
     pub notifications: NotificationConfig,
 
     /// Warning message if parsing the notifications config failed or was incomplete.
-    #[serde(skip)]
     pub notification_warning: Option<String>,
 
     /// Audit logging configuration, loaded from policy.yaml.
-    #[serde(skip)]
     pub audit: AuditConfig,
 }
 
 impl ClashSettings {
-    #[instrument(level = Level::TRACE)]
     pub fn settings_dir() -> PathBuf {
         home_dir()
             .expect("user must have $HOME set in environment")
             .join(".clash")
     }
-    #[instrument(level = Level::TRACE)]
-    pub fn settings_file() -> PathBuf {
-        Self::settings_dir().join("settings.json")
-    }
-    #[instrument(level = Level::TRACE)]
+
     pub fn policy_file() -> PathBuf {
         Self::settings_dir().join("policy.yaml")
     }
@@ -143,19 +117,12 @@ impl ClashSettings {
         })
     }
 
-    /// Resolve the policy based on engine_mode:
-    /// - Policy: load only from policy.yaml
-    /// - Legacy: compile Claude settings into a PolicyDocument
-    /// - Auto: use policy.yaml if it exists, else compile Claude settings
+    /// Resolve the policy: use policy.yaml if it exists, else compile Claude settings.
     #[instrument(level = Level::TRACE, skip(self))]
     fn resolve_policy(&mut self) {
-        self.policy = match self.engine_mode {
-            EngineMode::Policy => self.load_policy_file(),
-            EngineMode::Legacy => Self::compile_claude_to_policy(),
-            EngineMode::Auto => self
-                .load_policy_file()
-                .or_else(Self::compile_claude_to_policy),
-        };
+        self.policy = self
+            .load_policy_file()
+            .or_else(Self::compile_claude_to_policy);
     }
 
     /// Compile the loaded policy document into a CompiledPolicy for evaluation.
@@ -172,34 +139,12 @@ impl ClashSettings {
             })
     }
 
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn save(&self) -> Result<()> {
-        std::fs::create_dir_all(Self::settings_dir())?;
-        Ok(std::fs::write(
-            Self::settings_file(),
-            serde_json::to_string_pretty(&self)?,
-        )?)
-    }
-
-    #[instrument(level = Level::TRACE)]
-    pub fn load() -> Result<Self> {
-        let mut loaded: Self =
-            serde_json::from_str(&std::fs::read_to_string(Self::settings_file())?)?;
-        loaded.resolve_policy();
-        Ok(loaded)
-    }
-
-    #[instrument(level = Level::TRACE)]
-    pub fn create() -> Result<Self> {
-        let mut this = Self::default();
-        this.resolve_policy();
-        this.save()?;
-        Ok(this)
-    }
-
+    /// Load settings by resolving the policy from disk.
     #[instrument(level = Level::TRACE)]
     pub fn load_or_create() -> Result<Self> {
-        Self::load().or_else(|_| Self::create())
+        let mut this = Self::default();
+        this.resolve_policy();
+        Ok(this)
     }
 }
 
@@ -228,50 +173,7 @@ pub fn parse_notification_config(yaml_str: &str) -> (NotificationConfig, Option<
 }
 
 /// Default policy template written by `clash init`.
-pub const DEFAULT_POLICY: &str = r#"# Clash policy — safe defaults for local development.
-#
-# Evaluation: all matching statements are collected, then precedence applies:
-#   deny > ask > allow
-# If no statement matches, the default effect is used (ask).
-
-default:
-  permission: ask
-  profile: main
-
-profiles:
-  cwd:
-    rules:
-      allow * *:
-        fs:
-          read + write + execute: subpath($CWD)
-  tmp:
-    rules:
-      allow * *:
-        fs:
-          read + write + execute: regex(^/tmp)
-
-  global:
-    rules:
-      ask * *:
-        fs:
-          read: "!subpath($CWD)"
-
-  main:
-    include: [cwd, global]
-    rules:
-      # ── Git: deny commit and push ─────────────────────────────
-      ask bash git commit*:
-      deny bash git push*:
-      deny bash git merge*:
-
-      # ── Git: deny destructive operations ──────────────────────
-      deny bash git reset --hard*:
-      deny bash git clean*:
-      deny bash git branch -D*:
-
-      # ── Dangerous commands ─────────────────────────────────────
-      deny bash sudo *:
-"#;
+pub const DEFAULT_POLICY: &str = include_str!("default_policy.yaml");
 
 /// Extract the `audit:` section from a policy YAML string.
 ///
@@ -286,5 +188,15 @@ fn parse_audit_config(yaml_str: &str) -> AuditConfig {
     match serde_yaml::from_str::<RawYaml>(yaml_str) {
         Ok(raw) => raw.audit.unwrap_or_default(),
         Err(_) => AuditConfig::default(),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn default_policy_parses() -> anyhow::Result<()> {
+        let pol = claude_settings::policy::parse::parse_yaml(super::DEFAULT_POLICY)?;
+        assert!(pol.profile_defs.len() > 0, "{pol:#?}");
+        Ok(())
     }
 }

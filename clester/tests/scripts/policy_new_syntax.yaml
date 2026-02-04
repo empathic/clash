@@ -3,7 +3,6 @@ meta:
   description: Test the new format with profiles, inline rules, and cap-scoped fs
 
 clash:
-  engine_mode: policy
   policy_raw: |
     default:
       permission: ask

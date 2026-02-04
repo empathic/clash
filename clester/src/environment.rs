@@ -54,9 +54,6 @@ impl TestEnvironment {
             write_settings_file(&path, project_local)?;
         }
 
-        // Write ~/.clash/settings.json with engine_mode (if specified).
-        write_clash_settings(&home_dir, clash)?;
-
         // Write ~/.clash/policy.yaml — raw YAML takes precedence over PolicySpec.
         if let Some(raw) = clash.and_then(|c| c.policy_raw.as_ref()) {
             let path = home_dir.join(".clash/policy.yaml");
@@ -136,23 +133,6 @@ fn write_settings_file(path: &Path, spec: &SettingsSpec) -> Result<()> {
 
     let json = serde_json::to_string_pretty(&settings)?;
     std::fs::write(path, json).with_context(|| format!("failed to write {}", path.display()))?;
-    Ok(())
-}
-
-/// Write ~/.clash/settings.json with optional engine_mode.
-fn write_clash_settings(home_dir: &Path, clash: Option<&ClashConfig>) -> Result<()> {
-    let clash_settings_path = home_dir.join(".clash/settings.json");
-    let mut settings = serde_json::Map::new();
-
-    if let Some(engine_mode) = clash.and_then(|c| c.engine_mode.as_deref()) {
-        settings.insert(
-            "engine_mode".into(),
-            serde_json::Value::String(engine_mode.into()),
-        );
-    }
-
-    let json = serde_json::to_string_pretty(&settings)?;
-    std::fs::write(&clash_settings_path, json).context("failed to write clash settings")?;
     Ok(())
 }
 
@@ -242,36 +222,9 @@ mod tests {
     }
 
     #[test]
-    fn test_clash_settings_with_engine_mode() {
-        let config = SettingsConfig::default();
-        let clash = ClashConfig {
-            engine_mode: Some("policy".into()),
-            policy: None,
-            policy_raw: None,
-        };
-
-        let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
-        let content = std::fs::read_to_string(env.home_dir.join(".clash/settings.json")).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed["engine_mode"], "policy");
-    }
-
-    #[test]
-    fn test_clash_settings_without_engine_mode() {
-        let config = SettingsConfig::default();
-
-        let env = TestEnvironment::setup(&config, None).unwrap();
-        let content = std::fs::read_to_string(env.home_dir.join(".clash/settings.json")).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        // No engine_mode key when not specified
-        assert!(parsed.get("engine_mode").is_none());
-    }
-
-    #[test]
     fn test_policy_file_written() {
         let config = SettingsConfig::default();
         let clash = ClashConfig {
-            engine_mode: Some("policy".into()),
             policy: Some(PolicySpec {
                 default: "ask".into(),
                 rules: vec!["allow * bash git *".into(), "deny * read .env".into()],
@@ -291,7 +244,6 @@ mod tests {
     fn test_no_policy_file_when_not_specified() {
         let config = SettingsConfig::default();
         let clash = ClashConfig {
-            engine_mode: Some("legacy".into()),
             policy: None,
             policy_raw: None,
         };

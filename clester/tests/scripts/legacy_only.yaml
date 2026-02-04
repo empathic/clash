@@ -1,9 +1,6 @@
 meta:
-  name: legacy-only permissions
-  description: Test engine_mode=legacy uses only Claude Code settings, ignoring policy.yaml
-
-clash:
-  engine_mode: legacy
+  name: legacy permissions (no policy file)
+  description: Without a policy.yaml, Claude Code settings are compiled into policy rules
 
 settings:
   user:

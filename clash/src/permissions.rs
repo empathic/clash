@@ -220,7 +220,6 @@ mod tests {
     fn settings_with_policy(yaml: &str) -> ClashSettings {
         let doc = parse_yaml(yaml).expect("valid YAML");
         ClashSettings {
-            engine_mode: crate::settings::EngineMode::Policy,
             policy: Some(doc),
             notifications: Default::default(),
             notification_warning: None,
@@ -250,7 +249,6 @@ mod tests {
             profile_defs: Default::default(),
         };
         ClashSettings {
-            engine_mode: crate::settings::EngineMode::Auto,
             policy: Some(doc),
             notifications: Default::default(),
             notification_warning: None,
@@ -378,7 +376,6 @@ rules:
     fn test_auto_mode_uses_policy_when_available() -> Result<()> {
         let doc = parse_yaml("rules:\n  - allow * bash echo *\n").unwrap();
         let settings = ClashSettings {
-            engine_mode: crate::settings::EngineMode::Auto,
             policy: Some(doc),
             notifications: Default::default(),
             notification_warning: None,
