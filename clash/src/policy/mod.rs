@@ -54,7 +54,11 @@ pub mod sandbox_gen;
 pub mod sandbox_types;
 
 // Re-export AST types for backward compatibility.
-pub use ast::*;
+pub use ast::{
+    ArgSpec, ConstraintDef, DefaultConfig, DelegateConfig, DelegateType, FilterExpr,
+    InlineConstraints, LegacyPermissions, MatchExpr, Pattern, PolicyConfig, PolicyDocument,
+    ProfileDef, ProfileExpr, ProfileRule, Statement, VerbPattern,
+};
 pub use error::{CompileError, PolicyError, PolicyParseError};
 pub use ir::{
     CompiledMatchExpr, CompiledPattern, CompiledPolicy, DecisionTrace, PolicyDecision, RuleMatch,

@@ -105,7 +105,7 @@ impl HooksCmd {
         };
 
         output.write_stdout()?;
-        std::process::exit(exit_code::SUCCESS);
+        Ok(())
     }
 }
 
@@ -197,9 +197,9 @@ enum Commands {
 fn init_tracing() {
     // Log path: CLASH_LOG env var > ~/.clash/clash.log > stderr fallback.
     let log_path = std::env::var("CLASH_LOG").ok().unwrap_or_else(|| {
-        dirs::home_dir()
-            .map(|h| h.join(".clash").join("clash.log"))
-            .unwrap_or_else(|| std::path::PathBuf::from("clash.log"))
+        ClashSettings::settings_dir()
+            .map(|d| d.join("clash.log"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("clash.log"))
             .to_string_lossy()
             .into_owned()
     });
@@ -398,7 +398,7 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     });
 
     // Write hooks to a temp file that Claude Code can use
-    let hooks_dir = ClashSettings::settings_dir().join("hooks");
+    let hooks_dir = ClashSettings::settings_dir()?.join("hooks");
     std::fs::create_dir_all(&hooks_dir)?;
     let hooks_file = hooks_dir.join("hooks.json");
     std::fs::write(&hooks_file, serde_json::to_string_pretty(&hooks_json)?)?;
@@ -492,7 +492,7 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
     if dry_run {
         print!("{}", output);
     } else {
-        let path = ClashSettings::policy_file();
+        let path = ClashSettings::policy_file()?;
         if path.exists() {
             eprintln!(
                 "Warning: {} already exists. Use --dry-run to preview, or remove the file first.",
@@ -500,7 +500,7 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
             );
             anyhow::bail!("policy.yaml already exists at {}", path.display());
         }
-        std::fs::create_dir_all(ClashSettings::settings_dir())?;
+        std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
         std::fs::write(&path, &output)?;
         println!("Wrote policy to {}", path.display());
         println!(
@@ -648,7 +648,7 @@ fn run_explain(json_output: bool) -> Result<()> {
 /// Initialize a new clash policy.yaml with safe defaults.
 #[instrument(level = Level::TRACE)]
 fn run_init(force: bool) -> Result<()> {
-    let path = ClashSettings::policy_file();
+    let path = ClashSettings::policy_file()?;
 
     if path.exists() && !force {
         anyhow::bail!(
@@ -657,7 +657,7 @@ fn run_init(force: bool) -> Result<()> {
         );
     }
 
-    std::fs::create_dir_all(ClashSettings::settings_dir())?;
+    std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
     std::fs::write(&path, DEFAULT_POLICY)?;
     println!("Wrote default policy to {}", path.display());
     println!("Edit the file to customize rules for your environment.");

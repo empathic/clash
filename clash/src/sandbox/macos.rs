@@ -88,12 +88,27 @@ fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     p
 }
 
+/// Escape a path string for use inside an SBPL string literal.
+///
+/// Backslashes are escaped to `\\` and double quotes are escaped to `\"`,
+/// preventing a crafted path from breaking out of the Seatbelt profile
+/// string literal.
+fn sbpl_escape(path: &str) -> String {
+    path.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// Build an SBPL path filter from a path and match type.
+///
+/// For `Subpath` and `Literal` variants the path is escaped to prevent
+/// injection via characters that are special inside SBPL string literals.
+/// The `Regex` variant is left unescaped because its pattern comes from the
+/// policy author, not from untrusted input, and regex has its own escaping
+/// rules.
 #[instrument(level = Level::TRACE)]
 fn sbpl_filter(path: &str, path_match: PathMatch) -> String {
     match path_match {
-        PathMatch::Subpath => format!("(subpath \"{}\")", path),
-        PathMatch::Literal => format!("(literal \"{}\")", path),
+        PathMatch::Subpath => format!("(subpath \"{}\")", sbpl_escape(path)),
+        PathMatch::Literal => format!("(literal \"{}\")", sbpl_escape(path)),
         PathMatch::Regex => format!("(regex #\"{}\")", path),
     }
 }
@@ -139,5 +154,84 @@ fn emit_deny_for_path(profile: &mut String, path: &str, caps: Cap, path_match: P
     }
     if caps.contains(Cap::EXECUTE) {
         profile.push_str(&format!("(deny process-exec {})\n", filter));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── sbpl_escape ──────────────────────────────────────────────────
+
+    #[test]
+    fn escape_normal_path_unchanged() {
+        assert_eq!(sbpl_escape("/usr/local/bin"), "/usr/local/bin");
+    }
+
+    #[test]
+    fn escape_path_with_double_quote() {
+        assert_eq!(sbpl_escape("/tmp/evil\"path"), "/tmp/evil\\\"path");
+    }
+
+    #[test]
+    fn escape_path_with_backslash() {
+        assert_eq!(sbpl_escape("/tmp/evil\\path"), "/tmp/evil\\\\path");
+    }
+
+    #[test]
+    fn escape_path_with_both_backslash_and_quote() {
+        assert_eq!(sbpl_escape("/tmp/e\\vi\"l"), "/tmp/e\\\\vi\\\"l");
+    }
+
+    // ── sbpl_filter with adversarial paths ───────────────────────────
+
+    #[test]
+    fn filter_subpath_normal() {
+        assert_eq!(
+            sbpl_filter("/usr/local", PathMatch::Subpath),
+            "(subpath \"/usr/local\")"
+        );
+    }
+
+    #[test]
+    fn filter_literal_normal() {
+        assert_eq!(
+            sbpl_filter("/usr/local/bin/rustc", PathMatch::Literal),
+            "(literal \"/usr/local/bin/rustc\")"
+        );
+    }
+
+    #[test]
+    fn filter_regex_normal() {
+        assert_eq!(
+            sbpl_filter("/tmp/build-.*", PathMatch::Regex),
+            "(regex #\"/tmp/build-.*\")"
+        );
+    }
+
+    #[test]
+    fn filter_subpath_with_quote_injection() {
+        // A malicious path that tries to close the string and inject SBPL
+        let malicious = "/tmp/evil\") (allow default) (\"";
+        let result = sbpl_filter(malicious, PathMatch::Subpath);
+        assert_eq!(result, "(subpath \"/tmp/evil\\\") (allow default) (\\\"\")");
+        // The quotes are escaped, so the SBPL string literal stays intact.
+        assert!(result.starts_with("(subpath \""));
+        assert!(result.ends_with("\")"));
+    }
+
+    #[test]
+    fn filter_literal_with_backslash_and_quote() {
+        let adversarial = "/tmp/a\\b\"c";
+        let result = sbpl_filter(adversarial, PathMatch::Literal);
+        assert_eq!(result, "(literal \"/tmp/a\\\\b\\\"c\")");
+    }
+
+    #[test]
+    fn filter_regex_is_not_escaped() {
+        // Regex variant must NOT escape — policy authors control regex content.
+        let pattern = "/tmp/foo\"bar";
+        let result = sbpl_filter(pattern, PathMatch::Regex);
+        assert_eq!(result, "(regex #\"/tmp/foo\"bar\")");
     }
 }

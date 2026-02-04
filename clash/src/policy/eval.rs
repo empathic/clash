@@ -437,47 +437,17 @@ impl CompiledConstraintDef {
             }
         }
 
-        // Check pipe constraint (only relevant for bash commands)
-        if let Some(allow_pipe) = self.pipe
-            && !allow_pipe
-            && command_has_pipe(ctx.noun)
-        {
-            return Err("pipe constraint: command contains '|'".into());
-        }
+        let empty = Vec::new();
+        let forbid_args = self.forbid_args.as_deref().unwrap_or(&empty);
+        let require_args = self.require_args.as_deref().unwrap_or(&empty);
 
-        // Check redirect constraint (only relevant for bash commands)
-        if let Some(allow_redirect) = self.redirect
-            && !allow_redirect
-            && command_has_redirect(ctx.noun)
-        {
-            return Err("redirect constraint: command contains '>' or '<'".into());
-        }
-
-        // Check forbidden arguments
-        if let Some(ref forbidden) = self.forbid_args {
-            let args = tokenize_command(ctx.noun);
-            for forbidden_arg in forbidden {
-                if args.iter().any(|a| a == forbidden_arg) {
-                    return Err(format!(
-                        "forbid-args: found forbidden arg '{}'",
-                        forbidden_arg
-                    ));
-                }
-            }
-        }
-
-        // Check required arguments (at least one must be present)
-        if let Some(ref required) = self.require_args {
-            let args = tokenize_command(ctx.noun);
-            if !required.iter().any(|req| args.iter().any(|a| a == req)) {
-                return Err(format!(
-                    "require-args: none of {:?} found in command",
-                    required
-                ));
-            }
-        }
-
-        Ok(())
+        check_shell_constraints(
+            ctx.noun,
+            self.pipe,
+            self.redirect,
+            forbid_args,
+            require_args,
+        )
     }
 }
 
@@ -513,6 +483,61 @@ impl CompiledFilterExpr {
 // New-format constraint checking (free functions)
 // ---------------------------------------------------------------------------
 
+/// Shared logic for checking pipe, redirect, forbid-args, and require-args
+/// constraints against a command string.
+///
+/// Used by both `CompiledConstraintDef::eval()` (legacy named constraints) and
+/// `check_new_constraints()` (new-format inline constraints).
+fn check_shell_constraints(
+    noun: &str,
+    pipe: Option<bool>,
+    redirect: Option<bool>,
+    forbid_args: &[String],
+    require_args: &[String],
+) -> Result<(), String> {
+    // Check pipe constraint
+    if let Some(allow_pipe) = pipe
+        && !allow_pipe
+        && command_has_pipe(noun)
+    {
+        return Err("pipe constraint: command contains '|'".into());
+    }
+
+    // Check redirect constraint
+    if let Some(allow_redirect) = redirect
+        && !allow_redirect
+        && command_has_redirect(noun)
+    {
+        return Err("redirect constraint: command contains '>' or '<'".into());
+    }
+
+    // Check forbidden arguments
+    if !forbid_args.is_empty() {
+        let args = tokenize_command(noun);
+        for forbidden_arg in forbid_args {
+            if args.iter().any(|a| a == forbidden_arg) {
+                return Err(format!(
+                    "forbid-args: found forbidden arg '{}'",
+                    forbidden_arg
+                ));
+            }
+        }
+    }
+
+    // Check required arguments (at least one must be present)
+    if !require_args.is_empty() {
+        let args = tokenize_command(noun);
+        if !require_args.iter().any(|req| args.iter().any(|a| a == req)) {
+            return Err(format!(
+                "require-args: none of {:?} found in command",
+                require_args
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Check non-fs inline constraints (pipe, redirect, args).
 /// Returns `Ok(())` if satisfied, or `Err(reason)` explaining why not.
 fn check_new_constraints(
@@ -524,48 +549,13 @@ fn check_new_constraints(
         None => return Ok(()),
     };
 
-    // Check pipe
-    if let Some(allow_pipe) = constraints.pipe
-        && !allow_pipe
-        && command_has_pipe(ctx.noun)
-    {
-        return Err("pipe constraint: command contains '|'".into());
-    }
-
-    // Check redirect
-    if let Some(allow_redirect) = constraints.redirect
-        && !allow_redirect
-        && command_has_redirect(ctx.noun)
-    {
-        return Err("redirect constraint: command contains '>' or '<'".into());
-    }
-
-    // Check forbidden args
-    if !constraints.forbid_args.is_empty() {
-        let args = tokenize_command(ctx.noun);
-        for forbidden in &constraints.forbid_args {
-            if args.iter().any(|a| *a == forbidden) {
-                return Err(format!("forbid-args: found forbidden arg '{}'", forbidden));
-            }
-        }
-    }
-
-    // Check required args (at least one must be present)
-    if !constraints.require_args.is_empty() {
-        let args = tokenize_command(ctx.noun);
-        if !constraints
-            .require_args
-            .iter()
-            .any(|req| args.iter().any(|a| *a == req))
-        {
-            return Err(format!(
-                "require-args: none of {:?} found in command",
-                constraints.require_args
-            ));
-        }
-    }
-
-    Ok(())
+    check_shell_constraints(
+        ctx.noun,
+        constraints.pipe,
+        constraints.redirect,
+        &constraints.forbid_args,
+        &constraints.require_args,
+    )
 }
 
 /// Cap-scoped fs permission guard for non-bash verbs.
@@ -673,17 +663,32 @@ pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
 }
 
 /// Check if a command string contains shell pipe operators.
+///
+/// Also conservatively returns true for unquoted command substitution (`$(` or
+/// backtick), since those may contain pipes or redirects internally.
 pub(crate) fn command_has_pipe(command: &str) -> bool {
-    // Look for unquoted pipe characters
     let mut in_single_quote = false;
     let mut in_double_quote = false;
     let mut prev_char = ' ';
+    let mut escaped = false;
 
     for ch in command.chars() {
+        if escaped {
+            escaped = false;
+            prev_char = ch;
+            continue;
+        }
+        if !in_single_quote && !in_double_quote && ch == '\\' {
+            escaped = true;
+            prev_char = ch;
+            continue;
+        }
         match ch {
-            '\'' if !in_double_quote && prev_char != '\\' => in_single_quote = !in_single_quote,
+            '\'' if !in_double_quote => in_single_quote = !in_single_quote,
             '"' if !in_single_quote && prev_char != '\\' => in_double_quote = !in_double_quote,
             '|' if !in_single_quote && !in_double_quote => return true,
+            '(' if !in_single_quote && !in_double_quote && prev_char == '$' => return true,
+            '`' if !in_single_quote && !in_double_quote => return true,
             _ => {}
         }
         prev_char = ch;
@@ -692,16 +697,32 @@ pub(crate) fn command_has_pipe(command: &str) -> bool {
 }
 
 /// Check if a command string contains shell redirect operators.
+///
+/// Also conservatively returns true for unquoted command substitution (`$(` or
+/// backtick), since those may contain pipes or redirects internally.
 pub(crate) fn command_has_redirect(command: &str) -> bool {
     let mut in_single_quote = false;
     let mut in_double_quote = false;
     let mut prev_char = ' ';
+    let mut escaped = false;
 
     for ch in command.chars() {
+        if escaped {
+            escaped = false;
+            prev_char = ch;
+            continue;
+        }
+        if !in_single_quote && !in_double_quote && ch == '\\' {
+            escaped = true;
+            prev_char = ch;
+            continue;
+        }
         match ch {
-            '\'' if !in_double_quote && prev_char != '\\' => in_single_quote = !in_single_quote,
+            '\'' if !in_double_quote => in_single_quote = !in_single_quote,
             '"' if !in_single_quote && prev_char != '\\' => in_double_quote = !in_double_quote,
             '>' | '<' if !in_single_quote && !in_double_quote => return true,
+            '(' if !in_single_quote && !in_double_quote && prev_char == '$' => return true,
+            '`' if !in_single_quote && !in_double_quote => return true,
             _ => {}
         }
         prev_char = ch;
@@ -709,8 +730,203 @@ pub(crate) fn command_has_redirect(command: &str) -> bool {
     false
 }
 
-/// Tokenize a command string by splitting on whitespace.
-/// Simple tokenization — does not handle shell quoting.
-pub(crate) fn tokenize_command(command: &str) -> Vec<&str> {
-    command.split_whitespace().collect()
+/// Tokenize a command string with shell-aware quoting.
+///
+/// Handles POSIX sh quoting rules:
+/// - Single quotes: everything inside is literal (no escapes at all)
+/// - Double quotes: backslash escapes `"` and `\` inside
+/// - Outside quotes: backslash escapes the next character
+/// - Quotes are stripped from resulting tokens
+///
+/// Does NOT handle command substitution, variable expansion, or other shell
+/// features — only quoting/escaping for accurate argument splitting.
+pub(crate) fn tokenize_command(command: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut chars = command.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if in_single_quote {
+            // Inside single quotes: everything is literal until closing quote
+            if ch == '\'' {
+                in_single_quote = false;
+            } else {
+                current.push(ch);
+            }
+        } else if in_double_quote {
+            // Inside double quotes: backslash escapes " and \ only
+            if ch == '"' {
+                in_double_quote = false;
+            } else if ch == '\\' {
+                if let Some(&next) = chars.peek() {
+                    if next == '"' || next == '\\' {
+                        current.push(next);
+                        chars.next();
+                    } else {
+                        // Backslash is literal if not followed by " or \
+                        current.push(ch);
+                    }
+                } else {
+                    current.push(ch);
+                }
+            } else {
+                current.push(ch);
+            }
+        } else {
+            // Outside quotes
+            match ch {
+                '\'' => in_single_quote = true,
+                '"' => in_double_quote = true,
+                '\\' => {
+                    // Backslash escapes the next character
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                }
+                c if c.is_whitespace() => {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                }
+                _ => current.push(ch),
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tokenize_basic_splitting() {
+        assert_eq!(
+            tokenize_command("git push --force"),
+            vec!["git", "push", "--force"]
+        );
+        assert_eq!(tokenize_command("ls -la /tmp"), vec!["ls", "-la", "/tmp"]);
+        assert_eq!(tokenize_command("  spaced   out  "), vec!["spaced", "out"]);
+        assert_eq!(tokenize_command(""), Vec::<String>::new());
+        assert_eq!(tokenize_command("single"), vec!["single"]);
+    }
+
+    #[test]
+    fn test_tokenize_single_quoted_args() {
+        // Single quotes: everything is literal, no escapes
+        assert_eq!(
+            tokenize_command("echo 'hello world'"),
+            vec!["echo", "hello world"]
+        );
+        assert_eq!(
+            tokenize_command("grep -E 'a|b' file"),
+            vec!["grep", "-E", "a|b", "file"]
+        );
+        // Backslash is literal inside single quotes
+        assert_eq!(
+            tokenize_command("echo 'back\\slash'"),
+            vec!["echo", "back\\slash"]
+        );
+        // Security: quoted --force must be stripped to --force
+        assert_eq!(
+            tokenize_command("git push '--force'"),
+            vec!["git", "push", "--force"]
+        );
+    }
+
+    #[test]
+    fn test_tokenize_double_quoted_args() {
+        assert_eq!(
+            tokenize_command(r#"echo "hello world""#),
+            vec!["echo", "hello world"]
+        );
+        // Backslash escapes " and \ inside double quotes
+        assert_eq!(
+            tokenize_command(r#"echo "say \"hi\"""#),
+            vec!["echo", r#"say "hi""#]
+        );
+        assert_eq!(
+            tokenize_command(r#"echo "back\\slash""#),
+            vec!["echo", "back\\slash"]
+        );
+        // Backslash before other chars is literal
+        assert_eq!(
+            tokenize_command(r#"echo "hello\nworld""#),
+            vec!["echo", "hello\\nworld"]
+        );
+        // Security: double-quoted --force must be stripped to --force
+        assert_eq!(
+            tokenize_command(r#"git push "--force""#),
+            vec!["git", "push", "--force"]
+        );
+    }
+
+    #[test]
+    fn test_tokenize_backslash_escapes() {
+        // Outside quotes, backslash escapes the next character
+        assert_eq!(
+            tokenize_command(r"echo hello\ world"),
+            vec!["echo", "hello world"]
+        );
+        assert_eq!(
+            tokenize_command(r"echo back\\slash"),
+            vec!["echo", "back\\slash"]
+        );
+    }
+
+    #[test]
+    fn test_tokenize_mixed_quoting() {
+        // Mixed single and double quotes
+        assert_eq!(
+            tokenize_command(r#"cmd 'single' "double" plain"#),
+            vec!["cmd", "single", "double", "plain"]
+        );
+        // Adjacent quoting styles merge into one token
+        assert_eq!(
+            tokenize_command(r#"echo 'hello'" world""#),
+            vec!["echo", "hello world"]
+        );
+        // Single quote inside double quotes is literal
+        assert_eq!(tokenize_command(r#"echo "it's""#), vec!["echo", "it's"]);
+        // Double quote inside single quotes is literal
+        assert_eq!(
+            tokenize_command(r#"echo '"hello"'"#),
+            vec!["echo", r#""hello""#]
+        );
+    }
+
+    #[test]
+    fn test_command_has_pipe_with_substitution() {
+        // Unquoted command substitution should be detected
+        assert!(command_has_pipe("echo $(cat foo)"));
+        assert!(command_has_pipe("echo `cat foo`"));
+        // Quoted command substitution should NOT be detected
+        assert!(!command_has_pipe("echo '$(cat foo)'"));
+        assert!(!command_has_pipe("echo '`cat foo`'"));
+    }
+
+    #[test]
+    fn test_command_has_redirect_with_substitution() {
+        // Unquoted command substitution should be detected
+        assert!(command_has_redirect("echo $(cat foo)"));
+        assert!(command_has_redirect("echo `cat foo`"));
+        // Quoted command substitution should NOT be detected
+        assert!(!command_has_redirect("echo '$(cat foo)'"));
+        assert!(!command_has_redirect("echo '`cat foo`'"));
+    }
+
+    #[test]
+    fn test_command_has_pipe_single_quote_backslash() {
+        // Backslash is NOT an escape char inside single quotes (POSIX sh).
+        // 'hello\' ends the single-quoted region at the second quote.
+        // Then | is unquoted, so this should be detected as having a pipe.
+        assert!(command_has_pipe("echo 'hello\\' | grep x"));
+    }
 }

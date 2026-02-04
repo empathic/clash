@@ -14,5 +14,5 @@
 * The `clester` crate is the end-to-end test harness; see its source for script format
 
 ## Development
-* Always check the documentation after your changes to ensure they are logically consistant with what you have done. This should be the last step after you have validated your changes work.
-* ALWAYS update the relivant documentation (readme/comments) when changes have a public facing impact.
+* Always check the documentation after your changes to ensure they are logically consistent with what you have done. This should be the last step after you have validated your changes work.
+* ALWAYS update the relevant documentation (readme/comments) when changes have a public facing impact.

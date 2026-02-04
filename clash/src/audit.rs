@@ -16,7 +16,7 @@ use crate::policy::ir::DecisionTrace;
 /// A single audit log entry.
 #[derive(Debug, Serialize)]
 struct AuditEntry<'a> {
-    /// ISO 8601 timestamp.
+    /// Unix timestamp with millisecond precision (e.g. `1706123456.789`).
     timestamp: String,
     /// The tool that was invoked (e.g. "Bash", "Read").
     tool_name: &'a str,
