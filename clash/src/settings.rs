@@ -64,6 +64,14 @@ impl ClashSettings {
         Self::settings_dir().join("policy.yaml")
     }
 
+    /// Set the policy document directly.
+    ///
+    /// This is useful for library consumers who want to construct settings
+    /// programmatically without loading from disk.
+    pub fn set_policy(&mut self, doc: PolicyDocument) {
+        self.policy = Some(doc);
+    }
+
     /// Try to load and compile the policy document from ~/.clash/policy.yaml.
     #[instrument(level = Level::TRACE, skip(self))]
     fn load_policy_file(&mut self) -> Option<PolicyDocument> {
@@ -218,6 +226,52 @@ pub fn parse_notification_config(yaml_str: &str) -> (NotificationConfig, Option<
         }
     }
 }
+
+/// Default policy template written by `clash init`.
+pub const DEFAULT_POLICY: &str = r#"# Clash policy — safe defaults for local development.
+#
+# Evaluation: all matching statements are collected, then precedence applies:
+#   deny > ask > allow
+# If no statement matches, the default effect is used (ask).
+
+default:
+  permission: ask
+  profile: main
+
+profiles:
+  cwd:
+    rules:
+      allow * *:
+        fs:
+          read + write + execute: subpath($CWD)
+  tmp:
+    rules:
+      allow * *:
+        fs:
+          read + write + execute: regex(^/tmp)
+
+  global:
+    rules:
+      ask * *:
+        fs:
+          read: "!subpath($CWD)"
+
+  main:
+    include: [cwd, global]
+    rules:
+      # ── Git: deny commit and push ─────────────────────────────
+      ask bash git commit*:
+      deny bash git push*:
+      deny bash git merge*:
+
+      # ── Git: deny destructive operations ──────────────────────
+      deny bash git reset --hard*:
+      deny bash git clean*:
+      deny bash git branch -D*:
+
+      # ── Dangerous commands ─────────────────────────────────────
+      deny bash sudo *:
+"#;
 
 /// Extract the `audit:` section from a policy YAML string.
 ///
