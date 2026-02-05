@@ -245,49 +245,41 @@ pub struct HookOutput {
 }
 
 impl HookOutput {
-    /// Create an "allow" response for PreToolUse - bypasses permission system.
-    #[instrument(level = Level::TRACE)]
-    pub fn allow(reason: Option<String>, context: Option<String>) -> Self {
+    /// Private helper to construct a PreToolUse response with the given decision.
+    fn pretooluse_output(
+        decision: PermissionRule,
+        reason: Option<String>,
+        context: Option<String>,
+        updated_input: Option<serde_json::Value>,
+    ) -> Self {
         Self {
             should_continue: true,
             hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
                 hook_event_name: "PreToolUse",
-                permission_decision: Some(PermissionRule::Allow),
+                permission_decision: Some(decision),
                 permission_decision_reason: reason,
-                updated_input: None,
+                updated_input,
                 additional_context: context,
             })),
         }
+    }
+
+    /// Create an "allow" response for PreToolUse - bypasses permission system.
+    #[instrument(level = Level::TRACE)]
+    pub fn allow(reason: Option<String>, context: Option<String>) -> Self {
+        Self::pretooluse_output(PermissionRule::Allow, reason, context, None)
     }
 
     /// Create a "deny" response for PreToolUse - prevents tool execution.
     #[instrument(level = Level::TRACE)]
     pub fn deny(reason: String, context: Option<String>) -> Self {
-        Self {
-            should_continue: true,
-            hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
-                hook_event_name: "PreToolUse",
-                permission_decision: Some(PermissionRule::Deny),
-                permission_decision_reason: Some(reason),
-                updated_input: None,
-                additional_context: context,
-            })),
-        }
+        Self::pretooluse_output(PermissionRule::Deny, Some(reason), context, None)
     }
 
     /// Create an "ask" response for PreToolUse - prompts user for confirmation.
     #[instrument(level = Level::TRACE)]
     pub fn ask(reason: Option<String>, context: Option<String>) -> Self {
-        Self {
-            should_continue: true,
-            hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
-                hook_event_name: "PreToolUse",
-                permission_decision: Some(PermissionRule::Ask),
-                permission_decision_reason: reason,
-                updated_input: None,
-                additional_context: context,
-            })),
-        }
+        Self::pretooluse_output(PermissionRule::Ask, reason, context, None)
     }
 
     /// Approve a permission request on behalf of the user

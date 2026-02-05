@@ -93,6 +93,30 @@ pub enum PermissionResponse {
     Deny(String),
 }
 
+// ---------------------------------------------------------------------------
+// Keyword constants for approval/denial matching
+// ---------------------------------------------------------------------------
+
+/// Keywords that trigger approval when found anywhere in the message (substring match).
+const APPROVE_KEYWORDS: &[&str] = &["approve", "allow"];
+/// Keywords that trigger approval only when they are the entire message (exact match).
+const APPROVE_EXACT: &[&str] = &["yes", "y"];
+
+/// Keywords that trigger denial when found anywhere in the message (substring match).
+const DENY_KEYWORDS: &[&str] = &["deny", "reject"];
+/// Keywords that trigger denial only when they are the entire message (exact match).
+const DENY_EXACT: &[&str] = &["no", "n"];
+
+/// Check whether `content` (already lowercased and trimmed) is an approval response.
+fn is_approval_response(content: &str) -> bool {
+    APPROVE_KEYWORDS.iter().any(|kw| content.contains(kw)) || APPROVE_EXACT.contains(&content)
+}
+
+/// Check whether `content` (already lowercased and trimmed) is a denial response.
+fn is_denial_response(content: &str) -> bool {
+    DENY_KEYWORDS.iter().any(|kw| content.contains(kw)) || DENY_EXACT.contains(&content)
+}
+
 /// Synchronous Zulip API client.
 pub struct ZulipClient<'a> {
     config: &'a ZulipConfig,
@@ -141,16 +165,26 @@ impl<'a> ZulipClient<'a> {
 
     // -- internal helpers --
 
-    /// Post a message to the configured stream/topic. Returns the message ID.
-    fn send_message(&self, content: &str) -> anyhow::Result<u64> {
-        let url = format!(
-            "{}/api/v1/messages",
-            self.config.server_url.trim_end_matches('/')
-        );
-        let auth_header = format!(
+    /// Return the `Authorization` header value for HTTP Basic auth.
+    fn auth_header(&self) -> String {
+        format!(
             "Basic {}",
             base64_auth(&self.config.bot_email, &self.config.bot_api_key)
-        );
+        )
+    }
+
+    /// Return the Zulip messages API endpoint URL.
+    fn messages_url(&self) -> String {
+        format!(
+            "{}/api/v1/messages",
+            self.config.server_url.trim_end_matches('/')
+        )
+    }
+
+    /// Post a message to the configured stream/topic. Returns the message ID.
+    fn send_message(&self, content: &str) -> anyhow::Result<u64> {
+        let url = self.messages_url();
+        let auth_header = self.auth_header();
 
         let resp = ureq::post(&url)
             .set("Authorization", &auth_header)
@@ -174,14 +208,8 @@ impl<'a> ZulipClient<'a> {
 
     /// Poll for new messages in the topic after `after_msg_id`.
     fn check_for_response(&self, after_msg_id: u64) -> anyhow::Result<Option<PermissionResponse>> {
-        let url = format!(
-            "{}/api/v1/messages",
-            self.config.server_url.trim_end_matches('/')
-        );
-        let auth_header = format!(
-            "Basic {}",
-            base64_auth(&self.config.bot_email, &self.config.bot_api_key)
-        );
+        let url = self.messages_url();
+        let auth_header = self.auth_header();
 
         let narrow = serde_json::json!([
             {"operator": "stream", "operand": &self.config.stream},
@@ -216,11 +244,7 @@ impl<'a> ZulipClient<'a> {
                 let content = msg["content"].as_str().unwrap_or("").to_lowercase();
                 let content = content.trim();
 
-                if content.contains("approve")
-                    || content.contains("allow")
-                    || content == "yes"
-                    || content == "y"
-                {
+                if is_approval_response(content) {
                     info!(
                         sender = sender_email,
                         msg_id, "Permission approved via Zulip"
@@ -228,11 +252,7 @@ impl<'a> ZulipClient<'a> {
                     return Ok(Some(PermissionResponse::Approve));
                 }
 
-                if content.contains("deny")
-                    || content.contains("reject")
-                    || content == "no"
-                    || content == "n"
-                {
+                if is_denial_response(content) {
                     let reason = format!("Denied via Zulip by {}", sender_email);
                     info!(sender = sender_email, msg_id, "Permission denied via Zulip");
                     return Ok(Some(PermissionResponse::Deny(reason)));

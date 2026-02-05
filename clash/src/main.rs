@@ -744,6 +744,151 @@ fn run_init(force: bool) -> Result<()> {
     Ok(())
 }
 
+/// Load the policy.yaml file, returning its path and contents.
+fn load_policy_yaml() -> Result<(std::path::PathBuf, String)> {
+    let path = ClashSettings::policy_file()?;
+    let yaml = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "No policy.yaml found at {}. Run `clash init` first.",
+            path.display()
+        )
+    })?;
+    Ok((path, yaml))
+}
+
+/// Handle `clash policy add-rule`.
+fn handle_add_rule(rule: &str, profile: Option<&str>, dry_run: bool) -> Result<()> {
+    let (path, yaml) = load_policy_yaml()?;
+    let target_profile = edit::resolve_profile(&yaml, profile)?;
+    let modified = edit::add_rule(&yaml, &target_profile, rule)?;
+
+    if modified == yaml {
+        println!(
+            "Rule already exists in profile '{}': {}",
+            target_profile, rule
+        );
+        return Ok(());
+    }
+
+    if dry_run {
+        print!("{}", modified);
+    } else {
+        std::fs::write(&path, &modified)?;
+        println!("Added rule to profile '{}': {}", target_profile, rule);
+    }
+    Ok(())
+}
+
+/// Handle `clash policy remove-rule`.
+fn handle_remove_rule(rule: &str, profile: Option<&str>, dry_run: bool) -> Result<()> {
+    let (path, yaml) = load_policy_yaml()?;
+    let target_profile = edit::resolve_profile(&yaml, profile)?;
+    let modified = edit::remove_rule(&yaml, &target_profile, rule)?;
+
+    if dry_run {
+        print!("{}", modified);
+    } else {
+        std::fs::write(&path, &modified)?;
+        println!("Removed rule from profile '{}': {}", target_profile, rule);
+    }
+    Ok(())
+}
+
+/// Handle `clash policy list-rules`.
+fn handle_list_rules(profile: Option<&str>, json: bool) -> Result<()> {
+    let (_path, yaml) = load_policy_yaml()?;
+    let doc =
+        clash::policy::parse::parse_yaml(&yaml).context("failed to parse policy.yaml")?;
+
+    // Determine target profile
+    let target = match profile {
+        Some(p) => p.to_string(),
+        None => doc.default_config
+            .as_ref()
+            .map(|dc| dc.profile.clone())
+            .ok_or_else(|| anyhow::anyhow!(
+                "No active profile found. Use --profile or upgrade to the new policy format with `clash init --force`."
+            ))?,
+    };
+
+    let rules = flatten_profile(&target, &doc.profile_defs)
+        .with_context(|| format!("failed to resolve profile '{}'", target))?;
+
+    if json {
+        let json_rules: Vec<serde_json::Value> = rules
+            .iter()
+            .map(|r| {
+                let noun_str = clash::policy::ast::format_pattern_str(&r.noun);
+                let mut obj = serde_json::json!({
+                    "effect": r.effect.to_string(),
+                    "verb": r.verb,
+                    "noun": noun_str,
+                });
+                if r.constraints.is_some() {
+                    obj["has_constraints"] = serde_json::json!(true);
+                }
+                obj
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "profile": target,
+                "rules": json_rules,
+            }))?
+        );
+    } else {
+        println!("Profile: {}", target);
+        println!();
+        if rules.is_empty() {
+            println!("  (no rules)");
+        } else {
+            println!("  {:<8} {:<12} NOUN", "EFFECT", "VERB");
+            println!("  {:<8} {:<12} ----", "------", "----");
+            for r in &rules {
+                let noun_str = clash::policy::ast::format_pattern_str(&r.noun);
+                let constraint_note = if r.constraints.is_some() {
+                    " [+constraints]"
+                } else {
+                    ""
+                };
+                println!(
+                    "  {:<8} {:<12} {}{}",
+                    r.effect.to_string(),
+                    r.verb,
+                    noun_str,
+                    constraint_note
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Handle `clash policy show`.
+fn handle_show_policy(json: bool) -> Result<()> {
+    let (path, yaml) = load_policy_yaml()?;
+    let info = edit::policy_info(&yaml)?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "default_permission": info.default_permission,
+                "active_profile": info.active_profile,
+                "profiles": info.profiles,
+                "policy_file": path.display().to_string(),
+            }))?
+        );
+    } else {
+        println!("Policy file:        {}", path.display());
+        println!("Default permission: {}", info.default_permission);
+        println!("Active profile:     {}", info.active_profile);
+        println!("Profiles:           {}", info.profiles.join(", "));
+    }
+    Ok(())
+}
+
 /// Handle `clash policy` subcommands.
 #[instrument(level = Level::TRACE)]
 fn run_policy(cmd: PolicyCmd) -> Result<()> {
@@ -752,159 +897,14 @@ fn run_policy(cmd: PolicyCmd) -> Result<()> {
             rule,
             profile,
             dry_run,
-        } => {
-            let path = ClashSettings::policy_file()?;
-            let yaml = std::fs::read_to_string(&path).with_context(|| {
-                format!(
-                    "No policy.yaml found at {}. Run `clash init` first.",
-                    path.display()
-                )
-            })?;
-            let target_profile = edit::resolve_profile(&yaml, profile.as_deref())?;
-            let modified = edit::add_rule(&yaml, &target_profile, &rule)?;
-
-            if modified == yaml {
-                println!(
-                    "Rule already exists in profile '{}': {}",
-                    target_profile, rule
-                );
-                return Ok(());
-            }
-
-            if dry_run {
-                print!("{}", modified);
-            } else {
-                std::fs::write(&path, &modified)?;
-                println!("Added rule to profile '{}': {}", target_profile, rule);
-            }
-            Ok(())
-        }
+        } => handle_add_rule(&rule, profile.as_deref(), dry_run),
         PolicyCmd::RemoveRule {
             rule,
             profile,
             dry_run,
-        } => {
-            let path = ClashSettings::policy_file()?;
-            let yaml = std::fs::read_to_string(&path).with_context(|| {
-                format!(
-                    "No policy.yaml found at {}. Run `clash init` first.",
-                    path.display()
-                )
-            })?;
-            let target_profile = edit::resolve_profile(&yaml, profile.as_deref())?;
-            let modified = edit::remove_rule(&yaml, &target_profile, &rule)?;
-
-            if dry_run {
-                print!("{}", modified);
-            } else {
-                std::fs::write(&path, &modified)?;
-                println!("Removed rule from profile '{}': {}", target_profile, rule);
-            }
-            Ok(())
-        }
-        PolicyCmd::ListRules { profile, json } => {
-            let path = ClashSettings::policy_file()?;
-            let yaml = std::fs::read_to_string(&path).with_context(|| {
-                format!(
-                    "No policy.yaml found at {}. Run `clash init` first.",
-                    path.display()
-                )
-            })?;
-            let doc =
-                clash::policy::parse::parse_yaml(&yaml).context("failed to parse policy.yaml")?;
-
-            // Determine target profile
-            let target = match profile {
-                Some(p) => p,
-                None => doc.default_config
-                    .as_ref()
-                    .map(|dc| dc.profile.clone())
-                    .ok_or_else(|| anyhow::anyhow!(
-                        "No active profile found. Use --profile or upgrade to the new policy format with `clash init --force`."
-                    ))?,
-            };
-
-            let rules = flatten_profile(&target, &doc.profile_defs)
-                .with_context(|| format!("failed to resolve profile '{}'", target))?;
-
-            if json {
-                let json_rules: Vec<serde_json::Value> = rules
-                    .iter()
-                    .map(|r| {
-                        let noun_str = clash::policy::ast::format_pattern_str(&r.noun);
-                        let mut obj = serde_json::json!({
-                            "effect": r.effect.to_string(),
-                            "verb": r.verb,
-                            "noun": noun_str,
-                        });
-                        if r.constraints.is_some() {
-                            obj["has_constraints"] = serde_json::json!(true);
-                        }
-                        obj
-                    })
-                    .collect();
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "profile": target,
-                        "rules": json_rules,
-                    }))?
-                );
-            } else {
-                println!("Profile: {}", target);
-                println!();
-                if rules.is_empty() {
-                    println!("  (no rules)");
-                } else {
-                    println!("  {:<8} {:<12} NOUN", "EFFECT", "VERB");
-                    println!("  {:<8} {:<12} ----", "------", "----");
-                    for r in &rules {
-                        let noun_str = clash::policy::ast::format_pattern_str(&r.noun);
-                        let constraint_note = if r.constraints.is_some() {
-                            " [+constraints]"
-                        } else {
-                            ""
-                        };
-                        println!(
-                            "  {:<8} {:<12} {}{}",
-                            r.effect.to_string(),
-                            r.verb,
-                            noun_str,
-                            constraint_note
-                        );
-                    }
-                }
-            }
-            Ok(())
-        }
-        PolicyCmd::Show { json } => {
-            let path = ClashSettings::policy_file()?;
-            let yaml = std::fs::read_to_string(&path).with_context(|| {
-                format!(
-                    "No policy.yaml found at {}. Run `clash init` first.",
-                    path.display()
-                )
-            })?;
-            let info = edit::policy_info(&yaml)?;
-
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "default_permission": info.default_permission,
-                        "active_profile": info.active_profile,
-                        "profiles": info.profiles,
-                        "policy_file": path.display().to_string(),
-                    }))?
-                );
-            } else {
-                println!("Policy file:        {}", path.display());
-                println!("Default permission: {}", info.default_permission);
-                println!("Active profile:     {}", info.active_profile);
-                println!("Profiles:           {}", info.profiles.join(", "));
-            }
-            Ok(())
-        }
+        } => handle_remove_rule(&rule, profile.as_deref(), dry_run),
+        PolicyCmd::ListRules { profile, json } => handle_list_rules(profile.as_deref(), json),
+        PolicyCmd::Show { json } => handle_show_policy(json),
     }
 }
 

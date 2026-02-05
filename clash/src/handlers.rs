@@ -99,6 +99,36 @@ pub fn resolve_via_zulip_or_continue(
     }
 }
 
+/// Collect human-readable deny rule descriptions from both legacy statements and profile defs.
+fn collect_deny_descriptions(doc: &crate::policy::ast::PolicyDocument) -> Vec<String> {
+    let mut descriptions = Vec::new();
+
+    // Legacy statements
+    for stmt in &doc.statements {
+        if stmt.effect == crate::policy::Effect::Deny {
+            let noun_str = crate::policy::ast::format_pattern_str(&stmt.noun);
+            let verb_str = match &stmt.verb {
+                crate::policy::VerbPattern::Any => "*".to_string(),
+                crate::policy::VerbPattern::Exact(v) => v.to_string(),
+                crate::policy::VerbPattern::Named(s) => s.clone(),
+            };
+            descriptions.push(format!("deny {} {}", verb_str, noun_str));
+        }
+    }
+
+    // New-format profile rules
+    for profile_def in doc.profile_defs.values() {
+        for rule in &profile_def.rules {
+            if rule.effect == crate::policy::Effect::Deny {
+                let noun_str = crate::policy::ast::format_pattern_str(&rule.noun);
+                descriptions.push(format!("deny {} {}", rule.verb, noun_str));
+            }
+        }
+    }
+
+    descriptions
+}
+
 /// Handle a session start event — validate policy/settings and report status to Claude.
 #[instrument(level = Level::TRACE, skip(input))]
 pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOutput> {
@@ -145,33 +175,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
                         ));
 
                         // Build a user-friendly summary with key denials and active profile.
-                        let mut deny_descriptions: Vec<String> = Vec::new();
-
-                        // Collect deny nouns from legacy statements.
-                        for stmt in &doc.statements {
-                            if stmt.effect == crate::policy::Effect::Deny {
-                                let noun_str = crate::policy::ast::format_pattern_str(&stmt.noun);
-                                let verb_str = match &stmt.verb {
-                                    crate::policy::VerbPattern::Any => "*".to_string(),
-                                    crate::policy::VerbPattern::Exact(v) => v.to_string(),
-                                    crate::policy::VerbPattern::Named(s) => s.clone(),
-                                };
-                                deny_descriptions.push(format!("deny {} {}", verb_str, noun_str));
-                            }
-                        }
-
-                        // Collect deny descriptions from new-format profile rules.
-                        for (_profile_name, profile_def) in &doc.profile_defs {
-                            for rule in &profile_def.rules {
-                                if rule.effect == crate::policy::Effect::Deny {
-                                    let noun_str =
-                                        crate::policy::ast::format_pattern_str(&rule.noun);
-                                    deny_descriptions
-                                        .push(format!("deny {} {}", rule.verb, noun_str));
-                                }
-                            }
-                        }
-
+                        let mut deny_descriptions = collect_deny_descriptions(&doc);
                         deny_descriptions.sort();
                         deny_descriptions.dedup();
 

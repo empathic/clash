@@ -8,6 +8,51 @@ use anyhow::{Context, Result, bail};
 
 use super::parse;
 
+/// Compute the leading whitespace (indent) of a line.
+fn get_indent(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// Bail if the YAML is not in the new profile-based format.
+fn ensure_new_format(yaml: &str) -> Result<()> {
+    if !is_new_format(yaml) {
+        bail!(
+            "Old policy format detected. Run `clash init --force` to upgrade to the new profile-based format."
+        );
+    }
+    Ok(())
+}
+
+/// Validate that a profile exists in the YAML, returning a helpful error if not.
+fn validate_profile_exists(yaml: &str, profile: &str) -> Result<()> {
+    let names = profile_names(yaml)?;
+    if !names.iter().any(|n| n == profile) {
+        let suggestion = super::error::suggest_closest(
+            profile,
+            &names.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        );
+        if let Some(s) = suggestion {
+            bail!("profile '{}' not found; did you mean '{}'?", profile, s);
+        } else {
+            bail!(
+                "profile '{}' not found. Available profiles: {}",
+                profile,
+                names.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Join lines into a single string, preserving the original trailing newline behavior.
+fn reconstruct_yaml(lines: &[String], had_trailing_newline: bool) -> String {
+    if had_trailing_newline {
+        format!("{}\n", lines.join("\n"))
+    } else {
+        lines.join("\n")
+    }
+}
+
 /// Check whether the given YAML text uses the new profile-based format.
 ///
 /// New format has `default:` as a YAML mapping (with `permission` and `profile` keys).
@@ -68,11 +113,7 @@ fn profile_names(yaml: &str) -> Result<Vec<String>> {
 /// Add a rule to a profile's rules block, preserving comments.
 /// Returns the modified YAML text.
 pub fn add_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
-    if !is_new_format(yaml) {
-        bail!(
-            "Old policy format detected. Run `clash init --force` to upgrade to the new profile-based format."
-        );
-    }
+    ensure_new_format(yaml)?;
 
     // Validate the rule string parses correctly
     parse::parse_new_rule_key(rule).map_err(|e| {
@@ -81,22 +122,7 @@ pub fn add_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
     })?;
 
     // Check that the profile exists
-    let names = profile_names(yaml)?;
-    if !names.iter().any(|n| n == profile) {
-        let suggestion = super::error::suggest_closest(
-            profile,
-            &names.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-        );
-        if let Some(s) = suggestion {
-            bail!("profile '{}' not found; did you mean '{}'?", profile, s);
-        } else {
-            bail!(
-                "profile '{}' not found. Available profiles: {}",
-                profile,
-                names.join(", ")
-            );
-        }
-    }
+    validate_profile_exists(yaml, profile)?;
 
     let lines: Vec<&str> = yaml.lines().collect();
 
@@ -124,7 +150,7 @@ pub fn add_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
         if stripped.is_empty() || stripped.starts_with('#') {
             continue;
         }
-        let line_indent = line.len() - line.trim_start().len();
+        let line_indent = get_indent(line);
         if line_indent < entry_indent {
             break; // Left the rules block
         }
@@ -152,7 +178,7 @@ pub fn add_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
             insert_idx = i + 1;
             continue;
         }
-        let line_indent = line.len() - line.trim_start().len();
+        let line_indent = get_indent(line);
         if line_indent < entry_indent {
             // We've exited the rules block
             break;
@@ -168,11 +194,7 @@ pub fn add_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
     }
 
     // Reconstruct the YAML text
-    let modified = if yaml.ends_with('\n') {
-        format!("{}\n", result.join("\n"))
-    } else {
-        result.join("\n")
-    };
+    let modified = reconstruct_yaml(&result, yaml.ends_with('\n'));
 
     // Re-parse to validate the result
     parse::parse_yaml(&modified)
@@ -184,29 +206,10 @@ pub fn add_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
 /// Remove a rule from a profile's rules block, preserving comments.
 /// Returns the modified YAML text.
 pub fn remove_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
-    if !is_new_format(yaml) {
-        bail!(
-            "Old policy format detected. Run `clash init --force` to upgrade to the new profile-based format."
-        );
-    }
+    ensure_new_format(yaml)?;
 
     // Check that the profile exists
-    let names = profile_names(yaml)?;
-    if !names.iter().any(|n| n == profile) {
-        let suggestion = super::error::suggest_closest(
-            profile,
-            &names.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-        );
-        if let Some(s) = suggestion {
-            bail!("profile '{}' not found; did you mean '{}'?", profile, s);
-        } else {
-            bail!(
-                "profile '{}' not found. Available profiles: {}",
-                profile,
-                names.join(", ")
-            );
-        }
-    }
+    validate_profile_exists(yaml, profile)?;
 
     let lines: Vec<&str> = yaml.lines().collect();
 
@@ -228,7 +231,7 @@ pub fn remove_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
         if stripped.is_empty() || stripped.starts_with('#') {
             continue;
         }
-        let line_indent = line.len() - line.trim_start().len();
+        let line_indent = get_indent(line);
         if line_indent < entry_indent {
             break;
         }
@@ -262,7 +265,7 @@ pub fn remove_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
                 e = i + 1;
                 continue;
             }
-            let line_indent = line.len() - line.trim_start().len();
+            let line_indent = get_indent(line);
             if line_indent <= entry_indent {
                 break;
             }
@@ -280,11 +283,7 @@ pub fn remove_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
         result.push(line.to_string());
     }
 
-    let modified = if yaml.ends_with('\n') {
-        format!("{}\n", result.join("\n"))
-    } else {
-        result.join("\n")
-    };
+    let modified = reconstruct_yaml(&result, yaml.ends_with('\n'));
 
     // Re-parse to validate
     parse::parse_yaml(&modified)
@@ -310,7 +309,7 @@ fn find_rules_block(lines: &[&str], profile: &str) -> Result<(usize, usize)> {
         .iter()
         .position(|line| {
             let stripped = line.trim();
-            stripped == "profiles:" && (line.len() - stripped.len()) == 0
+            stripped == "profiles:" && get_indent(line) == 0
         })
         .ok_or_else(|| anyhow::anyhow!("no 'profiles:' key found in policy"))?;
 
@@ -323,7 +322,7 @@ fn find_rules_block(lines: &[&str], profile: &str) -> Result<(usize, usize)> {
         if stripped.is_empty() || stripped.starts_with('#') {
             continue;
         }
-        let indent = line.len() - stripped.len();
+        let indent = get_indent(line);
         if indent == 0 {
             break; // Left the profiles block
         }
@@ -343,7 +342,7 @@ fn find_rules_block(lines: &[&str], profile: &str) -> Result<(usize, usize)> {
         if stripped.is_empty() || stripped.starts_with('#') {
             continue;
         }
-        let indent = line.len() - stripped.len();
+        let indent = get_indent(line);
         if indent <= 2 {
             break; // Left this profile block
         }
@@ -373,11 +372,7 @@ pub struct PolicyInfo {
 
 /// Extract policy info from the YAML text.
 pub fn policy_info(yaml: &str) -> Result<PolicyInfo> {
-    if !is_new_format(yaml) {
-        bail!(
-            "Old policy format detected. Run `clash init --force` to upgrade to the new profile-based format."
-        );
-    }
+    ensure_new_format(yaml)?;
 
     let profile = active_profile(yaml)?;
     let names = profile_names(yaml)?;
