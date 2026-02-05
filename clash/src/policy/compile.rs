@@ -13,7 +13,34 @@ use super::ir::{
     CompiledPattern, CompiledPolicy, CompiledProfileRule,
 };
 use super::*;
+use crate::policy::sandbox_types::Cap;
 use regex::Regex;
+
+/// Name of the built-in profile that grants access to `~/.clash/`.
+/// Users can override this by defining a profile with the same name.
+const BUILTIN_CLASH_PROFILE: &str = "__clash_internal__";
+
+/// Name of the built-in profile that always allows Claude Code meta-tools
+/// (e.g. AskUserQuestion, ExitPlanMode). Users can override this by
+/// defining a profile with the same name.
+const BUILTIN_CLAUDE_PROFILE: &str = "__claude_internal__";
+
+/// Tools covered by the `__claude_internal__` built-in, with per-tool effects.
+/// Most are `Allow` (pure workflow tools), but some warrant `Ask`.
+const CLAUDE_INTERNAL_TOOLS: &[(&str, Effect)] = &[
+    ("askuserquestion", Effect::Ask),
+    ("exitplanmode", Effect::Ask),
+    ("enterplanmode", Effect::Allow),
+    ("taskcreate", Effect::Allow),
+    ("taskupdate", Effect::Allow),
+    ("tasklist", Effect::Allow),
+    ("taskget", Effect::Allow),
+    ("taskoutput", Effect::Allow),
+    ("taskstop", Effect::Allow),
+    ("skill", Effect::Allow),
+    ("sendmessage", Effect::Allow),
+    ("teammate", Effect::Allow),
+];
 
 impl CompiledPolicy {
     /// Returns true if this policy has any compiled rules.
@@ -56,12 +83,89 @@ impl CompiledPolicy {
             }
         }
 
+        // Inject built-in __clash_internal__ profile rules unless the user
+        // has defined their own override in profile_defs.
+        if !doc.profile_defs.contains_key(BUILTIN_CLASH_PROFILE) {
+            for rule in &Self::builtin_clash_rules() {
+                active_profile_rules.push(CompiledProfileRule::compile(rule)?);
+            }
+        }
+
+        // Inject built-in __claude_internal__ profile rules unless the user
+        // has defined their own override in profile_defs.
+        if !doc.profile_defs.contains_key(BUILTIN_CLAUDE_PROFILE) {
+            for rule in &Self::builtin_claude_rules() {
+                active_profile_rules.push(CompiledProfileRule::compile(rule)?);
+            }
+        }
+
         Ok(CompiledPolicy {
             default: doc.policy.default,
             constraints,
             profiles: doc.profiles.clone(),
             active_profile_rules,
         })
+    }
+
+    /// Built-in rules for the `__clash_internal__` profile.
+    ///
+    /// Two rules:
+    /// 1. Allow `Read` tool access to `~/.clash/` (so Claude can inspect the policy).
+    /// 2. Allow `Bash` commands matching `*clash init*` to write to `~/.clash/`
+    ///    (sandbox includes `~/.clash/` only for the clash binary, not all commands).
+    ///
+    /// Users can override by defining a profile named `__clash_internal__`
+    /// in their policy's `profiles:` section.
+    fn builtin_clash_rules() -> Vec<ProfileRule> {
+        vec![
+            // Allow reading ~/.clash/ files (so Claude can inspect/explain the policy)
+            ProfileRule {
+                effect: Effect::Allow,
+                verb: "read".to_string(),
+                noun: Pattern::Match(MatchExpr::Any),
+                constraints: Some(InlineConstraints {
+                    fs: Some(vec![(
+                        Cap::READ,
+                        FilterExpr::Subpath("~/.clash".to_string()),
+                    )]),
+                    ..Default::default()
+                }),
+            },
+            // Allow `clash init` (and --force) to write to ~/.clash/ via sandbox.
+            // Pattern ends with `clash init*` so it matches the clash binary
+            // whether invoked via full path or just `clash init` from PATH.
+            ProfileRule {
+                effect: Effect::Allow,
+                verb: "bash".to_string(),
+                noun: Pattern::Match(MatchExpr::Glob("*clash init*".to_string())),
+                constraints: Some(InlineConstraints {
+                    fs: Some(vec![(
+                        Cap::READ | Cap::WRITE | Cap::EXECUTE | Cap::CREATE | Cap::DELETE,
+                        FilterExpr::Subpath("~/.clash".to_string()),
+                    )]),
+                    ..Default::default()
+                }),
+            },
+        ]
+    }
+
+    /// Built-in rules for the `__claude_internal__` profile.
+    ///
+    /// Always allows Claude Code meta-tools that don't interact with the
+    /// user's filesystem or system (e.g. AskUserQuestion, ExitPlanMode).
+    ///
+    /// Users can override by defining a profile named `__claude_internal__`
+    /// in their policy's `profiles:` section.
+    fn builtin_claude_rules() -> Vec<ProfileRule> {
+        CLAUDE_INTERNAL_TOOLS
+            .iter()
+            .map(|(tool, effect)| ProfileRule {
+                effect: *effect,
+                verb: tool.to_string(),
+                noun: Pattern::Match(MatchExpr::Any),
+                constraints: None,
+            })
+            .collect()
     }
 }
 
@@ -952,6 +1056,15 @@ rules:
         assert_eq!(
             resolve_path("relative.txt", "/home/user"),
             PathBuf::from("/home/user/relative.txt")
+        );
+
+        // Tilde expansion
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(resolve_path("~", "/cwd"), home);
+        assert_eq!(resolve_path("~/.clash", "/cwd"), home.join(".clash"));
+        assert_eq!(
+            resolve_path("~/.clash/policy.yaml", "/cwd"),
+            home.join(".clash/policy.yaml")
         );
     }
 
@@ -1997,5 +2110,360 @@ rules:
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Built-in __clash_internal__ profile tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: path under ~/.clash/ using the actual home directory.
+    fn clash_path(relative: &str) -> String {
+        let home = dirs::home_dir().unwrap();
+        format!("{}/{}", home.to_string_lossy(), relative)
+    }
+
+    #[test]
+    fn test_builtin_allows_read_clash_dir() {
+        // Minimal policy with no user-defined __clash_internal__
+        let policy = compile_yaml("rules:\n  - deny * bash rm *\n");
+
+        // Read ~/.clash/policy.yaml → allowed by built-in profile
+        let noun = clash_path(".clash/policy.yaml");
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Read,
+            &noun,
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "read",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "built-in __clash_internal__ should allow reading ~/.clash/"
+        );
+    }
+
+    #[test]
+    fn test_builtin_does_not_allow_write_clash_dir() {
+        // Built-in only allows Read, not Write/Edit
+        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+
+        // Write to ~/.clash/policy.yaml → NOT allowed (no built-in write rule)
+        let noun = clash_path(".clash/policy.yaml");
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Write,
+            &noun,
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "write",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Ask,
+            "built-in should not allow Write tool to ~/.clash/ (only Read)"
+        );
+    }
+
+    #[test]
+    fn test_builtin_clash_init_gets_sandbox() {
+        let policy = compile_yaml("rules:\n  - deny * bash rm *\n");
+
+        // `clash init` via full path → allowed with sandbox including ~/.clash/
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "/tmp/clash-dev/clash-plugin/bin/clash init",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        let sandbox = decision
+            .sandbox
+            .expect("should have sandbox from built-in fs constraint");
+        assert!(
+            sandbox
+                .rules
+                .iter()
+                .any(|r| r.path.contains(".clash") && r.effect == RuleEffect::Allow),
+            "sandbox should include ~/.clash/ allow rule, got: {:?}",
+            sandbox.rules
+        );
+    }
+
+    #[test]
+    fn test_builtin_clash_init_force_gets_sandbox() {
+        let policy = compile_yaml("rules:\n  - deny * bash rm *\n");
+
+        // `clash init --force` also matches
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "/path/to/clash init --force",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        assert!(decision.sandbox.is_some());
+    }
+
+    #[test]
+    fn test_builtin_non_clash_bash_no_clash_sandbox() {
+        // Non-clash bash commands should NOT get ~/.clash/ in their sandbox
+        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "ls -la",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        // No allow rules match "ls -la" → default ask
+        assert_eq!(
+            decision.effect,
+            Effect::Ask,
+            "non-clash bash commands should not be allowed by built-in"
+        );
+    }
+
+    #[test]
+    fn test_builtin_does_not_allow_outside_clash_dir() {
+        // Policy with only deny rules — nothing else allowed
+        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+
+        // Read /etc/passwd → not covered by built-in, falls to default (ask)
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Read,
+            "/etc/passwd",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "read",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Ask,
+            "built-in should not allow access outside ~/.clash/"
+        );
+    }
+
+    #[test]
+    fn test_user_can_override_builtin_profile() {
+        // User defines __clash_internal__ in their profile_defs — built-in should NOT be injected
+        let yaml = r#"
+default:
+  permission: ask
+  profile: main
+
+profiles:
+  __clash_internal__:
+    rules:
+      deny read *:
+        fs:
+          read: subpath(~/.clash)
+  main:
+    include: [__clash_internal__]
+    rules:
+      allow bash git *:
+"#;
+        let policy = compile_yaml(yaml);
+
+        // Read from ~/.clash/ → denied by user's override
+        let noun = clash_path(".clash/policy.yaml");
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Read,
+            &noun,
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "read",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Deny,
+            "user-defined __clash_internal__ should override built-in"
+        );
+    }
+
+    #[test]
+    fn test_default_policy_includes_builtin() {
+        // The default policy template should work with the built-in profile
+        let policy = compile_yaml(crate::settings::DEFAULT_POLICY);
+
+        // Read ~/.clash/policy.yaml from a project dir → allowed
+        let noun = clash_path(".clash/policy.yaml");
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Read,
+            &noun,
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "read",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "default policy + built-in should allow reading ~/.clash/"
+        );
+    }
+
+    #[test]
+    fn test_default_policy_clash_init_sandbox() {
+        let policy = compile_yaml(crate::settings::DEFAULT_POLICY);
+
+        // clash init via full path → allowed with ~/.clash/ in sandbox
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "/tmp/clash-dev/clash-plugin/bin/clash init",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        let sandbox = decision.sandbox.expect("should have sandbox");
+        assert!(
+            sandbox
+                .rules
+                .iter()
+                .any(|r| r.path.contains(".clash") && r.effect == RuleEffect::Allow),
+            "default policy sandbox should include ~/.clash/ for clash init, got: {:?}",
+            sandbox.rules
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Built-in __claude_internal__ profile tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_asks_askuserquestion() {
+        let policy = compile_yaml("default: deny\n");
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "askuserquestion",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Ask,
+            "built-in __claude_internal__ should ask for AskUserQuestion"
+        );
+    }
+
+    #[test]
+    fn test_builtin_allows_exitplanmode() {
+        let policy = compile_yaml("default: ask\n");
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "exitplanmode",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Ask,
+            "built-in __claude_internal__ should allow ExitPlanMode"
+        );
+    }
+
+    #[test]
+    fn test_builtin_applies_correct_effect_to_all_claude_meta_tools() {
+        // Use deny as default so we can distinguish allow vs ask vs default
+        let policy = compile_yaml("default: deny\n");
+
+        for (tool, expected_effect) in super::CLAUDE_INTERNAL_TOOLS {
+            let ctx = make_ctx(
+                "agent",
+                &Verb::Execute,
+                "",
+                "/home/user/project",
+                &serde_json::Value::Null,
+                tool,
+            );
+            let decision = policy.evaluate_with_context(&ctx);
+            assert_eq!(
+                decision.effect, *expected_effect,
+                "built-in __claude_internal__ should {:?} for {}",
+                expected_effect, tool
+            );
+        }
+    }
+
+    #[test]
+    fn test_builtin_does_not_allow_bash_via_claude_internal() {
+        // Bash should NOT be allowed by __claude_internal__
+        let policy = compile_yaml("default: ask\n");
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "ls -la",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Ask,
+            "bash should not be allowed by __claude_internal__"
+        );
+    }
+
+    #[test]
+    fn test_user_can_override_claude_internal_profile() {
+        // User defines __claude_internal__ in their profile_defs
+        let yaml = r#"
+default:
+  permission: ask
+  profile: main
+
+profiles:
+  __claude_internal__:
+    rules:
+      deny askuserquestion *:
+  main:
+    include: [__claude_internal__]
+"#;
+        let policy = compile_yaml(yaml);
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "askuserquestion",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Deny,
+            "user-defined __claude_internal__ should override built-in"
+        );
     }
 }

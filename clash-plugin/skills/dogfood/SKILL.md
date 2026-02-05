@@ -18,6 +18,8 @@ After running the command, explain to the user:
    - **claude-internal** — allows all tools to access `~/.claude` (needed for Claude Code's own state)
    - **tmp** — allows all tools to access `/tmp`
    - **main** — the active profile, includes all three above plus the git/sudo rules below
+   - **`__clash_internal__`** (built-in) — always active, allows reading `~/.clash/` and grants `clash init` sandbox access to write its config. Can be overridden by defining a profile with the same name in the policy.
+   - **`__claude_internal__`** (built-in) — always active, allows Claude Code meta-tools (AskUserQuestion, ExitPlanMode, task management, etc.) so they are never blocked by policy. Can be overridden by defining a profile with the same name in the policy.
 3. The default policy provides these protections:
    - **Git commits** require approval (`ask`) — Claude must get permission before committing
    - **Git push** is denied — Claude cannot push commits

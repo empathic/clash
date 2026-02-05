@@ -3,6 +3,13 @@
 # Evaluation: all matching statements are collected, then precedence applies:
 #   deny > ask > allow
 # If no statement matches, the default effect is used (ask).
+#
+# Note: clash always injects two built-in profiles:
+#   __clash_internal__ — allows reading ~/.clash/ and grants clash init sandbox
+#                        access to write its config
+#   __claude_internal__ — allows Claude Code meta-tools (AskUserQuestion,
+#                         ExitPlanMode, task management, etc.)
+# To override either, define a profile with the same name below.
 
 default:
   permission: ask
@@ -27,9 +34,15 @@ profiles:
   
   sensitive:
     rules:
-      ask * *:
+      ask read *:
         fs:
-          read + write + create + delete: subpath(~/.ssh) | subpath(~/.aws)
+          read: subpath(~/.ssh) | subpath(~/.aws)
+      ask write *:
+        fs:
+          write + create: subpath(~/.ssh) | subpath(~/.aws)
+      ask edit *:
+        fs:
+          write: subpath(~/.ssh) | subpath(~/.aws)
   
       
   main:
