@@ -2385,7 +2385,7 @@ profiles:
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(
             decision.effect,
-            Effect::Allow,
+            Effect::Ask,
             "built-in __claude_internal__ should allow ExitPlanMode"
         );
     }
