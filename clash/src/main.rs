@@ -219,12 +219,19 @@ enum Commands {
 
     /// Explain which policy rule would match a given tool invocation
     ///
-    /// Reads JSON from stdin with tool_name and tool_input fields,
-    /// evaluates against the loaded policy, and shows the decision trace.
+    /// Accepts either CLI arguments or JSON from stdin.
+    /// CLI:   clash explain bash "git push"
+    /// Stdin: echo '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | clash explain
     Explain {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
         json: bool,
+
+        /// Tool type: bash, read, write, edit (or full tool name like Bash, Read, etc.)
+        tool: Option<String>,
+
+        /// The command, file path, or noun to check
+        input: Option<String>,
     },
 
     /// Initialize a new clash policy.yaml with a safe default configuration
@@ -311,7 +318,9 @@ fn main() -> Result<()> {
         Commands::Migrate { dry_run, default } => {
             run_or_exit("Migration", run_migrate(dry_run, &default))
         }
-        Commands::Explain { json } => run_or_exit("Explain", run_explain(json)),
+        Commands::Explain { json, tool, input } => {
+            run_or_exit("Explain", run_explain(json, tool, input))
+        }
         Commands::Init { force } => run_or_exit("Init", run_init(force)),
         Commands::Policy(cmd) => run_or_exit("Policy", run_policy(cmd)),
     }
@@ -570,16 +579,45 @@ fn default_cwd() -> String {
 
 /// Explain which policy rule would match a given tool invocation.
 ///
-/// Reads JSON from stdin: `{"tool_name":"Bash","tool_input":{"command":"git push"}}`
-/// Evaluates against the loaded policy and prints the decision trace.
+/// Accepts CLI args (`clash explain bash "git push"`) or JSON from stdin.
 #[instrument(level = Level::TRACE)]
-fn run_explain(json_output: bool) -> Result<()> {
+fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String>) -> Result<()> {
     use clash::permissions::{build_eval_context, extract_noun, resolve_verb};
 
-    // Read input from stdin
-    let input: ExplainInput = serde_json::from_reader(std::io::stdin().lock()).context(
-        "failed to parse JSON from stdin (expected {\"tool_name\":..., \"tool_input\":...})",
-    )?;
+    let input: ExplainInput = if let Some(tool_str) = tool {
+        // Build from CLI arguments
+        let (tool_name, input_field) = match tool_str.to_lowercase().as_str() {
+            "bash" => ("Bash", "command"),
+            "read" => ("Read", "file_path"),
+            "write" => ("Write", "file_path"),
+            "edit" => ("Edit", "file_path"),
+            _ => {
+                // Allow full tool names (Bash, Read, etc.) as-is
+                let field = match tool_str.as_str() {
+                    "Bash" => "command",
+                    "Read" | "Write" | "Edit" | "NotebookEdit" => "file_path",
+                    "Glob" | "Grep" => "pattern",
+                    "WebFetch" => "url",
+                    "WebSearch" => "query",
+                    _ => "command",
+                };
+                // Leak to get 'static — fine for a CLI tool that runs once
+                let name: &'static str = Box::leak(tool_str.into_boxed_str());
+                (name, field)
+            }
+        };
+        let noun = input_arg.unwrap_or_default();
+        ExplainInput {
+            tool_name: tool_name.to_string(),
+            tool_input: serde_json::json!({ input_field: noun }),
+            cwd: default_cwd(),
+        }
+    } else {
+        // Read from stdin
+        serde_json::from_reader(std::io::stdin().lock()).context(
+            "failed to parse JSON from stdin (expected {\"tool_name\":..., \"tool_input\":...})\n\nUsage: clash explain bash \"git push\"  OR  echo '{...}' | clash explain",
+        )?
+    };
 
     // Load settings and compile policy
     let settings = ClashSettings::load_or_create()?;
