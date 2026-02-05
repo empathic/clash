@@ -529,7 +529,7 @@ impl<'de> Deserialize<'de> for MatchExpr {
     }
 }
 
-pub(crate) fn format_pattern_str(pattern: &Pattern) -> String {
+pub fn format_pattern_str(pattern: &Pattern) -> String {
     match pattern {
         Pattern::Match(expr) => format_match_expr(expr),
         Pattern::Not(expr) => format!("!{}", format_match_expr(expr)),
