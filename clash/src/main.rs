@@ -223,7 +223,6 @@ fn init_tracing() {
                         .with_line_number(true)
                         .with_target(false)
                         .with_span_events(FmtSpan::CLOSE)
-                        .with_ansi(true)
                         .with_filter(LevelFilter::from_level(Level::DEBUG)),
                 )
                 .init();
@@ -238,7 +237,7 @@ fn init_tracing() {
                         .with_file(true)
                         .with_line_number(true)
                         .with_target(false)
-                        .with_filter(LevelFilter::from_level(Level::WARN)),
+                        .with_filter(LevelFilter::from_level(Level::INFO)),
                 )
                 .init();
         }
