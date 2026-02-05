@@ -1,6 +1,8 @@
-# clash
+# clash 
+**C**ommand **L**ine **A**gent **S**afety **H**arness
 
-A permission enforcement tool for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Clash intercepts tool usage and enforces permission policies (Allow/Deny/Ask) based on your configuration, with optional kernel-enforced sandboxing for runtime restrictions.
+A permission enforcement tool for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (other cli agent's comming soon).
+Clash intercepts tool usage and enforces permission policies (Allow/Deny/Ask) based on your configuration, with optional kernel-enforced sandboxing for runtime restrictions.
 
 ## Features
 
