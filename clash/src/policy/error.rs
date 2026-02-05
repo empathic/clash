@@ -79,7 +79,7 @@ impl PolicyParseError {
                     .into(),
             ),
             PolicyParseError::InvalidNewRuleKey(_, _) => {
-                Some("expected format: 'effect verb noun:' (e.g. 'allow bash *:')".into())
+                Some("format: \"effect verb noun\" where effect=allow|deny|ask, verb=bash|read|write|edit|*, noun=command or path pattern. Example: \"allow bash git *\"".into())
             }
             _ => None,
         }

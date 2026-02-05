@@ -75,8 +75,10 @@ pub fn add_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
     }
 
     // Validate the rule string parses correctly
-    parse::parse_new_rule_key(rule)
-        .map_err(|e| anyhow::anyhow!("invalid rule '{}': {}", rule, e))?;
+    parse::parse_new_rule_key(rule).map_err(|e| {
+        let hint = e.help().map(|h| format!(" {}", h)).unwrap_or_default();
+        anyhow::anyhow!("invalid rule '{}': {}.{}", rule, e, hint)
+    })?;
 
     // Check that the profile exists
     let names = profile_names(yaml)?;

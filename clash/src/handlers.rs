@@ -147,7 +147,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
                         // Build a user-friendly summary with key denials and active profile.
                         let mut deny_descriptions: Vec<String> = Vec::new();
 
-                        // Collect deny nouns from legacy statements.
+                        // Collect deny descriptions from legacy statements.
                         for stmt in &doc.statements {
                             if stmt.effect == crate::policy::Effect::Deny {
                                 let noun_str = crate::policy::ast::format_pattern_str(&stmt.noun);
@@ -156,17 +156,18 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
                                     crate::policy::VerbPattern::Exact(v) => v.to_string(),
                                     crate::policy::VerbPattern::Named(s) => s.clone(),
                                 };
-                                deny_descriptions.push(format!("{} {}", verb_str, noun_str));
+                                deny_descriptions.push(format!("deny {} {}", verb_str, noun_str));
                             }
                         }
 
-                        // Collect deny nouns from new-format profile rules.
+                        // Collect deny descriptions from new-format profile rules.
                         for (_profile_name, profile_def) in &doc.profile_defs {
                             for rule in &profile_def.rules {
                                 if rule.effect == crate::policy::Effect::Deny {
                                     let noun_str =
                                         crate::policy::ast::format_pattern_str(&rule.noun);
-                                    deny_descriptions.push(format!("{} {}", rule.verb, noun_str));
+                                    deny_descriptions
+                                        .push(format!("deny {} {}", rule.verb, noun_str));
                                 }
                             }
                         }
@@ -194,7 +195,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
                         };
 
                         lines.push(format!(
-                            "Clash active: profile '{}', {} rules. Key denials: {}. Use /clash:status or /clash:edit for details.",
+                            "Clash active: profile '{}', {} rules. Denied: {}. Use /clash:status or /clash:edit for details.",
                             profile_name, rule_count, denials_summary,
                         ));
                     }

@@ -150,7 +150,7 @@ enum SandboxCmd {
 enum PolicyCmd {
     /// Add a rule to the policy
     AddRule {
-        /// The rule to add (e.g. "allow bash git *")
+        /// Rule in "effect verb noun" format (e.g. "allow bash git *", "deny read .env")
         rule: String,
         /// Target profile (default: active profile from default.profile)
         #[arg(long)]
@@ -161,7 +161,7 @@ enum PolicyCmd {
     },
     /// Remove a rule from the policy
     RemoveRule {
-        /// The rule to remove (matched by rule key text)
+        /// Rule in "effect verb noun" format to remove (e.g. "deny bash git push*")
         rule: String,
         #[arg(long)]
         profile: Option<String>,
@@ -856,6 +856,8 @@ fn run_policy(cmd: PolicyCmd) -> Result<()> {
                 if rules.is_empty() {
                     println!("  (no rules)");
                 } else {
+                    println!("  {:<8} {:<12} NOUN", "EFFECT", "VERB");
+                    println!("  {:<8} {:<12} ----", "------", "----");
                     for r in &rules {
                         let noun_str = clash::policy::ast::format_pattern_str(&r.noun);
                         let constraint_note = if r.constraints.is_some() {
@@ -863,7 +865,13 @@ fn run_policy(cmd: PolicyCmd) -> Result<()> {
                         } else {
                             ""
                         };
-                        println!("  {} {} {}{}", r.effect, r.verb, noun_str, constraint_note);
+                        println!(
+                            "  {:<8} {:<12} {}{}",
+                            r.effect.to_string(),
+                            r.verb,
+                            noun_str,
+                            constraint_note
+                        );
                     }
                 }
             }

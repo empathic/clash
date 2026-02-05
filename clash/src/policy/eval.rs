@@ -585,15 +585,41 @@ fn check_cap_scoped_fs_guard(
 
 /// Build a human-readable description of a profile rule for explanations.
 fn describe_rule(rule: &CompiledProfileRule) -> String {
+    let noun_str = format_compiled_pattern(&rule.noun_matcher);
     let profile_suffix = if let Some(ref guard) = rule.profile_guard {
         format!(" : {}", guard)
     } else {
         String::new()
     };
     format!(
-        "{} {} * -> {}{}",
-        rule.effect, rule.verb, rule.effect, profile_suffix,
+        "{} {} {} -> {}{}",
+        rule.effect, rule.verb, noun_str, rule.effect, profile_suffix,
     )
+}
+
+/// Format a compiled pattern back to its source representation.
+fn format_compiled_pattern(pattern: &CompiledPattern) -> String {
+    match pattern {
+        CompiledPattern::Match(expr) => format_compiled_match_expr(expr),
+        CompiledPattern::Not(expr) => format!("!{}", format_compiled_match_expr(expr)),
+    }
+}
+
+/// Format a compiled match expression back to its source representation.
+fn format_compiled_match_expr(expr: &CompiledMatchExpr) -> String {
+    match expr {
+        CompiledMatchExpr::Any => "*".to_string(),
+        CompiledMatchExpr::Exact(s) => s.clone(),
+        CompiledMatchExpr::Glob { pattern, .. } => pattern.clone(),
+        CompiledMatchExpr::Typed {
+            entity_type,
+            name: None,
+        } => entity_type.to_string(),
+        CompiledMatchExpr::Typed {
+            entity_type,
+            name: Some(name),
+        } => format!("{}:{}", entity_type, name),
+    }
 }
 
 // ---------------------------------------------------------------------------
