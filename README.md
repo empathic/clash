@@ -233,6 +233,25 @@ profiles:
 
 Parent rules are included first (lower precedence), then the profile's own rules. The standard **deny > ask > allow** precedence still applies across all collected rules.
 
+#### Built-in profiles
+
+Clash always injects two built-in profiles that are active regardless of what's in your policy file:
+
+- **`__clash_internal__`** — Allows reading `~/.clash/` (so Claude can inspect the policy) and grants `clash init` sandbox access to write its config. This prevents bootstrapping loops where the policy can't modify itself.
+- **`__claude_internal__`** — Always allows Claude Code meta-tools (`AskUserQuestion`, `ExitPlanMode`, `EnterPlanMode`, task management, skills, team messaging) so they are never blocked by policy rules.
+
+To override either built-in, define a profile with the same name in your policy's `profiles:` section:
+
+```yaml
+profiles:
+  __clash_internal__:
+    rules:
+      # Your custom rules replace the built-in
+      deny read *:
+        fs:
+          read: subpath(~/.clash)
+```
+
 ### Sandbox
 
 For `bash` rules with `fs` constraints, the policy engine automatically generates a kernel-enforced sandbox. The sandbox restrictions are inherited by child processes and cannot be removed at runtime.

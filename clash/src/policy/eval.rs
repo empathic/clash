@@ -600,19 +600,31 @@ fn describe_rule(rule: &CompiledProfileRule) -> String {
 // Helper functions
 // ---------------------------------------------------------------------------
 
-/// Resolve a path relative to cwd. Handles `.` as cwd.
+/// Resolve a path relative to cwd. Handles `.` as cwd and `~` as home dir.
 pub(crate) fn resolve_path(path: &str, cwd: &str) -> PathBuf {
-    let p = Path::new(path);
+    // Expand tilde to home directory
+    let expanded: std::borrow::Cow<str> = if path == "~" {
+        dirs::home_dir()
+            .map(|p| std::borrow::Cow::Owned(p.to_string_lossy().into_owned()))
+            .unwrap_or(std::borrow::Cow::Borrowed(path))
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        dirs::home_dir()
+            .map(|p| std::borrow::Cow::Owned(format!("{}/{}", p.to_string_lossy(), rest)))
+            .unwrap_or(std::borrow::Cow::Borrowed(path))
+    } else {
+        std::borrow::Cow::Borrowed(path)
+    };
+
+    let p = Path::new(expanded.as_ref());
     if p.is_absolute() {
-        // Use lexical normalization for absolute paths
         lexical_normalize(p)
-    } else if path == "." {
+    } else if expanded.as_ref() == "." {
         lexical_normalize(Path::new(cwd))
-    } else if path.starts_with("./") || path.starts_with("..") {
-        lexical_normalize(&Path::new(cwd).join(path))
+    } else if expanded.starts_with("./") || expanded.starts_with("..") {
+        lexical_normalize(&Path::new(cwd).join(expanded.as_ref()))
     } else {
         // Bare relative path — resolve against cwd
-        lexical_normalize(&Path::new(cwd).join(path))
+        lexical_normalize(&Path::new(cwd).join(expanded.as_ref()))
     }
 }
 
