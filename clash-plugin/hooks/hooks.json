@@ -43,6 +43,16 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/clash hook session-start"
+          }
+        ]
+      }
     ]
   }
 }
