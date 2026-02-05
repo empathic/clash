@@ -147,7 +147,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
                         // Build a user-friendly summary with key denials and active profile.
                         let mut deny_descriptions: Vec<String> = Vec::new();
 
-                        // Collect deny descriptions from legacy statements.
+                        // Collect deny nouns from legacy statements.
                         for stmt in &doc.statements {
                             if stmt.effect == crate::policy::Effect::Deny {
                                 let noun_str = crate::policy::ast::format_pattern_str(&stmt.noun);
