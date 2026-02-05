@@ -673,36 +673,204 @@ pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
     components.iter().collect()
 }
 
+// ---------------------------------------------------------------------------
+// ShellScanner — shared quote-tracking state machine
+// ---------------------------------------------------------------------------
+
+/// Context for a character yielded by [`ShellScanner`].
+///
+/// Each item tells the caller whether the character is inside quotes and what
+/// the previous (unescaped) character was, so callers can make per-character
+/// decisions without reimplementing the quoting state machine.
+struct ShellChar {
+    ch: char,
+    /// `true` when the character is inside single or double quotes (or escaped).
+    quoted: bool,
+    /// `true` when this character is a quoting delimiter (an opening/closing
+    /// quote mark) rather than content. Tokenizers use this to strip delimiters
+    /// while keeping quoted content like `'` inside double quotes.
+    is_delimiter: bool,
+    /// The previous non-escaped character (used for detecting `$(` sequences).
+    prev: char,
+}
+
+/// Iterator that walks a command string while tracking POSIX-sh quoting state.
+///
+/// Yields one [`ShellChar`] per *logical* character, automatically handling:
+/// - Single-quote regions (no escapes inside)
+/// - Double-quote regions (`\"` and `\\` are the only escapes)
+/// - Backslash escapes outside quotes
+///
+/// Characters that are part of the quoting syntax itself (the quote delimiters,
+/// escape backslashes) are NOT yielded. Only content characters are produced,
+/// each annotated with quoting context.
+struct ShellScanner<'a> {
+    chars: std::iter::Peekable<std::str::Chars<'a>>,
+    in_single_quote: bool,
+    in_double_quote: bool,
+    prev_char: char,
+}
+
+impl<'a> ShellScanner<'a> {
+    fn new(command: &'a str) -> Self {
+        Self {
+            chars: command.chars().peekable(),
+            in_single_quote: false,
+            in_double_quote: false,
+            prev_char: ' ',
+        }
+    }
+}
+
+impl Iterator for ShellScanner<'_> {
+    type Item = ShellChar;
+
+    fn next(&mut self) -> Option<ShellChar> {
+        let ch = self.chars.next()?;
+
+        // Inside single quotes: everything is literal until the closing quote.
+        if self.in_single_quote {
+            let is_closing = ch == '\'';
+            if is_closing {
+                self.in_single_quote = false;
+            }
+            let item = ShellChar {
+                ch,
+                quoted: true,
+                is_delimiter: is_closing,
+                prev: self.prev_char,
+            };
+            self.prev_char = ch;
+            return Some(item);
+        }
+
+        // Inside double quotes: backslash escapes `"` and `\` only.
+        if self.in_double_quote {
+            if ch == '"' {
+                self.in_double_quote = false;
+                let item = ShellChar {
+                    ch,
+                    quoted: true,
+                    is_delimiter: true,
+                    prev: self.prev_char,
+                };
+                self.prev_char = ch;
+                return Some(item);
+            }
+            if ch == '\\'
+                && let Some(&next) = self.chars.peek()
+                && (next == '"' || next == '\\')
+            {
+                // Consume the escaped character and yield it as content.
+                self.chars.next();
+                let item = ShellChar {
+                    ch: next,
+                    quoted: true,
+                    is_delimiter: false,
+                    prev: self.prev_char,
+                };
+                self.prev_char = next;
+                return Some(item);
+            }
+            // Backslash before other chars is literal inside double quotes.
+            let item = ShellChar {
+                ch,
+                quoted: true,
+                is_delimiter: false,
+                prev: self.prev_char,
+            };
+            self.prev_char = ch;
+            return Some(item);
+        }
+
+        // Outside quotes.
+        match ch {
+            '\'' => {
+                self.in_single_quote = true;
+                let item = ShellChar {
+                    ch,
+                    quoted: true,
+                    is_delimiter: true,
+                    prev: self.prev_char,
+                };
+                self.prev_char = ch;
+                Some(item)
+            }
+            '"' => {
+                self.in_double_quote = true;
+                let item = ShellChar {
+                    ch,
+                    quoted: true,
+                    is_delimiter: true,
+                    prev: self.prev_char,
+                };
+                self.prev_char = ch;
+                Some(item)
+            }
+            '\\' => {
+                // Backslash escapes the next character.
+                if let Some(next) = self.chars.next() {
+                    let item = ShellChar {
+                        ch: next,
+                        quoted: true,
+                        is_delimiter: false,
+                        prev: self.prev_char,
+                    };
+                    self.prev_char = next;
+                    Some(item)
+                } else {
+                    // Trailing backslash with nothing after it.
+                    let item = ShellChar {
+                        ch,
+                        quoted: false,
+                        is_delimiter: false,
+                        prev: self.prev_char,
+                    };
+                    self.prev_char = ch;
+                    Some(item)
+                }
+            }
+            _ => {
+                let item = ShellChar {
+                    ch,
+                    quoted: false,
+                    is_delimiter: false,
+                    prev: self.prev_char,
+                };
+                self.prev_char = ch;
+                Some(item)
+            }
+        }
+    }
+}
+
+/// Check if a [`ShellChar`] represents an unquoted command substitution
+/// (`$(` or backtick).
+///
+/// Shared helper used by both `command_has_pipe` and `command_has_redirect`,
+/// which conservatively treat command substitutions as dangerous.
+fn has_unquoted_command_substitution(sc: &ShellChar) -> bool {
+    if sc.quoted {
+        return false;
+    }
+    matches!(
+        sc.ch,
+        '`' | '(' if sc.ch == '`' || sc.prev == '$'
+    )
+}
+
 /// Check if a command string contains shell pipe operators.
 ///
 /// Also conservatively returns true for unquoted command substitution (`$(` or
 /// backtick), since those may contain pipes or redirects internally.
 pub(crate) fn command_has_pipe(command: &str) -> bool {
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-    let mut prev_char = ' ';
-    let mut escaped = false;
-
-    for ch in command.chars() {
-        if escaped {
-            escaped = false;
-            prev_char = ch;
-            continue;
+    for sc in ShellScanner::new(command) {
+        if has_unquoted_command_substitution(&sc) {
+            return true;
         }
-        if !in_single_quote && !in_double_quote && ch == '\\' {
-            escaped = true;
-            prev_char = ch;
-            continue;
+        if !sc.quoted && sc.ch == '|' {
+            return true;
         }
-        match ch {
-            '\'' if !in_double_quote => in_single_quote = !in_single_quote,
-            '"' if !in_single_quote && prev_char != '\\' => in_double_quote = !in_double_quote,
-            '|' if !in_single_quote && !in_double_quote => return true,
-            '(' if !in_single_quote && !in_double_quote && prev_char == '$' => return true,
-            '`' if !in_single_quote && !in_double_quote => return true,
-            _ => {}
-        }
-        prev_char = ch;
     }
     false
 }
@@ -712,31 +880,13 @@ pub(crate) fn command_has_pipe(command: &str) -> bool {
 /// Also conservatively returns true for unquoted command substitution (`$(` or
 /// backtick), since those may contain pipes or redirects internally.
 pub(crate) fn command_has_redirect(command: &str) -> bool {
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-    let mut prev_char = ' ';
-    let mut escaped = false;
-
-    for ch in command.chars() {
-        if escaped {
-            escaped = false;
-            prev_char = ch;
-            continue;
+    for sc in ShellScanner::new(command) {
+        if has_unquoted_command_substitution(&sc) {
+            return true;
         }
-        if !in_single_quote && !in_double_quote && ch == '\\' {
-            escaped = true;
-            prev_char = ch;
-            continue;
+        if !sc.quoted && (sc.ch == '>' || sc.ch == '<') {
+            return true;
         }
-        match ch {
-            '\'' if !in_double_quote => in_single_quote = !in_single_quote,
-            '"' if !in_single_quote && prev_char != '\\' => in_double_quote = !in_double_quote,
-            '>' | '<' if !in_single_quote && !in_double_quote => return true,
-            '(' if !in_single_quote && !in_double_quote && prev_char == '$' => return true,
-            '`' if !in_single_quote && !in_double_quote => return true,
-            _ => {}
-        }
-        prev_char = ch;
     }
     false
 }
@@ -754,55 +904,23 @@ pub(crate) fn command_has_redirect(command: &str) -> bool {
 pub(crate) fn tokenize_command(command: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-    let mut chars = command.chars().peekable();
 
-    while let Some(ch) = chars.next() {
-        if in_single_quote {
-            // Inside single quotes: everything is literal until closing quote
-            if ch == '\'' {
-                in_single_quote = false;
-            } else {
-                current.push(ch);
-            }
-        } else if in_double_quote {
-            // Inside double quotes: backslash escapes " and \ only
-            if ch == '"' {
-                in_double_quote = false;
-            } else if ch == '\\' {
-                if let Some(&next) = chars.peek() {
-                    if next == '"' || next == '\\' {
-                        current.push(next);
-                        chars.next();
-                    } else {
-                        // Backslash is literal if not followed by " or \
-                        current.push(ch);
-                    }
-                } else {
-                    current.push(ch);
-                }
-            } else {
-                current.push(ch);
+    for sc in ShellScanner::new(command) {
+        if sc.is_delimiter {
+            // Skip quote delimiters — they are stripped from tokens.
+            continue;
+        }
+        if sc.quoted {
+            // Quoted content character — always append to current token.
+            current.push(sc.ch);
+        } else if sc.ch.is_whitespace() {
+            // Unquoted whitespace — finish the current token.
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
             }
         } else {
-            // Outside quotes
-            match ch {
-                '\'' => in_single_quote = true,
-                '"' => in_double_quote = true,
-                '\\' => {
-                    // Backslash escapes the next character
-                    if let Some(next) = chars.next() {
-                        current.push(next);
-                    }
-                }
-                c if c.is_whitespace() => {
-                    if !current.is_empty() {
-                        tokens.push(std::mem::take(&mut current));
-                    }
-                }
-                _ => current.push(ch),
-            }
+            // Unquoted non-whitespace — accumulate.
+            current.push(sc.ch);
         }
     }
 
