@@ -143,6 +143,60 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
                             "policy.yaml: OK ({} rules, format={}, default={})",
                             rule_count, format, doc.policy.default,
                         ));
+
+                        // Build a user-friendly summary with key denials and active profile.
+                        let mut deny_descriptions: Vec<String> = Vec::new();
+
+                        // Collect deny nouns from legacy statements.
+                        for stmt in &doc.statements {
+                            if stmt.effect == crate::policy::Effect::Deny {
+                                let noun_str = crate::policy::ast::format_pattern_str(&stmt.noun);
+                                let verb_str = match &stmt.verb {
+                                    crate::policy::VerbPattern::Any => "*".to_string(),
+                                    crate::policy::VerbPattern::Exact(v) => v.to_string(),
+                                    crate::policy::VerbPattern::Named(s) => s.clone(),
+                                };
+                                deny_descriptions.push(format!("{} {}", verb_str, noun_str));
+                            }
+                        }
+
+                        // Collect deny nouns from new-format profile rules.
+                        for (_profile_name, profile_def) in &doc.profile_defs {
+                            for rule in &profile_def.rules {
+                                if rule.effect == crate::policy::Effect::Deny {
+                                    let noun_str =
+                                        crate::policy::ast::format_pattern_str(&rule.noun);
+                                    deny_descriptions.push(format!("{} {}", rule.verb, noun_str));
+                                }
+                            }
+                        }
+
+                        deny_descriptions.sort();
+                        deny_descriptions.dedup();
+
+                        let profile_name = doc
+                            .default_config
+                            .as_ref()
+                            .map(|dc| dc.profile.as_str())
+                            .unwrap_or("(none)");
+
+                        let denials_summary = if deny_descriptions.is_empty() {
+                            "no explicit denials".to_string()
+                        } else if deny_descriptions.len() <= 4 {
+                            deny_descriptions.join(", ")
+                        } else {
+                            let first_four = &deny_descriptions[..4];
+                            format!(
+                                "{}, +{} more",
+                                first_four.join(", "),
+                                deny_descriptions.len() - 4
+                            )
+                        };
+
+                        lines.push(format!(
+                            "Clash active: profile '{}', {} rules. Key denials: {}. Use /clash:status or /clash:edit for details.",
+                            profile_name, rule_count, denials_summary,
+                        ));
                     }
                     Err(e) => {
                         lines.push(format!(

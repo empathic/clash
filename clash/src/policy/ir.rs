@@ -271,14 +271,17 @@ fn humanize_skip_reason(rule_desc: &str, reason: &str) -> String {
 /// Convert a final resolution string into human-readable English.
 fn humanize_resolution(resolution: &str) -> String {
     if resolution.contains("deny") && resolution.contains("deny > ask > allow") {
-        "Final decision: deny (deny rules take precedence over allow/ask)".into()
+        "Final decision: deny (deny rules take precedence over allow/ask). Use /clash:explain for details or /clash:edit to modify.".into()
     } else if resolution.contains("ask") && resolution.contains("ask > allow") {
-        "Final decision: ask (ask rules take precedence over allow)".into()
+        "Final decision: ask (ask rules take precedence over allow). Use /clash:allow to add an allow rule if desired.".into()
     } else if resolution == "result: allow" {
         "Final decision: allow".into()
     } else if resolution.starts_with("no rules matched") {
         let default = resolution.rsplit("default: ").next().unwrap_or("ask");
-        format!("No rules matched this action. Defaulting to {}.", default)
+        format!(
+            "No rules matched this action. Defaulting to {}. Use /clash:edit to add a rule for this action.",
+            default
+        )
     } else {
         // Fallback: pass through
         resolution.to_string()
