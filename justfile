@@ -1,6 +1,7 @@
 
 plugin_target := "./target/clash-dev"
 plugin_dir := plugin_target + "/clash-plugin/"
+wt_root := "../clash-wt"
 
 default:
     @just -l
@@ -65,3 +66,35 @@ clash *ARGS:
 
 fix:
     cargo fix --allow-dirty
+
+# Create a new worktree for a Claude Code session. Prints path to stdout.
+# Usage: just wt-new NAME [BRANCH]
+wt-new name branch="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{wt_root}}/{{name}}"
+    if [ -n "{{branch}}" ]; then
+        git worktree add "$dir" "{{branch}}" >&2
+    else
+        git worktree add -b "claude/{{name}}" "$dir" >&2
+    fi
+    echo "$dir"
+
+# List all worktrees
+wt-list:
+    git worktree list
+
+# Remove a worktree (preserves the branch)
+wt-rm name:
+    git worktree remove "{{wt_root}}/{{name}}"
+
+# Remove all worktrees under clash-wt/ and prune
+wt-clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -d "{{wt_root}}" ]; then
+        for dir in "{{wt_root}}"/*; do
+            [ -d "$dir" ] && git worktree remove "$dir" && echo "Removed $dir" || true
+        done
+    fi
+    git worktree prune
