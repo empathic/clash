@@ -109,10 +109,12 @@ impl CompiledPolicy {
 
     /// Built-in rules for the `__clash_internal__` profile.
     ///
-    /// Two rules:
+    /// Three rules:
     /// 1. Allow `Read` tool access to `~/.clash/` (so Claude can inspect the policy).
     /// 2. Allow `Bash` commands matching `*clash init*` to write to `~/.clash/`
     ///    (sandbox includes `~/.clash/` only for the clash binary, not all commands).
+    /// 3. Allow `Bash` commands matching `*clash policy*` to read/write `~/.clash/`
+    ///    (so `clash policy add-rule` / `remove-rule` can modify the policy file).
     ///
     /// Users can override by defining a profile named `__clash_internal__`
     /// in their policy's `profiles:` section.
@@ -138,6 +140,19 @@ impl CompiledPolicy {
                 effect: Effect::Allow,
                 verb: "bash".to_string(),
                 noun: Pattern::Match(MatchExpr::Glob("*clash init*".to_string())),
+                constraints: Some(InlineConstraints {
+                    fs: Some(vec![(
+                        Cap::READ | Cap::WRITE | Cap::EXECUTE | Cap::CREATE | Cap::DELETE,
+                        FilterExpr::Subpath("~/.clash".to_string()),
+                    )]),
+                    ..Default::default()
+                }),
+            },
+            // Allow `clash policy` subcommands to read/write ~/.clash/.
+            ProfileRule {
+                effect: Effect::Allow,
+                verb: "bash".to_string(),
+                noun: Pattern::Match(MatchExpr::Glob("*clash policy*".to_string())),
                 constraints: Some(InlineConstraints {
                     fs: Some(vec![(
                         Cap::READ | Cap::WRITE | Cap::EXECUTE | Cap::CREATE | Cap::DELETE,

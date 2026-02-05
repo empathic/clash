@@ -85,6 +85,16 @@ clash sandbox check                                             # Check platform
 clash migrate              # Write policy.yaml to ~/.clash/policy.yaml
 clash migrate --dry-run    # Preview generated policy on stdout
 clash migrate --default deny  # Set default effect (ask, deny, allow)
+
+# View and edit policy rules
+clash policy show                                    # Show active profile and policy info
+clash policy show --json                             # JSON output
+clash policy list-rules                              # List rules in the active profile
+clash policy list-rules --profile base --json        # List rules in a specific profile (JSON)
+clash policy add-rule "allow bash cargo *"           # Add a rule to the active profile
+clash policy add-rule "deny bash rm *" --profile base  # Add to a specific profile
+clash policy add-rule "allow bash git *" --dry-run   # Preview without writing
+clash policy remove-rule "deny bash git push*"       # Remove a rule from the active profile
 ```
 
 ## Configuration
@@ -237,7 +247,7 @@ Parent rules are included first (lower precedence), then the profile's own rules
 
 Clash always injects two built-in profiles that are active regardless of what's in your policy file:
 
-- **`__clash_internal__`** — Allows reading `~/.clash/` (so Claude can inspect the policy) and grants `clash init` sandbox access to write its config. This prevents bootstrapping loops where the policy can't modify itself.
+- **`__clash_internal__`** — Allows reading `~/.clash/` (so Claude can inspect the policy) and grants `clash init` and `clash policy` sandbox access to write its config. This prevents bootstrapping loops where the policy can't modify itself.
 - **`__claude_internal__`** — Always allows Claude Code meta-tools (`AskUserQuestion`, `ExitPlanMode`, `EnterPlanMode`, task management, skills, team messaging) so they are never blocked by policy rules.
 
 To override either built-in, define a profile with the same name in your policy's `profiles:` section:

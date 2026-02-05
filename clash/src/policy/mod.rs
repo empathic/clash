@@ -43,6 +43,7 @@
 
 pub mod ast;
 pub mod compile;
+pub mod edit;
 pub mod error;
 pub mod eval;
 pub mod expr;

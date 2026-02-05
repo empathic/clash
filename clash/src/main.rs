@@ -3,7 +3,8 @@ use std::fs::OpenOptions;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use clash::policy::parse::{desugar_legacy, format_rule};
+use clash::policy::edit;
+use clash::policy::parse::{desugar_legacy, flatten_profile, format_rule};
 use clash::policy::{Effect, LegacyPermissions, PolicyConfig, PolicyDocument};
 use claude_settings::SettingsLevel;
 use tracing::level_filters::LevelFilter;
@@ -146,6 +147,42 @@ enum SandboxCmd {
 }
 
 #[derive(Subcommand, Debug)]
+enum PolicyCmd {
+    /// Add a rule to the policy
+    AddRule {
+        /// The rule to add (e.g. "allow bash git *")
+        rule: String,
+        /// Target profile (default: active profile from default.profile)
+        #[arg(long)]
+        profile: Option<String>,
+        /// Print modified policy to stdout without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Remove a rule from the policy
+    RemoveRule {
+        /// The rule to remove (matched by rule key text)
+        rule: String,
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// List rules in the active profile (with includes resolved)
+    ListRules {
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show active profile, default permission, and available profiles
+    Show {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum Commands {
     #[command(subcommand, about = "commands for agents to call back into clash")]
     Hook(HooksCmd),
@@ -153,6 +190,10 @@ enum Commands {
     /// Apply sandbox restrictions and exec commands
     #[command(subcommand)]
     Sandbox(SandboxCmd),
+
+    /// View and edit policy rules
+    #[command(subcommand)]
+    Policy(PolicyCmd),
 
     /// Launch Claude Code with clash managing hooks and sandbox enforcement
     Launch {
@@ -272,6 +313,7 @@ fn main() -> Result<()> {
         }
         Commands::Explain { json } => run_or_exit("Explain", run_explain(json)),
         Commands::Init { force } => run_or_exit("Init", run_init(force)),
+        Commands::Policy(cmd) => run_or_exit("Policy", run_policy(cmd)),
     }
 
     Ok(())
@@ -662,6 +704,162 @@ fn run_init(force: bool) -> Result<()> {
     println!("Edit the file to customize rules for your environment.");
 
     Ok(())
+}
+
+/// Handle `clash policy` subcommands.
+#[instrument(level = Level::TRACE)]
+fn run_policy(cmd: PolicyCmd) -> Result<()> {
+    match cmd {
+        PolicyCmd::AddRule {
+            rule,
+            profile,
+            dry_run,
+        } => {
+            let path = ClashSettings::policy_file()?;
+            let yaml = std::fs::read_to_string(&path).with_context(|| {
+                format!(
+                    "No policy.yaml found at {}. Run `clash init` first.",
+                    path.display()
+                )
+            })?;
+            let target_profile = edit::resolve_profile(&yaml, profile.as_deref())?;
+            let modified = edit::add_rule(&yaml, &target_profile, &rule)?;
+
+            if modified == yaml {
+                println!(
+                    "Rule already exists in profile '{}': {}",
+                    target_profile, rule
+                );
+                return Ok(());
+            }
+
+            if dry_run {
+                print!("{}", modified);
+            } else {
+                std::fs::write(&path, &modified)?;
+                println!("Added rule to profile '{}': {}", target_profile, rule);
+            }
+            Ok(())
+        }
+        PolicyCmd::RemoveRule {
+            rule,
+            profile,
+            dry_run,
+        } => {
+            let path = ClashSettings::policy_file()?;
+            let yaml = std::fs::read_to_string(&path).with_context(|| {
+                format!(
+                    "No policy.yaml found at {}. Run `clash init` first.",
+                    path.display()
+                )
+            })?;
+            let target_profile = edit::resolve_profile(&yaml, profile.as_deref())?;
+            let modified = edit::remove_rule(&yaml, &target_profile, &rule)?;
+
+            if dry_run {
+                print!("{}", modified);
+            } else {
+                std::fs::write(&path, &modified)?;
+                println!("Removed rule from profile '{}': {}", target_profile, rule);
+            }
+            Ok(())
+        }
+        PolicyCmd::ListRules { profile, json } => {
+            let path = ClashSettings::policy_file()?;
+            let yaml = std::fs::read_to_string(&path).with_context(|| {
+                format!(
+                    "No policy.yaml found at {}. Run `clash init` first.",
+                    path.display()
+                )
+            })?;
+            let doc =
+                clash::policy::parse::parse_yaml(&yaml).context("failed to parse policy.yaml")?;
+
+            // Determine target profile
+            let target = match profile {
+                Some(p) => p,
+                None => doc.default_config
+                    .as_ref()
+                    .map(|dc| dc.profile.clone())
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "No active profile found. Use --profile or upgrade to the new policy format with `clash init --force`."
+                    ))?,
+            };
+
+            let rules = flatten_profile(&target, &doc.profile_defs)
+                .with_context(|| format!("failed to resolve profile '{}'", target))?;
+
+            if json {
+                let json_rules: Vec<serde_json::Value> = rules
+                    .iter()
+                    .map(|r| {
+                        let noun_str = clash::policy::ast::format_pattern_str(&r.noun);
+                        let mut obj = serde_json::json!({
+                            "effect": r.effect.to_string(),
+                            "verb": r.verb,
+                            "noun": noun_str,
+                        });
+                        if r.constraints.is_some() {
+                            obj["has_constraints"] = serde_json::json!(true);
+                        }
+                        obj
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "profile": target,
+                        "rules": json_rules,
+                    }))?
+                );
+            } else {
+                println!("Profile: {}", target);
+                println!();
+                if rules.is_empty() {
+                    println!("  (no rules)");
+                } else {
+                    for r in &rules {
+                        let noun_str = clash::policy::ast::format_pattern_str(&r.noun);
+                        let constraint_note = if r.constraints.is_some() {
+                            " [+constraints]"
+                        } else {
+                            ""
+                        };
+                        println!("  {} {} {}{}", r.effect, r.verb, noun_str, constraint_note);
+                    }
+                }
+            }
+            Ok(())
+        }
+        PolicyCmd::Show { json } => {
+            let path = ClashSettings::policy_file()?;
+            let yaml = std::fs::read_to_string(&path).with_context(|| {
+                format!(
+                    "No policy.yaml found at {}. Run `clash init` first.",
+                    path.display()
+                )
+            })?;
+            let info = edit::policy_info(&yaml)?;
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "default_permission": info.default_permission,
+                        "active_profile": info.active_profile,
+                        "profiles": info.profiles,
+                        "policy_file": path.display().to_string(),
+                    }))?
+                );
+            } else {
+                println!("Policy file:        {}", path.display());
+                println!("Default permission: {}", info.default_permission);
+                println!("Active profile:     {}", info.active_profile);
+                println!("Profiles:           {}", info.profiles.join(", "));
+            }
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]

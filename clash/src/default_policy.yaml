@@ -5,8 +5,8 @@
 # If no statement matches, the default effect is used (ask).
 #
 # Note: clash always injects two built-in profiles:
-#   __clash_internal__ — allows reading ~/.clash/ and grants clash init sandbox
-#                        access to write its config
+#   __clash_internal__ — allows reading ~/.clash/ and grants clash init and
+#                        clash policy sandbox access to write its config
 #   __claude_internal__ — allows Claude Code meta-tools (AskUserQuestion,
 #                         ExitPlanMode, task management, etc.)
 # To override either, define a profile with the same name below.

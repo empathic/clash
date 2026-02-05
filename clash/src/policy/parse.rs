@@ -399,7 +399,7 @@ fn parse_new_profile_def(value: &serde_yaml::Value) -> Result<ProfileDef, Policy
 /// Format: `effect verb noun...` — at least 3 whitespace-separated tokens.
 /// The entity slot is implicit (always the agent).
 /// The noun may contain multiple tokens (e.g., "deny bash rm *" → verb="bash", noun="rm *").
-fn parse_new_rule_key(key: &str) -> Result<(Effect, String, Pattern), PolicyParseError> {
+pub fn parse_new_rule_key(key: &str) -> Result<(Effect, String, Pattern), PolicyParseError> {
     // Strip trailing `:` if present (YAML mapping keys may include it)
     let key = key.strip_suffix(':').unwrap_or(key).trim();
     let parts: Vec<&str> = key.split_whitespace().collect();
