@@ -11,7 +11,6 @@ pub fn check_permission(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
 ) -> anyhow::Result<HookOutput> {
-    // TODO(eliot): re-enable mac notifications
     check_permission_policy(input, settings)
 }
 

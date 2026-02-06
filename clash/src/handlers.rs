@@ -37,29 +37,59 @@ pub fn handle_permission_request(
                     .unwrap_or_else(|| "denied by policy".into());
                 HookOutput::deny_permission(reason, false)
             }
-            // Ask or no decision: notify and try Zulip resolution.
-            _ => {
-                send_permission_desktop_notification(input, settings);
-                resolve_via_zulip_or_continue(input, settings)
-            }
+            // Ask or no decision: try interactive desktop prompt first,
+            // then fall through to Zulip / terminal.
+            _ => resolve_via_desktop_or_zulip(input, settings),
         },
         _ => pre_tool_result,
     })
 }
 
-/// Send a desktop notification for a permission request, if enabled.
-pub fn send_permission_desktop_notification(input: &ToolUseHookInput, settings: &ClashSettings) {
-    if !settings.notifications.desktop {
-        return;
-    }
-    let summary = match input.tool_name.as_str() {
+/// Build a human-readable summary of the permission request for notifications.
+fn permission_summary(input: &ToolUseHookInput) -> String {
+    match input.tool_name.as_str() {
         "Bash" => {
             let cmd = input.tool_input["command"].as_str().unwrap_or("(unknown)");
-            format!("Permission needed: Bash `{}`", cmd)
+            format!("Bash: {}", cmd)
         }
-        _ => format!("Permission needed: {}", input.tool_name),
-    };
-    notifications::send_desktop_notification("Clash: Permission Request", &summary);
+        _ => input.tool_name.to_string(),
+    }
+}
+
+/// Try to resolve a permission ask via interactive desktop notification first,
+/// then Zulip, and finally fall through to the terminal.
+#[instrument(level = Level::TRACE, skip(input, settings))]
+pub fn resolve_via_desktop_or_zulip(
+    input: &ToolUseHookInput,
+    settings: &ClashSettings,
+) -> HookOutput {
+    if settings.notifications.desktop {
+        let summary = permission_summary(input);
+        let timeout = std::time::Duration::from_secs(settings.notifications.desktop_timeout_secs);
+        let response = clash_notify::prompt("Clash: Permission Request", &summary, timeout);
+
+        match response {
+            clash_notify::PromptResponse::Approved => {
+                info!("Permission approved via desktop notification");
+                return HookOutput::approve_permission(None);
+            }
+            clash_notify::PromptResponse::Denied => {
+                info!("Permission denied via desktop notification");
+                return HookOutput::deny_permission(
+                    "denied via desktop notification".into(),
+                    false,
+                );
+            }
+            clash_notify::PromptResponse::TimedOut => {
+                info!("Desktop notification timed out, trying Zulip");
+            }
+            clash_notify::PromptResponse::Unavailable => {
+                info!("Interactive desktop notifications unavailable, trying Zulip");
+            }
+        }
+    }
+
+    resolve_via_zulip_or_continue(input, settings)
 }
 
 /// Attempt to resolve a permission ask via Zulip. Falls back to `continue_execution`.

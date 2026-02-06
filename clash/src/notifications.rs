@@ -1,20 +1,38 @@
 use serde::Deserialize;
 use tracing::{info, warn};
 
+fn default_desktop_timeout_secs() -> u64 {
+    120
+}
+
 // ---------------------------------------------------------------------------
 // Configuration types (parsed from policy.yaml root-level `notifications:` key)
 // ---------------------------------------------------------------------------
 
 /// Top-level notification configuration.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct NotificationConfig {
     /// Enable desktop notifications for permission prompts and idle events.
     #[serde(default)]
     pub desktop: bool,
 
+    /// Timeout in seconds for interactive desktop notification prompts.
+    #[serde(default = "default_desktop_timeout_secs")]
+    pub desktop_timeout_secs: u64,
+
     /// Zulip bot configuration for remote permission resolution.
     #[serde(default)]
     pub zulip: Option<ZulipConfig>,
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            desktop: false,
+            desktop_timeout_secs: default_desktop_timeout_secs(),
+            zulip: None,
+        }
+    }
 }
 
 /// Zulip bot configuration.
@@ -42,37 +60,6 @@ fn default_topic() -> String {
 
 fn default_timeout() -> u64 {
     120
-}
-
-// ---------------------------------------------------------------------------
-// Desktop notifications (cross-platform)
-// ---------------------------------------------------------------------------
-
-/// Send a desktop notification. Errors are logged but never propagated.
-pub fn send_desktop_notification(title: &str, message: &str) {
-    info!(title, message, "Sending desktop notification");
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    {
-        use std::time::Duration;
-
-        match notify_rust::Notification::new()
-            .auto_icon()
-            .summary(title)
-            .timeout(Duration::from_secs(10))
-            .body(message)
-            .show()
-        {
-            Ok(_resp) => {}
-            Err(e) => warn!(error = %e, "Failed to send desktop notification"),
-        }
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        let _ = (title, message);
-        warn!("Desktop notifications not supported on this platform");
-    }
 }
 
 // ---------------------------------------------------------------------------
