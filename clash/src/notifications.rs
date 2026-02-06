@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use tracing::{info, warn};
 
-fn default_desktop_timeout_secs() -> u64 {
+fn default_timeout_secs() -> u64 {
     120
 }
 
@@ -17,7 +17,7 @@ pub struct NotificationConfig {
     pub desktop: bool,
 
     /// Timeout in seconds for interactive desktop notification prompts.
-    #[serde(default = "default_desktop_timeout_secs")]
+    #[serde(default = "default_timeout_secs")]
     pub desktop_timeout_secs: u64,
 
     /// Zulip bot configuration for remote permission resolution.
@@ -29,7 +29,7 @@ impl Default for NotificationConfig {
     fn default() -> Self {
         Self {
             desktop: false,
-            desktop_timeout_secs: default_desktop_timeout_secs(),
+            desktop_timeout_secs: default_timeout_secs(),
             zulip: None,
         }
     }
@@ -50,16 +50,12 @@ pub struct ZulipConfig {
     #[serde(default = "default_topic")]
     pub topic: String,
     /// Timeout in seconds to wait for a Zulip response on permission requests.
-    #[serde(default = "default_timeout")]
+    #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
 }
 
 fn default_topic() -> String {
     "permissions".into()
-}
-
-fn default_timeout() -> u64 {
-    120
 }
 
 // ---------------------------------------------------------------------------
