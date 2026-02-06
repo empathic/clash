@@ -56,48 +56,130 @@ fn permission_summary(input: &ToolUseHookInput) -> String {
     }
 }
 
-/// Try to resolve a permission ask via interactive desktop notification first,
-/// then Zulip, and finally fall through to the terminal.
+/// Try to resolve a permission ask via desktop notification and/or Zulip.
+///
+/// When both are configured they race concurrently — the first response wins.
+/// The desktop notification blocks the main thread (macOS requirement), while
+/// Zulip polls in a background thread. If the Zulip thread gets a response
+/// first it writes directly to stdout and exits the process.
+///
+/// When only one channel is configured, it runs alone. If neither resolves
+/// the request, we fall through to the terminal prompt.
 #[instrument(level = Level::TRACE, skip(input, settings))]
 pub fn resolve_via_desktop_or_zulip(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
 ) -> HookOutput {
-    if settings.notifications.desktop {
-        let summary = permission_summary(input);
-        let timeout = std::time::Duration::from_secs(settings.notifications.desktop_timeout_secs);
-        let response = clash_notify::prompt("Clash: Permission Request", &summary, timeout);
+    let has_desktop = settings.notifications.desktop;
+    let has_zulip = settings.notifications.zulip.is_some();
 
-        match response {
-            clash_notify::PromptResponse::Approved => {
-                info!("Permission approved via desktop notification");
-                return HookOutput::approve_permission(None);
-            }
-            clash_notify::PromptResponse::Denied => {
-                info!("Permission denied via desktop notification");
-                return HookOutput::deny_permission(
-                    "denied via desktop notification".into(),
-                    false,
-                );
-            }
-            clash_notify::PromptResponse::TimedOut => {
-                info!("Desktop notification timed out, trying Zulip");
-            }
-            clash_notify::PromptResponse::Unavailable => {
-                info!("Interactive desktop notifications unavailable, trying Zulip");
-            }
-        }
+    // If both are configured, race them concurrently.
+    // If only Zulip, run it on the main thread (no macOS constraint).
+    // If only desktop, run it on the main thread.
+    // If neither, fall through immediately.
+
+    if has_zulip && has_desktop {
+        // Start Zulip polling in a background thread. If it wins the race,
+        // it writes the hook output to stdout and exits the process directly.
+        start_zulip_background(input, settings);
+
+        // Desktop notification blocks the main thread.
+        return resolve_via_desktop_then_continue(input, settings);
     }
 
-    resolve_via_zulip_or_continue(input, settings)
+    if has_desktop {
+        return resolve_via_desktop_then_continue(input, settings);
+    }
+
+    if has_zulip {
+        return resolve_via_zulip_or_continue(input, settings);
+    }
+
+    HookOutput::continue_execution()
 }
 
-/// Attempt to resolve a permission ask via Zulip. Falls back to `continue_execution`.
-#[instrument(level = Level::TRACE, skip(input, settings))]
-pub fn resolve_via_zulip_or_continue(
+/// Show an interactive desktop notification and return the result.
+/// Falls through to `continue_execution` on timeout or unavailability.
+fn resolve_via_desktop_then_continue(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
 ) -> HookOutput {
+    let summary = permission_summary(input);
+    let timeout = std::time::Duration::from_secs(settings.notifications.desktop_timeout_secs);
+    let response = clash_notify::prompt("Clash: Permission Request", &summary, timeout);
+
+    match response {
+        clash_notify::PromptResponse::Approved => {
+            info!("Permission approved via desktop notification");
+            HookOutput::approve_permission(None)
+        }
+        clash_notify::PromptResponse::Denied => {
+            info!("Permission denied via desktop notification");
+            HookOutput::deny_permission("denied via desktop notification".into(), false)
+        }
+        clash_notify::PromptResponse::TimedOut => {
+            info!("Desktop notification timed out, falling through to terminal");
+            HookOutput::continue_execution()
+        }
+        clash_notify::PromptResponse::Unavailable => {
+            info!("Interactive desktop notifications unavailable, falling through to terminal");
+            HookOutput::continue_execution()
+        }
+    }
+}
+
+/// Spawn a background thread that polls Zulip for a permission response.
+///
+/// If the Zulip thread receives a response before the desktop notification,
+/// it writes the hook output directly to stdout and exits the process. This
+/// is safe because we run inside a short-lived hook subprocess.
+fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
+    let Some(ref zulip_config) = settings.notifications.zulip else {
+        return;
+    };
+
+    let request = notifications::PermissionRequest {
+        tool_name: input.tool_name.clone(),
+        tool_input: input.tool_input.clone(),
+        session_id: input.session_id.clone(),
+        cwd: input.cwd.clone(),
+    };
+
+    // Clone config so the thread owns its data.
+    let config = zulip_config.clone();
+
+    std::thread::spawn(move || {
+        let client = notifications::ZulipClient::new(&config);
+        match client.resolve_permission(&request) {
+            Ok(Some(notifications::PermissionResponse::Approve)) => {
+                info!("Permission approved via Zulip (background), exiting hook");
+                let output = HookOutput::approve_permission(None);
+                if output.write_stdout().is_ok() {
+                    std::process::exit(0);
+                }
+            }
+            Ok(Some(notifications::PermissionResponse::Deny(reason))) => {
+                info!("Permission denied via Zulip (background), exiting hook");
+                let output = HookOutput::deny_permission(reason, false);
+                if output.write_stdout().is_ok() {
+                    std::process::exit(0);
+                }
+            }
+            Ok(None) => {
+                info!("Zulip resolution timed out (background)");
+                // Don't exit — let the desktop notification or terminal handle it.
+            }
+            Err(e) => {
+                warn!(error = %e, "Zulip resolution failed (background)");
+            }
+        }
+    });
+}
+
+/// Attempt to resolve a permission ask via Zulip on the current thread.
+/// Falls back to `continue_execution`.
+#[instrument(level = Level::TRACE, skip(input, settings))]
+fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSettings) -> HookOutput {
     let Some(ref zulip_config) = settings.notifications.zulip else {
         return HookOutput::continue_execution();
     };
@@ -118,7 +200,6 @@ pub fn resolve_via_zulip_or_continue(
             HookOutput::deny_permission(reason, false)
         }
         Ok(None) => {
-            // Timeout — fall through to terminal.
             info!("Zulip resolution timed out, falling through to terminal");
             HookOutput::continue_execution()
         }
