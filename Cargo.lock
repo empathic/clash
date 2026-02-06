@@ -375,13 +375,13 @@ dependencies = [
  "base64",
  "bitflags",
  "clap",
+ "clash_notify",
  "claude_settings",
  "dirs",
  "figment",
  "landlock",
  "libc",
  "mockito",
- "notify-rust",
  "pest",
  "pest_derive",
  "proptest",
@@ -397,6 +397,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq",
+]
+
+[[package]]
+name = "clash_notify"
+version = "0.1.0"
+dependencies = [
+ "mac-notification-sys",
+ "notify-rust",
+ "tracing",
 ]
 
 [[package]]

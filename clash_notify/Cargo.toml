@@ -1,0 +1,13 @@
+[package]
+name = "clash_notify"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+mac-notification-sys = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+notify-rust = { workspace = true }

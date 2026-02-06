@@ -1,5 +1,5 @@
 [workspace]
-members = ["clash", "claude_settings", "clester"]
+members = ["clash", "clash_notify", "claude_settings", "clester"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -26,6 +26,7 @@ tracing-subscriber = { version = "0.3.22", features = [
 ] }
 
 # Workspace crates
+clash_notify = { path = "clash_notify" }
 claude_settings = { path = "claude_settings" }
 
 landlock = "0.4"
@@ -34,6 +35,7 @@ libc = "0.2"
 
 ureq = "2"
 base64 = "0.22"
+mac-notification-sys = "0.6"
 notify-rust = "4"
 
 # Dev dependencies
