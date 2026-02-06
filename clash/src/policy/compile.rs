@@ -109,12 +109,14 @@ impl CompiledPolicy {
 
     /// Built-in rules for the `__clash_internal__` profile.
     ///
-    /// Three rules:
+    /// Four rules:
     /// 1. Allow `Read` tool access to `~/.clash/` (so Claude can inspect the policy).
     /// 2. Allow `Bash` commands matching `*clash init*` to write to `~/.clash/`
     ///    (sandbox includes `~/.clash/` only for the clash binary, not all commands).
     /// 3. Allow `Bash` commands matching `*clash policy*` to read/write `~/.clash/`
     ///    (so `clash policy add-rule` / `remove-rule` can modify the policy file).
+    /// 4. Allow `Bash` commands matching `*clash migrate*` to read/write `~/.clash/`
+    ///    (so `clash migrate` can import existing Claude permissions).
     ///
     /// Users can override by defining a profile named `__clash_internal__`
     /// in their policy's `profiles:` section.
@@ -153,6 +155,19 @@ impl CompiledPolicy {
                 effect: Effect::Allow,
                 verb: "bash".to_string(),
                 noun: Pattern::Match(MatchExpr::Glob("*clash policy*".to_string())),
+                constraints: Some(InlineConstraints {
+                    fs: Some(vec![(
+                        Cap::READ | Cap::WRITE | Cap::EXECUTE | Cap::CREATE | Cap::DELETE,
+                        FilterExpr::Subpath("~/.clash".to_string()),
+                    )]),
+                    ..Default::default()
+                }),
+            },
+            // Allow `clash migrate` to read Claude settings and write to ~/.clash/.
+            ProfileRule {
+                effect: Effect::Allow,
+                verb: "bash".to_string(),
+                noun: Pattern::Match(MatchExpr::Glob("*clash migrate*".to_string())),
                 constraints: Some(InlineConstraints {
                     fs: Some(vec![(
                         Cap::READ | Cap::WRITE | Cap::EXECUTE | Cap::CREATE | Cap::DELETE,
@@ -2227,6 +2242,34 @@ rules:
         let decision = policy.evaluate_with_context(&ctx);
         assert_eq!(decision.effect, Effect::Allow);
         assert!(decision.sandbox.is_some());
+    }
+
+    #[test]
+    fn test_builtin_clash_migrate_gets_sandbox() {
+        let policy = compile_yaml("rules:\n  - deny * bash rm *\n");
+
+        // `clash migrate` via full path → allowed with sandbox including ~/.clash/
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "/tmp/clash-dev/clash-plugin/bin/clash migrate",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        let sandbox = decision
+            .sandbox
+            .expect("should have sandbox from built-in fs constraint");
+        assert!(
+            sandbox
+                .rules
+                .iter()
+                .any(|r| r.path.contains(".clash") && r.effect == RuleEffect::Allow),
+            "sandbox should include ~/.clash/ allow rule, got: {:?}",
+            sandbox.rules
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@ Explain to the user that you are going to initialize clash and that you will be 
 Run the clash init command (without --force, so it won't overwrite an existing config):
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/clash init
+$CLASH_BIN init
 ```
 If this fails, ask the user if they want to re-run with "--force" to fully reinitilize
 

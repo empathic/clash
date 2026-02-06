@@ -5,13 +5,13 @@ description: Guided editing of the clash policy file
 First, get an overview of the current policy:
 
 ```bash
-$PLUGIN_DIR/bin/clash policy show
+$CLASH_BIN policy show
 ```
 
 Then list the active rules:
 
 ```bash
-$PLUGIN_DIR/bin/clash policy list-rules
+$CLASH_BIN policy list-rules
 ```
 
 If the user has already stated what they want to change, proceed. Otherwise, ask what change they would like to make. Common requests include:
@@ -30,13 +30,13 @@ Translate the user's intent into a rule string: `effect verb noun` where:
 Preview the change with `--dry-run`:
 
 ```bash
-$PLUGIN_DIR/bin/clash policy add-rule "RULE" --dry-run
+$CLASH_BIN policy add-rule "RULE" --dry-run
 ```
 
 Show the preview to the user. After confirmation, apply:
 
 ```bash
-$PLUGIN_DIR/bin/clash policy add-rule "RULE"
+$CLASH_BIN policy add-rule "RULE"
 ```
 
 To target a specific profile, add `--profile NAME`.
@@ -46,13 +46,13 @@ To target a specific profile, add `--profile NAME`.
 Preview the removal:
 
 ```bash
-$PLUGIN_DIR/bin/clash policy remove-rule "RULE" --dry-run
+$CLASH_BIN policy remove-rule "RULE" --dry-run
 ```
 
 After confirmation:
 
 ```bash
-$PLUGIN_DIR/bin/clash policy remove-rule "RULE"
+$CLASH_BIN policy remove-rule "RULE"
 ```
 
 ## Validating changes
@@ -60,7 +60,7 @@ $PLUGIN_DIR/bin/clash policy remove-rule "RULE"
 After applying a change, validate it by running explain with a simulated request:
 
 ```bash
-echo '{"tool_name":"Bash","tool_input":{"command":"<matching-command>"}}' | $PLUGIN_DIR/bin/clash explain
+echo '{"tool_name":"Bash","tool_input":{"command":"<matching-command>"}}' | $CLASH_BIN explain
 ```
 
 Suggest follow-up skills:

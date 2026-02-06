@@ -57,7 +57,7 @@ fn reconstruct_yaml(lines: &[String], had_trailing_newline: bool) -> String {
 ///
 /// New format has `default:` as a YAML mapping (with `permission` and `profile` keys).
 /// Old format has `default:` as a scalar string or missing.
-fn is_new_format(yaml: &str) -> bool {
+pub fn is_new_format(yaml: &str) -> bool {
     let value: serde_yaml::Value = match serde_yaml::from_str(yaml) {
         Ok(v) => v,
         Err(_) => return false,

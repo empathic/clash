@@ -379,7 +379,22 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
         }
     }
 
-    // 4. Session metadata
+    // 4. Export CLASH_BIN via CLAUDE_ENV_FILE so skills can use $CLASH_BIN
+    if let Ok(env_file) = std::env::var("CLAUDE_ENV_FILE") {
+        match std::env::current_exe() {
+            Ok(exe_path) => {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&env_file) {
+                    let _ = writeln!(f, "CLASH_BIN={}", exe_path.display());
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to resolve clash binary path");
+            }
+        }
+    }
+
+    // 5. Session metadata
     if let Some(ref source) = input.source {
         lines.push(format!("session source: {}", source));
     }

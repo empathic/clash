@@ -36,4 +36,5 @@ pub mod permissions;
 pub mod policy;
 pub mod sandbox;
 pub mod sandbox_cmd;
+pub mod schema;
 pub mod settings;

@@ -104,6 +104,11 @@ enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Show the full schema of policy.yaml settings (sections, fields, types, defaults)
+    Schema {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -130,13 +135,16 @@ enum Commands {
         args: Vec<String>,
     },
 
-    /// Migrate legacy Claude Code permissions to a policy.yaml file
+    /// Migrate legacy Claude Code permissions into clash policy.
+    ///
+    /// If no policy.yaml exists, creates one. If one already exists,
+    /// merges new rules from Claude permissions into the active profile.
     Migrate {
-        /// Print generated policy to stdout instead of writing to ~/.clash/policy.yaml
+        /// Preview the migration: show which rules would be added
         #[arg(long)]
         dry_run: bool,
 
-        /// Override the default effect for unmatched requests (ask, deny)
+        /// Default effect when creating a new policy (ignored when merging)
         #[arg(long, default_value = "ask")]
         default: String,
     },
@@ -322,10 +330,10 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     std::process::exit(status.code().unwrap_or(1));
 }
 
-/// Migrate legacy Claude Code permissions to a policy.yaml file.
+/// Migrate legacy Claude Code permissions into clash policy.
 ///
-/// Reads the effective Claude Code settings, desugars the permission rules
-/// into policy statements, and writes a `policy.yaml` file.
+/// If no policy.yaml exists, creates a fresh one. If one already exists
+/// (in the new profile-based format), merges only new rules into the active profile.
 #[instrument(level = Level::TRACE)]
 fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
     let default = match default_effect {
@@ -359,13 +367,98 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Build the policy document
+    // Convert statements to rule strings for add_rule
+    let rules: Vec<String> = statements.iter().map(format_rule).collect();
+
+    let path = ClashSettings::policy_file()?;
+    if path.exists() {
+        merge_rules_into_policy(&path, &rules, dry_run)
+    } else {
+        create_fresh_policy(&path, &statements, default, dry_run)
+    }
+}
+
+/// Merge rule strings into an existing policy.yaml's active profile.
+fn merge_rules_into_policy(path: &std::path::Path, rules: &[String], dry_run: bool) -> Result<()> {
+    let yaml = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    if !edit::is_new_format(&yaml) {
+        anyhow::bail!(
+            "Old policy format detected at {}. Run `clash init --force` to upgrade to the new profile-based format first.",
+            path.display()
+        );
+    }
+
+    let profile = edit::resolve_profile(&yaml, None)?;
+
+    let mut current_yaml = yaml.clone();
+    let mut added: Vec<String> = Vec::new();
+    let mut skipped: usize = 0;
+
+    for rule in rules {
+        let modified = edit::add_rule(&current_yaml, &profile, rule)?;
+        if modified == current_yaml {
+            skipped += 1;
+        } else {
+            added.push(rule.clone());
+            current_yaml = modified;
+        }
+    }
+
+    if added.is_empty() {
+        println!(
+            "All {} Claude permission(s) already exist in profile '{}'. Nothing to do.",
+            rules.len(),
+            profile
+        );
+        return Ok(());
+    }
+
+    if dry_run {
+        println!(
+            "Would add {} new rule(s) to profile '{}':\n",
+            added.len(),
+            profile
+        );
+        for rule in &added {
+            println!("  + {}", rule);
+        }
+        if skipped > 0 {
+            println!("\n({} existing rule(s) already present, skipped.)", skipped);
+        }
+    } else {
+        std::fs::write(path, &current_yaml)?;
+        println!(
+            "Merged {} new rule(s) into profile '{}' at {}:",
+            added.len(),
+            profile,
+            path.display()
+        );
+        for rule in &added {
+            println!("  + {}", rule);
+        }
+        if skipped > 0 {
+            println!("({} rule(s) already existed, skipped.)", skipped);
+        }
+    }
+
+    Ok(())
+}
+
+/// Create a fresh policy.yaml from migrated statements.
+fn create_fresh_policy(
+    path: &std::path::Path,
+    statements: &[clash::policy::Statement],
+    default: Effect,
+    dry_run: bool,
+) -> Result<()> {
     let doc = PolicyDocument {
         policy: PolicyConfig { default },
         permissions: None,
         constraints: Default::default(),
         profiles: Default::default(),
-        statements,
+        statements: statements.to_vec(),
         default_config: None,
         profile_defs: Default::default(),
     };
@@ -391,16 +484,11 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
     if dry_run {
         print!("{}", output);
     } else {
-        let path = ClashSettings::policy_file()?;
-        if path.exists() {
-            eprintln!(
-                "Warning: {} already exists. Use --dry-run to preview, or remove the file first.",
-                path.display()
-            );
-            anyhow::bail!("policy.yaml already exists at {}", path.display());
-        }
-        std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
-        std::fs::write(&path, &output)?;
+        std::fs::create_dir_all(
+            path.parent()
+                .ok_or_else(|| anyhow::anyhow!("policy path has no parent directory"))?,
+        )?;
+        std::fs::write(path, &output)?;
         println!("Wrote policy to {}", path.display());
         println!(
             "Migrated {} rule(s) from legacy Claude Code permissions.",
@@ -738,6 +826,58 @@ fn handle_show_policy(json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Handle `clash policy schema`.
+fn handle_schema(json: bool) -> Result<()> {
+    let schema = clash::schema::policy_schema();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&schema)?);
+    } else {
+        println!("Policy Schema");
+        println!("=============\n");
+
+        for section in &schema.sections {
+            println!("{}:", section.key);
+            println!("  {}\n", section.description);
+            print_fields(&section.fields, 2);
+            println!();
+        }
+
+        println!("Rule Syntax:");
+        println!("  Format: {}\n", schema.rule_syntax.format);
+        println!("  Effects: {}", schema.rule_syntax.effects.join(", "));
+        println!("  Verbs:   {}", schema.rule_syntax.verbs.join(", "));
+        println!("  Caps:    {}", schema.rule_syntax.capabilities.join(", "));
+        println!("\n  Constraints:");
+        print_fields(&schema.rule_syntax.constraints, 4);
+        println!("\n  Filesystem filters:");
+        print_fields(&schema.rule_syntax.fs_filters, 4);
+    }
+    Ok(())
+}
+
+fn print_fields(fields: &[clash::schema::SchemaField], indent: usize) {
+    let pad = " ".repeat(indent);
+    for f in fields {
+        let req = if f.required { " (required)" } else { "" };
+        let default_str = match &f.default {
+            Some(v) => format!(" [default: {}]", v),
+            None => String::new(),
+        };
+        let values_str = match &f.values {
+            Some(vals) => format!(" ({})", vals.join("|")),
+            None => String::new(),
+        };
+        println!(
+            "{}{}: {}{}{}{} — {}",
+            pad, f.key, f.type_name, values_str, default_str, req, f.description
+        );
+        if let Some(ref sub) = f.fields {
+            print_fields(sub, indent + 2);
+        }
+    }
+}
+
 /// Handle `clash policy` subcommands.
 #[instrument(level = Level::TRACE)]
 fn run_policy(cmd: PolicyCmd) -> Result<()> {
@@ -754,5 +894,6 @@ fn run_policy(cmd: PolicyCmd) -> Result<()> {
         } => handle_remove_rule(&rule, profile.as_deref(), dry_run),
         PolicyCmd::ListRules { profile, json } => handle_list_rules(profile.as_deref(), json),
         PolicyCmd::Show { json } => handle_show_policy(json),
+        PolicyCmd::Schema { json } => handle_schema(json),
     }
 }
