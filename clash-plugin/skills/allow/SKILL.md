@@ -18,13 +18,13 @@ Help the user add an **allow** rule to their clash policy.
 
 3. **Dry-run first** to preview the change:
    ```bash
-   ${CLASH_PLUGIN_ROOT}/bin/clash policy add-rule "RULE" --dry-run
+   $CLASH_BIN policy add-rule "RULE" --dry-run
    ```
    Show the output to the user.
 
 4. **Get confirmation**, then apply:
    ```bash
-   ${CLASH_PLUGIN_ROOT}/bin/clash policy add-rule "RULE"
+   $CLASH_BIN policy add-rule "RULE"
    ```
 
 5. **Report success** and explain that the rule is now active.
