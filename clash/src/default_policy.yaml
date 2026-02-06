@@ -26,17 +26,17 @@ profiles:
     rules:
       allow * *: 
         fs:
-          read + write + execute + create + delete: subpath(.)
+          all: subpath(.)
   claude-internal:
     rules:
       allow * *: 
         fs:
-          read + write + execute + create + delete: subpath(~/.claude)
+          all: subpath(~/.claude)
   tmp:
     rules:
       allow * *:
         fs:
-          read + write + execute + create + delete: regex(^(/private)?/tmp) | regex(^(/private)?/var/folders/)
+          all: regex(^(/private)?/tmp) | regex(^(/private)?/var/folders/)
   
   sensitive:
     rules:

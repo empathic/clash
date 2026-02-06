@@ -221,11 +221,21 @@ An identifier resolves first as a named profile (composite), then as a named con
 Used in new-format `fs:` keys for capability-scoped filesystem constraints.
 
 ```ebnf
-cap_expr        = cap_name ("+" cap_name)*
-cap_name        = "read" | "write" | "create" | "delete" | "execute"
+cap_expr        = cap_term (('+' | '-') cap_term)*
+cap_term        = "read" | "write" | "create" | "delete" | "execute"
+                | "all" | "full"
 ```
 
-Example: `read + write` matches the `READ | WRITE` capability bitfield.
+The `+` operator adds capabilities, the `-` operator removes them. Removals take precedence over additions (consistent with deny-overrides-allow semantics). `all` and `full` are shorthand for all five capabilities.
+
+Examples:
+
+| Expression | Result |
+|-----------|--------|
+| `read + write` | READ \| WRITE |
+| `all` | READ \| WRITE \| CREATE \| DELETE \| EXECUTE |
+| `all - write` | READ \| CREATE \| DELETE \| EXECUTE |
+| `all - write - delete` | READ \| CREATE \| EXECUTE |
 
 ---
 

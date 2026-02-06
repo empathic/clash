@@ -27,25 +27,62 @@ bitflags::bitflags! {
 }
 
 impl Cap {
-    /// Parse a capability expression like "read + write + create".
+    /// Parse a capability expression.
+    ///
+    /// Additive: `read + write + create`
+    /// Shorthand: `all` or `full` (all capabilities)
+    /// Subtractive: `all - write`, `full - delete - create`
+    /// Mixed: `all - write + execute` (exclusions win)
     pub fn parse(s: &str) -> Result<Cap, String> {
-        let mut caps = Cap::empty();
-        for part in s.split('+') {
-            let part = part.trim();
-            match part {
-                "read" => caps |= Cap::READ,
-                "write" => caps |= Cap::WRITE,
-                "create" => caps |= Cap::CREATE,
-                "delete" => caps |= Cap::DELETE,
-                "execute" => caps |= Cap::EXECUTE,
-                "full" => caps |= Cap::all(),
-                other => return Err(format!("unknown capability: '{}'", other)),
-            }
-        }
-        if caps.is_empty() {
+        let s = s.trim();
+        if s.is_empty() {
             return Err("empty capability expression".into());
         }
-        Ok(caps)
+
+        let mut add = Cap::empty();
+        let mut sub = Cap::empty();
+        let mut op = '+'; // first term is implicitly additive
+
+        let mut start = 0;
+        let bytes = s.as_bytes();
+
+        for i in 0..=bytes.len() {
+            let at_op = i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-');
+            if at_op || i == bytes.len() {
+                let part = s[start..i].trim();
+                if !part.is_empty() {
+                    let cap = Self::parse_single(part)?;
+                    match op {
+                        '+' => add |= cap,
+                        '-' => sub |= cap,
+                        _ => unreachable!(),
+                    }
+                }
+                if at_op {
+                    op = bytes[i] as char;
+                    start = i + 1;
+                }
+            }
+        }
+
+        let result = add & !sub;
+        if result.is_empty() {
+            return Err("capability expression resolves to empty set".into());
+        }
+        Ok(result)
+    }
+
+    /// Parse a single capability name.
+    fn parse_single(s: &str) -> Result<Cap, String> {
+        match s {
+            "read" => Ok(Cap::READ),
+            "write" => Ok(Cap::WRITE),
+            "create" => Ok(Cap::CREATE),
+            "delete" => Ok(Cap::DELETE),
+            "execute" => Ok(Cap::EXECUTE),
+            "full" | "all" => Ok(Cap::all()),
+            other => Err(format!("unknown capability: '{}'", other)),
+        }
     }
 
     /// Format capabilities as a human-readable string like "read + write".
@@ -254,6 +291,49 @@ mod tests {
         assert_eq!(Cap::parse("full + read").unwrap(), Cap::all()); // redundant but valid
         assert!(Cap::parse("unknown").is_err());
         assert!(Cap::parse("").is_err());
+    }
+
+    #[test]
+    fn test_cap_parse_all_keyword() {
+        assert_eq!(Cap::parse("all").unwrap(), Cap::all());
+        assert_eq!(Cap::parse("all + read").unwrap(), Cap::all()); // redundant but valid
+    }
+
+    #[test]
+    fn test_cap_parse_subtraction() {
+        // all - write = read + create + delete + execute
+        assert_eq!(
+            Cap::parse("all - write").unwrap(),
+            Cap::READ | Cap::CREATE | Cap::DELETE | Cap::EXECUTE
+        );
+
+        // full - write also works
+        assert_eq!(
+            Cap::parse("full - write").unwrap(),
+            Cap::READ | Cap::CREATE | Cap::DELETE | Cap::EXECUTE
+        );
+
+        // multiple subtractions
+        assert_eq!(
+            Cap::parse("all - write - delete").unwrap(),
+            Cap::READ | Cap::CREATE | Cap::EXECUTE
+        );
+
+        // subtract everything → error (empty result)
+        assert!(Cap::parse("all - all").is_err());
+        assert!(Cap::parse("read - read").is_err());
+
+        // no-op subtraction (removing something not present)
+        assert_eq!(
+            Cap::parse("read + write - execute").unwrap(),
+            Cap::READ | Cap::WRITE
+        );
+
+        // without spaces
+        assert_eq!(
+            Cap::parse("all-write").unwrap(),
+            Cap::READ | Cap::CREATE | Cap::DELETE | Cap::EXECUTE
+        );
     }
 
     #[test]
