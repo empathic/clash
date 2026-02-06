@@ -134,6 +134,21 @@ fn collect_deny_descriptions(doc: &crate::policy::ast::PolicyDocument) -> Vec<St
 pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOutput> {
     let mut lines: Vec<String> = Vec::new();
 
+    // 0. Check permission mode and recommend --dangerously-skip-permissions
+    let skip_permissions = input
+        .permission_mode
+        .as_deref()
+        .is_some_and(|m| m.contains("dangerously-skip-permissions"));
+
+    if !skip_permissions {
+        lines.push(
+            "NOTE: Clash is managing permissions for this session. \
+             For the best experience, run Claude Code with --dangerously-skip-permissions \
+             to let Clash be the sole permission handler and avoid double prompting."
+                .into(),
+        );
+    }
+
     // 1. Check policy file
     let policy_contents = match ClashSettings::policy_file() {
         Ok(policy_path) if policy_path.exists() => match std::fs::read_to_string(&policy_path) {
@@ -316,6 +331,37 @@ mod tests {
         assert!(
             ctx.contains("model: claude-sonnet-4-20250514"),
             "got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn test_session_start_recommends_skip_permissions_in_default_mode() {
+        let input = default_session_start_input(); // permission_mode = "default"
+        let output = handle_session_start(&input).unwrap();
+        let context = match &output.hook_specific_output {
+            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
+            _ => panic!("expected SessionStart output"),
+        };
+        let ctx = context.expect("should have context");
+        assert!(
+            ctx.contains("--dangerously-skip-permissions"),
+            "should recommend --dangerously-skip-permissions when not in skip mode, got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn test_session_start_no_recommendation_when_skip_permissions() {
+        let mut input = default_session_start_input();
+        input.permission_mode = Some("dangerously-skip-permissions".into());
+        let output = handle_session_start(&input).unwrap();
+        let context = match &output.hook_specific_output {
+            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
+            _ => panic!("expected SessionStart output"),
+        };
+        let ctx = context.expect("should have context");
+        assert!(
+            !ctx.contains("NOTE: Clash is managing permissions"),
+            "should NOT recommend --dangerously-skip-permissions when already in skip mode, got: {ctx}"
         );
     }
 }
