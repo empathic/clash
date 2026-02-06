@@ -61,11 +61,11 @@ impl CompiledPolicy {
             constraints.insert(name.clone(), CompiledConstraintDef::compile(def)?);
         }
 
-        // Build the unified rule list: desugared legacy permissions first,
+        // Build the unified rule list: desugared Claude permissions first,
         // then explicit `rules:` statements, then new-format profile rules.
         let mut active_profile_rules: Vec<CompiledProfileRule> = Vec::new();
         if let Some(ref perms) = doc.permissions {
-            let legacy = parse::desugar_legacy(perms);
+            let legacy = parse::desugar_claude_permissions(perms);
             for stmt in &legacy {
                 active_profile_rules.push(statement_to_profile_rule(stmt)?);
             }

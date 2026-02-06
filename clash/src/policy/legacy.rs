@@ -1,31 +1,31 @@
-//! Legacy permission desugaring.
+//! Claude Code permission desugaring.
 //!
 //! Converts Claude Code's `PermissionSet` allow/deny/ask lists into
-//! policy `Statement`s so the new engine can evaluate them.
+//! policy `Statement`s so the policy engine can evaluate them.
 
 use tracing::{Level, instrument};
 
-use super::ast::{LegacyPermissions, MatchExpr, Pattern, Statement, VerbPattern};
+use super::ast::{ClaudePermissions, MatchExpr, Pattern, Statement, VerbPattern};
 use super::{Effect, Verb};
 
-/// Convert a `LegacyPermissions` struct (allow / deny / ask string lists)
-/// into equivalent statements with `entity = "agent"`.
+/// Convert a `ClaudePermissions` struct (allow / deny / ask string lists)
+/// into equivalent policy statements with `entity = "agent"`.
 #[instrument(level = Level::TRACE, skip(perms))]
-pub fn desugar_legacy(perms: &LegacyPermissions) -> Vec<Statement> {
+pub fn desugar_claude_permissions(perms: &ClaudePermissions) -> Vec<Statement> {
     let mut statements = Vec::new();
 
     for pattern in &perms.allow {
-        if let Some(stmt) = legacy_pattern_to_statement(pattern, Effect::Allow) {
+        if let Some(stmt) = claude_pattern_to_statement(pattern, Effect::Allow) {
             statements.push(stmt);
         }
     }
     for pattern in &perms.deny {
-        if let Some(stmt) = legacy_pattern_to_statement(pattern, Effect::Deny) {
+        if let Some(stmt) = claude_pattern_to_statement(pattern, Effect::Deny) {
             statements.push(stmt);
         }
     }
     for pattern in &perms.ask {
-        if let Some(stmt) = legacy_pattern_to_statement(pattern, Effect::Ask) {
+        if let Some(stmt) = claude_pattern_to_statement(pattern, Effect::Ask) {
             statements.push(stmt);
         }
     }
@@ -33,8 +33,8 @@ pub fn desugar_legacy(perms: &LegacyPermissions) -> Vec<Statement> {
     statements
 }
 
-/// Convert a single legacy permission pattern like `"Bash(git:*)"` into a Statement.
-fn legacy_pattern_to_statement(pattern: &str, effect: Effect) -> Option<Statement> {
+/// Convert a single Claude Code permission pattern like `"Bash(git:*)"` into a Statement.
+fn claude_pattern_to_statement(pattern: &str, effect: Effect) -> Option<Statement> {
     let pattern = pattern.trim();
 
     // Parse "ToolName(arg)" or "ToolName"

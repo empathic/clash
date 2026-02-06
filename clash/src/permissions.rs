@@ -35,14 +35,14 @@ fn check_permission_policy(
     let (verb, verb_str_owned) = resolve_verb(&input.tool_name);
     let noun = extract_noun(&input.tool_name, &input.tool_input);
     let entity = "agent";
-    let ctx = build_eval_context(
+    let ctx = EvalContext {
         entity,
-        &verb,
-        &verb_str_owned,
-        &noun,
-        &input.cwd,
-        &input.tool_input,
-    );
+        verb: &verb,
+        noun: &noun,
+        cwd: &input.cwd,
+        tool_input: &input.tool_input,
+        verb_str: &verb_str_owned,
+    };
 
     let decision = compiled.evaluate_with_context(&ctx);
     info!(
@@ -147,7 +147,6 @@ fn shell_escape(s: &str) -> String {
 /// Checks common field names in priority order to extract a meaningful
 /// noun from any tool's input JSON. This handles both known tools
 /// (Bash, Read, Write, Edit) and arbitrary tools (Glob, Grep, WebSearch, etc.).
-#[instrument(level = Level::TRACE, skip(tool_input))]
 pub fn extract_noun(tool_name: &str, tool_input: &serde_json::Value) -> String {
     let fields = [
         "command",   // Bash
@@ -181,32 +180,13 @@ pub fn resolve_verb(tool_name: &str) -> (Verb, String) {
     }
 }
 
-/// Build an `EvalContext` from common request parameters.
-pub fn build_eval_context<'a>(
-    entity: &'a str,
-    verb: &'a Verb,
-    verb_str: &'a str,
-    noun: &'a str,
-    cwd: &'a str,
-    tool_input: &'a serde_json::Value,
-) -> EvalContext<'a> {
-    EvalContext {
-        entity,
-        verb,
-        noun,
-        cwd,
-        tool_input,
-        verb_str,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hooks::ToolUseHookInput;
-    use crate::policy::parse::desugar_legacy;
+    use crate::policy::parse::desugar_claude_permissions;
     use crate::policy::parse::parse_yaml;
-    use crate::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
+    use crate::policy::{ClaudePermissions, PolicyConfig, PolicyDocument};
     use anyhow::Result;
     use serde_json::json;
 
@@ -232,18 +212,18 @@ mod tests {
         settings
     }
 
-    /// Build ClashSettings from legacy permission strings, compiled into a PolicyDocument.
-    fn settings_with_legacy_perms(
+    /// Build ClashSettings from Claude Code permission strings, compiled into a PolicyDocument.
+    fn settings_with_claude_perms(
         allow: Vec<&str>,
         deny: Vec<&str>,
         ask: Vec<&str>,
     ) -> ClashSettings {
-        let legacy = LegacyPermissions {
+        let claude_perms = ClaudePermissions {
             allow: allow.into_iter().map(String::from).collect(),
             deny: deny.into_iter().map(String::from).collect(),
             ask: ask.into_iter().map(String::from).collect(),
         };
-        let statements = desugar_legacy(&legacy);
+        let statements = desugar_claude_permissions(&claude_perms);
         let doc = PolicyDocument {
             policy: PolicyConfig::default(),
             permissions: None,
@@ -262,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_allow_npm_exact() -> Result<()> {
-        let settings = settings_with_legacy_perms(vec!["Bash(npm run test)"], vec![], vec![]);
+        let settings = settings_with_claude_perms(vec!["Bash(npm run test)"], vec![], vec![]);
         let result = check_permission(&bash_input("npm run test"), &settings)?;
         assert_decision(
             &result,
@@ -273,7 +253,7 @@ mod tests {
     }
     #[test]
     fn test_allow_npm_glob() -> Result<()> {
-        let settings = settings_with_legacy_perms(vec!["Bash(npm run test *)"], vec![], vec![]);
+        let settings = settings_with_claude_perms(vec!["Bash(npm run test *)"], vec![], vec![]);
         let result = check_permission(&bash_input("npm run test any"), &settings)?;
         assert_decision(
             &result,
@@ -284,7 +264,7 @@ mod tests {
     }
     #[test]
     fn test_allow_empty() -> Result<()> {
-        let settings = settings_with_legacy_perms(vec![], vec![], vec![]);
+        let settings = settings_with_claude_perms(vec![], vec![], vec![]);
         let result = check_permission(&bash_input("npm run test any"), &settings)?;
         assert_decision(
             &result,
@@ -295,7 +275,7 @@ mod tests {
     }
     #[test]
     fn test_deny_glob() -> Result<()> {
-        let settings = settings_with_legacy_perms(vec![], vec!["Bash(*)"], vec![]);
+        let settings = settings_with_claude_perms(vec![], vec!["Bash(*)"], vec![]);
         let result = check_permission(&bash_input("npm run test any"), &settings)?;
         assert_decision(
             &result,
@@ -391,7 +371,7 @@ rules:
     #[test]
     fn test_auto_mode_legacy_compiled_to_policy() -> Result<()> {
         // Legacy permissions compiled into a policy document
-        let settings = settings_with_legacy_perms(vec!["Bash(npm run test)"], vec![], vec![]);
+        let settings = settings_with_claude_perms(vec!["Bash(npm run test)"], vec![], vec![]);
         let result = check_permission(&bash_input("npm run test"), &settings)?;
         assert_decision(
             &result,

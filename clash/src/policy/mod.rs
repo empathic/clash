@@ -55,7 +55,7 @@ pub mod sandbox_types;
 
 // Re-export AST types for backward compatibility.
 pub use ast::{
-    ArgSpec, ConstraintDef, DefaultConfig, FilterExpr, InlineConstraints, LegacyPermissions,
+    ArgSpec, ClaudePermissions, ConstraintDef, DefaultConfig, FilterExpr, InlineConstraints,
     MatchExpr, Pattern, PolicyConfig, PolicyDocument, ProfileDef, ProfileExpr, ProfileRule,
     Statement, VerbPattern,
 };
