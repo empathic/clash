@@ -400,15 +400,14 @@ impl CompiledConstraintDef {
     pub(crate) fn eval(&self, ctx: &EvalContext) -> Result<(), String> {
         // For bash commands, skip fs check — fs generates sandbox rules instead.
         // For other verbs (read/write/edit), fs acts as a permission guard.
-        if ctx.verb_str != "bash" {
-            if let Some(ref fs) = self.fs
-                && !fs.matches(ctx.noun, ctx.cwd)
-            {
-                return Err(format!(
-                    "fs constraint: '{}' does not match filter",
-                    ctx.noun
-                ));
-            }
+        if ctx.verb_str != "bash"
+            && let Some(ref fs) = self.fs
+            && !fs.matches(ctx.noun, ctx.cwd)
+        {
+            return Err(format!(
+                "fs constraint: '{}' does not match filter",
+                ctx.noun
+            ));
         }
 
         let empty = Vec::new();

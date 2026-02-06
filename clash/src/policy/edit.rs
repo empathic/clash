@@ -62,10 +62,10 @@ fn is_new_format(yaml: &str) -> bool {
         Ok(v) => v,
         Err(_) => return false,
     };
-    if let serde_yaml::Value::Mapping(map) = &value {
-        if let Some(default_val) = map.get(&serde_yaml::Value::String("default".into())) {
-            return default_val.is_mapping();
-        }
+    if let serde_yaml::Value::Mapping(map) = &value
+        && let Some(default_val) = map.get(serde_yaml::Value::String("default".into()))
+    {
+        return default_val.is_mapping();
     }
     false
 }
@@ -78,13 +78,13 @@ fn active_profile(yaml: &str) -> Result<String> {
         .as_mapping()
         .ok_or_else(|| anyhow::anyhow!("policy YAML is not a mapping"))?;
     let default_val = map
-        .get(&serde_yaml::Value::String("default".into()))
+        .get(serde_yaml::Value::String("default".into()))
         .ok_or_else(|| anyhow::anyhow!("missing 'default' key"))?;
     let default_map = default_val
         .as_mapping()
         .ok_or_else(|| anyhow::anyhow!("'default' is not a mapping"))?;
     let profile = default_map
-        .get(&serde_yaml::Value::String("profile".into()))
+        .get(serde_yaml::Value::String("profile".into()))
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing 'default.profile'"))?;
     Ok(profile.to_string())
@@ -97,7 +97,7 @@ fn profile_names(yaml: &str) -> Result<Vec<String>> {
     let map = value
         .as_mapping()
         .ok_or_else(|| anyhow::anyhow!("policy YAML is not a mapping"))?;
-    let profiles_val = match map.get(&serde_yaml::Value::String("profiles".into())) {
+    let profiles_val = match map.get(serde_yaml::Value::String("profiles".into())) {
         Some(v) => v,
         None => return Ok(Vec::new()),
     };
@@ -144,8 +144,7 @@ pub fn add_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
 
     // Check if the rule already exists (idempotent)
     let rule_without_colon = rule_key.strip_suffix(':').unwrap_or(&rule_key);
-    for i in (rules_line_idx + 1)..lines.len() {
-        let line = lines[i];
+    for &line in &lines[(rules_line_idx + 1)..] {
         let stripped = line.trim();
         if stripped.is_empty() || stripped.starts_with('#') {
             continue;
@@ -165,8 +164,7 @@ pub fn add_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
 
     // Find the insertion point: after the last entry in this rules block
     let mut insert_idx = rules_line_idx + 1;
-    for i in (rules_line_idx + 1)..lines.len() {
-        let line = lines[i];
+    for (i, &line) in lines.iter().enumerate().skip(rules_line_idx + 1) {
         let stripped = line.trim();
         if stripped.is_empty() {
             // Empty lines within the block — keep scanning
@@ -225,8 +223,7 @@ pub fn remove_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
     let mut found_start: Option<usize> = None;
     let mut found_end: Option<usize> = None;
 
-    for i in (rules_line_idx + 1)..lines.len() {
-        let line = lines[i];
+    for (i, &line) in lines.iter().enumerate().skip(rules_line_idx + 1) {
         let stripped = line.trim();
         if stripped.is_empty() || stripped.starts_with('#') {
             continue;
@@ -258,8 +255,7 @@ pub fn remove_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
     // If we didn't find the end by hitting the next rule, scan to find where the block ends
     let end = found_end.unwrap_or_else(|| {
         let mut e = start + 1;
-        for i in (start + 1)..lines.len() {
-            let line = lines[i];
+        for (i, &line) in lines.iter().enumerate().skip(start + 1) {
             let stripped = line.trim();
             if stripped.is_empty() || stripped.starts_with('#') {
                 e = i + 1;
@@ -316,8 +312,7 @@ fn find_rules_block(lines: &[&str], profile: &str) -> Result<(usize, usize)> {
     // Step 2: Find `  {profile}:` at indent 2
     let profile_key = format!("{}:", profile);
     let mut profile_idx = None;
-    for i in (profiles_idx + 1)..lines.len() {
-        let line = lines[i];
+    for (i, &line) in lines.iter().enumerate().skip(profiles_idx + 1) {
         let stripped = line.trim();
         if stripped.is_empty() || stripped.starts_with('#') {
             continue;
@@ -336,8 +331,7 @@ fn find_rules_block(lines: &[&str], profile: &str) -> Result<(usize, usize)> {
 
     // Step 3: Find `    rules:` at indent 4 within this profile
     let mut rules_idx = None;
-    for i in (profile_idx + 1)..lines.len() {
-        let line = lines[i];
+    for (i, &line) in lines.iter().enumerate().skip(profile_idx + 1) {
         let stripped = line.trim();
         if stripped.is_empty() || stripped.starts_with('#') {
             continue;
@@ -382,9 +376,9 @@ pub fn policy_info(yaml: &str) -> Result<PolicyInfo> {
         serde_yaml::from_str(yaml).context("failed to parse policy YAML")?;
     let permission = value
         .as_mapping()
-        .and_then(|m| m.get(&serde_yaml::Value::String("default".into())))
+        .and_then(|m| m.get(serde_yaml::Value::String("default".into())))
         .and_then(|v| v.as_mapping())
-        .and_then(|m| m.get(&serde_yaml::Value::String("permission".into())))
+        .and_then(|m| m.get(serde_yaml::Value::String("permission".into())))
         .and_then(|v| v.as_str())
         .unwrap_or("ask")
         .to_string();

@@ -171,10 +171,10 @@ pub fn parse_yaml(input: &str) -> Result<PolicyDocument, PolicyParseError> {
 /// New format has `default:` as a mapping (with `permission` and `profile` keys).
 /// Old format has `default:` as a scalar string or missing.
 fn is_new_format(value: &serde_yaml::Value) -> bool {
-    if let serde_yaml::Value::Mapping(map) = value {
-        if let Some(default_val) = map.get(&serde_yaml::Value::String("default".into())) {
-            return default_val.is_mapping();
-        }
+    if let serde_yaml::Value::Mapping(map) = value
+        && let Some(default_val) = map.get(serde_yaml::Value::String("default".into()))
+    {
+        return default_val.is_mapping();
     }
     false
 }
@@ -246,7 +246,7 @@ fn parse_new_format(value: serde_yaml::Value) -> Result<PolicyDocument, PolicyPa
 
     // Parse `default: { permission: ..., profile: ... }`
     let default_val = map
-        .get(&serde_yaml::Value::String("default".into()))
+        .get(serde_yaml::Value::String("default".into()))
         .ok_or_else(|| {
             PolicyParseError::Yaml(serde_yaml::Error::custom("missing 'default' key"))
         })?;
@@ -254,7 +254,7 @@ fn parse_new_format(value: serde_yaml::Value) -> Result<PolicyDocument, PolicyPa
 
     // Parse `profiles: { name: { include: ..., rules: ... } }`
     let mut profile_defs = HashMap::new();
-    if let Some(profiles_val) = map.get(&serde_yaml::Value::String("profiles".into())) {
+    if let Some(profiles_val) = map.get(serde_yaml::Value::String("profiles".into())) {
         let profiles_map = profiles_val.as_mapping().ok_or_else(|| {
             PolicyParseError::Yaml(serde_yaml::Error::custom("'profiles' must be a mapping"))
         })?;
@@ -277,7 +277,7 @@ fn parse_new_format(value: serde_yaml::Value) -> Result<PolicyDocument, PolicyPa
     }
 
     // Validate all includes
-    for (_name, def) in &profile_defs {
+    for def in profile_defs.values() {
         if let Some(ref includes) = def.include {
             for include in includes {
                 if !profile_defs.contains_key(include) {
@@ -320,7 +320,7 @@ fn parse_new_default(value: &serde_yaml::Value) -> Result<DefaultConfig, PolicyP
     })?;
 
     let permission_str = map
-        .get(&serde_yaml::Value::String("permission".into()))
+        .get(serde_yaml::Value::String("permission".into()))
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
             PolicyParseError::Yaml(serde_yaml::Error::custom(
@@ -330,7 +330,7 @@ fn parse_new_default(value: &serde_yaml::Value) -> Result<DefaultConfig, PolicyP
     let permission = parse_effect_str(permission_str)?;
 
     let profile = map
-        .get(&serde_yaml::Value::String("profile".into()))
+        .get(serde_yaml::Value::String("profile".into()))
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
             PolicyParseError::Yaml(serde_yaml::Error::custom(
@@ -352,7 +352,7 @@ fn parse_new_profile_def(value: &serde_yaml::Value) -> Result<ProfileDef, Policy
     })?;
 
     let include = map
-        .get(&serde_yaml::Value::String("include".into()))
+        .get(serde_yaml::Value::String("include".into()))
         .map(|v| match v {
             serde_yaml::Value::String(s) => Ok(vec![s.clone()]),
             serde_yaml::Value::Sequence(seq) => seq
@@ -372,7 +372,7 @@ fn parse_new_profile_def(value: &serde_yaml::Value) -> Result<ProfileDef, Policy
         .transpose()?;
 
     let mut rules = Vec::new();
-    if let Some(rules_val) = map.get(&serde_yaml::Value::String("rules".into())) {
+    if let Some(rules_val) = map.get(serde_yaml::Value::String("rules".into())) {
         let rules_map = rules_val.as_mapping().ok_or_else(|| {
             PolicyParseError::Yaml(serde_yaml::Error::custom("'rules' must be a mapping"))
         })?;
@@ -437,15 +437,15 @@ fn parse_inline_constraints(
         serde_yaml::Value::Mapping(map) => {
             let mut constraints = InlineConstraints::default();
 
-            if let Some(fs_val) = map.get(&serde_yaml::Value::String("fs".into())) {
+            if let Some(fs_val) = map.get(serde_yaml::Value::String("fs".into())) {
                 constraints.fs = Some(parse_cap_scoped_fs(fs_val)?);
             }
 
-            if let Some(args_val) = map.get(&serde_yaml::Value::String("args".into())) {
+            if let Some(args_val) = map.get(serde_yaml::Value::String("args".into())) {
                 constraints.args = Some(parse_args_list(args_val)?);
             }
 
-            if let Some(net_val) = map.get(&serde_yaml::Value::String("network".into())) {
+            if let Some(net_val) = map.get(serde_yaml::Value::String("network".into())) {
                 let net_str = net_val.as_str().ok_or_else(|| {
                     PolicyParseError::Yaml(serde_yaml::Error::custom("'network' must be a string"))
                 })?;
@@ -461,11 +461,11 @@ fn parse_inline_constraints(
                 });
             }
 
-            if let Some(pipe_val) = map.get(&serde_yaml::Value::String("pipe".into())) {
+            if let Some(pipe_val) = map.get(serde_yaml::Value::String("pipe".into())) {
                 constraints.pipe = pipe_val.as_bool();
             }
 
-            if let Some(redir_val) = map.get(&serde_yaml::Value::String("redirect".into())) {
+            if let Some(redir_val) = map.get(serde_yaml::Value::String("redirect".into())) {
                 constraints.redirect = redir_val.as_bool();
             }
 
@@ -610,11 +610,11 @@ fn detect_circular_include(
         });
     }
     path.push(name.to_string());
-    if let Some(def) = profiles.get(name) {
-        if let Some(ref includes) = def.include {
-            for include in includes {
-                detect_circular_include(include, profiles, visited, path)?;
-            }
+    if let Some(def) = profiles.get(name)
+        && let Some(ref includes) = def.include
+    {
+        for include in includes {
+            detect_circular_include(include, profiles, visited, path)?;
         }
     }
     path.pop();
