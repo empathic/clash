@@ -797,8 +797,7 @@ fn handle_remove_rule(rule: &str, profile: Option<&str>, dry_run: bool) -> Resul
 /// Handle `clash policy list-rules`.
 fn handle_list_rules(profile: Option<&str>, json: bool) -> Result<()> {
     let (_path, yaml) = load_policy_yaml()?;
-    let doc =
-        clash::policy::parse::parse_yaml(&yaml).context("failed to parse policy.yaml")?;
+    let doc = clash::policy::parse::parse_yaml(&yaml).context("failed to parse policy.yaml")?;
 
     // Determine target profile
     let target = match profile {
