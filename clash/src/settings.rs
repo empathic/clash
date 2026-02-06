@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crate::policy::CompiledPolicy;
-use crate::policy::parse::desugar_legacy;
-use crate::policy::{LegacyPermissions, PolicyConfig, PolicyDocument};
+use crate::policy::parse::desugar_claude_permissions;
+use crate::policy::{ClaudePermissions, PolicyConfig, PolicyDocument};
 use anyhow::Result;
 use claude_settings::ClaudeSettings;
 use dirs::home_dir;
@@ -100,10 +100,10 @@ impl ClashSettings {
         }
     }
 
-    /// Compile Claude Code's legacy permissions into a PolicyDocument.
+    /// Compile Claude Code's permissions into a PolicyDocument.
     ///
     /// Reads Claude settings via ClaudeSettings::new().effective(), converts the
-    /// PermissionSet to LegacyPermissions, and desugars into policy Statements.
+    /// PermissionSet to ClaudePermissions, and desugars into policy Statements.
     #[instrument(level = Level::TRACE)]
     fn compile_claude_to_policy() -> Option<PolicyDocument> {
         let effective = match ClaudeSettings::new().effective() {
@@ -115,15 +115,15 @@ impl ClashSettings {
         };
 
         let perms = effective.permissions.to_permissions();
-        let legacy = LegacyPermissions {
+        let claude_perms = ClaudePermissions {
             allow: perms.allow,
             deny: perms.deny,
             ask: perms.ask,
         };
 
-        let statements = desugar_legacy(&legacy);
+        let statements = desugar_claude_permissions(&claude_perms);
         if statements.is_empty() {
-            info!("No legacy Claude permissions found; compiled policy has no statements");
+            info!("No Claude permissions found; compiled policy has no statements");
         }
 
         Some(PolicyDocument {

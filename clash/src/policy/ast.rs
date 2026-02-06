@@ -29,9 +29,9 @@ pub struct PolicyDocument {
     #[serde(default)]
     pub policy: PolicyConfig,
 
-    /// Legacy-compatible simple permissions (backward compat with Claude Code format).
+    /// Claude Code's native permissions (allow/deny/ask string lists).
     #[serde(default)]
-    pub permissions: Option<LegacyPermissions>,
+    pub permissions: Option<ClaudePermissions>,
 
     /// Named constraint primitives (typed maps with fs, pipe, redirect, etc.) — legacy format.
     #[serde(default)]
@@ -79,10 +79,10 @@ impl Default for PolicyConfig {
     }
 }
 
-/// Legacy permissions format for backward compatibility with Claude Code's
+/// Claude Code's native permissions format:
 /// `{ "permissions": { "allow": [...], "deny": [...], "ask": [...] } }`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct LegacyPermissions {
+pub struct ClaudePermissions {
     #[serde(default)]
     pub allow: Vec<String>,
     #[serde(default)]

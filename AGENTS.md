@@ -36,3 +36,4 @@ This repo uses git worktrees to run parallel Claude Code sessions in isolation.
 ## Development
 * Always check the documentation after your changes to ensure they are logically consistent with what you have done. This should be the last step after you have validated your changes work.
 * ALWAYS update the relevant documentation (readme/comments) when changes have a public facing impact.
+* Prefer to "comment through context", whether that be debug logs, anyhow::Context instead of comments unless your code comments are explaining difficult to understand code

@@ -52,9 +52,9 @@ struct RawPolicyYaml {
     )]
     rules: Vec<String>,
 
-    /// Legacy backward-compat with Claude Code permission format.
+    /// Claude Code's native permission format (allow/deny/ask lists).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    permissions: Option<LegacyPermissions>,
+    permissions: Option<ClaudePermissions>,
 }
 
 fn default_ask_str() -> String {
@@ -187,9 +187,9 @@ fn parse_old_format(input: &str) -> Result<PolicyDocument, PolicyParseError> {
 
     let mut statements = Vec::new();
 
-    // Desugar legacy permissions if present.
+    // Desugar Claude Code permissions if present.
     if let Some(ref perms) = raw.permissions {
-        statements.extend(desugar_legacy(perms));
+        statements.extend(desugar_claude_permissions(perms));
     }
 
     // Parse compact rule strings.
@@ -896,7 +896,7 @@ pub fn parse_verb_pattern(s: &str) -> Result<VerbPattern, String> {
 }
 
 // Re-export legacy desugaring for backward compatibility.
-pub use super::legacy::desugar_legacy;
+pub use super::legacy::desugar_claude_permissions;
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -1247,16 +1247,16 @@ permissions:
         assert_eq!(perms.ask.len(), 1);
     }
 
-    // --- Legacy desugaring ---
+    // --- Claude permissions desugaring ---
 
     #[test]
-    fn test_desugar_legacy_bash() {
-        let perms = LegacyPermissions {
+    fn test_desugar_claude_permissions_bash() {
+        let perms = ClaudePermissions {
             allow: vec!["Bash(git:*)".into()],
             deny: vec![],
             ask: vec![],
         };
-        let stmts = desugar_legacy(&perms);
+        let stmts = desugar_claude_permissions(&perms);
         assert_eq!(stmts.len(), 1);
         let stmt = &stmts[0];
         assert_eq!(stmt.effect, Effect::Allow);
@@ -1266,13 +1266,13 @@ permissions:
     }
 
     #[test]
-    fn test_desugar_legacy_read() {
-        let perms = LegacyPermissions {
+    fn test_desugar_claude_permissions_read() {
+        let perms = ClaudePermissions {
             allow: vec!["Read".into()],
             deny: vec!["Read(.env)".into()],
             ask: vec![],
         };
-        let stmts = desugar_legacy(&perms);
+        let stmts = desugar_claude_permissions(&perms);
         assert_eq!(stmts.len(), 2);
 
         let allow_stmt = &stmts[0];
@@ -1286,13 +1286,13 @@ permissions:
     }
 
     #[test]
-    fn test_desugar_legacy_glob() {
-        let perms = LegacyPermissions {
+    fn test_desugar_claude_permissions_glob() {
+        let perms = ClaudePermissions {
             allow: vec!["Read(**/*.rs)".into()],
             deny: vec![],
             ask: vec![],
         };
-        let stmts = desugar_legacy(&perms);
+        let stmts = desugar_claude_permissions(&perms);
         assert_eq!(stmts.len(), 1);
         assert!(stmts[0].matches("agent:claude", &Verb::Read, "src/main.rs"));
         assert!(!stmts[0].matches("agent:claude", &Verb::Read, "src/main.py"));

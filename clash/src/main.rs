@@ -1,24 +1,22 @@
-use std::fmt::Display;
 use std::fs::OpenOptions;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use clash::policy::edit;
-use clash::policy::parse::{desugar_legacy, flatten_profile, format_rule};
-use clash::policy::{Effect, LegacyPermissions, PolicyConfig, PolicyDocument};
-use claude_settings::SettingsLevel;
+use clash::policy::parse::{desugar_claude_permissions, flatten_profile, format_rule};
+use clash::policy::{ClaudePermissions, Effect, PolicyConfig, PolicyDocument};
 use tracing::level_filters::LevelFilter;
 use tracing::{Level, error, info, instrument};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 
 use clash::handlers;
-use clash::hooks::{HookOutput, SessionStartHookInput, ToolUseHookInput, exit_code};
+use clash::hooks::{HookOutput, ToolUseHookInput, exit_code};
 use clash::permissions::check_permission;
-use clash::sandbox;
+use clash::sandbox_cmd;
 use clash::settings::{ClashSettings, DEFAULT_POLICY};
 
-use clash::policy::sandbox_types::SandboxPolicy;
+use sandbox_cmd::{SandboxCmd, run_sandbox};
 
 #[derive(Parser, Debug)]
 #[command(name = "clash")]
@@ -29,36 +27,6 @@ struct Cli {
 
     #[command(subcommand)]
     command: Commands,
-}
-
-#[derive(Clone, Debug, Default, Copy, ValueEnum)]
-#[value(rename_all = "kebab_case")]
-enum LevelArg {
-    #[default]
-    User,
-    ProjectLocal,
-    Project,
-}
-
-impl Display for LevelArg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            LevelArg::User => "user",
-            LevelArg::ProjectLocal => "project-local",
-            LevelArg::Project => "project",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-impl From<LevelArg> for SettingsLevel {
-    fn from(val: LevelArg) -> Self {
-        match val {
-            LevelArg::User => SettingsLevel::User,
-            LevelArg::ProjectLocal => SettingsLevel::ProjectLocal,
-            LevelArg::Project => SettingsLevel::Project,
-        }
-    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -74,10 +42,6 @@ enum HooksCmd {
     /// Handle PermissionRequest hook - respond to permission prompts on behalf of user
     #[command(name = "permission-request")]
     PermissionRequest,
-
-    /// Handle SessionStart hook - validate settings and report status
-    #[command(name = "session-start")]
-    SessionStart,
 }
 
 impl HooksCmd {
@@ -99,51 +63,11 @@ impl HooksCmd {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
                 handlers::handle_permission_request(&input, &settings)?
             }
-            Self::SessionStart => {
-                let input = SessionStartHookInput::from_reader(std::io::stdin().lock())?;
-                handlers::handle_session_start(&input)?
-            }
         };
 
         output.write_stdout()?;
         Ok(())
     }
-}
-
-#[derive(Subcommand, Debug)]
-enum SandboxCmd {
-    /// Apply sandbox restrictions and exec a command
-    Exec {
-        /// Sandbox policy as JSON string
-        #[arg(long)]
-        policy: String,
-
-        /// Working directory for path resolution
-        #[arg(long)]
-        cwd: String,
-
-        /// Command and arguments to execute under sandbox
-        #[arg(trailing_var_arg = true)]
-        command: Vec<String>,
-    },
-
-    /// Test sandbox enforcement interactively
-    Test {
-        /// Sandbox policy as JSON string
-        #[arg(long)]
-        policy: String,
-
-        /// Working directory for path resolution
-        #[arg(long)]
-        cwd: String,
-
-        /// Command and arguments to test
-        #[arg(trailing_var_arg = true)]
-        command: Vec<String>,
-    },
-
-    /// Check if sandboxing is supported on this platform
-    Check,
 }
 
 #[derive(Subcommand, Debug)]
@@ -328,75 +252,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Parse shared sandbox arguments (policy JSON + cwd).
-fn parse_sandbox_args(policy_json: &str, cwd: &str) -> Result<(SandboxPolicy, std::path::PathBuf)> {
-    let policy: SandboxPolicy =
-        serde_json::from_str(policy_json).context("failed to parse --policy JSON")?;
-    Ok((policy, std::path::PathBuf::from(cwd)))
-}
-
-/// Run a command inside a sandbox.
-#[instrument(level = Level::TRACE)]
-fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
-    match cmd {
-        SandboxCmd::Exec {
-            policy,
-            cwd,
-            command,
-        } => {
-            let (policy, cwd_path) = parse_sandbox_args(&policy, &cwd)?;
-            // This does not return on success (replaces the process via execvp)
-            match sandbox::exec_sandboxed(&policy, &cwd_path, &command) {
-                Err(e) => anyhow::bail!("sandbox exec failed: {}", e),
-            }
-        }
-        SandboxCmd::Test {
-            policy,
-            cwd,
-            command,
-        } => {
-            let (policy, cwd_path) = parse_sandbox_args(&policy, &cwd)?;
-
-            eprintln!("Testing sandbox with policy:");
-            eprintln!("  default: {}", policy.default.display());
-            eprintln!("  network: {:?}", policy.network);
-            for rule in &policy.rules {
-                eprintln!(
-                    "  {:?} {} in {}",
-                    rule.effect,
-                    rule.caps.display(),
-                    rule.path
-                );
-            }
-            eprintln!("  command: {:?}", command);
-            eprintln!("---");
-
-            match sandbox::exec_sandboxed(&policy, &cwd_path, &command) {
-                Err(e) => anyhow::bail!("sandbox test failed: {}", e),
-            }
-        }
-        SandboxCmd::Check => {
-            let support = sandbox::check_support();
-            match support {
-                sandbox::SupportLevel::Full => {
-                    println!("Sandbox: fully supported");
-                }
-                sandbox::SupportLevel::Partial { missing } => {
-                    println!("Sandbox: partially supported");
-                    for m in &missing {
-                        println!("  missing: {}", m);
-                    }
-                }
-                sandbox::SupportLevel::Unsupported { reason } => {
-                    println!("Sandbox: not supported ({})", reason);
-                    std::process::exit(1);
-                }
-            }
-            Ok(())
-        }
-    }
-}
-
 /// Launch Claude Code with clash managing hooks and sandbox enforcement.
 #[instrument(level = Level::TRACE)]
 fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
@@ -438,12 +293,6 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
                     "matcher": "*"
                 }]
             }],
-            "SessionStart": [{
-                "hooks": [{
-                    "type": "command",
-                    "command": format!("{} hook session-start", clash_bin_str)
-                }]
-            }]
         }
     });
 
@@ -495,15 +344,15 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
         .effective()
         .context("failed to load Claude Code settings")?;
 
-    // Convert PermissionSet to Permissions (string lists), then to LegacyPermissions
+    // Convert PermissionSet to ClaudePermissions (allow/deny/ask string lists)
     let perms = effective.permissions.to_permissions();
-    let legacy = LegacyPermissions {
+    let claude_perms = ClaudePermissions {
         allow: perms.allow,
         deny: perms.deny,
         ask: perms.ask,
     };
 
-    let statements = desugar_legacy(&legacy);
+    let statements = desugar_claude_permissions(&claude_perms);
 
     if statements.is_empty() {
         println!("No legacy permissions found to migrate.");
@@ -582,7 +431,8 @@ fn default_cwd() -> String {
 /// Accepts CLI args (`clash explain bash "git push"`) or JSON from stdin.
 #[instrument(level = Level::TRACE)]
 fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String>) -> Result<()> {
-    use clash::permissions::{build_eval_context, extract_noun, resolve_verb};
+    use clash::permissions::{extract_noun, resolve_verb};
+    use clash::policy::EvalContext;
 
     let input: ExplainInput = if let Some(tool_str) = tool {
         // Build from CLI arguments
@@ -640,14 +490,14 @@ fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String
     let (verb, verb_str_owned) = resolve_verb(&input.tool_name);
     let noun = extract_noun(&input.tool_name, &input.tool_input);
     let entity = "agent";
-    let ctx = build_eval_context(
+    let ctx = EvalContext {
         entity,
-        &verb,
-        &verb_str_owned,
-        &noun,
-        &input.cwd,
-        &input.tool_input,
-    );
+        verb: &verb,
+        noun: &noun,
+        cwd: &input.cwd,
+        tool_input: &input.tool_input,
+        verb_str: &verb_str_owned,
+    };
 
     let decision = compiled.evaluate_with_context(&ctx);
 
@@ -904,24 +754,5 @@ fn run_policy(cmd: PolicyCmd) -> Result<()> {
         } => handle_remove_rule(&rule, profile.as_deref(), dry_run),
         PolicyCmd::ListRules { profile, json } => handle_list_rules(profile.as_deref(), json),
         PolicyCmd::Show { json } => handle_show_policy(json),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_session_start_output_serialization() {
-        let output = HookOutput::session_start(Some("test context".into()));
-        let mut buf = Vec::new();
-        output.write_to(&mut buf).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
-        assert_eq!(json["hookSpecificOutput"]["hookEventName"], "SessionStart");
-        assert_eq!(
-            json["hookSpecificOutput"]["additionalContext"],
-            "test context"
-        );
-        assert_eq!(json["continue"], true);
     }
 }
