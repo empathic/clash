@@ -198,11 +198,12 @@ fs:
 
 Each entry maps a capability set to a filter expression. For bash commands, these become sandbox rules. For non-bash verbs, they act as permission guards (the verb is mapped to a capability and checked against matching entries).
 
-The shorthand `full` can be used in place of `read + write + create + delete + execute`:
+The shorthand `all` (or `full`) can be used in place of `read + write + create + delete + execute`, and the `-` operator can remove individual capabilities:
 
 ```yaml
 fs:
-  full: subpath(.)    # All capabilities under CWD
+  all: subpath(.)              # All capabilities under CWD
+  all - write: subpath(/etc)   # Everything except write under /etc
 ```
 
 ---
