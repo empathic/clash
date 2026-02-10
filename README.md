@@ -82,6 +82,9 @@ clash sandbox test --policy '<json>' --cwd /path -- <command>  # Test sandbox in
 clash sandbox check                                             # Check platform support
 
 # Migrate legacy permissions to policy format
+# Initialize with bypass permissions (recommended for Clash-managed sessions)
+clash init --bypass-permissions
+
 clash migrate              # Write policy.yaml to ~/.clash/policy.yaml
 clash migrate --dry-run    # Preview generated policy on stdout
 clash migrate --default deny  # Set default effect (ask, deny, allow)

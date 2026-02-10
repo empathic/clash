@@ -51,6 +51,12 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 
+    /// When true, Claude Code starts with permissions bypassed (equivalent to
+    /// `--dangerously-skip-permissions`). Useful when an external tool like
+    /// Clash is the sole permission handler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bypass_permissions: Option<bool>,
+
     /// Any additional fields not explicitly defined.
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
@@ -301,6 +307,12 @@ impl Settings {
         self
     }
 
+    /// Creates a Settings instance with bypass_permissions enabled or disabled.
+    pub fn with_bypass_permissions(mut self, enabled: bool) -> Self {
+        self.bypass_permissions = Some(enabled);
+        self
+    }
+
     /// Returns true if all fields are None or empty.
     pub fn is_empty(&self) -> bool {
         self.permissions.is_empty()
@@ -312,6 +324,7 @@ impl Settings {
             && self.enabled_plugins.is_none()
             && self.cleanup_period_days.is_none()
             && self.language.is_none()
+            && self.bypass_permissions.is_none()
             && self.extra.is_empty()
     }
 
@@ -455,5 +468,29 @@ mod tests {
         let parsed: Settings = serde_json::from_str(&json).unwrap();
         assert!(parsed.is_clash_installed());
         assert_eq!(parsed.model.as_deref(), Some("test-model"));
+    }
+
+    #[test]
+    fn test_bypass_permissions_builder() {
+        let settings = Settings::new().with_bypass_permissions(true);
+        assert_eq!(settings.bypass_permissions, Some(true));
+        assert!(!settings.is_empty());
+    }
+
+    #[test]
+    fn test_bypass_permissions_serialization() {
+        let settings = Settings::new().with_bypass_permissions(true);
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains("\"bypassPermissions\":true"));
+
+        let parsed: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.bypass_permissions, Some(true));
+    }
+
+    #[test]
+    fn test_bypass_permissions_deserialization() {
+        let json = r#"{"bypassPermissions": true}"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.bypass_permissions, Some(true));
     }
 }

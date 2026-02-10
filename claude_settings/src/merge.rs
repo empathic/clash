@@ -48,6 +48,7 @@ impl Merge for Settings {
             enabled_plugins: merge_option_map(&self.enabled_plugins, &other.enabled_plugins),
             cleanup_period_days: other.cleanup_period_days.or(self.cleanup_period_days),
             language: other.language.clone().or_else(|| self.language.clone()),
+            bypass_permissions: other.bypass_permissions.or(self.bypass_permissions),
             extra: merge_maps(&self.extra, &other.extra),
         }
     }

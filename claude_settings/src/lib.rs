@@ -442,6 +442,18 @@ impl ClaudeSettings {
         })
     }
 
+    /// Sets bypass_permissions at the specified level.
+    ///
+    /// When enabled, Claude Code starts with permissions bypassed (equivalent to
+    /// `--dangerously-skip-permissions`), letting an external tool like Clash be
+    /// the sole permission handler.
+    #[instrument(level = Level::TRACE, skip(self))]
+    pub fn set_bypass_permissions(&self, level: SettingsLevel, enabled: bool) -> Result<()> {
+        self.update(level, |settings| {
+            settings.bypass_permissions = Some(enabled);
+        })
+    }
+
     /// Sets sandbox enabled/disabled at the specified level.
     #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_sandbox_enabled(&self, level: SettingsLevel, enabled: bool) -> Result<()> {
@@ -784,5 +796,17 @@ mod tests {
 
         let all = manager.list_all().unwrap();
         assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_set_bypass_permissions() {
+        let (_temp, manager) = setup_test_manager();
+
+        manager
+            .set_bypass_permissions(SettingsLevel::User, true)
+            .unwrap();
+
+        let read = manager.read(SettingsLevel::User).unwrap().unwrap();
+        assert_eq!(read.bypass_permissions, Some(true));
     }
 }
