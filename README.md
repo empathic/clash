@@ -1,446 +1,208 @@
-# clash 
+# clash
+
 **C**ommand **L**ine **A**gent **S**afety **H**arness
 
-A permission enforcement tool for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (other cli agent's comming soon).
-Clash intercepts tool usage and enforces permission policies (Allow/Deny/Ask) based on your configuration, with optional kernel-enforced sandboxing for runtime restrictions.
+Permission enforcement for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that makes working with agents more fun and less frustrating.
 
-## Features
+**Platforms:** macOS (Apple Silicon, Intel) | Linux (x86_64, aarch64)
+**License:** Apache 2.0
 
-- **Permission enforcement** - Control which tools Claude Code can use automatically
-- **Hierarchical settings** - Configure permissions at system, project, or user level
-- **Policy engine** - Profile-based rules with inline constraints and deny > ask > allow precedence
-- **Unified sandbox** - `fs` constraints on bash rules automatically generate kernel-enforced sandbox via Landlock + seccomp (Linux) or Seatbelt (macOS)
-- **Plugin mode** - Run as a Claude Code plugin for seamless integration
-- **CLI mode** - Launch Claude Code with managed hooks, migrate legacy permissions, and test sandbox policies
-- **Legacy migration** - Convert existing Claude Code permission rules to the new policy format
+---
 
-## Installation
+## What is clash?
 
-### As a Claude Code plugin (recommended)
+Claude Code's default permission model is all-or-nothing: either you allow a tool entirely or get prompted every time. Clash gives you granular control with policy rules that decide what to allow, deny, or ask about — so you can let the agent work freely on safe operations while blocking dangerous ones.
+
+- **Policy engine** — Profile-based rules with `deny > ask > allow` precedence
+- **Kernel sandbox** — `fs:` constraints on bash rules generate OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS)
+- **Plugin mode** — Runs as a Claude Code plugin for seamless integration
+- **CLI mode** — Launch Claude Code with managed hooks via `clash launch`
+
+---
+
+## Quick Start
 
 ```bash
-# Build the plugin (copies binary + plugin manifest to /tmp/clash-dev/)
+# 1. Install (build from source)
+cargo install --path clash
+
+# 2. Initialize a policy (creates ~/.clash/policy.yaml)
+clash init --bypass-permissions
+
+# 3. Run with Claude Code
+clash launch
+```
+
+Or use as a Claude Code plugin:
+
+```bash
+# Build the plugin
 just build-plugin
 
-# Use with Claude Code
+# Launch Claude Code with the plugin
 claude --plugin-dir /tmp/clash-dev/clash-plugin/
 ```
 
-### As a standalone CLI
+---
 
-```bash
-cargo install --path clash
+## How It Works
+
+Clash intercepts every tool call Claude Code makes and evaluates it against your policy. Each rule has three parts: **effect**, **verb**, and **noun**.
+
+```yaml
+# ~/.clash/policy.yaml
+default:
+  permission: ask          # what happens when no rule matches
+  profile: main
+
+profiles:
+  main:
+    rules:
+      allow read *:                  # let the agent read any file
+      allow bash cargo *:            # let it run cargo freely
+      allow bash git status:         # allow git status
+      ask bash git commit*:          # prompt before committing
+      deny bash git push*:           # never allow push
+      deny bash rm -rf *:            # never allow rm -rf
 ```
 
-### Development mode
+**Effects:** `allow` (auto-approve), `deny` (block), `ask` (prompt you)
 
-```bash
-# Build plugin and launch Claude Code with it
-just dev
+**Precedence:** When multiple rules match, the strictest wins: `deny > ask > allow`
+
+Rules can also have filesystem constraints that generate a kernel-enforced sandbox:
+
+```yaml
+      allow bash cargo *:
+        fs:
+          read + execute: subpath(.)        # read anywhere in project
+          write + create: subpath(./target)  # write only to target/
+        network: allow
 ```
 
-## Usage
+For the full rule syntax, see the [Policy Writing Guide](docs/policy-guide.md).
 
-### Launch mode (recommended)
-
-The `launch` command starts Claude Code with clash managing all hooks and sandbox enforcement:
-
-```bash
-# Launch with default settings
-clash launch
-
-# Launch with a custom policy file
-clash launch --policy ./policy.yaml
-
-# Pass additional arguments to Claude Code
-clash launch -- --debug
-```
-
-### Plugin mode
-
-When running as a plugin, clash automatically intercepts tool usage via hooks:
-
-```bash
-claude --plugin-dir /path/to/clash-plugin
-```
-
-### CLI commands
-
-```bash
-# Launch Claude Code with clash managing hooks and sandbox
-clash launch [--policy <path>] [-- <claude-args>...]
-
-# Hook commands (called by Claude Code, not typically invoked directly)
-clash hook pre-tool-use       # Evaluate permissions before tool execution
-clash hook post-tool-use      # Post-execution informational hook
-clash hook permission-request # Auto-approve/deny permission requests
-clash hook notification       # Handle notifications
-
-# Sandbox commands
-clash sandbox exec --policy '<json>' --cwd /path -- <command>  # Run command in sandbox
-clash sandbox test --policy '<json>' --cwd /path -- <command>  # Test sandbox interactively
-clash sandbox check                                             # Check platform support
-
-# Migrate legacy permissions to policy format
-# Initialize with bypass permissions (recommended for Clash-managed sessions)
-clash init --bypass-permissions
-
-clash migrate              # Write policy.yaml to ~/.clash/policy.yaml
-clash migrate --dry-run    # Preview generated policy on stdout
-clash migrate --default deny  # Set default effect (ask, deny, allow)
-
-# View and edit policy rules
-clash policy show                                    # Show active profile and policy info
-clash policy show --json                             # JSON output
-clash policy list-rules                              # List rules in the active profile
-clash policy list-rules --profile base --json        # List rules in a specific profile (JSON)
-clash policy add-rule "allow bash cargo *"           # Add a rule to the active profile
-clash policy add-rule "deny bash rm *" --profile base  # Add to a specific profile
-clash policy add-rule "allow bash git *" --dry-run   # Preview without writing
-clash policy remove-rule "deny bash git push*"       # Remove a rule from the active profile
-```
+---
 
 ## Configuration
 
-### Legacy permissions (Claude Code settings)
+Your policy lives at `~/.clash/policy.yaml`. Clash reads it on every tool invocation, so changes take effect immediately — no restart needed.
 
-Configure permissions in your Claude Code settings files:
-
-- **User level**: `~/.claude/settings.json`
-- **Project local**: `.claude/settings.local.json` (not version controlled)
-- **Project**: `.claude/settings.json` (version controlled)
-- **System**: `/etc/claude-code/managed-settings.json` (read-only)
-
-Example permission configuration:
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(git:*)",
-      "Bash(cargo:*)",
-      "Read"
-    ],
-    "deny": [
-      "Bash(rm -rf:*)",
-      "Read(.env)"
-    ]
-  }
-}
-```
-
-**Permission patterns:**
-
-- `Tool` - Match any usage of a tool
-- `Tool(prefix:*)` - Match tool usage where the argument starts with prefix
-- `Tool(exact)` - Match exact argument
-
-### Policy engine
-
-The policy engine uses a profile-based syntax with inline constraints for fine-grained control over permissions and sandboxing. Use `clash migrate` to convert legacy permissions to this format.
-
-**Evaluation:** All matching rules in the active profile are collected, then precedence applies: **deny > ask > allow**. If no rule matches, the configurable default effect is used.
-
-#### Policy file structure
-
-```yaml
-default:
-  permission: ask        # Default effect: ask, deny, or allow
-  profile: main          # Active profile name
-
-profiles:
-  base:
-    rules:
-      deny bash rm *:
-
-  main:
-    include: [base]      # Inherit rules from other profiles
-    rules:
-      allow bash git *:
-        args: ["!--force"]       # Forbid --force flag
-      allow bash cargo *:
-      allow read *:
-      deny bash curl *:
-```
-
-#### Rule syntax
-
-Rules use the format `effect verb noun:` with optional inline constraints:
-
-```yaml
-allow bash git *:          # Allow all git commands
-deny bash rm *:            # Deny all rm commands
-allow read *:              # Allow reading any file
-ask * *:                   # Ask for everything else
-```
-
-- **Effect**: `allow`, `deny`, or `ask`
-- **Verb**: `bash`, `read`, `write`, `edit`, any tool name (e.g., `task`, `glob`, `websearch`), or `*` (wildcard)
-- **Noun**: A resource pattern — file path, command string, or glob (with `*` and `**`)
-
-#### Inline constraints
-
-Rules can have inline constraints that further restrict when they match and how commands are sandboxed:
-
-```yaml
-allow bash cargo *:
-  args: ["!--force", "--dry-run"]  # Forbid --force, require --dry-run
-  fs:
-    read + execute: subpath(.)     # Sandbox: allow r+x in CWD
-  network: deny                    # Sandbox: block network access
-  pipe: false                      # Disallow pipe operators
-  redirect: false                  # Disallow I/O redirects
-```
-
-**`args`** — Argument constraints using a unified list:
-- `"!--force"` — Forbid this argument (rule won't match if present; falls to default)
-- `"--dry-run"` — Require this argument (rule won't match if absent)
-
-**`fs`** — Cap-scoped filesystem constraints. For `bash` rules, these generate kernel-enforced sandbox rules. For other verbs (`read`, `write`, `edit`), they act as permission guards.
-
-```yaml
-fs:
-  read + execute: subpath(.)          # Allow read+execute under CWD
-  read + write: subpath(~/.ssh)       # Allow read+write under ~/.ssh
-```
-
-Capabilities: `read`, `write`, `create`, `delete`, `execute` (combined with `+`), or `full` as shorthand for all five
-
-**`network`** — `deny` or `allow` (controls network access in the sandbox)
-
-**`pipe`** / **`redirect`** — `true` or `false` (control shell pipe and I/O redirect operators)
-
-#### Filter expressions
-
-Filter expressions specify filesystem path constraints:
-
-- `subpath(.)` — Path must be under this directory
-- `literal(.env)` — Exactly this path
-- `regex(\\.env\\.*)` — Regex pattern match
-- `!expr` — NOT (invert the expression)
-- `a & b` — AND (both must match)
-- `a | b` — OR (either can match)
-
-#### Profile inheritance
-
-Profiles can inherit rules from other profiles via `include`. Multiple includes are supported, and circular dependencies are detected:
-
-```yaml
-profiles:
-  safe-ssh:
-    rules:
-      deny * *:
-        fs:
-          read + write: subpath(~/.ssh)
-
-  safe-read:
-    rules:
-      allow read *:
-
-  research:
-    include: [safe-ssh, safe-read]
-    rules:
-      allow bash *:
-        args: ["!-delete"]
-```
-
-Parent rules are included first (lower precedence), then the profile's own rules. The standard **deny > ask > allow** precedence still applies across all collected rules.
-
-#### Built-in profiles
-
-Clash always injects two built-in profiles that are active regardless of what's in your policy file:
-
-- **`__clash_internal__`** — Allows reading `~/.clash/` (so Claude can inspect the policy) and grants `clash init` and `clash policy` sandbox access to write its config. This prevents bootstrapping loops where the policy can't modify itself.
-- **`__claude_internal__`** — Always allows Claude Code meta-tools (`AskUserQuestion`, `ExitPlanMode`, `EnterPlanMode`, task management, skills, team messaging) so they are never blocked by policy rules.
-
-To override either built-in, define a profile with the same name in your policy's `profiles:` section:
-
-```yaml
-profiles:
-  __clash_internal__:
-    rules:
-      # Your custom rules replace the built-in
-      deny read *:
-        fs:
-          read: subpath(~/.clash)
-```
-
-### Sandbox
-
-For `bash` rules with `fs` constraints, the policy engine automatically generates a kernel-enforced sandbox. The sandbox restrictions are inherited by child processes and cannot be removed at runtime.
-
-**Platform backends:**
-- **Linux**: Landlock LSM (filesystem) + seccomp-BPF (syscall filtering)
-- **macOS**: Seatbelt sandbox profiles (SBPL)
-
-When a bash command matches an `allow` rule with `fs` or `network` constraints, the command is automatically wrapped in a sandbox:
+### Useful commands
 
 ```bash
-# Original command
-cargo build
-
-# Rewritten by clash as
-clash sandbox exec --policy '<json>' --cwd /path -- bash -c "cargo build"
+clash policy show              # see active profile and settings
+clash policy list-rules        # list all rules in the active profile
+clash policy add-rule "allow bash npm *"   # add a rule
+clash policy remove-rule "deny bash git push*"  # remove a rule
+clash explain bash "git push"  # see which rule matches a command
 ```
 
-**Path variables in filter expressions:** `$CWD`, `$HOME`, `$TMPDIR`
+### Migrating from Claude Code permissions
 
-## Project structure
-
-```
-clash/
-├── clash/              # CLI binary + library (hooks, permissions, sandbox, handlers)
-│   ├── src/lib.rs      #   Library entry point (use clash as a dependency)
-│   ├── src/main.rs     #   Thin CLI wrapper
-│   ├── src/handlers.rs #   Pre-built hook handlers
-│   ├── src/hooks.rs    #   Hook I/O types (input/output for Claude Code protocol)
-│   ├── src/permissions.rs # Policy-based permission evaluation
-│   ├── src/settings.rs #   Settings loading + default policy template
-│   ├── src/sandbox/    #   Platform-specific sandbox backends
-│   ├── src/audit.rs    #   Audit logging
-│   └── src/notifications.rs # Desktop + Zulip notifications
-├── clash-plugin/       # Claude Code plugin (hooks.json + skills)
-├── claude_settings/    # Settings library (permissions, policy engine, sandbox types)
-├── clester/            # End-to-end testing tool
-└── plans/              # Design documents and research
-```
-
-## Library usage
-
-### Using clash as a library
-
-The `clash` crate can be used as a library for permission enforcement, hook handling, and sandbox management:
-
-```rust
-use clash::hooks::ToolUseHookInput;
-use clash::permissions::check_permission;
-use clash::settings::ClashSettings;
-
-// Load settings and evaluate a tool invocation
-let settings = ClashSettings::load_or_create()?;
-let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
-let output = check_permission(&input, &settings)?;
-output.write_stdout()?;
-```
-
-Use the pre-built handlers for full hook integration:
-
-```rust
-use clash::handlers;
-use clash::hooks::{ToolUseHookInput, SessionStartHookInput};
-use clash::settings::ClashSettings;
-
-let settings = ClashSettings::load_or_create()?;
-
-// Handle permission requests (integrates policy + Zulip + desktop notifications)
-let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
-let output = handlers::handle_permission_request(&input, &settings)?;
-
-// Handle session start (validates policy, settings, sandbox support)
-let session_input = SessionStartHookInput::from_reader(std::io::stdin().lock())?;
-let output = handlers::handle_session_start(&session_input)?;
-```
-
-### Using claude_settings
-
-The `claude_settings` crate can be used independently to read and write Claude Code settings:
-
-```rust
-use claude_settings::{ClaudeSettings, Settings, SettingsLevel, PermissionSet};
-
-let manager = ClaudeSettings::new();
-
-// Read effective settings (merged from all levels)
-let settings = manager.effective()?;
-
-// Check permissions
-if settings.permissions.is_allowed("Bash", Some("git status")) {
-    println!("git commands are allowed");
-}
-
-// Write settings
-let new_settings = Settings::new()
-    .with_permissions(PermissionSet::new().allow("Bash(git:*)"));
-manager.write(SettingsLevel::Project, &new_settings)?;
-```
-
-## Testing with clester
-
-`clester` (claude tester) is a headless, deterministic end-to-end testing tool for clash. It simulates Claude Code's hook invocations by feeding scripted inputs to the clash binary and asserting on outputs.
-
-### Running tests
+If you already have permissions configured in Claude Code settings, migrate them:
 
 ```bash
-# Run all end-to-end tests
+clash migrate --dry-run   # preview what would be imported
+clash migrate              # import into ~/.clash/policy.yaml
+```
+
+For the full command reference, see the [CLI Reference](docs/cli-reference.md).
+
+---
+
+## Requirements
+
+- **macOS** (Apple Silicon or Intel) or **Linux** (x86_64 or aarch64)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
+- Rust toolchain (for building from source)
+- Windows is **not** supported
+
+---
+
+## Troubleshooting
+
+### "command not found: clash"
+
+Make sure the binary is in your `PATH`. If you installed with `cargo install`, check that `~/.cargo/bin` is on your path:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+### "No policy.yaml found"
+
+Run `clash init` to generate a starter policy:
+
+```bash
+clash init --bypass-permissions
+```
+
+### Double-prompting (clash asks, then Claude Code asks)
+
+Run init with `--bypass-permissions` to make clash the sole permission handler:
+
+```bash
+clash init --bypass-permissions
+```
+
+This sets `bypassPermissions: true` in your Claude Code user settings.
+
+### Policy not working as expected
+
+Use `clash explain` to debug which rule matches:
+
+```bash
+clash explain bash "git push origin main"
+```
+
+### Filing a bug
+
+```bash
+clash bug "Short description of the issue" --include-config --include-logs
+```
+
+---
+
+## Development
+
+```bash
+# Build and launch with the plugin
+just dev
+
+# Run all checks (fmt + test + clippy)
+just check
+
+# Run end-to-end tests
 just clester
 
-# Run with verbose output (shows clash stdout/stderr)
-just clester -v
-
-# Run a single test script
-just clester-run clester/tests/scripts/basic_permissions.yaml
-
-# Validate test scripts without executing
-just clester-validate
-
-# Full CI: unit tests + clippy + end-to-end tests
+# Full CI (unit tests + clippy + e2e)
 just ci
 ```
 
-### Writing test scripts
+### Project structure
 
-Test scripts are YAML files that define:
-
-1. **Settings** - Permission configurations at user/project levels
-2. **Steps** - Hook invocations with expected outcomes
-
-Example test script:
-
-```yaml
-meta:
-  name: basic permission enforcement
-  description: Test that allow/deny rules work
-
-settings:
-  user:
-    permissions:
-      allow:
-        - "Bash(git:*)"
-      deny:
-        - "Read(.env)"
-
-steps:
-  - name: git status should be allowed
-    hook: pre-tool-use
-    tool_name: Bash
-    tool_input:
-      command: git status
-    expect:
-      decision: allow
-      reason_contains: explicitly allowed
-
-  - name: read .env should be denied
-    hook: pre-tool-use
-    tool_name: Read
-    tool_input:
-      file_path: ".env"
-    expect:
-      decision: deny
+```
+clash/
+├── clash/              # CLI binary + library
+├── clash-plugin/       # Claude Code plugin (hooks, skills)
+├── claude_settings/    # Settings library
+├── clester/            # End-to-end test harness
+└── docs/               # Documentation
+    ├── policy-guide.md
+    ├── cli-reference.md
+    ├── policy-grammar.md
+    └── policy-semantics.md
 ```
 
-### Test script reference
+---
 
-**Settings levels**: `settings.user`, `settings.project`, `settings.project_local`
+## Documentation
 
-**Hook types**: `pre-tool-use`, `post-tool-use`, `permission-request`, `notification`
-
-**Tool types**: `Bash`, `Read`, `Write`, `Edit`
-
-**Assertions**:
-- `decision` - Expected permission decision: `"allow"`, `"deny"`, or `"ask"`
-- `exit_code` - Expected process exit code (default: 0)
-- `no_decision` - Expect no hook-specific output (for informational hooks)
-- `reason_contains` - Expected substring in the decision reason
+- [Policy Writing Guide](docs/policy-guide.md) — how to write rules, profiles, constraints, and recipes
+- [CLI Reference](docs/cli-reference.md) — all commands, flags, and options
+- [Policy Grammar](docs/policy-grammar.md) — formal EBNF grammar
+- [Policy Semantics](docs/policy-semantics.md) — evaluation algorithm and sandbox generation
 
 ## License
 

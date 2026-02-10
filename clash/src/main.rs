@@ -708,6 +708,14 @@ fn run_init(force: bool, bypass_permissions: bool) -> Result<()> {
         );
     }
 
+    // Refuse to overwrite a directory even with --force.
+    if path.exists() && path.is_dir() {
+        anyhow::bail!(
+            "{} is a directory. Remove it first, then run `clash init`.",
+            path.display()
+        );
+    }
+
     std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
     std::fs::write(&path, DEFAULT_POLICY)?;
     println!("Wrote default policy to {}", path.display());
@@ -741,11 +749,21 @@ fn set_bypass_permissions() -> Result<()> {
 /// Load the policy.yaml file, returning its path and contents.
 fn load_policy_yaml() -> Result<(std::path::PathBuf, String)> {
     let path = ClashSettings::policy_file()?;
-    let yaml = std::fs::read_to_string(&path).with_context(|| {
-        format!(
-            "No policy.yaml found at {}. Run `clash init` first.",
+    if path.is_dir() {
+        anyhow::bail!(
+            "{} is a directory, not a file. Remove it and run `clash init` to create a policy.",
             path.display()
-        )
+        );
+    }
+    let yaml = std::fs::read_to_string(&path).with_context(|| {
+        if !path.exists() {
+            format!(
+                "No policy.yaml found at {}. Run `clash init` first.",
+                path.display()
+            )
+        } else {
+            format!("Failed to read {}", path.display())
+        }
     })?;
     Ok((path, yaml))
 }
