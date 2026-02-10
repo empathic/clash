@@ -33,6 +33,7 @@ landlock = "0.4"
 seccompiler = "0.4"
 libc = "0.2"
 
+uuid = { version = "1", features = ["v4"] }
 ureq = "2"
 base64 = "0.22"
 mac-notification-sys = "0.6"

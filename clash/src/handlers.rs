@@ -4,7 +4,7 @@
 //! session validation into ready-to-use functions that process Claude Code
 //! hook events.
 
-use tracing::{Level, info, instrument, warn};
+use tracing::{Level, debug, info, instrument, warn};
 
 use crate::hooks::{HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput};
 use crate::notifications;
@@ -391,6 +391,55 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
             Err(e) => {
                 warn!(error = %e, "Failed to resolve clash binary path");
             }
+        }
+    }
+
+    // 4b. Symlink clash binary into a user-owned PATH directory
+    #[cfg(unix)]
+    if let Ok(exe_path) = std::env::current_exe() {
+        use std::os::unix::fs::MetadataExt;
+        let uid = unsafe { libc::getuid() };
+        let linked = std::env::var("PATH")
+            .unwrap_or_default()
+            .split(':')
+            .find_map(|dir| {
+                let dir = std::path::Path::new(dir);
+                let meta = std::fs::metadata(dir).ok()?;
+                if meta.uid() != uid {
+                    return None;
+                }
+                // Check writable by attempting a temp file
+                let test_path = dir.join(".clash_write_test");
+                if std::fs::write(&test_path, b"").is_ok() {
+                    let _ = std::fs::remove_file(&test_path);
+                } else {
+                    return None;
+                }
+                let link_path = dir.join("clash");
+                // Already correctly linked — nothing to do
+                if let Ok(target) = std::fs::read_link(&link_path) {
+                    if target == exe_path {
+                        return Some(true);
+                    }
+                    // Stale symlink — replace it
+                    let _ = std::fs::remove_file(&link_path);
+                } else if link_path.exists() {
+                    // Regular file exists — don't clobber
+                    return None;
+                }
+                match std::os::unix::fs::symlink(&exe_path, &link_path) {
+                    Ok(()) => {
+                        info!(dir = %dir.display(), "symlinked clash into PATH");
+                        Some(true)
+                    }
+                    Err(e) => {
+                        debug!(error = %e, dir = %dir.display(), "failed to symlink clash");
+                        None
+                    }
+                }
+            });
+        if linked.is_none() {
+            debug!("no suitable user-owned PATH directory found for clash symlink");
         }
     }
 

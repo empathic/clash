@@ -1,3 +1,4 @@
+use std::boxed;
 use std::fs::OpenOptions;
 
 use anyhow::{Context, Result};
@@ -6,8 +7,8 @@ use clash::policy::edit;
 use clash::policy::parse::{desugar_claude_permissions, flatten_profile, format_rule};
 use clash::policy::{ClaudePermissions, Effect, PolicyConfig, PolicyDocument};
 use tracing::level_filters::LevelFilter;
-use tracing::{Level, error, info, instrument};
-use tracing_subscriber::fmt::format::FmtSpan;
+use tracing::{Level, debug_span, error, info, instrument};
+use tracing_subscriber::Layer;
 use tracing_subscriber::prelude::*;
 
 use clash::handlers;
@@ -42,6 +43,10 @@ enum HooksCmd {
     /// Handle PermissionRequest hook - respond to permission prompts on behalf of user
     #[command(name = "permission-request")]
     PermissionRequest,
+
+    /// Handle SessionStart hook - called when a Claude Code session begins
+    #[command(name = "session-start")]
+    SessionStart,
 }
 
 impl HooksCmd {
@@ -62,6 +67,11 @@ impl HooksCmd {
             Self::PermissionRequest => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
                 handlers::handle_permission_request(&input, &settings)?
+            }
+            Self::SessionStart => {
+                let input =
+                    clash::hooks::SessionStartHookInput::from_reader(std::io::stdin().lock())?;
+                handlers::handle_session_start(&input)?
             }
         };
 
@@ -172,6 +182,22 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+
+    /// File a bug report to the clash issue tracker
+    #[command(alias = "rage")]
+    Bug {
+        /// Short summary of the bug
+        title: String,
+        /// Detailed description of the bug
+        #[arg(short, long)]
+        description: Option<String>,
+        /// Include the clash policy config in the report
+        #[arg(long)]
+        include_config: bool,
+        /// Include recent debug logs in the report
+        #[arg(long)]
+        include_logs: bool,
+    },
 }
 
 fn init_tracing() {
@@ -185,52 +211,36 @@ fn init_tracing() {
     });
 
     // Ensure parent directory exists.
-    if let Some(parent) = std::path::Path::new(&log_path).parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+    let log_file = std::path::Path::new(&log_path)
+        .parent()
+        .and_then(|parent| std::fs::create_dir_all(parent).ok())
+        .and_then(|_| {
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+                .ok()
+        });
 
-    let log_file = OpenOptions::new().create(true).append(true).open(&log_path);
-
-    match log_file {
-        Ok(file) => {
-            tracing_subscriber::registry()
-                .with(
-                    tracing_subscriber::fmt::layer()
-                        .pretty()
-                        .with_level(true)
-                        .with_writer(file)
-                        .with_file(true)
-                        .with_line_number(true)
-                        .with_target(false)
-                        .with_span_events(FmtSpan::CLOSE)
-                        .with_filter(LevelFilter::from_level(Level::DEBUG)),
-                )
-                .init();
-        }
-        Err(_) => {
+    let layer: Box<dyn Layer<_> + Send + Sync> = match log_file {
+        Some(file) => tracing_subscriber::fmt::layer()
+            .with_writer(file)
+            .pretty()
+            .with_ansi(false)
+            .with_filter(LevelFilter::from_level(Level::DEBUG))
+            .boxed(),
+        None => {
             // Fallback to stderr if log file can't be opened.
-            tracing_subscriber::registry()
-                .with(
-                    tracing_subscriber::fmt::layer()
-                        .with_level(true)
-                        .with_writer(std::io::stderr)
-                        .with_file(true)
-                        .with_line_number(true)
-                        .with_target(false)
-                        .with_filter(LevelFilter::from_level(Level::INFO)),
-                )
-                .init();
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .pretty()
+                .with_ansi(false)
+                .with_filter(LevelFilter::from_level(Level::INFO))
+                .boxed()
         }
-    }
-}
+    };
 
-/// Log an error and exit with code 1. Used for all non-hook subcommands.
-fn run_or_exit(label: &str, result: Result<()>) {
-    if let Err(e) = result {
-        error!("{} error: {}", label, e);
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
-    }
+    tracing_subscriber::registry().with(layer).init()
 }
 
 fn main() -> Result<()> {
@@ -238,24 +248,34 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     info!(args = ?std::env::args(), "clash started");
 
-    match cli.command {
-        Commands::Hook(hook_cmd) => {
-            if let Err(e) = hook_cmd.run() {
-                error!(cmd=?hook_cmd, "Hook error: {}", e);
-                std::process::exit(exit_code::BLOCKING_ERROR);
+    debug_span!("main", cmd = ?cli.command).in_scope(|| {
+        let resp = match cli.command {
+            Commands::Hook(hook_cmd) => {
+                if let Err(e) = hook_cmd.run() {
+                    error!(cmd=?hook_cmd, "Hook error: {}", e);
+                    std::process::exit(exit_code::BLOCKING_ERROR);
+                }
+                Ok(())
             }
+            Commands::Sandbox(cmd) => run_sandbox(cmd),
+            Commands::Launch { policy, args } => run_launch(policy, args),
+            Commands::Migrate { dry_run, default } => run_migrate(dry_run, &default),
+            Commands::Explain { json, tool, input } => run_explain(json, tool, input),
+            Commands::Init { force } => run_init(force),
+            Commands::Policy(cmd) => run_policy(cmd),
+            Commands::Bug {
+                title,
+                description,
+                include_config,
+                include_logs,
+            } => run_bug_report(title, description, include_config, include_logs),
+        };
+        if let Err(err) = resp {
+            error!("{}", err);
+            eprintln!("Error: {}", err);
+            std::process::exit(1);
         }
-        Commands::Sandbox(cmd) => run_or_exit("Sandbox", run_sandbox(cmd)),
-        Commands::Launch { policy, args } => run_or_exit("Launch", run_launch(policy, args)),
-        Commands::Migrate { dry_run, default } => {
-            run_or_exit("Migration", run_migrate(dry_run, &default))
-        }
-        Commands::Explain { json, tool, input } => {
-            run_or_exit("Explain", run_explain(json, tool, input))
-        }
-        Commands::Init { force } => run_or_exit("Init", run_init(force)),
-        Commands::Policy(cmd) => run_or_exit("Policy", run_policy(cmd)),
-    }
+    });
 
     Ok(())
 }
@@ -299,6 +319,12 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
                     "type": "command",
                     "command": format!("{} hook permission-request", clash_bin_str),
                     "matcher": "*"
+                }]
+            }],
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("{} hook session-start", clash_bin_str),
                 }]
             }],
         }
@@ -876,6 +902,80 @@ fn print_fields(fields: &[clash::schema::SchemaField], indent: usize) {
             print_fields(sub, indent + 2);
         }
     }
+}
+
+/// File a bug report to Linear.
+#[instrument(level = Level::TRACE)]
+fn run_bug_report(
+    title: String,
+    description: Option<String>,
+    include_config: bool,
+    include_logs: bool,
+) -> Result<()> {
+    use clash::linear;
+
+    if !linear::api_key_available() {
+        anyhow::bail!(
+            "Bug reporting is not configured in this build.\n\
+             Rebuild with CLASH_LINEAR_API_KEY set to enable it."
+        );
+    }
+
+    let mut attachments = Vec::new();
+
+    if include_config {
+        match ClashSettings::policy_file().and_then(|p| {
+            std::fs::read_to_string(&p).with_context(|| format!("failed to read {}", p.display()))
+        }) {
+            Ok(contents) => attachments.push(linear::Attachment {
+                filename: "policy.yaml".into(),
+                content_type: "text/yaml".into(),
+                title: "Policy Config".into(),
+                body: contents.into_bytes(),
+            }),
+            Err(e) => eprintln!("Warning: could not read config: {}", e),
+        }
+    }
+
+    if include_logs {
+        match read_recent_logs(100) {
+            Ok(contents) => attachments.push(linear::Attachment {
+                filename: "clash.log".into(),
+                content_type: "text/plain".into(),
+                title: "Debug Logs".into(),
+                body: contents.into_bytes(),
+            }),
+            Err(e) => eprintln!("Warning: could not read logs: {}", e),
+        }
+    }
+
+    let report = linear::BugReport {
+        title,
+        description,
+        attachments,
+    };
+
+    let issue = linear::create_issue(&report).context("failed to file bug report")?;
+    println!("Filed bug {}: {}", issue.identifier, issue.url);
+    Ok(())
+}
+
+/// Read the last `n` lines from the clash log file.
+fn read_recent_logs(n: usize) -> Result<String> {
+    let log_path = std::env::var("CLASH_LOG").ok().unwrap_or_else(|| {
+        ClashSettings::settings_dir()
+            .map(|d| d.join("clash.log"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("clash.log"))
+            .to_string_lossy()
+            .into_owned()
+    });
+
+    let contents = std::fs::read_to_string(&log_path)
+        .with_context(|| format!("failed to read {}", log_path))?;
+
+    let lines: Vec<&str> = contents.lines().collect();
+    let start = lines.len().saturating_sub(n);
+    Ok(lines[start..].join("\n"))
 }
 
 /// Handle `clash policy` subcommands.
