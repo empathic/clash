@@ -103,6 +103,25 @@ pub enum CompileError {
     ProfileError(String),
 }
 
+impl CompileError {
+    /// Return a help message suggesting how to fix this error, if applicable.
+    pub fn help(&self) -> Option<String> {
+        match self {
+            CompileError::InvalidGlob { pattern, .. } => Some(format!(
+                "check glob pattern '{}': use * for single segment, ** for recursive, ? for single char",
+                pattern
+            )),
+            CompileError::InvalidFilterRegex { pattern, .. } => Some(format!(
+                "check regex '{}': special characters like (, ), [, ] need escaping with \\",
+                pattern
+            )),
+            CompileError::ProfileError(_) => {
+                Some("check profile definitions for missing or circular includes".into())
+            }
+        }
+    }
+}
+
 /// Unified policy error wrapping parse and compile errors.
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyError {

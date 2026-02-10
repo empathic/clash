@@ -1,4 +1,3 @@
-use std::boxed;
 use std::fs::OpenOptions;
 
 use anyhow::{Context, Result};
@@ -252,7 +251,8 @@ fn main() -> Result<()> {
         let resp = match cli.command {
             Commands::Hook(hook_cmd) => {
                 if let Err(e) = hook_cmd.run() {
-                    error!(cmd=?hook_cmd, "Hook error: {}", e);
+                    error!(cmd=?hook_cmd, "Hook error: {:?}", e);
+                    clash::errors::display_error(&e, cli.verbose);
                     std::process::exit(exit_code::BLOCKING_ERROR);
                 }
                 Ok(())
@@ -271,8 +271,8 @@ fn main() -> Result<()> {
             } => run_bug_report(title, description, include_config, include_logs),
         };
         if let Err(err) = resp {
-            error!("{}", err);
-            eprintln!("Error: {}", err);
+            error!("{:?}", err);
+            clash::errors::display_error(&err, cli.verbose);
             std::process::exit(1);
         }
     });
