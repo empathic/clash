@@ -30,6 +30,7 @@
 //! ```
 
 pub mod audit;
+pub mod errors;
 pub mod handlers;
 pub mod hooks;
 pub mod linear;
