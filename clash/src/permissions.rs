@@ -55,9 +55,10 @@ fn check_permission_policy(
         "Policy decision"
     );
 
-    // Write audit log entry if enabled.
+    // Write audit log entry (global + session).
     crate::audit::log_decision(
         &settings.audit,
+        &input.session_id,
         &input.tool_name,
         &input.tool_input,
         decision.effect,

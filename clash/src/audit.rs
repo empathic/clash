@@ -58,22 +58,53 @@ impl AuditConfig {
     }
 }
 
+/// Return the session-specific temp directory for the given session ID.
+pub fn session_dir(session_id: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("clash-{}", session_id))
+}
+
+/// Initialize a per-session history directory.
+///
+/// Creates `/tmp/clash-<session_id>/` with a `metadata.json` containing
+/// session info. Returns the session directory path on success.
+pub fn init_session(
+    session_id: &str,
+    cwd: &str,
+    source: Option<&str>,
+    model: Option<&str>,
+) -> std::io::Result<PathBuf> {
+    let dir = session_dir(session_id);
+    std::fs::create_dir_all(&dir)?;
+
+    let metadata = serde_json::json!({
+        "session_id": session_id,
+        "cwd": cwd,
+        "source": source,
+        "model": model,
+        "started_at": chrono_timestamp(),
+    });
+
+    let meta_path = dir.join("metadata.json");
+    let mut f = std::fs::File::create(&meta_path)?;
+    serde_json::to_writer_pretty(&mut f, &metadata).map_err(std::io::Error::other)?;
+
+    Ok(dir)
+}
+
 /// Write an audit log entry for a policy decision.
+///
+/// Writes to the global audit log (if enabled) and to the session-specific
+/// audit log in the session tempdir (if the directory exists).
 #[instrument(level = Level::TRACE, skip(trace, tool_input))]
 pub fn log_decision(
     config: &AuditConfig,
+    session_id: &str,
     tool_name: &str,
     tool_input: &serde_json::Value,
     effect: Effect,
     reason: Option<&str>,
     trace: &DecisionTrace,
 ) {
-    if !config.enabled {
-        return;
-    }
-
-    let path = config.log_path();
-
     // Truncate tool_input for the log entry.
     let input_str = tool_input.to_string();
     let tool_input_summary = if input_str.len() > 200 {
@@ -99,8 +130,20 @@ pub fn log_decision(
         resolution: &trace.final_resolution,
     };
 
-    if let Err(e) = append_entry(&path, &entry) {
-        warn!(error = %e, path = %path.display(), "Failed to write audit log entry");
+    // Write to global audit log if enabled.
+    if config.enabled {
+        let path = config.log_path();
+        if let Err(e) = append_entry(&path, &entry) {
+            warn!(error = %e, path = %path.display(), "Failed to write audit log entry");
+        }
+    }
+
+    // Write to session-specific audit log if the session dir exists.
+    let session_log = session_dir(session_id).join("audit.jsonl");
+    if session_log.parent().is_some_and(|p| p.exists())
+        && let Err(e) = append_entry(&session_log, &entry)
+    {
+        warn!(error = %e, path = %session_log.display(), "Failed to write session audit entry");
     }
 }
 
@@ -132,4 +175,120 @@ fn append_entry(path: &std::path::Path, entry: &AuditEntry) -> std::io::Result<(
     let json = serde_json::to_string(entry).map_err(std::io::Error::other)?;
     writeln!(file, "{}", json)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::ir::{DecisionTrace, RuleMatch};
+
+    fn mock_trace(matched: usize) -> DecisionTrace {
+        DecisionTrace {
+            matched_rules: (0..matched)
+                .map(|i| RuleMatch {
+                    rule_index: i,
+                    description: format!("rule {}", i),
+                    effect: Effect::Allow,
+                })
+                .collect(),
+            skipped_rules: vec![],
+            final_resolution: "test".into(),
+        }
+    }
+
+    #[test]
+    fn test_session_dir_uses_session_id() {
+        let dir = session_dir("abc-123");
+        assert!(dir.ends_with("clash-abc-123"));
+    }
+
+    #[test]
+    fn test_init_session_creates_dir_and_metadata() {
+        let id = format!("test-{}", std::process::id());
+        let dir = session_dir(&id);
+        // Clean up from previous runs.
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let result = init_session(&id, "/tmp", Some("startup"), Some("claude-sonnet"));
+        assert!(result.is_ok());
+
+        let meta_path = dir.join("metadata.json");
+        assert!(meta_path.exists(), "metadata.json should exist");
+
+        let contents = std::fs::read_to_string(&meta_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(json["session_id"], id);
+        assert_eq!(json["cwd"], "/tmp");
+        assert_eq!(json["source"], "startup");
+        assert_eq!(json["model"], "claude-sonnet");
+
+        // Clean up.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_log_decision_writes_to_session_dir() {
+        let id = format!("test-log-{}", std::process::id());
+        let dir = session_dir(&id);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Create session dir first.
+        init_session(&id, "/tmp", None, None).unwrap();
+
+        // Log a decision (global audit disabled, session dir exists).
+        let config = AuditConfig {
+            enabled: false,
+            path: None,
+        };
+        log_decision(
+            &config,
+            &id,
+            "Bash",
+            &serde_json::json!({"command": "ls"}),
+            Effect::Allow,
+            Some("policy: allowed"),
+            &mock_trace(1),
+        );
+
+        let session_log = dir.join("audit.jsonl");
+        assert!(session_log.exists(), "session audit.jsonl should exist");
+
+        let contents = std::fs::read_to_string(&session_log).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(contents.trim()).unwrap();
+        assert_eq!(entry["tool_name"], "Bash");
+        assert_eq!(entry["decision"], "allow");
+        assert_eq!(entry["matched_rules"], 1);
+
+        // Clean up.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_log_decision_skips_session_when_no_dir() {
+        let id = "nonexistent-session-12345";
+        let dir = session_dir(id);
+        // Ensure no dir exists.
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let config = AuditConfig {
+            enabled: false,
+            path: None,
+        };
+
+        // Should not panic or create the dir.
+        log_decision(
+            &config,
+            id,
+            "Read",
+            &serde_json::json!({"file_path": "/tmp/x"}),
+            Effect::Ask,
+            None,
+            &mock_trace(0),
+        );
+
+        assert!(
+            !dir.exists(),
+            "should not create session dir on log_decision"
+        );
+    }
 }

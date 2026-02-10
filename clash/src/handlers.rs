@@ -395,22 +395,39 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
         }
     }
 
-    // 4. Export CLASH_BIN via CLAUDE_ENV_FILE so skills can use $CLASH_BIN
-    if let Ok(env_file) = std::env::var("CLAUDE_ENV_FILE") {
-        match std::env::current_exe() {
-            Ok(exe_path) => {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&env_file) {
-                    let _ = writeln!(f, "CLASH_BIN={}", exe_path.display());
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to resolve clash binary path");
-            }
+    // 4. Initialize per-session history directory
+    match crate::audit::init_session(
+        &input.session_id,
+        &input.cwd,
+        input.source.as_deref(),
+        input.model.as_deref(),
+    ) {
+        Ok(session_dir) => {
+            lines.push(format!("session history: {}", session_dir.display()));
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to create session history directory");
         }
     }
 
-    // 4b. Symlink clash binary into a user-owned PATH directory
+    // 5. Export CLASH_BIN and CLASH_SESSION_DIR via CLAUDE_ENV_FILE
+    if let Ok(env_file) = std::env::var("CLAUDE_ENV_FILE") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&env_file) {
+            match std::env::current_exe() {
+                Ok(exe_path) => {
+                    let _ = writeln!(f, "CLASH_BIN={}", exe_path.display());
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to resolve clash binary path");
+                }
+            }
+            let session_dir = crate::audit::session_dir(&input.session_id);
+            let _ = writeln!(f, "CLASH_SESSION_DIR={}", session_dir.display());
+        }
+    }
+
+    // 5b. Symlink clash binary into a user-owned PATH directory
     #[cfg(unix)]
     if let Ok(exe_path) = std::env::current_exe() {
         use std::os::unix::fs::MetadataExt;
@@ -459,7 +476,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
         }
     }
 
-    // 5. Session metadata
+    // 6. Session metadata
     if let Some(ref source) = input.source {
         lines.push(format!("session source: {}", source));
     }
