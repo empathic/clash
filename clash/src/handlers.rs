@@ -251,7 +251,23 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
         .as_deref()
         .is_some_and(|m| m.contains("dangerously-skip-permissions"));
 
-    if !skip_permissions {
+    if skip_permissions {
+        eprintln!(
+            "\x1b[1;33mwarning\x1b[0m: clash: running with --dangerously-skip-permissions \
+             — policy enforcement disabled"
+        );
+
+        lines.push(
+            "IMPORTANT: This session is running with --dangerously-skip-permissions. \
+             Clash's policy enforcement is DISABLED — all tool calls are auto-approved \
+             without policy evaluation. Filesystem sandboxing (Landlock/Seatbelt) is \
+             still active if configured, but no permission rules are being checked. \
+             Exercise extra caution with destructive operations (deleting files, force-pushing, \
+             modifying system files). To re-enable policy enforcement, restart Claude Code \
+             without the --dangerously-skip-permissions flag."
+                .into(),
+        );
+    } else {
         lines.push(
             "NOTE: Clash is managing permissions for this session. \
              For the best experience, run Claude Code with --dangerously-skip-permissions \
@@ -537,6 +553,30 @@ mod tests {
         assert!(
             !ctx.contains("NOTE: Clash is managing permissions"),
             "should NOT recommend --dangerously-skip-permissions when already in skip mode, got: {ctx}"
+        );
+    }
+
+    #[test]
+    fn test_session_start_injects_instructions_when_skip_permissions() {
+        let mut input = default_session_start_input();
+        input.permission_mode = Some("dangerously-skip-permissions".into());
+        let output = handle_session_start(&input).unwrap();
+        let context = match &output.hook_specific_output {
+            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
+            _ => panic!("expected SessionStart output"),
+        };
+        let ctx = context.expect("should have context");
+        assert!(
+            ctx.contains("policy enforcement is DISABLED"),
+            "should warn about disabled policy enforcement, got: {ctx}"
+        );
+        assert!(
+            ctx.contains("Filesystem sandboxing"),
+            "should mention sandbox is still active, got: {ctx}"
+        );
+        assert!(
+            ctx.contains("restart Claude Code without"),
+            "should explain how to re-enable, got: {ctx}"
         );
     }
 }
