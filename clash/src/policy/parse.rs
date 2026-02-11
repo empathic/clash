@@ -13,6 +13,8 @@ use pest::Parser;
 use pest_derive::Parser;
 use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
+
+use super::ast::UrlSpec;
 use tracing::{Level, instrument};
 
 use super::error::{PolicyParseError, suggest_closest};
@@ -461,6 +463,10 @@ fn parse_inline_constraints(
                 });
             }
 
+            if let Some(url_val) = map.get(serde_yaml::Value::String("url".into())) {
+                constraints.url = Some(parse_url_list(url_val)?);
+            }
+
             if let Some(pipe_val) = map.get(serde_yaml::Value::String("pipe".into())) {
                 constraints.pipe = pipe_val.as_bool();
             }
@@ -517,6 +523,33 @@ fn parse_cap_scoped_fs(
     }
 
     Ok(entries)
+}
+
+/// Parse a `url:` constraint list.
+///
+/// ```yaml
+/// url: ["github.com", "!evil.com"]
+/// ```
+///
+/// `"!x"` → `UrlSpec::Forbid("x")`, `"x"` → `UrlSpec::Require("x")`
+fn parse_url_list(value: &serde_yaml::Value) -> Result<Vec<UrlSpec>, PolicyParseError> {
+    let seq = value
+        .as_sequence()
+        .ok_or_else(|| PolicyParseError::InvalidArg("'url' must be a sequence".into()))?;
+
+    let mut specs = Vec::new();
+    for item in seq {
+        let s = item
+            .as_str()
+            .ok_or_else(|| PolicyParseError::InvalidArg("each url must be a string".into()))?;
+        if let Some(inner) = s.strip_prefix('!') {
+            specs.push(UrlSpec::Forbid(inner.to_string()));
+        } else {
+            specs.push(UrlSpec::Require(s.to_string()));
+        }
+    }
+
+    Ok(specs)
 }
 
 /// Parse a unified `args:` list.
@@ -852,6 +885,8 @@ pub fn parse_match_expr(s: &str) -> MatchExpr {
             && !entity_type.contains('/')
             && !entity_type.contains('.')
             && !entity_type.contains('~')
+            && !name.starts_with("//")
+        // skip URL schemes (https://, http://)
         {
             if name == "*" {
                 return MatchExpr::Typed {
@@ -2109,5 +2144,86 @@ rules:
         let json = serde_json::to_string(&pattern).unwrap();
         let parsed: VerbPattern = serde_json::from_str(&json).unwrap();
         assert_eq!(pattern, parsed);
+    }
+
+    // --- URL constraint tests ---
+
+    #[test]
+    fn test_parse_url_list_require_and_forbid() {
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow webfetch *:
+        url: ["github.com", "!evil.com"]
+"#;
+        let doc = parse_yaml(yaml).unwrap();
+        let rule = &doc.profile_defs["test"].rules[0];
+        let constraints = rule.constraints.as_ref().unwrap();
+        let urls = constraints.url.as_ref().unwrap();
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0], UrlSpec::Require("github.com".into()));
+        assert_eq!(urls[1], UrlSpec::Forbid("evil.com".into()));
+    }
+
+    #[test]
+    fn test_parse_new_format_url_only() {
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow webfetch *:
+        url: ["github.com"]
+"#;
+        let doc = parse_yaml(yaml).unwrap();
+        let rule = &doc.profile_defs["test"].rules[0];
+        let constraints = rule.constraints.as_ref().unwrap();
+        assert!(constraints.url.is_some());
+        assert!(constraints.args.is_none());
+        assert!(constraints.fs.is_none());
+    }
+
+    #[test]
+    fn test_parse_match_expr_url_not_typed_entity() {
+        // Before the bug fix, https://github.com/* was parsed as
+        // Typed { entity_type: "https", name: "//github.com/*" }
+        // After the fix, it should be parsed as Glob
+        let expr = parse_match_expr("https://github.com/*");
+        assert!(
+            matches!(expr, MatchExpr::Glob(_)),
+            "URL should be parsed as Glob, got {:?}",
+            expr
+        );
+    }
+
+    #[test]
+    fn test_parse_match_expr_http_url_not_typed() {
+        let expr = parse_match_expr("http://example.com/path");
+        assert!(
+            matches!(expr, MatchExpr::Exact(_)),
+            "http URL without glob chars should be Exact, got {:?}",
+            expr
+        );
+    }
+
+    #[test]
+    fn test_parse_pattern_negated_url() {
+        // Negated URL patterns should work: !https://evil.com/*
+        let pattern = parse_pattern("!https://evil.com/*");
+        match pattern {
+            Pattern::Not(inner) => match inner {
+                MatchExpr::Glob(ref g) => assert_eq!(g, "https://evil.com/*"),
+                other => panic!("expected Glob inside Not, got {:?}", other),
+            },
+            other => panic!("expected Not pattern, got {:?}", other),
+        }
     }
 }

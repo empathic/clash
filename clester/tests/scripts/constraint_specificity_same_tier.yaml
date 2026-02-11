@@ -1,0 +1,43 @@
+meta:
+  name: same-tier constraint specificity
+  description: >
+    When both ask and allow have active constraints (same tier),
+    ask still beats allow. Specificity only helps across tiers.
+
+clash:
+  policy_raw: |
+    default:
+      permission: deny
+      profile: main
+
+    profiles:
+      main:
+        rules:
+          # Both rules have URL constraints — same specificity tier
+          allow webfetch *:
+            url: ["github.com"]
+          ask webfetch *:
+            url: ["github.com"]
+
+steps:
+  - name: constrained ask beats constrained allow (same tier)
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://github.com/foo"
+      prompt: "test"
+    expect:
+      # Both rules match and both are constrained (Tier 1).
+      # Within Tier 1: ask > allow.
+      decision: ask
+
+  - name: neither constraint matches so default deny applies
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://example.com/foo"
+      prompt: "test"
+    expect:
+      # Both constrained rules are skipped. No unconstrained rules.
+      # Falls to default: deny.
+      decision: deny

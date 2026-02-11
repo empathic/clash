@@ -189,6 +189,7 @@ mod tests {
                     rule_index: i,
                     description: format!("rule {}", i),
                     effect: Effect::Allow,
+                    has_active_constraints: false,
                 })
                 .collect(),
             skipped_rules: vec![],

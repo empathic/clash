@@ -88,6 +88,18 @@ enum PolicyCmd {
         /// Target profile (default: active profile from default.profile)
         #[arg(long)]
         profile: Option<String>,
+        /// URL constraints: require or forbid domains (e.g. "github.com", "!evil.com")
+        #[arg(long)]
+        url: Vec<String>,
+        /// Argument constraints: require or forbid args (e.g. "--dry-run", "!-delete")
+        #[arg(long)]
+        args: Vec<String>,
+        /// Allow piping (stdin/stdout redirection between commands)
+        #[arg(long)]
+        pipe: Option<bool>,
+        /// Allow shell redirects (>, >>, <)
+        #[arg(long)]
+        redirect: Option<bool>,
         /// Print modified policy to stdout without writing
         #[arg(long)]
         dry_run: bool,
@@ -431,7 +443,12 @@ fn merge_rules_into_policy(path: &std::path::Path, rules: &[String], dry_run: bo
     let mut skipped: usize = 0;
 
     for rule in rules {
-        let modified = edit::add_rule(&current_yaml, &profile, rule)?;
+        let modified = edit::add_rule(
+            &current_yaml,
+            &profile,
+            rule,
+            &edit::InlineConstraintArgs::default(),
+        )?;
         if modified == current_yaml {
             skipped += 1;
         } else {
@@ -769,10 +786,15 @@ fn load_policy_yaml() -> Result<(std::path::PathBuf, String)> {
 }
 
 /// Handle `clash policy add-rule`.
-fn handle_add_rule(rule: &str, profile: Option<&str>, dry_run: bool) -> Result<()> {
+fn handle_add_rule(
+    rule: &str,
+    profile: Option<&str>,
+    constraints: &edit::InlineConstraintArgs,
+    dry_run: bool,
+) -> Result<()> {
     let (path, yaml) = load_policy_yaml()?;
     let target_profile = edit::resolve_profile(&yaml, profile)?;
-    let modified = edit::add_rule(&yaml, &target_profile, rule)?;
+    let modified = edit::add_rule(&yaml, &target_profile, rule, constraints)?;
 
     if modified == yaml {
         println!(
@@ -1033,8 +1055,20 @@ fn run_policy(cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::AddRule {
             rule,
             profile,
+            url,
+            args,
+            pipe,
+            redirect,
             dry_run,
-        } => handle_add_rule(&rule, profile.as_deref(), dry_run),
+        } => {
+            let constraints = edit::InlineConstraintArgs {
+                url,
+                args,
+                pipe,
+                redirect,
+            };
+            handle_add_rule(&rule, profile.as_deref(), &constraints, dry_run)
+        }
         PolicyCmd::RemoveRule {
             rule,
             profile,

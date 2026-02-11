@@ -1,0 +1,46 @@
+meta:
+  name: URL constraints for WebFetch
+  description: Test url constraint on webfetch rules, URL noun pattern matching, and constraint specificity
+
+clash:
+  policy_raw: |
+    default:
+      permission: ask
+      profile: main
+
+    profiles:
+      main:
+        rules:
+          allow webfetch *:
+            url: ["github.com"]
+          deny webfetch *:
+            url: ["evil.com"]
+          ask webfetch *:
+
+steps:
+  - name: webfetch to github.com allowed by constrained allow (specificity)
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://github.com/anthropics/claude"
+      prompt: "test"
+    expect:
+      decision: allow
+
+  - name: webfetch to evil.com denied by url forbid constraint
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://evil.com/malware"
+      prompt: "test"
+    expect:
+      decision: deny
+
+  - name: webfetch to unmatched domain falls to unconstrained ask
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://random-site.org/page"
+      prompt: "test"
+    expect:
+      decision: ask

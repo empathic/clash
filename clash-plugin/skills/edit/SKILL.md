@@ -55,6 +55,33 @@ After confirmation:
 $CLASH_BIN policy remove-rule "RULE"
 ```
 
+## Removing or changing constraints on a rule
+
+There is no single command to remove a constraint (e.g., `url`, `args`, `fs`) from a rule.
+Use a remove-then-re-add workflow:
+
+1. Remove the existing rule (this deletes the rule and all its constraints):
+
+```bash
+$CLASH_BIN policy remove-rule "RULE"
+```
+
+2. Re-add the rule — either without constraints, or with only the constraints you want to keep:
+
+```bash
+# No constraints:
+$CLASH_BIN policy add-rule "RULE"
+
+# With specific constraints:
+$CLASH_BIN policy add-rule "RULE" --url "example.com" --args "--safe-flag"
+```
+
+Available inline constraint flags for `add-rule`:
+- `--url` — domain patterns (e.g., `"github.com"`, `"!evil.com"` to forbid)
+- `--args` — argument constraints (e.g., `"--dry-run"`, `"!--delete"` to forbid)
+- `--pipe` — allow piped input (boolean flag)
+- `--redirect` — allow output redirection (boolean flag)
+
 ## Validating changes
 
 After applying a change, validate it by running explain with a simulated request:

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use tracing::{Level, instrument};
 
+use super::ast::UrlSpec;
 use super::error::CompileError;
 use super::ir::{
     CompiledConstraintDef, CompiledFilterExpr, CompiledInlineConstraints, CompiledMatchExpr,
@@ -271,10 +272,23 @@ impl CompiledInlineConstraints {
             }
         }
 
+        let mut forbid_urls = Vec::new();
+        let mut require_urls = Vec::new();
+        if let Some(ref urls) = ic.url {
+            for spec in urls {
+                match spec {
+                    UrlSpec::Forbid(s) => forbid_urls.push(s.clone()),
+                    UrlSpec::Require(s) => require_urls.push(s.clone()),
+                }
+            }
+        }
+
         Ok(CompiledInlineConstraints {
             fs,
             forbid_args,
             require_args,
+            forbid_urls,
+            require_urls,
             network: ic.network,
             pipe: ic.pipe,
             redirect: ic.redirect,
@@ -2523,5 +2537,441 @@ profiles:
             Effect::Deny,
             "user-defined __claude_internal__ should override built-in"
         );
+    }
+
+    #[test]
+    fn test_new_format_url_require() {
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow webfetch *:
+        url: ["github.com"]
+"#;
+        let policy = compile_yaml(yaml);
+
+        // URL matching required domain → allowed
+        let input = serde_json::json!({"url": "https://github.com/foo/bar"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://github.com/foo/bar",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Allow);
+
+        // URL not matching required domain → constraint fails → default (ask)
+        let input = serde_json::json!({"url": "https://evil.com/malware"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://evil.com/malware",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Ask);
+    }
+
+    #[test]
+    fn test_new_format_url_forbid() {
+        let yaml = r#"
+default:
+  permission: allow
+  profile: test
+
+profiles:
+  test:
+    rules:
+      deny webfetch *:
+        url: ["evil.com"]
+"#;
+        let policy = compile_yaml(yaml);
+
+        // URL matching forbidden domain → denied
+        let input = serde_json::json!({"url": "https://evil.com/malware"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://evil.com/malware",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Deny);
+
+        // URL not matching forbidden domain → falls through to default (allow)
+        let input = serde_json::json!({"url": "https://github.com/foo"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://github.com/foo",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Allow);
+    }
+
+    #[test]
+    fn test_new_format_url_wildcard_subdomain() {
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow webfetch *:
+        url: ["*.github.com"]
+"#;
+        let policy = compile_yaml(yaml);
+
+        // Subdomain matches → allowed
+        let input = serde_json::json!({"url": "https://api.github.com/repos"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://api.github.com/repos",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Allow);
+
+        // Non-matching domain → default (ask)
+        let input = serde_json::json!({"url": "https://example.com/foo"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://example.com/foo",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Ask);
+    }
+
+    #[test]
+    fn test_new_format_url_full_glob() {
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow webfetch *:
+        url: ["https://github.com/*"]
+"#;
+        let policy = compile_yaml(yaml);
+
+        // Full URL glob matches → allowed
+        let input = serde_json::json!({"url": "https://github.com/anthropics/claude"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://github.com/anthropics/claude",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Allow);
+
+        // Non-matching URL → default (ask)
+        let input = serde_json::json!({"url": "https://evil.com/foo"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://evil.com/foo",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Ask);
+    }
+
+    #[test]
+    fn test_url_noun_pattern_after_bug_fix() {
+        // After fixing the URL-as-entity parsing bug, URL noun patterns should work
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow webfetch https://github.com/*: []
+"#;
+        let policy = compile_yaml(yaml);
+
+        let input = serde_json::json!({"url": "https://github.com/foo"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://github.com/foo",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Allow);
+
+        // Non-matching URL → default (ask)
+        let input = serde_json::json!({"url": "https://evil.com/foo"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://evil.com/foo",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Ask);
+    }
+
+    // ── Constraint specificity tests ──────────────────────────────────
+
+    #[test]
+    fn test_constrained_allow_beats_unconstrained_ask() {
+        // A URL-constrained allow should beat an unconstrained ask
+        // when the URL matches the constraint.
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow webfetch *:
+        url: ["github.com"]
+      ask webfetch *:
+"#;
+        let policy = compile_yaml(yaml);
+
+        // URL matches constraint → constrained allow wins over unconstrained ask
+        let input = serde_json::json!({"url": "https://github.com/anthropics/claude"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://github.com/anthropics/claude",
+            "",
+            &input,
+            "webfetch",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        assert!(
+            decision.trace.final_resolution.contains("constrained"),
+            "resolution should mention specificity: {}",
+            decision.trace.final_resolution
+        );
+
+        // URL does not match constraint → unconstrained ask applies
+        let input = serde_json::json!({"url": "https://example.com/foo"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://example.com/foo",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Ask);
+    }
+
+    #[test]
+    fn test_constrained_ask_beats_constrained_allow() {
+        // When both ask and allow have constraints, ask wins (same tier).
+        let yaml = r#"
+default:
+  permission: allow
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow webfetch *:
+        url: ["github.com"]
+      ask webfetch *:
+        url: ["github.com"]
+"#;
+        let policy = compile_yaml(yaml);
+
+        let input = serde_json::json!({"url": "https://github.com/foo"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://github.com/foo",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Ask);
+    }
+
+    #[test]
+    fn test_deny_beats_constrained_allow() {
+        // Deny always wins, even over constrained allow.
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow webfetch *:
+        url: ["github.com"]
+      deny webfetch *:
+"#;
+        let policy = compile_yaml(yaml);
+
+        let input = serde_json::json!({"url": "https://github.com/foo"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://github.com/foo",
+            "",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Deny);
+    }
+
+    #[test]
+    fn test_fs_only_constraints_not_active_for_webfetch() {
+        // An allow * * rule with only fs constraints should NOT count as
+        // "constrained" for webfetch, since fs guards are irrelevant for
+        // non-read/write/edit verbs.
+        let yaml = r#"
+default:
+  permission: deny
+  profile: test
+
+profiles:
+  base:
+    rules:
+      allow * *:
+        fs:
+          read + write + execute + create + delete: subpath(/home/user/project)
+  test:
+    include: [base]
+    rules:
+      ask webfetch *:
+"#;
+        let policy = compile_yaml(yaml);
+
+        // The ask webfetch * is unconstrained. The allow * * has fs constraints
+        // but those are not "active" for webfetch. Both are Tier 0.
+        // Within Tier 0: ask > allow.
+        let input = serde_json::json!({"url": "https://example.com"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://example.com",
+            "/home/user/project",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Ask);
+    }
+
+    #[test]
+    fn test_constrained_allow_with_fs_broad_allow_and_ask() {
+        // Real-world scenario: fs-constrained broad allows + URL-constrained
+        // webfetch allow + unconstrained webfetch ask.
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  cwd:
+    rules:
+      allow * *:
+        fs:
+          read + write + execute + create + delete: subpath(/home/user/project)
+  test:
+    include: [cwd]
+    rules:
+      allow webfetch *:
+        url: ["github.com"]
+      ask webfetch *:
+"#;
+        let policy = compile_yaml(yaml);
+
+        // github.com → constrained allow (Tier 1) beats unconstrained ask (Tier 0)
+        let input = serde_json::json!({"url": "https://github.com/foo"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://github.com/foo",
+            "/home/user/project",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Allow);
+
+        // example.com → constrained allow skipped, Tier 0: ask > allow
+        let input = serde_json::json!({"url": "https://example.com"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "https://example.com",
+            "/home/user/project",
+            &input,
+            "webfetch",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Ask);
+    }
+
+    #[test]
+    fn test_constrained_args_allow_beats_unconstrained_ask() {
+        // Args-constrained allow should beat unconstrained ask for bash.
+        let yaml = r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow bash git *:
+        args: ["--dry-run"]
+      ask bash *:
+"#;
+        let policy = compile_yaml(yaml);
+
+        // git diff --dry-run → constrained allow (has require-args) beats unconstrained ask
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "git diff --dry-run",
+            "/home/user",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Allow);
+
+        // git push (no --dry-run) → constrained allow skipped, unconstrained ask
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "git push",
+            "/home/user",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Ask);
     }
 }

@@ -1,7 +1,9 @@
 //! Policy evaluation engine.
 //!
-//! Evaluates requests against compiled policies using the deny > ask > allow
-//! precedence model. Sandbox generation is handled by `sandbox_gen`.
+//! Evaluates requests against compiled policies using specificity-aware
+//! precedence: deny always wins, then constrained rules beat unconstrained
+//! rules, then ask > allow within the same tier. Sandbox generation is
+//! handled by `sandbox_gen`.
 
 use std::path::{Path, PathBuf};
 
@@ -53,15 +55,22 @@ impl CompiledPolicy {
     /// 5. Cap-scoped fs permission guard (non-bash, new-format rules)
     /// 6. Profile guard evaluation (legacy-converted rules)
     ///
-    /// Precedence: deny > ask > allow.
+    /// Specificity-aware precedence:
+    /// - Deny always wins
+    /// - Constrained rules (with active url/args/pipe/redirect/fs constraints)
+    ///   beat unconstrained rules among non-deny effects
+    /// - Within the same constraint tier: ask > allow
     #[instrument(level = Level::TRACE, skip(self))]
     pub fn evaluate_with_context(&self, ctx: &EvalContext) -> PolicyDecision {
         let mut has_allow = false;
         let mut has_ask = false;
         let mut has_deny = false;
+        let mut has_constrained_allow = false;
+        let mut has_constrained_ask = false;
 
         let mut deny_reason: Option<&str> = None;
         let mut ask_reason: Option<&str> = None;
+        let mut constrained_ask_reason: Option<&str> = None;
 
         // Collect cap-scoped fs entries from matched allow rules (for sandbox, new-format).
         let mut allow_fs_entries: Vec<(&CompiledFilterExpr, Cap)> = Vec::new();
@@ -125,10 +134,12 @@ impl CompiledPolicy {
                 continue;
             }
 
+            let active_constraints = has_active_constraints(&rule.constraints, ctx.verb);
             matched_rules.push(RuleMatch {
                 rule_index,
                 description: rule_desc,
                 effect: rule.effect,
+                has_active_constraints: active_constraints,
             });
 
             match rule.effect {
@@ -143,9 +154,18 @@ impl CompiledPolicy {
                     if ask_reason.is_none() {
                         ask_reason = rule.reason.as_deref();
                     }
+                    if active_constraints {
+                        has_constrained_ask = true;
+                        if constrained_ask_reason.is_none() {
+                            constrained_ask_reason = rule.reason.as_deref();
+                        }
+                    }
                 }
                 Effect::Allow => {
                     has_allow = true;
+                    if active_constraints {
+                        has_constrained_allow = true;
+                    }
                     // Collect inline constraint fs entries (new-format, bash only)
                     if ctx.verb_str == "bash"
                         && let Some(ref constraints) = rule.constraints
@@ -167,7 +187,13 @@ impl CompiledPolicy {
             }
         }
 
-        // Precedence: deny > ask > allow
+        // Precedence: deny > (specificity-aware) ask/allow
+        //
+        // 1. Deny always wins (safety is absolute)
+        // 2. Among non-deny rules, constrained rules beat unconstrained:
+        //    - Constrained ask > constrained allow (same tier, ask > allow)
+        //    - Constrained allow > unconstrained ask (specificity wins)
+        // 3. Within unconstrained: ask > allow (original behavior)
         if has_deny {
             let trace = DecisionTrace {
                 matched_rules,
@@ -181,6 +207,52 @@ impl CompiledPolicy {
                 sandbox: None,
             };
         }
+
+        // Tier 1: constrained rules take precedence over unconstrained
+        if has_constrained_ask || has_constrained_allow {
+            if has_constrained_ask {
+                let trace = DecisionTrace {
+                    matched_rules,
+                    skipped_rules,
+                    final_resolution: "result: ask (constrained ask > constrained allow)".into(),
+                };
+                return PolicyDecision {
+                    effect: Effect::Ask,
+                    reason: constrained_ask_reason.map(|s| s.to_string()),
+                    trace,
+                    sandbox: None,
+                };
+            }
+            // has_constrained_allow only
+            let sandbox = if ctx.verb_str == "bash" {
+                self.generate_unified_sandbox(
+                    &allow_fs_entries,
+                    merged_network,
+                    &allow_profile_guards,
+                    ctx.cwd,
+                )
+            } else {
+                None
+            };
+            let resolution = if has_ask {
+                "result: allow (constrained allow > unconstrained ask)"
+            } else {
+                "result: allow"
+            };
+            let trace = DecisionTrace {
+                matched_rules,
+                skipped_rules,
+                final_resolution: resolution.into(),
+            };
+            return PolicyDecision {
+                effect: Effect::Allow,
+                reason: None,
+                trace,
+                sandbox,
+            };
+        }
+
+        // Tier 0: unconstrained rules — original behavior
         if has_ask {
             let trace = DecisionTrace {
                 matched_rules,
@@ -456,6 +528,43 @@ impl CompiledFilterExpr {
 // New-format constraint checking (free functions)
 // ---------------------------------------------------------------------------
 
+/// Check if a rule has inline constraints that were actively evaluated for
+/// the given verb. Used for specificity-aware precedence: constrained rules
+/// beat unconstrained rules among non-deny effects.
+///
+/// "Active" means the constraint actually narrows the set of matching requests:
+/// - URL, args, pipe, redirect constraints are always active when present
+/// - Fs constraints are only active for read/write/edit (where they act as
+///   permission guards), NOT for bash/webfetch/etc. (where fs is either used
+///   for sandbox generation or skipped entirely)
+fn has_active_constraints(constraints: &Option<CompiledInlineConstraints>, verb: &Verb) -> bool {
+    let c = match constraints {
+        Some(c) => c,
+        None => return false,
+    };
+
+    // Tool-input constraints always count
+    if !c.require_urls.is_empty() || !c.forbid_urls.is_empty() {
+        return true;
+    }
+    if !c.forbid_args.is_empty() || !c.require_args.is_empty() {
+        return true;
+    }
+    if c.pipe.is_some() || c.redirect.is_some() {
+        return true;
+    }
+
+    // Fs constraints count only for verbs where the fs guard is evaluated
+    if matches!(verb, Verb::Read | Verb::Write | Verb::Edit)
+        && let Some(ref fs) = c.fs
+        && !fs.is_empty()
+    {
+        return true;
+    }
+
+    false
+}
+
 /// Shared logic for checking pipe, redirect, forbid-args, and require-args
 /// constraints against a command string.
 ///
@@ -511,7 +620,7 @@ fn check_shell_constraints(
     Ok(())
 }
 
-/// Check non-fs inline constraints (pipe, redirect, args).
+/// Check non-fs inline constraints (pipe, redirect, args, url).
 /// Returns `Ok(())` if satisfied, or `Err(reason)` explaining why not.
 fn check_new_constraints(
     constraints: &Option<CompiledInlineConstraints>,
@@ -528,7 +637,100 @@ fn check_new_constraints(
         constraints.redirect,
         &constraints.forbid_args,
         &constraints.require_args,
-    )
+    )?;
+
+    check_url_constraints(ctx, &constraints.forbid_urls, &constraints.require_urls)
+}
+
+/// Check URL constraints against the request's URL.
+///
+/// The URL is extracted from `tool_input.url`, falling back to the noun.
+/// Patterns without `://` are matched against the URL's host (domain matching).
+/// Patterns with `://` are matched against the full URL (glob matching).
+fn check_url_constraints(
+    ctx: &EvalContext,
+    forbid_urls: &[String],
+    require_urls: &[String],
+) -> Result<(), String> {
+    if forbid_urls.is_empty() && require_urls.is_empty() {
+        return Ok(());
+    }
+
+    let url = ctx
+        .tool_input
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or(ctx.noun);
+
+    let host = extract_url_host(url);
+
+    for pattern in forbid_urls {
+        if url_pattern_matches(pattern, url, &host) {
+            return Err(format!(
+                "url constraint: URL matches forbidden pattern '{}'",
+                pattern
+            ));
+        }
+    }
+
+    if !require_urls.is_empty()
+        && !require_urls
+            .iter()
+            .any(|p| url_pattern_matches(p, url, &host))
+    {
+        return Err(format!(
+            "url constraint: URL does not match any required pattern {:?}",
+            require_urls
+        ));
+    }
+
+    Ok(())
+}
+
+/// Extract the host from a URL string.
+///
+/// Finds `://`, takes everything after it until the next `/`, `?`, `#`, or end,
+/// then strips any port suffix.
+fn extract_url_host(url: &str) -> String {
+    let after_scheme = url.find("://").map(|i| &url[i + 3..]).unwrap_or(url);
+
+    let host_port = after_scheme
+        .find(['/', '?', '#'])
+        .map(|i| &after_scheme[..i])
+        .unwrap_or(after_scheme);
+
+    // Strip port
+    if let Some(colon) = host_port.rfind(':')
+        && host_port[colon + 1..].chars().all(|c| c.is_ascii_digit())
+    {
+        return host_port[..colon].to_string();
+    }
+
+    host_port.to_string()
+}
+
+/// Check if a pattern matches a URL.
+///
+/// Patterns with `://` are full URL globs matched against the entire URL.
+/// Patterns without `://` are domain patterns matched against the host.
+fn url_pattern_matches(pattern: &str, full_url: &str, host: &str) -> bool {
+    if pattern.contains("://") {
+        super::ast::policy_glob_matches(pattern, full_url)
+    } else {
+        domain_matches(pattern, host)
+    }
+}
+
+/// Check if a host matches a domain pattern.
+///
+/// - `"github.com"` matches `"github.com"` exactly.
+/// - `"*.github.com"` matches `"api.github.com"`, `"raw.github.com"`, etc.
+fn domain_matches(pattern: &str, host: &str) -> bool {
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        host == suffix || host.ends_with(&format!(".{}", suffix))
+    } else {
+        host == pattern
+    }
 }
 
 /// Cap-scoped fs permission guard for non-bash verbs.
@@ -1056,5 +1258,90 @@ mod tests {
         // 'hello\' ends the single-quoted region at the second quote.
         // Then | is unquoted, so this should be detected as having a pipe.
         assert!(command_has_pipe("echo 'hello\\' | grep x"));
+    }
+
+    #[test]
+    fn test_extract_url_host_basic() {
+        assert_eq!(extract_url_host("https://github.com/foo"), "github.com");
+        assert_eq!(extract_url_host("http://example.com"), "example.com");
+        assert_eq!(
+            extract_url_host("https://api.github.com/repos"),
+            "api.github.com"
+        );
+    }
+
+    #[test]
+    fn test_extract_url_host_with_port() {
+        assert_eq!(extract_url_host("http://localhost:8080/path"), "localhost");
+        assert_eq!(
+            extract_url_host("https://example.com:443/foo"),
+            "example.com"
+        );
+    }
+
+    #[test]
+    fn test_extract_url_host_with_query_and_fragment() {
+        assert_eq!(
+            extract_url_host("https://example.com/path?q=1"),
+            "example.com"
+        );
+        assert_eq!(
+            extract_url_host("https://example.com#section"),
+            "example.com"
+        );
+    }
+
+    #[test]
+    fn test_extract_url_host_no_scheme() {
+        // Fallback: no :// means the whole string is treated as host
+        assert_eq!(extract_url_host("github.com"), "github.com");
+    }
+
+    #[test]
+    fn test_domain_matches_exact() {
+        assert!(domain_matches("github.com", "github.com"));
+        assert!(!domain_matches("github.com", "evil.com"));
+        assert!(!domain_matches("github.com", "notgithub.com"));
+    }
+
+    #[test]
+    fn test_domain_matches_wildcard() {
+        assert!(domain_matches("*.github.com", "api.github.com"));
+        assert!(domain_matches("*.github.com", "raw.github.com"));
+        // The wildcard suffix itself should also match
+        assert!(domain_matches("*.github.com", "github.com"));
+        // Should NOT match unrelated domains
+        assert!(!domain_matches("*.github.com", "evil.com"));
+        assert!(!domain_matches("*.github.com", "fakegithub.com"));
+    }
+
+    #[test]
+    fn test_url_pattern_matches_domain() {
+        // Plain domain patterns delegate to domain_matches
+        assert!(url_pattern_matches(
+            "github.com",
+            "https://github.com/foo",
+            "github.com"
+        ));
+        assert!(!url_pattern_matches(
+            "github.com",
+            "https://evil.com/foo",
+            "evil.com"
+        ));
+    }
+
+    #[test]
+    fn test_url_pattern_matches_full_url_glob() {
+        // Patterns with :// use full URL glob matching
+        assert!(url_pattern_matches(
+            "https://github.com/*",
+            "https://github.com/foo/bar",
+            "github.com"
+        ));
+        assert!(!url_pattern_matches(
+            "https://github.com/*",
+            "https://evil.com/foo",
+            "evil.com"
+        ));
     }
 }
