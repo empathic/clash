@@ -304,6 +304,41 @@ impl CompiledPolicy {
         }
     }
 
+    /// Generate a sandbox policy from ALL allow rules in the active profile.
+    ///
+    /// Unlike `generate_unified_sandbox` (which uses only rules that matched a
+    /// specific request), this collects sandbox-relevant constraints from every
+    /// allow rule regardless of matching. This provides a profile-wide sandbox
+    /// for the `clash sandbox exec --profile` CLI.
+    pub fn sandbox_for_active_profile(&self, cwd: &str) -> Option<SandboxPolicy> {
+        let mut inline_fs_entries: Vec<(&CompiledFilterExpr, Cap)> = Vec::new();
+        let mut merged_network = NetworkPolicy::Allow;
+        let mut profile_guards: Vec<&ProfileExpr> = Vec::new();
+
+        for rule in &self.active_profile_rules {
+            if rule.effect != Effect::Allow {
+                continue;
+            }
+
+            if let Some(ref constraints) = rule.constraints {
+                if let Some(ref fs_entries) = constraints.fs {
+                    for (caps, compiled_fs) in fs_entries {
+                        inline_fs_entries.push((compiled_fs, *caps));
+                    }
+                }
+                if constraints.network == Some(NetworkPolicy::Deny) {
+                    merged_network = NetworkPolicy::Deny;
+                }
+            }
+
+            if let Some(ref profile_guard) = rule.profile_guard {
+                profile_guards.push(profile_guard);
+            }
+        }
+
+        self.generate_unified_sandbox(&inline_fs_entries, merged_network, &profile_guards, cwd)
+    }
+
     /// Generate a sandbox policy from both inline constraints and profile guards.
     ///
     /// Two sources are merged:
