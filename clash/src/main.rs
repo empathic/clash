@@ -88,6 +88,9 @@ enum PolicyCmd {
         /// Target profile (default: active profile from default.profile)
         #[arg(long)]
         profile: Option<String>,
+        /// Filesystem constraints: "caps:filter_expr" (e.g. "full:subpath(~/dir)", "read+write:subpath(.)")
+        #[arg(long)]
+        fs: Vec<String>,
         /// URL constraints: require or forbid domains (e.g. "github.com", "!evil.com")
         #[arg(long)]
         url: Vec<String>,
@@ -1055,6 +1058,7 @@ fn run_policy(cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::AddRule {
             rule,
             profile,
+            fs,
             url,
             args,
             pipe,
@@ -1062,11 +1066,13 @@ fn run_policy(cmd: PolicyCmd) -> Result<()> {
             dry_run,
         } => {
             let constraints = edit::InlineConstraintArgs {
+                fs,
                 url,
                 args,
                 pipe,
                 redirect,
             };
+            constraints.validate()?;
             handle_add_rule(&rule, profile.as_deref(), &constraints, dry_run)
         }
         PolicyCmd::RemoveRule {

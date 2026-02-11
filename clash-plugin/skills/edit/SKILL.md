@@ -73,10 +73,11 @@ $CLASH_BIN policy remove-rule "RULE"
 $CLASH_BIN policy add-rule "RULE"
 
 # With specific constraints:
-$CLASH_BIN policy add-rule "RULE" --url "example.com" --args "--safe-flag"
+$CLASH_BIN policy add-rule "RULE" --fs "full:subpath(~/dir)" --url "example.com" --args "--safe-flag"
 ```
 
 Available inline constraint flags for `add-rule`:
+- `--fs` — filesystem constraints as `"caps:filter_expr"` (e.g., `"full:subpath(~/dir)"`, `"read+write:subpath(.)"`)
 - `--url` — domain patterns (e.g., `"github.com"`, `"!evil.com"` to forbid)
 - `--args` — argument constraints (e.g., `"--dry-run"`, `"!--delete"` to forbid)
 - `--pipe` — allow piped input (boolean flag)

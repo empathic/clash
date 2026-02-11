@@ -9,6 +9,7 @@ Help the user add a **deny** rule to their clash policy.
 1. **Determine the rule** from the conversation context. Consider what the user wants to block:
    - Example: `deny bash git push*` (block git push)
    - Example: `deny bash sudo *` (block sudo commands)
+   - Example: `deny * *` with `--fs "write+delete:subpath(~/important)"` (block writes to a directory)
    - If unsure, ask the user what they want to deny.
 
 2. **Confirm with the user** before making any changes:

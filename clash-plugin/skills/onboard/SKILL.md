@@ -80,6 +80,15 @@ Apply each change silently:
 $CLASH_BIN policy add-rule "RULE"
 ```
 
+For rules with filesystem constraints, use the `--fs` flag:
+
+```bash
+$CLASH_BIN policy add-rule "allow * *" --fs "full:subpath(~/Library/Caches)"
+```
+
+Capability options: `read`, `write`, `create`, `delete`, `execute`, or `full` (all).
+Filter functions: `subpath(path)`, `literal(path)`, `regex(pattern)` — combinable with `|` and `&`.
+
 Confirm in plain English after each: "Done — git push is now blocked."
 
 ## Step 4: Confirm

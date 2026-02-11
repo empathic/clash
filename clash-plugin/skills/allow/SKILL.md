@@ -10,6 +10,11 @@ Help the user add an **allow** rule to their clash policy.
    - Good: `allow bash git *` (covers all git commands)
    - Avoid: `allow bash git status` (too narrow, user will hit another prompt soon)
    - If unsure, ask the user what they want to allow.
+   - If the request involves a **directory path** or filesystem access (e.g., "allow access to ~/Library/Caches"):
+     - Use `allow * *` as the rule with a `--fs` constraint
+     - Example: `$CLASH_BIN policy add-rule "allow * *" --fs "full:subpath(~/Library/Caches)"`
+     - Capabilities: `read`, `write`, `create`, `delete`, `execute`, or `full` (all of the above)
+     - Filters: `subpath(path)`, `literal(path)`, `regex(pattern)` — combinable with `|` (or) and `&` (and)
 
 2. **Confirm with the user** before making any changes:
    - Show the exact rule that will be added
@@ -19,6 +24,8 @@ Help the user add an **allow** rule to their clash policy.
 3. **Dry-run first** to preview the change:
    ```bash
    $CLASH_BIN policy add-rule "RULE" --dry-run
+   # Or with filesystem constraints:
+   $CLASH_BIN policy add-rule "allow * *" --fs "full:subpath(~/dir)" --dry-run
    ```
    Show the output to the user.
 
