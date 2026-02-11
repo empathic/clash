@@ -113,6 +113,9 @@ fn profile_names(yaml: &str) -> Result<Vec<String>> {
 /// CLI-provided inline constraints to attach below a rule.
 #[derive(Debug, Default)]
 pub struct InlineConstraintArgs {
+    /// Filesystem constraints: `"caps:filter_expr"` pairs.
+    /// e.g. `"full:subpath(~/Library/Caches)"`, `"read+write:subpath(.)"`.
+    pub fs: Vec<String>,
     /// URL domain patterns: `"github.com"` (require), `"!evil.com"` (forbid).
     pub url: Vec<String>,
     /// Argument constraints: `"--dry-run"` (require), `"!-delete"` (forbid).
@@ -126,16 +129,39 @@ pub struct InlineConstraintArgs {
 impl InlineConstraintArgs {
     /// Returns true if there are no constraints to emit.
     pub fn is_empty(&self) -> bool {
-        self.url.is_empty()
+        self.fs.is_empty()
+            && self.url.is_empty()
             && self.args.is_empty()
             && self.pipe.is_none()
             && self.redirect.is_none()
+    }
+
+    /// Validate that all `--fs` entries have the required `caps:filter` format.
+    pub fn validate(&self) -> Result<()> {
+        for entry in &self.fs {
+            if entry.split_once(':').is_none() {
+                bail!(
+                    "invalid --fs value '{}': expected 'caps:filter_expr' \
+                     (e.g. 'full:subpath(~/dir)', 'read+write:subpath(.)') ",
+                    entry
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Render constraint lines as YAML at the given indent level.
     fn to_yaml_lines(&self, indent: usize) -> Vec<String> {
         let mut lines = Vec::new();
         let pad = " ".repeat(indent);
+        if !self.fs.is_empty() {
+            lines.push(format!("{}fs:", pad));
+            for entry in &self.fs {
+                if let Some((caps, filter)) = entry.split_once(':') {
+                    lines.push(format!("{}  {}: {}", pad, caps.trim(), filter.trim()));
+                }
+            }
+        }
         if !self.url.is_empty() {
             let items: Vec<String> = self.url.iter().map(|u| format!("\"{}\"", u)).collect();
             lines.push(format!("{}url: [{}]", pad, items.join(", ")));
@@ -715,10 +741,8 @@ profiles:
             args: vec!["--dry-run".into(), "!-delete".into()],
             ..Default::default()
         };
-        let result = add_rule(TEST_POLICY, "main", "allow bash git *", &constraints).unwrap();
-        // Existing rule already exists but has no constraints — should add new one?
-        // Actually, the idempotency check matches on the rule key, so this returns unchanged.
-        // Use a different rule:
+        let _existing = add_rule(TEST_POLICY, "main", "allow bash git *", &constraints).unwrap();
+        // Idempotency check matches on the rule key, so use a different rule:
         let result = add_rule(TEST_POLICY, "main", "allow bash cargo *", &constraints).unwrap();
         assert!(result.contains("allow bash cargo *:"));
         assert!(result.contains(r#"args: ["--dry-run", "!-delete"]"#));
@@ -735,5 +759,63 @@ profiles:
         assert!(result.contains("deny bash curl *:"));
         assert!(result.contains("pipe: false"));
         assert!(result.contains("redirect: false"));
+    }
+
+    #[test]
+    fn test_add_rule_with_fs_constraint() {
+        let constraints = InlineConstraintArgs {
+            fs: vec!["full:subpath(~/Library/Caches)".into()],
+            ..Default::default()
+        };
+        let result = add_rule(TEST_POLICY, "main", "allow * *", &constraints).unwrap();
+        assert!(result.contains("allow * *:"));
+        assert!(result.contains("fs:"));
+        assert!(result.contains("full: subpath(~/Library/Caches)"));
+    }
+
+    #[test]
+    fn test_add_rule_with_multi_cap_fs() {
+        let constraints = InlineConstraintArgs {
+            fs: vec![
+                "read+write:subpath(.)".into(),
+                "execute:subpath(./bin)".into(),
+            ],
+            ..Default::default()
+        };
+        let result = add_rule(TEST_POLICY, "main", "allow bash *", &constraints).unwrap();
+        assert!(result.contains("fs:"));
+        assert!(result.contains("read+write: subpath(.)"));
+        assert!(result.contains("execute: subpath(./bin)"));
+    }
+
+    #[test]
+    fn test_add_rule_with_fs_and_url() {
+        let constraints = InlineConstraintArgs {
+            fs: vec!["read:subpath(.)".into()],
+            url: vec!["github.com".into()],
+            ..Default::default()
+        };
+        let result = add_rule(TEST_POLICY, "main", "allow webfetch *", &constraints).unwrap();
+        assert!(result.contains("fs:"));
+        assert!(result.contains("read: subpath(.)"));
+        assert!(result.contains(r#"url: ["github.com"]"#));
+    }
+
+    #[test]
+    fn test_fs_constraint_validate_ok() {
+        let constraints = InlineConstraintArgs {
+            fs: vec!["full:subpath(~/dir)".into()],
+            ..Default::default()
+        };
+        assert!(constraints.validate().is_ok());
+    }
+
+    #[test]
+    fn test_fs_constraint_validate_missing_colon() {
+        let constraints = InlineConstraintArgs {
+            fs: vec!["subpath(~/dir)".into()],
+            ..Default::default()
+        };
+        assert!(constraints.validate().is_err());
     }
 }

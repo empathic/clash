@@ -17,6 +17,23 @@ Each rule has three parts: **`effect verb noun`**
 
 Precedence: **deny** always wins. Among non-deny rules, a rule with constraints (url, args, etc.) beats one without. Within the same tier, **ask > allow**.
 
+## Step 0: Initialize
+
+If the user doesn't have a policy file yet, initialize with safe defaults:
+
+```bash
+$CLASH_BIN init
+```
+
+If this succeeds, explain that a default policy has been created at `~/.clash/policy.yaml` with:
+- Filesystem profiles: `cwd` (current directory), `claude-internal` (~/.claude), `tmp` (/tmp)
+- A `sensitive` profile that prompts before accessing ~/.ssh or ~/.aws
+- Git safety rules: commit requires approval, push/merge/destructive ops are denied
+- `sudo` is denied
+- Default behavior: `ask` (prompt for anything not covered by a rule)
+
+If a policy already exists, skip to Step 1.
+
 ## Step 1: Migrate existing permissions
 
 Import any existing Claude Code permissions as a starting point:
@@ -94,6 +111,15 @@ Show the dry-run output, get confirmation, then apply:
 ```bash
 $CLASH_BIN policy add-rule "RULE"
 ```
+
+For rules with filesystem constraints, use the `--fs` flag:
+
+```bash
+$CLASH_BIN policy add-rule "allow * *" --fs "full:subpath(~/Library/Caches)" --dry-run
+```
+
+Capability options: `read`, `write`, `create`, `delete`, `execute`, or `full` (all).
+Filter functions: `subpath(path)`, `literal(path)`, `regex(pattern)` — combinable with `|` and `&`.
 
 For non-rule settings (notifications, audit), edit the policy.yaml directly using the Edit tool, preserving existing comments and structure.
 
