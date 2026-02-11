@@ -977,7 +977,7 @@ fn print_fields(fields: &[clash::schema::SchemaField], indent: usize) {
     }
 }
 
-/// File a bug report to Linear.
+/// File a bug report to Linear if the key was supplied at compile time
 #[instrument(level = Level::TRACE)]
 fn run_bug_report(
     title: String,

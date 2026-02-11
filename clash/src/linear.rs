@@ -7,7 +7,7 @@ const PROJECT_ID: &str = "3f2561c9-6f78-43d7-84df-90386b0b571e";
 const BUG_LABEL_ID: &str = "c1e8c097-307e-478a-885c-fad0afa92fd3";
 const API_KEY: Option<&str> = option_env!("CLASH_LINEAR_API_KEY");
 
-/// Whether the Linear API key was baked in at build time.
+/// Whether the Linear API key was baked in at build time
 pub fn api_key_available() -> bool {
     API_KEY.is_some()
 }

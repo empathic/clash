@@ -1,15 +1,15 @@
 # Clash Plugin for Claude Code
 
-Clash (Claude Shell) is a permission enforcement plugin for Claude Code. It intercepts tool usage and enforces permission policies (Allow/Deny/Ask) based on your configuration.
+The Claude Code plugin that integrates clash into your agent sessions. It registers hooks to intercept tool calls and provides slash-command skills for managing your policy interactively.
 
-## Installation
+For general usage and policy documentation, see the [project README](../README.md).
 
-### Build and run
+## Building
 
 Requires Rust toolchain.
 
 ```bash
-# Build the plugin (outputs to /tmp/clash-dev/clash-plugin/)
+# Build the plugin (outputs to ./target/clash-dev/clash-plugin/)
 just build-plugin
 
 # Build and launch Claude Code with the plugin
@@ -19,65 +19,44 @@ just dev
 ### Manual build
 
 ```bash
-# Build the binary
 cargo build --release -p clash
-
-# Use the plugin with Claude Code
 claude --plugin-dir /path/to/clash-plugin
 ```
 
-When using `just build-plugin`, the build copies the plugin directory and compiled binary into a staging directory that Claude Code can load.
+The build copies this plugin directory and the compiled `clash` binary into a staging directory that Claude Code can load.
 
-## Configuration
-
-Clash reads permission rules from your Claude Code settings. Configure permissions in your settings files (highest to lowest priority):
-
-- **System**: `/etc/claude-code/managed-settings.json` (read-only)
-- **Project local**: `.claude/settings.local.json` (not version controlled)
-- **Project**: `.claude/settings.json` (version controlled)
-- **User**: `~/.claude/settings.json`
-
-Example permission configuration:
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(git:*)",
-      "Bash(cargo:*)",
-      "Read"
-    ],
-    "deny": [
-      "Bash(rm -rf:*)",
-      "Read(.env)"
-    ]
-  }
-}
-```
-
-### Permission patterns
-
-- `Tool` - Match any usage of a tool
-- `Tool(prefix:*)` - Match tool usage where the argument starts with a prefix
-- `Tool(exact)` - Match an exact argument
-
-## Hooks
+## How It Works
 
 The plugin registers four hook types via `hooks/hooks.json`:
 
 | Hook | Purpose |
 |------|---------|
-| **PreToolUse** | Checks permissions before tool execution; returns Allow, Deny, or Ask |
-| **PostToolUse** | Runs after tool execution (informational) |
+| **PreToolUse** | Evaluates policy rules before tool execution; returns Allow, Deny, or Ask |
+| **PostToolUse** | Runs after tool execution (audit logging) |
 | **PermissionRequest** | Responds to permission prompts on behalf of the user |
-| **Notification** | Handles notification events (permission prompts, idle prompts, auth, etc.) |
+| **Notification** | Handles notification events (permission prompts, idle detection, etc.) |
+
+Policy rules are read from `~/.clash/policy.yaml`. See the [Policy Writing Guide](../docs/policy-guide.md) for syntax.
 
 ## Skills
 
-### `/clash:status`
+Skills are slash commands available inside Claude Code when the plugin is loaded:
 
-Shows the current clash installation status and configured permissions across all settings levels.
+| Skill | Description |
+|-------|-------------|
+| `/clash:onboard` | Interactively build a policy from scratch |
+| `/clash:edit` | Guided editing of your policy file |
+| `/clash:status` | Show policy, rules, and enforcement status |
+| `/clash:describe` | Plain-English description of your active policy |
+| `/clash:explain` | See which rule matches a tool invocation |
+| `/clash:allow` | Add an allow rule |
+| `/clash:deny` | Add a deny rule |
+| `/clash:test` | Test policy against hypothetical tool uses |
+| `/clash:migrate` | Import Claude Code permissions into policy.yaml |
+| `/clash:audit` | View recent permission decisions |
+| `/clash:bug-report` | File a bug report |
 
-## Project structure
+## Project Structure
 
 ```
 clash-plugin/
@@ -86,21 +65,25 @@ clash-plugin/
 ├── hooks/
 │   └── hooks.json        # Hook configuration
 ├── skills/
-│   └── status/
-│       └── SKILL.md      # /clash:status skill
-└── scripts/              # Build scripts
+│   ├── onboard/          # Interactive policy builder
+│   ├── edit/             # Guided policy editing
+│   ├── status/           # Status display
+│   ├── explain/          # Rule matching explanation
+│   ├── allow/            # Quick allow rule
+│   ├── deny/             # Quick deny rule
+│   ├── test/             # Policy testing
+│   ├── audit/            # Audit log viewer
+│   ├── migrate/          # Permission migration
+│   ├── describe/         # Policy description
+│   └── bug-report/       # Bug reporting
+└── bin/                  # Compiled clash binary (populated by build)
 ```
-
-The compiled `clash` binary is placed in `bin/` by the build process (`just build-plugin`).
 
 ## Development
 
 ```bash
-# Build plugin and launch Claude Code with it
-just dev
-
-# Run checks (fmt, test, clippy)
-just check
+just dev       # build plugin and launch Claude Code with it
+just check     # fmt, test, clippy
 ```
 
 Logs are written to `/tmp/clash.log`.
