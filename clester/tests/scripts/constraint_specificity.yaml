@@ -1,0 +1,111 @@
+meta:
+  name: constraint specificity precedence
+  description: >
+    Test that constrained rules beat unconstrained rules among non-deny effects.
+    A constrained allow should beat an unconstrained ask when the constraint matches.
+    Deny always wins regardless of specificity.
+
+clash:
+  policy_raw: |
+    default:
+      permission: ask
+      profile: main
+
+    profiles:
+      cwd:
+        rules:
+          allow * *:
+            fs:
+              read + write + execute + create + delete: subpath(/home/user/project)
+
+      main:
+        include: [cwd]
+        rules:
+          # URL-constrained allow for specific domain
+          allow webfetch *:
+            url: ["github.com"]
+
+          # Unconstrained ask for all webfetch (should lose to constrained allow)
+          ask webfetch *:
+
+          # Args-constrained allow for git with --dry-run
+          allow bash git *:
+            args: ["--dry-run"]
+
+          # Unconstrained ask for all bash (should lose to constrained allow)
+          ask bash *:
+
+          # Deny always wins regardless of specificity
+          deny bash rm *:
+
+steps:
+  # ── URL constraint specificity ──────────────────────────────────────
+
+  - name: constrained allow beats unconstrained ask (matching URL)
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://github.com/anthropics/claude"
+      prompt: "test"
+    expect:
+      decision: allow
+
+  - name: unconstrained ask wins when URL constraint does not match
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://example.com/page"
+      prompt: "test"
+    expect:
+      decision: ask
+
+  - name: constrained allow matches subdomain via github.com pattern
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://github.com/eliothedeman/clash"
+      prompt: "test"
+    expect:
+      decision: allow
+
+  # ── Args constraint specificity ─────────────────────────────────────
+
+  - name: constrained allow beats unconstrained ask (matching args)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "git push --dry-run"
+    expect:
+      decision: allow
+
+  - name: unconstrained ask wins when args constraint does not match
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "git push origin main"
+    expect:
+      decision: ask
+
+  # ── Deny still beats constrained allow ──────────────────────────────
+
+  - name: deny beats everything (no specificity override)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "rm -rf /tmp/foo"
+    expect:
+      decision: deny
+
+  # ── Fs-only constraints are not active for webfetch ─────────────────
+
+  - name: fs-only broad allow does not count as constrained for webfetch
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://random-site.org/page"
+      prompt: "test"
+    expect:
+      # The allow * * [fs: subpath(...)] matches but is Tier 0 for webfetch
+      # (fs constraints are irrelevant for webfetch).
+      # ask webfetch * is also Tier 0. Within Tier 0: ask > allow.
+      decision: ask
