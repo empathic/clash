@@ -979,4 +979,95 @@ rules:
         let cmd = extract_wrapped_command(&result);
         assert!(cmd.contains("sandbox exec"), "command should be rewritten");
     }
+
+    // --- WebFetch URL constraint integration tests ---
+
+    fn webfetch_input(url: &str) -> ToolUseHookInput {
+        ToolUseHookInput {
+            tool_name: "WebFetch".into(),
+            tool_input: json!({"url": url, "prompt": "test"}),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_webfetch_url_constraint_allows_matching_domain() -> Result<()> {
+        let settings = settings_with_policy(
+            r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow webfetch *:
+        url: ["github.com"]
+"#,
+        );
+        let result = check_permission(&webfetch_input("https://github.com/foo"), &settings)?;
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_webfetch_url_constraint_falls_to_default_for_non_matching() -> Result<()> {
+        let settings = settings_with_policy(
+            r#"
+default:
+  permission: ask
+  profile: test
+
+profiles:
+  test:
+    rules:
+      allow webfetch *:
+        url: ["github.com"]
+"#,
+        );
+        let result = check_permission(&webfetch_input("https://evil.com/malware"), &settings)?;
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Ask,
+            Some("policy: ask"),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_webfetch_url_forbid_denies_matching() -> Result<()> {
+        let settings = settings_with_policy(
+            r#"
+default:
+  permission: allow
+  profile: test
+
+profiles:
+  test:
+    rules:
+      deny webfetch *:
+        url: ["evil.com"]
+"#,
+        );
+        // Forbidden domain → denied
+        let result = check_permission(&webfetch_input("https://evil.com/malware"), &settings)?;
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Deny,
+            Some("policy: denied"),
+        );
+
+        // Non-forbidden domain → falls through to default (allow)
+        let result = check_permission(&webfetch_input("https://github.com/foo"), &settings)?;
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
+        );
+        Ok(())
+    }
 }

@@ -76,6 +76,8 @@ pub(crate) struct CompiledInlineConstraints {
     pub(crate) fs: Option<Vec<(Cap, CompiledFilterExpr)>>,
     pub(crate) forbid_args: Vec<String>,
     pub(crate) require_args: Vec<String>,
+    pub(crate) forbid_urls: Vec<String>,
+    pub(crate) require_urls: Vec<String>,
     pub(crate) network: Option<NetworkPolicy>,
     pub(crate) pipe: Option<bool>,
     pub(crate) redirect: Option<bool>,
@@ -139,6 +141,10 @@ pub struct RuleMatch {
     pub description: String,
     /// The effect this rule produces.
     pub effect: Effect,
+    /// Whether this rule had inline constraints that were actively checked
+    /// (url, args, pipe, redirect, or fs for read/write/edit verbs).
+    /// Used for specificity-aware precedence: constrained rules beat unconstrained.
+    pub has_active_constraints: bool,
 }
 
 /// A rule that was skipped during evaluation.
@@ -257,6 +263,11 @@ fn humanize_skip_reason(rule_desc: &str, reason: &str) -> String {
             "Rule '{}' was skipped: command is missing a required argument",
             rule_desc
         )
+    } else if reason.contains("url constraint") {
+        format!(
+            "Rule '{}' was skipped: URL does not match the allowed patterns",
+            rule_desc
+        )
     } else if reason.starts_with("constraint failed:") {
         let detail = reason.strip_prefix("constraint failed: ").unwrap_or(reason);
         format!(
@@ -272,6 +283,10 @@ fn humanize_skip_reason(rule_desc: &str, reason: &str) -> String {
 fn humanize_resolution(resolution: &str) -> String {
     if resolution.contains("deny") && resolution.contains("deny > ask > allow") {
         "Final decision: deny (deny rules take precedence over allow/ask). Use /clash:explain for details or /clash:edit to modify.".into()
+    } else if resolution.contains("constrained") && resolution.contains("allow") {
+        "Final decision: allow (constrained allow takes precedence over unconstrained ask)".into()
+    } else if resolution.contains("constrained") && resolution.contains("ask") {
+        "Final decision: ask (constrained rules take precedence)".into()
     } else if resolution.contains("ask") && resolution.contains("ask > allow") {
         "Final decision: ask (ask rules take precedence over allow). Use /clash:allow to add an allow rule if desired.".into()
     } else if resolution == "result: allow" {

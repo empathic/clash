@@ -67,3 +67,6 @@ profiles:
 
       # ── Dangerous commands ─────────────────────────────────────
       deny bash sudo *:
+
+      # ── URL restrictions ────────────────────────────────────────
+      deny webfetch *:

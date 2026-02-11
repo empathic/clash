@@ -410,69 +410,41 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
         }
     }
 
-    // 5. Export CLASH_BIN and CLASH_SESSION_DIR via CLAUDE_ENV_FILE
-    if let Ok(env_file) = std::env::var("CLAUDE_ENV_FILE") {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&env_file) {
-            match std::env::current_exe() {
-                Ok(exe_path) => {
-                    let _ = writeln!(f, "CLASH_BIN={}", exe_path.display());
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to resolve clash binary path");
+    // 5. Symlink clash binary into ~/.local/bin
+    #[cfg(unix)]
+    if let Ok(exe_path) = std::env::current_exe() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::path::Path::new(&home).join(".local/bin");
+        let _ = std::fs::create_dir_all(&dir);
+        let link_path = dir.join("clash");
+        if let Ok(target) = std::fs::read_link(&link_path) {
+            if target != exe_path {
+                let _ = std::fs::remove_file(&link_path);
+                match std::os::unix::fs::symlink(&exe_path, &link_path) {
+                    Ok(()) => info!(dir = %dir.display(), "symlinked clash into ~/.local/bin"),
+                    Err(e) => debug!(error = %e, "failed to symlink clash into ~/.local/bin"),
                 }
             }
-            let session_dir = crate::audit::session_dir(&input.session_id);
-            let _ = writeln!(f, "CLASH_SESSION_DIR={}", session_dir.display());
+        } else if link_path.exists() {
+            debug!("~/.local/bin/clash exists as a regular file, not replacing");
+        } else {
+            match std::os::unix::fs::symlink(&exe_path, &link_path) {
+                Ok(()) => info!(dir = %dir.display(), "symlinked clash into ~/.local/bin"),
+                Err(e) => debug!(error = %e, "failed to symlink clash into ~/.local/bin"),
+            }
         }
     }
 
-    // 5b. Symlink clash binary into a user-owned PATH directory
-    #[cfg(unix)]
-    if let Ok(exe_path) = std::env::current_exe() {
-        use std::os::unix::fs::MetadataExt;
-        let uid = unsafe { libc::getuid() };
-        let linked = std::env::var("PATH")
-            .unwrap_or_default()
-            .split(':')
-            .find_map(|dir| {
-                let dir = std::path::Path::new(dir);
-                let meta = std::fs::metadata(dir).ok()?;
-                if meta.uid() != uid {
-                    return None;
-                }
-                // Check writable by attempting a temp file
-                let test_path = dir.join(".clash_write_test");
-                if std::fs::write(&test_path, b"").is_ok() {
-                    let _ = std::fs::remove_file(&test_path);
-                } else {
-                    return None;
-                }
-                let link_path = dir.join("clash");
-                // Already correctly linked — nothing to do
-                if let Ok(target) = std::fs::read_link(&link_path) {
-                    if target == exe_path {
-                        return Some(true);
-                    }
-                    // Stale symlink — replace it
-                    let _ = std::fs::remove_file(&link_path);
-                } else if link_path.exists() {
-                    // Regular file exists — don't clobber
-                    return None;
-                }
-                match std::os::unix::fs::symlink(&exe_path, &link_path) {
-                    Ok(()) => {
-                        info!(dir = %dir.display(), "symlinked clash into PATH");
-                        Some(true)
-                    }
-                    Err(e) => {
-                        debug!(error = %e, dir = %dir.display(), "failed to symlink clash");
-                        None
-                    }
-                }
-            });
-        if linked.is_none() {
-            debug!("no suitable user-owned PATH directory found for clash symlink");
+    // 5b. Export CLASH_BIN and CLASH_SESSION_DIR via CLAUDE_ENV_FILE
+    //     Points to ~/.local/bin/clash (the symlink created above).
+    if let Ok(env_file) = std::env::var("CLAUDE_ENV_FILE") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&env_file) {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let bin_path = std::path::Path::new(&home).join(".local/bin/clash");
+            let _ = writeln!(f, "CLASH_BIN={}", bin_path.display());
+            let session_dir = crate::audit::session_dir(&input.session_id);
+            let _ = writeln!(f, "CLASH_SESSION_DIR={}", session_dir.display());
         }
     }
 

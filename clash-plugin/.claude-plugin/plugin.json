@@ -1,9 +1,14 @@
 {
   "name": "clash",
   "version": "0.1.0",
-  "description": "Claude shell - permission enforcement for Claude Code tool usage",
+  "description": "Command Line Agent Safety Harness. All interactions with clash policy should go through this plugin",
   "author": {
     "name": "Empathic"
   },
-  "keywords": ["permissions", "security", "hooks", "policy"]
+  "keywords": [
+    "permissions",
+    "security",
+    "hooks",
+    "policy"
+  ]
 }

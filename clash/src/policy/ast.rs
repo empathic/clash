@@ -430,6 +430,9 @@ pub struct InlineConstraints {
     pub fs: Option<Vec<(Cap, FilterExpr)>>,
     /// Unified args list: `"!x"` → Forbid(x), `"x"` → Require(x).
     pub args: Option<Vec<ArgSpec>>,
+    /// URL constraints: domain patterns or full URL globs.
+    /// `"github.com"` → require, `"!evil.com"` → forbid.
+    pub url: Option<Vec<UrlSpec>>,
     pub network: Option<NetworkPolicy>,
     pub pipe: Option<bool>,
     pub redirect: Option<bool>,
@@ -444,6 +447,17 @@ pub enum ArgSpec {
     Require(String),
 }
 
+/// A URL constraint specification in the `url:` list.
+///
+/// Plain domains match the URL's host; patterns with `://` match the full URL.
+/// `"github.com"` → Require("github.com")  — URL host must match
+/// `"!evil.com"` → Forbid("evil.com")      — URL host must NOT match
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UrlSpec {
+    Forbid(String),
+    Require(String),
+}
+
 // ---------------------------------------------------------------------------
 // Private helper
 // ---------------------------------------------------------------------------
@@ -452,7 +466,7 @@ pub enum ArgSpec {
 ///
 /// Unlike file-path globbing, `*` matches any character (including `/`)
 /// because policy patterns apply to both file paths and command strings.
-fn policy_glob_matches(pattern: &str, value: &str) -> bool {
+pub(crate) fn policy_glob_matches(pattern: &str, value: &str) -> bool {
     use regex::Regex;
     let regex_pattern = pattern
         .replace('.', "\\.")

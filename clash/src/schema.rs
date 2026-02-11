@@ -304,6 +304,15 @@ fn rule_syntax() -> RuleSyntax {
                 required: false,
                 fields: None,
             },
+            SchemaField {
+                key: "url",
+                type_name: "list",
+                description: "URL domain restrictions — plain domains match the host (e.g. 'github.com'), patterns with :// match the full URL. Prefix with ! to forbid.",
+                default: None,
+                values: None,
+                required: false,
+                fields: None,
+            },
         ],
         fs_filters: vec![
             SchemaField {
@@ -454,6 +463,7 @@ mod tests {
         assert!(constraint_keys.contains(&"network"));
         assert!(constraint_keys.contains(&"pipe"));
         assert!(constraint_keys.contains(&"redirect"));
+        assert!(constraint_keys.contains(&"url"));
     }
 
     #[test]
