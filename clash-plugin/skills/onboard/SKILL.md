@@ -15,7 +15,7 @@ Each rule has three parts: **`effect verb noun`**
 - **verb**: which tool — `bash`, `read`, `write`, `edit`, or `*` (any)
 - **noun**: a glob pattern — e.g. `git push*`, `*.env`, `*`
 
-Precedence: **deny > ask > allow**. If multiple rules match, the strictest wins.
+Precedence: **deny** always wins. Among non-deny rules, a rule with constraints (url, args, etc.) beats one without. Within the same tier, **ask > allow**.
 
 ## Step 1: Migrate existing permissions
 

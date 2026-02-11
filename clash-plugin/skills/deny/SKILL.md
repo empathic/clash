@@ -15,7 +15,7 @@ Help the user add a **deny** rule to their clash policy.
    - Show the exact rule that will be added
    - Show which profile it will be added to (the active profile by default)
    - Explain what the rule means in plain English
-   - Remind the user that **deny takes precedence over allow** — this rule will block the action even if an allow rule also matches
+   - Remind the user that **deny always wins** — this rule will block the action even if a constrained allow or ask rule also matches
 
 3. **Dry-run first** to preview the change:
    ```bash
@@ -33,6 +33,6 @@ Help the user add a **deny** rule to their clash policy.
 ## Safety guidelines
 
 - Always dry-run first and show the result before applying
-- Explain that deny rules take precedence: `deny > ask > allow`
+- Explain that deny rules always take precedence, regardless of constraint specificity
 - Warn if the deny rule is very broad (e.g., `deny bash *` or `deny * *`) as it may block legitimate operations
 - Suggest using `ask` instead of `deny` if the user might want to approve the action on a case-by-case basis

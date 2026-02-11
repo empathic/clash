@@ -14,7 +14,10 @@
 //! ## Evaluation
 //!
 //! 1. Collect all statements that match the request
-//! 2. Apply precedence: **deny > ask > allow**
+//! 2. Apply specificity-aware precedence:
+//!    - deny always wins
+//!    - constrained rules beat unconstrained (among non-deny)
+//!    - within the same tier: ask > allow
 //! 3. If no match: apply the configurable default effect
 //!
 //! ## Negation
