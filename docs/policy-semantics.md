@@ -124,18 +124,48 @@ For bash commands, `fs` is **not** checked as a permission guard — instead, it
 
 ## Precedence Resolution
 
-After all rules are evaluated, the final effect is determined by strict precedence:
+After all rules are evaluated, the final effect is determined by **specificity-aware precedence**.
+
+### Step 1: Deny always wins
+
+If **any** matching rule says `deny`, the result is `deny` regardless of other rules or their constraints. Rule order does not matter.
+
+### Step 2: Constraint specificity (among non-deny rules)
+
+Each matched non-deny rule is classified as **constrained** or **unconstrained**:
+
+- **Constrained**: the rule has inline constraints that were actively checked — url, args, pipe, or redirect constraints. Filesystem (`fs:`) constraints count only for `read`/`write`/`edit` verbs (where they act as permission guards), not for `bash`/`webfetch`/etc. (where fs is irrelevant or generates sandboxes).
+- **Unconstrained**: the rule has no inline constraints, or only has constraints irrelevant to the verb.
+
+Constrained rules take precedence over unconstrained rules:
 
 ```
-deny > ask > allow > delegate > default
+deny (any) > constrained ask > constrained allow > unconstrained ask > unconstrained allow > default
 ```
 
-This means:
-- If **any** matching rule says `deny`, the result is `deny` regardless of other rules
-- If no deny but **any** matching rule says `ask`, the result is `ask`
-- If no deny/ask but **any** matching rule says `allow`, the result is `allow`
-- If no deny/ask/allow but **any** matching rule says `delegate`, the result is `delegate`
-- If **no rules match**, the configured `default` effect applies (typically `ask`)
+### Step 3: Same-tier resolution
+
+Within the same constraint tier, `ask > allow`.
+
+### Examples
+
+```yaml
+allow webfetch *:
+  url: ["github.com"]    # constrained allow
+ask webfetch *:          # unconstrained ask
+```
+
+- **github.com** → constrained allow matches (Tier 1), unconstrained ask matches (Tier 0). Tier 1 wins → **allow**
+- **example.com** → constrained allow skipped, unconstrained ask (Tier 0) → **ask**
+
+```yaml
+allow bash git *:
+  args: ["--dry-run"]    # constrained allow (require --dry-run)
+ask bash *:              # unconstrained ask
+```
+
+- **git push --dry-run** → constrained allow matches → **allow**
+- **git push** → constrained allow skipped (missing --dry-run), unconstrained ask → **ask**
 
 Rule order in the document does **not** affect precedence. A deny rule at the bottom overrides an allow rule at the top.
 

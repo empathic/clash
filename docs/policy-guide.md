@@ -86,9 +86,11 @@ Glob wildcards: `*` matches any characters (including `/`), `?` matches a single
 
 ## Precedence
 
-**deny > ask > allow**
+Clash uses **specificity-aware precedence** to resolve conflicts when multiple rules match:
 
-If multiple rules match the same action, the strictest effect wins. Rule order in the file does not matter.
+1. **Deny always wins** — a deny rule overrides everything, regardless of constraints
+2. **Constrained beats unconstrained** — among non-deny rules, a rule with active inline constraints (url, args, pipe, redirect) takes precedence over one without
+3. **Within the same tier** — `ask > allow`
 
 ```yaml
 rules:
@@ -97,6 +99,17 @@ rules:
 ```
 
 Here, reading `config.env` is denied even though the first rule allows all reads.
+
+### Constraint specificity in action
+
+```yaml
+rules:
+  allow webfetch *:
+    url: ["github.com"]    # constrained: only github.com
+  ask webfetch *:          # unconstrained: all URLs
+```
+
+A webfetch to `github.com` is **allowed** — the constrained allow rule is more specific and wins. A webfetch to `example.com` triggers **ask** — the constrained allow doesn't match, so the unconstrained ask applies.
 
 If no rules match, the `default.permission` effect applies (typically `ask`).
 

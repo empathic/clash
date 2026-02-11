@@ -7,7 +7,9 @@
 # Example:  deny bash git push*    (deny executing git push commands)
 #
 # Evaluation: all matching statements are collected, then precedence applies:
-#   deny > ask > allow
+#   1. deny always wins
+#   2. constrained rules (url, args, etc.) beat unconstrained rules
+#   3. within the same tier: ask > allow
 # If no statement matches, the default effect is used (ask).
 #
 # Note: clash always injects two built-in profiles:

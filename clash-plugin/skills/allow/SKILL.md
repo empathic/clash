@@ -34,5 +34,6 @@ Help the user add an **allow** rule to their clash policy.
 - Always dry-run first and show the result before applying
 - Never suggest rules that override intentional deny rules without explicit user consent
 - Never suggest `allow * *` or `allow bash *` without explaining the security implications and getting explicit user consent
-- If the user asks to allow something that is currently denied, warn them that deny rules take precedence and they may need to remove the deny rule first
+- If the user asks to allow something that is currently denied, warn them that deny rules always take precedence (even over constrained allows) and they may need to remove the deny rule first
+- If the user wants an allow rule to override a broader ask, suggest adding inline constraints (url, args, etc.) to the allow rule — constrained allows beat unconstrained asks
 - Prefer scoped rules (e.g., `allow bash git *`) over broad wildcards

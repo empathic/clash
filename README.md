@@ -13,7 +13,7 @@ Permission enforcement for [Claude Code](https://docs.anthropic.com/en/docs/clau
 
 Claude Code's default permission model is all-or-nothing: either you allow a tool entirely or get prompted every time. Clash gives you granular control with policy rules that decide what to allow, deny, or ask about — so you can let the agent work freely on safe operations while blocking dangerous ones.
 
-- **Policy engine** — Profile-based rules with `deny > ask > allow` precedence
+- **Policy engine** — Profile-based rules with specificity-aware precedence
 - **Kernel sandbox** — `fs:` constraints on bash rules generate OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS)
 - **Plugin mode** — Runs as a Claude Code plugin for seamless integration
 - **CLI mode** — Launch Claude Code with managed hooks via `clash launch`
@@ -68,7 +68,7 @@ profiles:
 
 **Effects:** `allow` (auto-approve), `deny` (block), `ask` (prompt you)
 
-**Precedence:** When multiple rules match, the strictest wins: `deny > ask > allow`
+**Precedence:** `deny` always wins. Among non-deny rules, a rule with constraints (url, args, etc.) beats one without. Within the same tier, `ask > allow`. See the [Policy Semantics](docs/policy-semantics.md) for details.
 
 Rules can also have filesystem constraints that generate a kernel-enforced sandbox:
 
