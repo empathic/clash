@@ -1,0 +1,60 @@
+meta:
+  name: custom tool name policy rules
+  description: Test that arbitrary tool names can be matched by policy rules
+
+clash:
+  policy:
+    default: ask
+    rules:
+      allow * task * : []
+      deny * websearch * : []
+      allow * glob *.rs : []
+
+steps:
+  - name: custom tool task allowed by rule
+    hook: pre-tool-use
+    tool_name: Task
+    tool_input:
+      prompt: "search for errors"
+    expect:
+      decision: allow
+
+  - name: custom tool websearch denied by rule
+    hook: pre-tool-use
+    tool_name: WebSearch
+    tool_input:
+      query: "test query"
+    expect:
+      decision: deny
+
+  - name: custom tool glob allowed with matching noun
+    hook: pre-tool-use
+    tool_name: Glob
+    tool_input:
+      pattern: "src/main.rs"
+    expect:
+      decision: allow
+
+  - name: custom tool glob falls to default with non-matching noun
+    hook: pre-tool-use
+    tool_name: Glob
+    tool_input:
+      pattern: "src/main.py"
+    expect:
+      decision: ask
+
+  - name: known tool bash still works
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: ask
+
+  - name: unconfigured custom tool falls to default
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://example.com"
+    expect:
+      decision: ask

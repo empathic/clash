@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "clash",
+  "version": "0.1.0",
+  "description": "Permission enforcement for Claude Code - policy-based tool access control with optional kernel-enforced sandboxing",
+  "owner": {
+    "name": "Empathic"
+  },
+  "plugins": [
+    {
+      "name": "clash",
+      "description": "Permission enforcement for Claude Code tool usage with policy-based rules, hierarchical settings, and optional kernel-enforced sandboxing via Landlock/seccomp (Linux) and Seatbelt (macOS)",
+      "version": "0.1.0",
+      "author": {
+        "name": "Empathic"
+      },
+      "source": "./target/clash-dev/clash-plugin",
+      "category": "security"
+    }
+  ]
+}

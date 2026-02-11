@@ -1,0 +1,62 @@
+meta:
+  name: policy with default deny
+  description: Test that default deny blocks everything not explicitly allowed
+
+clash:
+  policy:
+    default: deny
+    rules:
+      allow bash git * : []
+      allow read /tmp/* : []
+
+steps:
+  - name: git status allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: read /tmp/file allowed
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/somefile.txt
+    expect:
+      decision: allow
+
+  - name: unconfigured bash denied by default
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "curl https://example.com"
+    expect:
+      decision: deny
+
+  - name: read outside /tmp denied by default
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /etc/passwd
+    expect:
+      decision: deny
+
+  - name: write denied by default
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/output.txt
+      content: hello
+    expect:
+      decision: deny
+
+  - name: edit denied by default
+    hook: pre-tool-use
+    tool_name: Edit
+    tool_input:
+      file_path: /tmp/output.txt
+      old_string: hello
+      new_string: world
+    expect:
+      decision: deny

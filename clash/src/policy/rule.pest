@@ -1,0 +1,21 @@
+// Grammar for policy rule strings.
+//
+// Format: effect entity tool pattern
+// Example: allow * bash cargo build *
+
+rule = { SOI ~ effect ~ sep ~ entity ~ sep ~ tool ~ sep ~ pattern ~ EOI }
+
+effect = { "allow" | "deny" | "ask" }
+
+entity = { negation? ~ entity_value }
+negation = { "!" }
+entity_value = { wildcard | typed_entity | identifier }
+typed_entity = { identifier ~ ":" ~ (wildcard | identifier) }
+wildcard = { "*" }
+identifier = @{ (ASCII_ALPHANUMERIC | "_" | "-" | ".")+ }
+
+tool = { wildcard | identifier }
+
+pattern = @{ ANY+ }
+
+sep = _{ (" " | "\t")+ }

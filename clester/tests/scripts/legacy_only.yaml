@@ -1,0 +1,54 @@
+meta:
+  name: legacy permissions (no policy file)
+  description: Without a policy.yaml, Claude Code settings are compiled into policy rules
+
+settings:
+  user:
+    permissions:
+      allow:
+        - "Bash(git:*)"
+        - "Read(*)"
+      deny:
+        - "Bash(rm:*)"
+        - "Read(.env)"
+
+steps:
+  - name: git status allowed via legacy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: read allowed via legacy
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/file.txt
+    expect:
+      decision: allow
+
+  - name: rm denied via legacy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "rm -rf /"
+    expect:
+      decision: deny
+
+  - name: read .env denied via legacy (deny overrides allow)
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: ".env"
+    expect:
+      decision: deny
+
+  - name: unconfigured command asks
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "curl https://example.com"
+    expect:
+      decision: ask

@@ -1,0 +1,89 @@
+meta:
+  name: new profile-based policy syntax
+  description: Test the new format with profiles, inline rules, and cap-scoped fs
+
+clash:
+  policy_raw: |
+    default:
+      permission: ask
+      profile: main
+
+    profiles:
+      base:
+        rules:
+          deny bash rm *:
+
+      main:
+        include: base
+        rules:
+          allow bash git *:
+            args: ["!--force"]
+          allow bash cargo *:
+          allow read *:
+          deny bash curl *:
+
+steps:
+  - name: git status allowed by profile rule
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: git push allowed (no --force)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git push origin main
+    expect:
+      decision: allow
+
+  - name: git push --force blocked by forbid arg
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "git push --force origin main"
+    expect:
+      decision: ask
+
+  - name: rm denied by inherited base profile
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "rm -rf /"
+    expect:
+      decision: deny
+
+  - name: curl denied by explicit deny rule
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "curl https://example.com"
+    expect:
+      decision: deny
+
+  - name: read allowed by profile rule
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/somefile.txt
+    expect:
+      decision: allow
+
+  - name: unmatched tool falls to default ask
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/output.txt
+      content: hello
+    expect:
+      decision: ask
+
+  - name: cargo build allowed by profile rule
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: cargo build
+    expect:
+      decision: allow

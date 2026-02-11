@@ -1,0 +1,42 @@
+meta:
+  name: unknown tool names
+  description: Test that unrecognized tool names fall through to the default effect
+
+clash:
+  policy:
+    default: ask
+    rules:
+      allow bash git * : []
+
+steps:
+  - name: known tool bash with matching rule
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: unknown tool WebSearch falls to default
+    hook: pre-tool-use
+    tool_name: WebSearch
+    tool_input:
+      query: "test query"
+    expect:
+      decision: ask
+
+  - name: unknown tool WebFetch falls to default
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://example.com"
+    expect:
+      decision: ask
+
+  - name: unknown tool CustomTool falls to default
+    hook: pre-tool-use
+    tool_name: SomeCustomMCPTool
+    tool_input:
+      data: "test"
+    expect:
+      decision: ask

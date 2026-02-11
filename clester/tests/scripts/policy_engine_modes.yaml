@@ -1,0 +1,34 @@
+meta:
+  name: policy takes precedence over legacy
+  description: Test that policy.yaml rules take precedence over legacy Claude Code permissions
+
+clash:
+  policy:
+    default: deny
+    rules:
+      allow bash cargo * : []
+
+settings:
+  user:
+    permissions:
+      allow:
+        - "Bash(git:*)"
+
+steps:
+  - name: cargo build allowed by policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "cargo build"
+    expect:
+      decision: allow
+      reason_contains: "policy"
+
+  - name: git status denied by policy default (legacy allow ignored)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "git status"
+    expect:
+      decision: deny
+      reason_contains: "policy"

@@ -1,0 +1,4 @@
+[toolchain]
+components = ["clippy", "rustfmt", "rust-std", "rust-analyzer"]
+targets = ["x86_64-apple-darwin", "aarch64-apple-darwin"]
+profile = "default"

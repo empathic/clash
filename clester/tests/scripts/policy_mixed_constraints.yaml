@@ -1,0 +1,100 @@
+meta:
+  name: mixed constraints in profiles
+  description: Test new-format profiles with args constraints, fs constraints, and inheritance
+
+clash:
+  policy_raw: |
+    default:
+      permission: ask
+      profile: dev
+
+    profiles:
+      readonly:
+        rules:
+          allow read *:
+          deny write *:
+          deny edit *:
+
+      dev:
+        include: readonly
+        rules:
+          allow bash git *:
+            args: ["!--force", "!-f"]
+          allow bash cargo *:
+          deny bash rm *:
+
+steps:
+  - name: git status allowed by dev profile
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: git push allowed (no force)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git push origin main
+    expect:
+      decision: allow
+
+  - name: git push --force blocked by args constraint
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "git push --force origin main"
+    expect:
+      decision: ask
+
+  - name: git push -f blocked by args constraint
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "git push -f origin main"
+    expect:
+      decision: ask
+
+  - name: cargo build allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: cargo build
+    expect:
+      decision: allow
+
+  - name: rm denied by dev profile
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "rm -rf /tmp/foo"
+    expect:
+      decision: deny
+
+  - name: read allowed by inherited readonly profile
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/file.txt
+    expect:
+      decision: allow
+
+  - name: write denied by inherited readonly profile
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/file.txt
+      content: test
+    expect:
+      decision: deny
+
+  - name: edit denied by inherited readonly profile
+    hook: pre-tool-use
+    tool_name: Edit
+    tool_input:
+      file_path: /tmp/file.txt
+      old_string: hello
+      new_string: world
+    expect:
+      decision: deny

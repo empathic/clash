@@ -1,0 +1,63 @@
+meta:
+  name: basic policy engine rules
+  description: Test allow/deny/ask rules via the policy engine
+
+clash:
+  policy:
+    default: ask
+    rules:
+      allow bash git * : []
+      allow read * : []
+      deny read .env : []
+      deny bash rm * : []
+
+steps:
+  - name: git status allowed by policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+      reason_contains: "policy"
+
+  - name: git diff allowed by policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "git diff --cached"
+    expect:
+      decision: allow
+
+  - name: read any file allowed by policy
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/somefile.txt
+    expect:
+      decision: allow
+
+  - name: read .env denied by policy (deny overrides allow)
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: ".env"
+    expect:
+      decision: deny
+      reason_contains: "policy"
+
+  - name: rm denied by policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "rm -rf /"
+    expect:
+      decision: deny
+
+  - name: unconfigured command falls to default ask
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "curl https://example.com"
+    expect:
+      decision: ask

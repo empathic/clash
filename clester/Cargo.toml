@@ -1,0 +1,13 @@
+[package]
+name = "clester"
+version = "0.1.0"
+edition = "2024"
+description = "End-to-end testing tool for clash - simulates Claude Code hook invocations"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tempfile = { workspace = true }
+clap = { workspace = true }

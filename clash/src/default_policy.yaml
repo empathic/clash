@@ -1,0 +1,74 @@
+# Clash policy — safe defaults for local development.
+#
+# Rule syntax:  effect verb noun
+#   effect  — allow, deny, or ask
+#   verb    — tool type: bash, read, write, edit, or * (any)
+#   noun    — command/path pattern: e.g. "git push*", "*.env", or * (any)
+# Example:  deny bash git push*    (deny executing git push commands)
+#
+# Evaluation: all matching statements are collected, then precedence applies:
+#   1. deny always wins
+#   2. constrained rules (url, args, etc.) beat unconstrained rules
+#   3. within the same tier: ask > allow
+# If no statement matches, the default effect is used (ask).
+#
+# Note: clash always injects two built-in profiles:
+#   __clash_internal__ — allows reading ~/.clash/ and grants clash init and
+#                        clash policy sandbox access to write its config
+#   __claude_internal__ — allows Claude Code meta-tools (AskUserQuestion,
+#                         ExitPlanMode, task management, etc.)
+# To override either, define a profile with the same name below.
+
+default:
+  permission: ask
+  profile: main
+
+profiles:
+  cwd:
+    rules:
+      allow * *: 
+        fs:
+          all: subpath(.)
+  claude-internal:
+    rules:
+      allow * *: 
+        fs:
+          all: subpath(~/.claude)
+  tmp:
+    rules:
+      allow * *:
+        fs:
+          all: regex(^(/private)?/tmp) | regex(^(/private)?/var/folders/)
+  
+  sensitive:
+    rules:
+      ask read *:
+        fs:
+          read: subpath(~/.ssh) | subpath(~/.aws)
+      ask write *:
+        fs:
+          write + create: subpath(~/.ssh) | subpath(~/.aws)
+      ask edit *:
+        fs:
+          write: subpath(~/.ssh) | subpath(~/.aws)
+  
+      
+  main:
+    include: [cwd, claude-internal, tmp, sensitive]
+    rules:
+      # ── Git: deny commit and push ─────────────────────────────
+      #    effect verb  noun
+      ask bash git commit*:
+      deny bash git push*:
+      deny bash git merge*:
+
+      # ── Git: deny destructive operations ──────────────────────
+      deny bash git reset --hard*:
+      deny bash git clean*:
+      deny bash git branch -D*:
+
+      # ── Dangerous commands ─────────────────────────────────────
+      deny bash sudo *:
+
+      # ── URL restrictions ────────────────────────────────────────
+      deny webfetch *:

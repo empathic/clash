@@ -1,0 +1,36 @@
+meta:
+  name: permission request handling
+  description: Test that permission-request hooks produce correct decisions
+
+settings:
+  user:
+    permissions:
+      allow:
+        - "Bash(git:*)"
+      deny:
+        - "Bash(rm:*)"
+
+steps:
+  - name: permission request for allowed tool
+    hook: permission-request
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: permission request for denied tool
+    hook: permission-request
+    tool_name: Bash
+    tool_input:
+      command: "rm -rf /"
+    expect:
+      decision: deny
+
+  - name: permission request for unconfigured tool
+    hook: permission-request
+    tool_name: Bash
+    tool_input:
+      command: "curl https://example.com"
+    expect:
+      no_decision: true

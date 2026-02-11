@@ -1,0 +1,36 @@
+[package]
+name = "claude_settings-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+claude_settings = { path = ".." }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_parse_yaml"
+path = "fuzz_targets/fuzz_parse_yaml.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_parse_rule"
+path = "fuzz_targets/fuzz_parse_rule.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_parse_filter_expr"
+path = "fuzz_targets/fuzz_parse_filter_expr.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_parse_profile_expr"
+path = "fuzz_targets/fuzz_parse_profile_expr.rs"
+doc = false

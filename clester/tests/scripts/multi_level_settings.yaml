@@ -1,0 +1,60 @@
+meta:
+  name: multi-level settings merging
+  description: Test that settings from multiple levels merge correctly with proper precedence
+
+settings:
+  user:
+    permissions:
+      allow:
+        - "Bash(git:*)"
+        - Read
+
+  project:
+    permissions:
+      deny:
+        - "Read(.env)"
+        - "Read(.secret)"
+      allow:
+        - "Bash(npm run test)"
+
+steps:
+  - name: user-level git allow still works
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git log
+    expect:
+      decision: allow
+
+  - name: project-level npm allow works
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm run test
+    expect:
+      decision: allow
+
+  - name: project-level deny .env works
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: ".env"
+    expect:
+      decision: deny
+
+  - name: project-level deny .secret works
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: ".secret"
+    expect:
+      decision: deny
+
+  - name: unconfigured write should ask
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/test.txt
+      content: hello
+    expect:
+      decision: ask
