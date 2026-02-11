@@ -110,70 +110,129 @@ impl CompiledPolicy {
 
     /// Built-in rules for the `__clash_internal__` profile.
     ///
-    /// Four rules:
-    /// 1. Allow `Read` tool access to `~/.clash/` (so Claude can inspect the policy).
-    /// 2. Allow `Bash` commands matching `*clash init*` to write to `~/.clash/`
-    ///    (sandbox includes `~/.clash/` only for the clash binary, not all commands).
-    /// 3. Allow `Bash` commands matching `*clash policy*` to read/write `~/.clash/`
-    ///    (so `clash policy add-rule` / `remove-rule` can modify the policy file).
-    /// 4. Allow `Bash` commands matching `*clash migrate*` to read/write `~/.clash/`
-    ///    (so `clash migrate` can import existing Claude permissions).
+    /// Principle: **read operations are allowed; mutations require human consent (`ask`).**
+    ///
+    /// Read-only rules (effect = Allow):
+    /// 1. `Read` tool access to `~/.clash/` (inspect the policy file).
+    /// 2. `clash policy show` — display the current policy.
+    /// 3. `clash policy schema` — display the policy schema.
+    /// 4. `clash policy add-rule --dry-run` — preview an addition (constrained by args).
+    /// 5. `clash policy remove-rule --dry-run` — preview a removal (constrained by args).
+    ///
+    /// Mutation rules (effect = Ask):
+    /// 6. `clash policy add-rule` (without `--dry-run`) — add a rule to the policy.
+    /// 7. `clash policy remove-rule` (without `--dry-run`) — remove a rule from the policy.
+    /// 8. `clash init` — create or overwrite the default policy.
+    /// 9. `clash migrate` — import Claude Code permissions into clash.
+    ///
+    /// The `--dry-run` rules use `args: ["--dry-run"]` which makes them *constrained*.
+    /// Specificity-aware precedence ensures constrained-allow beats unconstrained-ask,
+    /// so `add-rule --dry-run` is allowed while `add-rule` (without it) triggers ask.
     ///
     /// Users can override by defining a profile named `__clash_internal__`
     /// in their policy's `profiles:` section.
     fn builtin_clash_rules() -> Vec<ProfileRule> {
+        let fs_read = Some(vec![(
+            Cap::READ,
+            FilterExpr::Subpath("~/.clash".to_string()),
+        )]);
+        let fs_full = Some(vec![(
+            Cap::READ | Cap::WRITE | Cap::EXECUTE | Cap::CREATE | Cap::DELETE,
+            FilterExpr::Subpath("~/.clash".to_string()),
+        )]);
+
         vec![
-            // Allow reading ~/.clash/ files (so Claude can inspect/explain the policy)
+            // 1. Allow reading ~/.clash/ files (so Claude can inspect/explain the policy)
             ProfileRule {
                 effect: Effect::Allow,
                 verb: "read".to_string(),
                 noun: Pattern::Match(MatchExpr::Any),
                 constraints: Some(InlineConstraints {
-                    fs: Some(vec![(
-                        Cap::READ,
-                        FilterExpr::Subpath("~/.clash".to_string()),
-                    )]),
+                    fs: fs_read.clone(),
                     ..Default::default()
                 }),
             },
-            // Allow `clash init` (and --force) to write to ~/.clash/ via sandbox.
-            // Pattern ends with `clash init*` so it matches the clash binary
-            // whether invoked via full path or just `clash init` from PATH.
+            // 2. Allow `clash policy show` (read-only, sandboxed to read ~/.clash/)
             ProfileRule {
                 effect: Effect::Allow,
+                verb: "bash".to_string(),
+                noun: Pattern::Match(MatchExpr::Glob("*clash policy show*".to_string())),
+                constraints: Some(InlineConstraints {
+                    fs: fs_read.clone(),
+                    ..Default::default()
+                }),
+            },
+            // 3. Allow `clash policy schema` (read-only, sandboxed to read ~/.clash/)
+            ProfileRule {
+                effect: Effect::Allow,
+                verb: "bash".to_string(),
+                noun: Pattern::Match(MatchExpr::Glob("*clash policy schema*".to_string())),
+                constraints: Some(InlineConstraints {
+                    fs: fs_read.clone(),
+                    ..Default::default()
+                }),
+            },
+            // 4. Allow `clash policy add-rule --dry-run` (preview only, no mutation)
+            // The args constraint makes this a constrained-allow, which beats the
+            // unconstrained-ask rule below when --dry-run is present.
+            ProfileRule {
+                effect: Effect::Allow,
+                verb: "bash".to_string(),
+                noun: Pattern::Match(MatchExpr::Glob("*clash policy add-rule*".to_string())),
+                constraints: Some(InlineConstraints {
+                    fs: fs_read.clone(),
+                    args: Some(vec![ArgSpec::Require("--dry-run".to_string())]),
+                    ..Default::default()
+                }),
+            },
+            // 5. Allow `clash policy remove-rule --dry-run` (preview only, no mutation)
+            ProfileRule {
+                effect: Effect::Allow,
+                verb: "bash".to_string(),
+                noun: Pattern::Match(MatchExpr::Glob("*clash policy remove-rule*".to_string())),
+                constraints: Some(InlineConstraints {
+                    fs: fs_read,
+                    args: Some(vec![ArgSpec::Require("--dry-run".to_string())]),
+                    ..Default::default()
+                }),
+            },
+            // 6. Ask before `clash policy add-rule` (actual mutation)
+            ProfileRule {
+                effect: Effect::Ask,
+                verb: "bash".to_string(),
+                noun: Pattern::Match(MatchExpr::Glob("*clash policy add-rule*".to_string())),
+                constraints: Some(InlineConstraints {
+                    fs: fs_full.clone(),
+                    ..Default::default()
+                }),
+            },
+            // 7. Ask before `clash policy remove-rule` (actual mutation)
+            ProfileRule {
+                effect: Effect::Ask,
+                verb: "bash".to_string(),
+                noun: Pattern::Match(MatchExpr::Glob("*clash policy remove-rule*".to_string())),
+                constraints: Some(InlineConstraints {
+                    fs: fs_full.clone(),
+                    ..Default::default()
+                }),
+            },
+            // 8. Ask before `clash init` (creates or overwrites default policy)
+            ProfileRule {
+                effect: Effect::Ask,
                 verb: "bash".to_string(),
                 noun: Pattern::Match(MatchExpr::Glob("*clash init*".to_string())),
                 constraints: Some(InlineConstraints {
-                    fs: Some(vec![(
-                        Cap::READ | Cap::WRITE | Cap::EXECUTE | Cap::CREATE | Cap::DELETE,
-                        FilterExpr::Subpath("~/.clash".to_string()),
-                    )]),
+                    fs: fs_full.clone(),
                     ..Default::default()
                 }),
             },
-            // Allow `clash policy` subcommands to read/write ~/.clash/.
+            // 9. Ask before `clash migrate` (imports Claude permissions into clash)
             ProfileRule {
-                effect: Effect::Allow,
-                verb: "bash".to_string(),
-                noun: Pattern::Match(MatchExpr::Glob("*clash policy*".to_string())),
-                constraints: Some(InlineConstraints {
-                    fs: Some(vec![(
-                        Cap::READ | Cap::WRITE | Cap::EXECUTE | Cap::CREATE | Cap::DELETE,
-                        FilterExpr::Subpath("~/.clash".to_string()),
-                    )]),
-                    ..Default::default()
-                }),
-            },
-            // Allow `clash migrate` to read Claude settings and write to ~/.clash/.
-            ProfileRule {
-                effect: Effect::Allow,
+                effect: Effect::Ask,
                 verb: "bash".to_string(),
                 noun: Pattern::Match(MatchExpr::Glob("*clash migrate*".to_string())),
                 constraints: Some(InlineConstraints {
-                    fs: Some(vec![(
-                        Cap::READ | Cap::WRITE | Cap::EXECUTE | Cap::CREATE | Cap::DELETE,
-                        FilterExpr::Subpath("~/.clash".to_string()),
-                    )]),
+                    fs: fs_full,
                     ..Default::default()
                 }),
             },
@@ -2213,10 +2272,10 @@ rules:
     }
 
     #[test]
-    fn test_builtin_clash_init_gets_sandbox() {
+    fn test_builtin_clash_init_asks() {
         let policy = compile_yaml("rules:\n  - deny * bash rm *\n");
 
-        // `clash init` via full path → allowed with sandbox including ~/.clash/
+        // `clash init` via full path → ask (mutation requires consent)
         let ctx = make_ctx(
             "agent",
             &Verb::Execute,
@@ -2226,25 +2285,18 @@ rules:
             "bash",
         );
         let decision = policy.evaluate_with_context(&ctx);
-        assert_eq!(decision.effect, Effect::Allow);
-        let sandbox = decision
-            .sandbox
-            .expect("should have sandbox from built-in fs constraint");
-        assert!(
-            sandbox
-                .rules
-                .iter()
-                .any(|r| r.path.contains(".clash") && r.effect == RuleEffect::Allow),
-            "sandbox should include ~/.clash/ allow rule, got: {:?}",
-            sandbox.rules
+        assert_eq!(
+            decision.effect,
+            Effect::Ask,
+            "clash init should ask (mutation requires consent)"
         );
     }
 
     #[test]
-    fn test_builtin_clash_init_force_gets_sandbox() {
+    fn test_builtin_clash_init_force_asks() {
         let policy = compile_yaml("rules:\n  - deny * bash rm *\n");
 
-        // `clash init --force` also matches
+        // `clash init --force` also matches → ask (mutation)
         let ctx = make_ctx(
             "agent",
             &Verb::Execute,
@@ -2254,15 +2306,18 @@ rules:
             "bash",
         );
         let decision = policy.evaluate_with_context(&ctx);
-        assert_eq!(decision.effect, Effect::Allow);
-        assert!(decision.sandbox.is_some());
+        assert_eq!(
+            decision.effect,
+            Effect::Ask,
+            "clash init --force should ask (mutation requires consent)"
+        );
     }
 
     #[test]
-    fn test_builtin_clash_migrate_gets_sandbox() {
+    fn test_builtin_clash_migrate_asks() {
         let policy = compile_yaml("rules:\n  - deny * bash rm *\n");
 
-        // `clash migrate` via full path → allowed with sandbox including ~/.clash/
+        // `clash migrate` via full path → ask (mutation requires consent)
         let ctx = make_ctx(
             "agent",
             &Verb::Execute,
@@ -2272,17 +2327,10 @@ rules:
             "bash",
         );
         let decision = policy.evaluate_with_context(&ctx);
-        assert_eq!(decision.effect, Effect::Allow);
-        let sandbox = decision
-            .sandbox
-            .expect("should have sandbox from built-in fs constraint");
-        assert!(
-            sandbox
-                .rules
-                .iter()
-                .any(|r| r.path.contains(".clash") && r.effect == RuleEffect::Allow),
-            "sandbox should include ~/.clash/ allow rule, got: {:?}",
-            sandbox.rules
+        assert_eq!(
+            decision.effect,
+            Effect::Ask,
+            "clash migrate should ask (mutation requires consent)"
         );
     }
 
@@ -2393,10 +2441,10 @@ profiles:
     }
 
     #[test]
-    fn test_default_policy_clash_init_sandbox() {
+    fn test_default_policy_clash_init_asks() {
         let policy = compile_yaml(crate::settings::DEFAULT_POLICY);
 
-        // clash init via full path → allowed with ~/.clash/ in sandbox
+        // clash init via full path → ask (mutation requires consent)
         let ctx = make_ctx(
             "agent",
             &Verb::Execute,
@@ -2406,15 +2454,140 @@ profiles:
             "bash",
         );
         let decision = policy.evaluate_with_context(&ctx);
-        assert_eq!(decision.effect, Effect::Allow);
-        let sandbox = decision.sandbox.expect("should have sandbox");
-        assert!(
-            sandbox
-                .rules
-                .iter()
-                .any(|r| r.path.contains(".clash") && r.effect == RuleEffect::Allow),
-            "default policy sandbox should include ~/.clash/ for clash init, got: {:?}",
-            sandbox.rules
+        assert_eq!(
+            decision.effect,
+            Effect::Ask,
+            "default policy: clash init should ask (mutation requires consent)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Read-only clash commands: allow without prompting
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_clash_policy_show_allowed() {
+        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "/path/to/clash policy show",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "clash policy show should be allowed (read-only)"
+        );
+    }
+
+    #[test]
+    fn test_builtin_clash_policy_schema_allowed() {
+        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "/path/to/clash policy schema --json",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "clash policy schema should be allowed (read-only)"
+        );
+    }
+
+    #[test]
+    fn test_builtin_clash_policy_add_rule_dry_run_allowed() {
+        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+
+        // --dry-run preview → constrained-allow beats unconstrained-ask
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "/path/to/clash policy add-rule --dry-run \"allow bash git *\"",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "clash policy add-rule --dry-run should be allowed (preview only)"
+        );
+    }
+
+    #[test]
+    fn test_builtin_clash_policy_remove_rule_dry_run_allowed() {
+        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "/path/to/clash policy remove-rule --dry-run \"deny bash rm *\"",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "clash policy remove-rule --dry-run should be allowed (preview only)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Mutation clash commands: require human consent (ask)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_builtin_clash_policy_add_rule_asks() {
+        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+
+        // Without --dry-run → actual mutation → ask
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "/path/to/clash policy add-rule \"allow bash git *\"",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Ask,
+            "clash policy add-rule should ask (mutation requires consent)"
+        );
+    }
+
+    #[test]
+    fn test_builtin_clash_policy_remove_rule_asks() {
+        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "/path/to/clash policy remove-rule \"deny bash rm *\"",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Ask,
+            "clash policy remove-rule should ask (mutation requires consent)"
         );
     }
 
