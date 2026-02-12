@@ -20,8 +20,6 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-          - target: x86_64-apple-darwin
-            os: macos-13
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
@@ -84,17 +82,3 @@ jobs:
         with:
           files: artifacts/*
           generate_release_notes: true
-
-  dotslash:
-    name: Generate DotSlash manifest
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: facebook/dotslash-publish-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          config: .github/workflows/dotslash-config.json
-          tag: ${{ github.ref_name }}
