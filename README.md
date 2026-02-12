@@ -21,13 +21,10 @@ Clash gives you granular control. Write policy rules that decide what to **allow
 
 ```bash
 # 1. Install (requires Rust toolchain)
-cargo install --path clash
+just install
 
-# 2. Initialize — creates ~/.clash/policy.yaml and installs the plugin
-clash init --bypass-permissions
-
-# 3. Launch Claude Code with clash managing permissions
-clash launch
+# 2. Start Claude Code — clash is now managing permissions
+claude
 ```
 
 That's it. Clash is now intercepting every tool call and evaluating it against your policy. The default policy allows reads and writes within your project, prompts before git commits, and denies destructive operations like `git push`, `git reset --hard`, and `sudo`.
