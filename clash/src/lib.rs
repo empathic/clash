@@ -37,6 +37,7 @@ pub mod linear;
 pub mod notifications;
 pub mod permissions;
 pub mod policy;
+pub mod presets;
 pub mod sandbox;
 pub mod sandbox_cmd;
 pub mod schema;

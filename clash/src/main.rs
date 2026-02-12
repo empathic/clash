@@ -6,7 +6,7 @@ use clash::policy::edit;
 use clash::policy::parse::{desugar_claude_permissions, flatten_profile, format_rule};
 use clash::policy::{ClaudePermissions, Effect, PolicyConfig, PolicyDocument};
 use tracing::level_filters::LevelFilter;
-use tracing::{Level, debug_span, error, info, instrument};
+use tracing::{Level, debug_span, error, info, instrument, warn};
 use tracing_subscriber::Layer;
 use tracing_subscriber::prelude::*;
 
@@ -144,6 +144,16 @@ enum Commands {
     #[command(subcommand)]
     Sandbox(SandboxCmd),
 
+    /// Allow a category of actions (editing, commands, web)
+    Allow {
+        /// Preset name to apply (e.g. editing, commands, web)
+        preset: Option<String>,
+
+        /// List available presets
+        #[arg(long)]
+        list: bool,
+    },
+
     /// View and edit policy rules
     #[command(subcommand)]
     Policy(PolicyCmd),
@@ -196,10 +206,9 @@ enum Commands {
         #[arg(long)]
         force: bool,
 
-        /// Set bypassPermissions in user-level Claude Code settings so Clash is
-        /// the sole permission handler (avoids double-prompting)
+        /// Skip setting bypassPermissions in Claude Code settings
         #[arg(long)]
-        bypass_permissions: bool,
+        no_bypass: bool,
     },
 
     /// File a bug report to the clash issue tracker
@@ -277,14 +286,12 @@ fn main() -> Result<()> {
                 }
                 Ok(())
             }
+            Commands::Allow { preset, list } => run_allow(preset, list),
             Commands::Sandbox(cmd) => run_sandbox(cmd),
             Commands::Launch { policy, args } => run_launch(policy, args),
             Commands::Migrate { dry_run, default } => run_migrate(dry_run, &default),
             Commands::Explain { json, tool, input } => run_explain(json, tool, input),
-            Commands::Init {
-                force,
-                bypass_permissions,
-            } => run_init(force, bypass_permissions),
+            Commands::Init { force, no_bypass } => run_init(force, no_bypass),
             Commands::Policy(cmd) => run_policy(cmd),
             Commands::Bug {
                 title,
@@ -716,9 +723,9 @@ fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String
     Ok(())
 }
 
-/// Initialize a new clash policy.yaml with safe defaults.
+/// Initialize a new clash policy.yaml with deny-all defaults.
 #[instrument(level = Level::TRACE)]
-fn run_init(force: bool, bypass_permissions: bool) -> Result<()> {
+fn run_init(force: bool, no_bypass: bool) -> Result<()> {
     let path = ClashSettings::policy_file()?;
 
     if path.exists() && !force {
@@ -738,11 +745,24 @@ fn run_init(force: bool, bypass_permissions: bool) -> Result<()> {
 
     std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
     std::fs::write(&path, DEFAULT_POLICY)?;
-    println!("Wrote default policy to {}", path.display());
-    println!("Edit the file to customize rules for your environment.");
 
-    if bypass_permissions {
-        set_bypass_permissions()?;
+    println!("Clash initialized.\n");
+    println!("What happens now:");
+    println!("  - Claude can read files in this project");
+    println!("  - Everything else (editing, commands, web access) is blocked");
+    println!("  - When Claude hits a block, you'll see how to allow it");
+    println!();
+    println!("Run \"clash allow --help\" to see what you can unlock.");
+
+    // Set bypass_permissions by default so clash is the sole permission handler.
+    if !no_bypass
+        && let Err(e) = set_bypass_permissions()
+    {
+        warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
+        eprintln!(
+            "warning: could not configure Claude Code to use clash as sole permission handler.\n\
+             You may see double prompts. Run with --dangerously-skip-permissions to avoid this."
+        );
     }
 
     Ok(())
@@ -755,15 +775,23 @@ fn run_init(force: bool, bypass_permissions: bool) -> Result<()> {
 fn set_bypass_permissions() -> Result<()> {
     let claude = claude_settings::ClaudeSettings::new();
     claude.set_bypass_permissions(claude_settings::SettingsLevel::User, true)?;
-
-    let settings_path = claude
-        .resolver()
-        .settings_path(claude_settings::SettingsLevel::User)?;
-    println!("Set bypassPermissions=true in {}", settings_path.display());
-    println!(
-        "Claude Code will now skip its built-in permission prompts, letting Clash handle all permissions."
-    );
+    println!("Configured Claude Code to use clash as the sole permission handler.");
     Ok(())
+}
+
+/// Handle `clash allow <preset>` and `clash allow --list`.
+fn run_allow(preset: Option<String>, list: bool) -> Result<()> {
+    if list {
+        clash::presets::list_presets();
+        return Ok(());
+    }
+    match preset {
+        Some(name) => clash::presets::apply_preset(&name),
+        None => {
+            clash::presets::list_presets();
+            Ok(())
+        }
+    }
 }
 
 /// Load the policy.yaml file, returning its path and contents.

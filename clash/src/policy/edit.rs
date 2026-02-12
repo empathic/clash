@@ -718,9 +718,19 @@ profiles:
     }
 
     #[test]
-    fn test_remove_rule_default_policy() {
+    fn test_add_then_remove_rule_default_policy() {
         let default_policy = include_str!("../default_policy.yaml");
-        let result = remove_rule(default_policy, "main", "deny bash git push*").unwrap();
+        // First add a rule to the default policy
+        let with_rule = add_rule(
+            default_policy,
+            "main",
+            "deny bash git push*",
+            &InlineConstraintArgs::default(),
+        )
+        .unwrap();
+        assert!(with_rule.contains("deny bash git push*:"));
+        // Then remove it
+        let result = remove_rule(&with_rule, "main", "deny bash git push*").unwrap();
         assert!(!result.contains("deny bash git push*:"));
     }
 

@@ -1,74 +1,28 @@
-# Clash policy — safe defaults for local development.
+# Clash policy — deny-all default for new users.
 #
-# Rule syntax:  effect verb noun
-#   effect  — allow, deny, or ask
-#   verb    — tool type: bash, read, write, edit, or * (any)
-#   noun    — command/path pattern: e.g. "git push*", "*.env", or * (any)
-# Example:  deny bash git push*    (deny executing git push commands)
+# Everything is blocked except reading files in your project.
+# Use "clash allow editing", "clash allow commands", or "clash allow web"
+# to unlock capabilities as you need them.
 #
-# Evaluation: all matching statements are collected, then precedence applies:
-#   1. deny always wins
-#   2. constrained rules (url, args, etc.) beat unconstrained rules
-#   3. within the same tier: ask > allow
-# If no statement matches, the default effect is used (ask).
+# For full rule syntax, run "clash policy add-rule --help".
 #
 # Note: clash always injects two built-in profiles:
-#   __clash_internal__ — allows reading ~/.clash/ and grants clash init and
-#                        clash policy sandbox access to write its config
+#   __clash_internal__ — allows clash to read/write its own config
 #   __claude_internal__ — allows Claude Code meta-tools (AskUserQuestion,
 #                         ExitPlanMode, task management, etc.)
-# To override either, define a profile with the same name below.
 
 default:
-  permission: ask
+  permission: deny
   profile: main
 
 profiles:
-  cwd:
+  cwd-read:
     rules:
-      allow * *: 
+      allow read *:
         fs:
-          all: subpath(.)
-  claude-internal:
-    rules:
-      allow * *: 
-        fs:
-          all: subpath(~/.claude)
-  tmp:
-    rules:
-      allow * *:
-        fs:
-          all: regex(^(/private)?/tmp) | regex(^(/private)?/var/folders/)
-  
-  sensitive:
-    rules:
-      ask read *:
-        fs:
-          read: subpath(~/.ssh) | subpath(~/.aws)
-      ask write *:
-        fs:
-          write + create: subpath(~/.ssh) | subpath(~/.aws)
-      ask edit *:
-        fs:
-          write: subpath(~/.ssh) | subpath(~/.aws)
-  
-      
+          read: subpath(.)
+
   main:
-    include: [cwd, claude-internal, tmp, sensitive]
+    include: [cwd-read]
     rules:
-      # ── Git: deny commit and push ─────────────────────────────
-      #    effect verb  noun
-      ask bash git commit*:
-      deny bash git push*:
-      deny bash git merge*:
-
-      # ── Git: deny destructive operations ──────────────────────
-      deny bash git reset --hard*:
-      deny bash git clean*:
-      deny bash git branch -D*:
-
-      # ── Dangerous commands ─────────────────────────────────────
-      deny bash sudo *:
-
-      # ── URL restrictions ────────────────────────────────────────
-      deny webfetch *:
+      # Add rules here with "clash allow <preset>" or "clash policy add-rule"
