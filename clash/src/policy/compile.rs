@@ -4,6 +4,7 @@
 //! organizes statements for efficient evaluation.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use tracing::{Level, instrument};
 
@@ -14,7 +15,6 @@ use super::ir::{
     CompiledPattern, CompiledPolicy, CompiledProfileRule,
 };
 use super::*;
-use crate::policy::sandbox_types::Cap;
 use regex::Regex;
 
 /// Name of the built-in profile that grants access to `~/.clash/`.
@@ -26,22 +26,8 @@ const BUILTIN_CLASH_PROFILE: &str = "__clash_internal__";
 /// defining a profile with the same name.
 const BUILTIN_CLAUDE_PROFILE: &str = "__claude_internal__";
 
-/// Tools covered by the `__claude_internal__` built-in, with per-tool effects.
-/// Most are `Allow` (pure workflow tools), but some warrant `Ask`.
-const CLAUDE_INTERNAL_TOOLS: &[(&str, Effect)] = &[
-    ("askuserquestion", Effect::Ask),
-    ("exitplanmode", Effect::Ask),
-    ("enterplanmode", Effect::Allow),
-    ("taskcreate", Effect::Allow),
-    ("taskupdate", Effect::Allow),
-    ("tasklist", Effect::Allow),
-    ("taskget", Effect::Allow),
-    ("taskoutput", Effect::Allow),
-    ("taskstop", Effect::Allow),
-    ("skill", Effect::Allow),
-    ("sendmessage", Effect::Allow),
-    ("teammate", Effect::Allow),
-];
+static BUILTIN_CLASH_RULES: OnceLock<Vec<ProfileRule>> = OnceLock::new();
+static BUILTIN_CLAUDE_RULES: OnceLock<Vec<ProfileRule>> = OnceLock::new();
 
 impl CompiledPolicy {
     /// Returns true if this policy has any compiled rules.
@@ -87,7 +73,7 @@ impl CompiledPolicy {
         // Inject built-in __clash_internal__ profile rules unless the user
         // has defined their own override in profile_defs.
         if !doc.profile_defs.contains_key(BUILTIN_CLASH_PROFILE) {
-            for rule in &Self::builtin_clash_rules() {
+            for rule in builtin_clash_rules() {
                 active_profile_rules.push(CompiledProfileRule::compile(rule)?);
             }
         }
@@ -95,7 +81,7 @@ impl CompiledPolicy {
         // Inject built-in __claude_internal__ profile rules unless the user
         // has defined their own override in profile_defs.
         if !doc.profile_defs.contains_key(BUILTIN_CLAUDE_PROFILE) {
-            for rule in &Self::builtin_claude_rules() {
+            for rule in builtin_claude_rules() {
                 active_profile_rules.push(CompiledProfileRule::compile(rule)?);
             }
         }
@@ -107,156 +93,32 @@ impl CompiledPolicy {
             active_profile_rules,
         })
     }
+}
 
-    /// Built-in rules for the `__clash_internal__` profile.
-    ///
-    /// Principle: **read operations are allowed; mutations require human consent (`ask`).**
-    ///
-    /// Read-only rules (effect = Allow):
-    /// 1. `Read` tool access to `~/.clash/` (inspect the policy file).
-    /// 2. `clash policy show` — display the current policy.
-    /// 3. `clash policy schema` — display the policy schema.
-    /// 4. `clash policy add-rule --dry-run` — preview an addition (constrained by args).
-    /// 5. `clash policy remove-rule --dry-run` — preview a removal (constrained by args).
-    ///
-    /// Mutation rules (effect = Ask):
-    /// 6. `clash policy add-rule` (without `--dry-run`) — add a rule to the policy.
-    /// 7. `clash policy remove-rule` (without `--dry-run`) — remove a rule from the policy.
-    /// 8. `clash init` — create or overwrite the default policy.
-    /// 9. `clash migrate` — import Claude Code permissions into clash.
-    ///
-    /// The `--dry-run` rules use `args: ["--dry-run"]` which makes them *constrained*.
-    /// Specificity-aware precedence ensures constrained-allow beats unconstrained-ask,
-    /// so `add-rule --dry-run` is allowed while `add-rule` (without it) triggers ask.
-    ///
-    /// Users can override by defining a profile named `__clash_internal__`
-    /// in their policy's `profiles:` section.
-    fn builtin_clash_rules() -> Vec<ProfileRule> {
-        let fs_read = Some(vec![(
-            Cap::READ,
-            FilterExpr::Subpath("~/.clash".to_string()),
-        )]);
-        let fs_full = Some(vec![(
-            Cap::READ | Cap::WRITE | Cap::EXECUTE | Cap::CREATE | Cap::DELETE,
-            FilterExpr::Subpath("~/.clash".to_string()),
-        )]);
+/// Lazily parsed built-in rules for the `__clash_internal__` profile.
+///
+/// See `builtin_clash_profile.yaml` for the rule definitions and rationale.
+/// Users can override by defining a profile named `__clash_internal__`
+/// in their policy's `profiles:` section.
+fn builtin_clash_rules() -> &'static [ProfileRule] {
+    BUILTIN_CLASH_RULES.get_or_init(|| {
+        parse::parse_profile_def_yaml(include_str!("../builtin_clash_profile.yaml"))
+            .expect("builtin_clash_profile.yaml is invalid")
+            .rules
+    })
+}
 
-        vec![
-            // 1. Allow reading ~/.clash/ files (so Claude can inspect/explain the policy)
-            ProfileRule {
-                effect: Effect::Allow,
-                verb: "read".to_string(),
-                noun: Pattern::Match(MatchExpr::Any),
-                constraints: Some(InlineConstraints {
-                    fs: fs_read.clone(),
-                    ..Default::default()
-                }),
-            },
-            // 2. Allow `clash policy show` (read-only, sandboxed to read ~/.clash/)
-            ProfileRule {
-                effect: Effect::Allow,
-                verb: "bash".to_string(),
-                noun: Pattern::Match(MatchExpr::Glob("*clash policy show*".to_string())),
-                constraints: Some(InlineConstraints {
-                    fs: fs_read.clone(),
-                    ..Default::default()
-                }),
-            },
-            // 3. Allow `clash policy schema` (read-only, sandboxed to read ~/.clash/)
-            ProfileRule {
-                effect: Effect::Allow,
-                verb: "bash".to_string(),
-                noun: Pattern::Match(MatchExpr::Glob("*clash policy schema*".to_string())),
-                constraints: Some(InlineConstraints {
-                    fs: fs_read.clone(),
-                    ..Default::default()
-                }),
-            },
-            // 4. Allow `clash policy add-rule --dry-run` (preview only, no mutation)
-            // The args constraint makes this a constrained-allow, which beats the
-            // unconstrained-ask rule below when --dry-run is present.
-            ProfileRule {
-                effect: Effect::Allow,
-                verb: "bash".to_string(),
-                noun: Pattern::Match(MatchExpr::Glob("*clash policy add-rule*".to_string())),
-                constraints: Some(InlineConstraints {
-                    fs: fs_read.clone(),
-                    args: Some(vec![ArgSpec::Require("--dry-run".to_string())]),
-                    ..Default::default()
-                }),
-            },
-            // 5. Allow `clash policy remove-rule --dry-run` (preview only, no mutation)
-            ProfileRule {
-                effect: Effect::Allow,
-                verb: "bash".to_string(),
-                noun: Pattern::Match(MatchExpr::Glob("*clash policy remove-rule*".to_string())),
-                constraints: Some(InlineConstraints {
-                    fs: fs_read,
-                    args: Some(vec![ArgSpec::Require("--dry-run".to_string())]),
-                    ..Default::default()
-                }),
-            },
-            // 6. Ask before `clash policy add-rule` (actual mutation)
-            ProfileRule {
-                effect: Effect::Ask,
-                verb: "bash".to_string(),
-                noun: Pattern::Match(MatchExpr::Glob("*clash policy add-rule*".to_string())),
-                constraints: Some(InlineConstraints {
-                    fs: fs_full.clone(),
-                    ..Default::default()
-                }),
-            },
-            // 7. Ask before `clash policy remove-rule` (actual mutation)
-            ProfileRule {
-                effect: Effect::Ask,
-                verb: "bash".to_string(),
-                noun: Pattern::Match(MatchExpr::Glob("*clash policy remove-rule*".to_string())),
-                constraints: Some(InlineConstraints {
-                    fs: fs_full.clone(),
-                    ..Default::default()
-                }),
-            },
-            // 8. Ask before `clash init` (creates or overwrites default policy)
-            ProfileRule {
-                effect: Effect::Ask,
-                verb: "bash".to_string(),
-                noun: Pattern::Match(MatchExpr::Glob("*clash init*".to_string())),
-                constraints: Some(InlineConstraints {
-                    fs: fs_full.clone(),
-                    ..Default::default()
-                }),
-            },
-            // 9. Ask before `clash migrate` (imports Claude permissions into clash)
-            ProfileRule {
-                effect: Effect::Ask,
-                verb: "bash".to_string(),
-                noun: Pattern::Match(MatchExpr::Glob("*clash migrate*".to_string())),
-                constraints: Some(InlineConstraints {
-                    fs: fs_full,
-                    ..Default::default()
-                }),
-            },
-        ]
-    }
-
-    /// Built-in rules for the `__claude_internal__` profile.
-    ///
-    /// Always allows Claude Code meta-tools that don't interact with the
-    /// user's filesystem or system (e.g. AskUserQuestion, ExitPlanMode).
-    ///
-    /// Users can override by defining a profile named `__claude_internal__`
-    /// in their policy's `profiles:` section.
-    fn builtin_claude_rules() -> Vec<ProfileRule> {
-        CLAUDE_INTERNAL_TOOLS
-            .iter()
-            .map(|(tool, effect)| ProfileRule {
-                effect: *effect,
-                verb: tool.to_string(),
-                noun: Pattern::Match(MatchExpr::Any),
-                constraints: None,
-            })
-            .collect()
-    }
+/// Lazily parsed built-in rules for the `__claude_internal__` profile.
+///
+/// See `builtin_claude_profile.yaml` for the rule definitions.
+/// Users can override by defining a profile named `__claude_internal__`
+/// in their policy's `profiles:` section.
+fn builtin_claude_rules() -> &'static [ProfileRule] {
+    BUILTIN_CLAUDE_RULES.get_or_init(|| {
+        parse::parse_profile_def_yaml(include_str!("../builtin_claude_profile.yaml"))
+            .expect("builtin_claude_profile.yaml is invalid")
+            .rules
+    })
 }
 
 /// Convert a legacy `Statement` into a `CompiledProfileRule`.
@@ -2641,20 +2503,20 @@ profiles:
         // Use deny as default so we can distinguish allow vs ask vs default
         let policy = compile_yaml("default: deny\n");
 
-        for (tool, expected_effect) in super::CLAUDE_INTERNAL_TOOLS {
+        for rule in super::builtin_claude_rules() {
             let ctx = make_ctx(
                 "agent",
                 &Verb::Execute,
                 "",
                 "/home/user/project",
                 &serde_json::Value::Null,
-                tool,
+                &rule.verb,
             );
             let decision = policy.evaluate_with_context(&ctx);
             assert_eq!(
-                decision.effect, *expected_effect,
+                decision.effect, rule.effect,
                 "built-in __claude_internal__ should {:?} for {}",
-                expected_effect, tool
+                rule.effect, rule.verb
             );
         }
     }
