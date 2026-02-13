@@ -88,7 +88,7 @@ work issue plugin="":
     dir="{{wt_root}}/$branch"
 
     # Create worktree + branch
-    git worktree add -b "claude/$branch" "$dir" >&2
+    git worktree add -b "claude/$branch" "$dir" >&2 || true
 
     # Build plugin args if requested
     plugin_args=""
