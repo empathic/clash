@@ -585,6 +585,20 @@ fn parse_args_list(value: &serde_yaml::Value) -> Result<Vec<ArgSpec>, PolicyPars
 
 /// Flatten a profile by resolving its `include:` chain.
 ///
+/// Parse a YAML string as a standalone profile definition (for embedded built-in profiles).
+///
+/// The YAML should have the same shape as a single entry under `profiles:`:
+/// ```yaml
+/// rules:
+///   allow read *:
+///     fs:
+///       read: subpath(~/.clash)
+/// ```
+pub fn parse_profile_def_yaml(yaml: &str) -> Result<ProfileDef, PolicyParseError> {
+    let value: serde_yaml::Value = serde_yaml::from_str(yaml).map_err(PolicyParseError::Yaml)?;
+    parse_new_profile_def(&value)
+}
+
 /// Returns rules from the included parent first, then the profile's own rules.
 #[instrument(level = Level::TRACE)]
 pub fn flatten_profile(
