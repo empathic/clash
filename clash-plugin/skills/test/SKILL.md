@@ -11,10 +11,10 @@ Ask the user what tool use they want to test, or use what they already described
 Run each test through clash explain using the simple CLI syntax:
 
 ```bash
-$CLASH_BIN explain bash "rm -rf /" --json
-$CLASH_BIN explain read "/etc/passwd" --json
-$CLASH_BIN explain bash "git push origin main" --json
-$CLASH_BIN explain write "~/.ssh/config" --json
+$CLASH_BIN policy explain bash "rm -rf /" --json
+$CLASH_BIN policy explain read "/etc/passwd" --json
+$CLASH_BIN policy explain bash "git push origin main" --json
+$CLASH_BIN policy explain write "~/.ssh/config" --json
 ```
 
 Parse the JSON output and present results clearly with visual indicators:

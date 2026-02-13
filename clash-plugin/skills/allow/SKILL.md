@@ -10,28 +10,34 @@ Help the user add an **allow** rule to their clash policy.
    - Good: `allow bash git *` (covers all git commands)
    - Avoid: `allow bash git status` (too narrow, user will hit another prompt soon)
    - If unsure, ask the user what they want to allow.
+   - **Bare verb shortcuts**: if the user wants a common capability, use a bare verb:
+     - `$CLASH_BIN policy allow edit` — allow editing files in the project
+     - `$CLASH_BIN policy allow bash` — allow running commands in the project
+     - `$CLASH_BIN policy allow web` — allow web search and fetch
+     - `$CLASH_BIN policy allow read` — allow reading files in the project
+   - **Full rule** for specific patterns:
+     - `$CLASH_BIN policy allow "bash git *"` — allow all git commands
    - If the request involves a **directory path** or filesystem access (e.g., "allow access to ~/Library/Caches"):
-     - Use `allow * *` as the rule with a `--fs` constraint
-     - Example: `$CLASH_BIN policy add-rule "allow * *" --fs "full:subpath(~/Library/Caches)"`
+     - Use `"* *"` as the rule with a `--fs` constraint
+     - Example: `$CLASH_BIN policy allow "* *" --fs "full:subpath(~/Library/Caches)"`
      - Capabilities: `read`, `write`, `create`, `delete`, `execute`, or `full` (all of the above)
      - Filters: `subpath(path)`, `literal(path)`, `regex(pattern)` — combinable with `|` (or) and `&` (and)
 
 2. **Confirm with the user** before making any changes:
-   - Show the exact rule that will be added
-   - Show which profile it will be added to (the active profile by default)
+   - Show the exact command that will be run
    - Explain what the rule means in plain English
 
 3. **Dry-run first** to preview the change:
    ```bash
-   $CLASH_BIN policy add-rule "RULE" --dry-run
+   $CLASH_BIN policy allow "RULE" --dry-run
    # Or with filesystem constraints:
-   $CLASH_BIN policy add-rule "allow * *" --fs "full:subpath(~/dir)" --dry-run
+   $CLASH_BIN policy allow "* *" --fs "full:subpath(~/dir)" --dry-run
    ```
    Show the output to the user.
 
 4. **Get confirmation**, then apply:
    ```bash
-   $CLASH_BIN policy add-rule "RULE"
+   $CLASH_BIN policy allow "RULE"
    ```
 
 5. **Report success** and explain that the rule is now active.
@@ -40,7 +46,7 @@ Help the user add an **allow** rule to their clash policy.
 
 - Always dry-run first and show the result before applying
 - Never suggest rules that override intentional deny rules without explicit user consent
-- Never suggest `allow * *` or `allow bash *` without explaining the security implications and getting explicit user consent
+- Never suggest `allow "* *"` or `allow "bash *"` without explaining the security implications and getting explicit user consent
 - If the user asks to allow something that is currently denied, warn them that deny rules always take precedence (even over constrained allows) and they may need to remove the deny rule first
 - If the user wants an allow rule to override a broader ask, suggest adding inline constraints (url, args, etc.) to the allow rule — constrained allows beat unconstrained asks
-- Prefer scoped rules (e.g., `allow bash git *`) over broad wildcards
+- Prefer scoped rules (e.g., `allow "bash git *"`) over broad wildcards

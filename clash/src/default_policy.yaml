@@ -1,10 +1,10 @@
 # Clash policy — deny-all default for new users.
 #
 # Everything is blocked except reading files in your project.
-# Use "clash allow editing", "clash allow commands", or "clash allow web"
-# to unlock capabilities as you need them.
+# Use "clash policy allow edit", "clash policy allow bash", or
+# "clash policy allow web" to unlock capabilities as you need them.
 #
-# For full rule syntax, run "clash policy add-rule --help".
+# Run "clash policy setup" for interactive configuration.
 #
 # Note: clash always injects two built-in profiles:
 #   __clash_internal__ — allows clash to read/write its own config
@@ -25,4 +25,4 @@ profiles:
   main:
     include: [cwd-read]
     rules:
-      # Add rules here with "clash allow <preset>" or "clash policy add-rule"
+      # Add rules here with "clash policy allow <verb>" or "clash policy setup"

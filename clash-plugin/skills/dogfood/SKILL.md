@@ -19,21 +19,16 @@ CLASH_BIN="${CLASH_BIN:-$(command -v clash 2>/dev/null || echo "$HOME/.local/bin
 
 Tell the user you're going to set up clash with safe defaults, and that you'll need permission for the first few actions since there are no rules yet.
 
-Run the init command (without --force, so it won't overwrite an existing config):
+Run the init command:
 
 ```bash
 $CLASH_BIN init
 ```
 
-If this fails because a config already exists, ask the user if they want to re-run with `--force` to fully reinitialize.
+If clash is already configured, `init` will interactively ask whether to reconfigure from scratch or update the existing configuration.
 
 ## Explain what was created
 
-After initialization, summarize briefly:
+After initialization, run `$CLASH_BIN status` and summarize briefly what Claude can and cannot do.
 
-- **Default**: `ask` — anything without a matching rule prompts for approval
-- **Git**: commits need approval, push/merge/destructive ops are blocked
-- **Sudo**: blocked
-- **File access**: current directory, `~/.claude`, and `/tmp` are allowed. Sensitive paths (`~/.ssh`, `~/.aws`) prompt for approval.
-
-Suggest they review `~/.clash/policy.yaml` and use `/clash:edit` to customize.
+Suggest they run `clash policy setup` in their terminal for interactive configuration, or use `/clash:edit` to customize individual rules.

@@ -27,14 +27,15 @@ clash init [OPTIONS]
 
 | Flag | Description |
 |------|-------------|
-| `--force` | Overwrite an existing `policy.yaml` file |
-| `--bypass-permissions` | Set `bypassPermissions` in user-level Claude Code settings so Clash is the sole permission handler (avoids double-prompting) |
+| `--no-bypass` | Skip setting `bypassPermissions` in Claude Code settings |
 
 **What it does:**
 
-1. Creates `~/.clash/policy.yaml` with a safe default policy
-2. Installs the clash plugin into Claude Code's settings
-3. With `--bypass-permissions`, disables Claude Code's built-in permission system so clash handles all permission decisions
+1. Creates `~/.clash/policy.yaml` with a safe default policy (or reconfigures an existing one)
+2. Sets `bypassPermissions: true` in Claude Code settings so clash is the sole permission handler
+3. Offers an interactive wizard to configure capabilities
+
+If a policy already exists and stdin is a TTY, prompts you to choose between reconfiguring from scratch or updating the existing configuration.
 
 **Examples:**
 
@@ -42,11 +43,11 @@ clash init [OPTIONS]
 # First-time setup
 clash init
 
-# Re-initialize, replacing existing policy
-clash init --force
+# Re-run to reconfigure (interactive prompt)
+clash init
 
-# Initialize and become sole permission handler
-clash init --bypass-permissions
+# Initialize without touching Claude Code settings
+clash init --no-bypass
 ```
 
 ---

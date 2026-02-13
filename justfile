@@ -31,6 +31,7 @@ install: uninstall
 uninstall:
     -claude plugin uninstall clash
     -claude plugin marketplace remove clash
+    -rm ~/.local/bin/clash
 
 check:
     cargo fmt
@@ -67,26 +68,39 @@ clash *ARGS:
 fix:
     cargo fix --allow-dirty
 
-# Create a new worktree for a Claude Code session. Prints path to stdout.
-# Usage: just wt-new NAME [BRANCH]
-wt-new name branch="":
+# Launch a Claude session for a Linear issue in a new tmux window.
+# Usage: just work EMP-123
+#        just work https://linear.app/empathic/issue/EMP-123/title-slug
+#        just work EMP-123 plugin=true
+work issue plugin="":
     #!/usr/bin/env bash
     set -euo pipefail
-    dir="{{wt_root}}/{{name}}"
-    if [ -n "{{branch}}" ]; then
-        git worktree add "$dir" "{{branch}}" >&2
+
+    # Extract issue ID from URL or use as-is
+    input="{{issue}}"
+    if [[ "$input" == http* ]]; then
+        id=$(echo "$input" | grep -oE '[A-Z]+-[0-9]+')
     else
-        git worktree add -b "claude/{{name}}" "$dir" >&2
+        id="$input"
     fi
-    echo "$dir"
 
-# List all worktrees
-wt-list:
-    git worktree list
+    branch=$(echo "$id" | tr '[:upper:]' '[:lower:]')
+    dir="{{wt_root}}/$branch"
 
-# Remove a worktree (preserves the branch)
-wt-rm name:
-    git worktree remove "{{wt_root}}/{{name}}"
+    # Create worktree + branch
+    git worktree add -b "claude/$branch" "$dir" >&2
+
+    # Build plugin args if requested
+    plugin_args=""
+    if [ -n "{{plugin}}" ]; then
+        just build-plugin >&2
+        plugin_args="--plugin-dir {{plugin_dir}}"
+    fi
+
+    # Launch Claude in a new tmux window
+    tmux new-window -n "$branch" -c "$dir" \
+        "claude $plugin_args --dangerously-skip-permissions \
+        'Look up Linear issue $id using the linear MCP server. Read the issue description, understand the requirements, and start working on it.'"
 
 # Remove all worktrees under clash-wt/ and prune
 wt-clean:

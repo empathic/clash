@@ -81,25 +81,29 @@ fn check_permission_policy(
 
         eprintln!("clash: blocked {} on {}", verb_str_owned, noun_summary);
 
-        // 1st denial: full explanation line
-        if denial_count <= 1 {
-            let explanation = denial_explanation(&verb_str_owned);
-            eprintln!("  {}", explanation);
-        }
+        let is_explicit_deny = decision
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("denied") || r.contains("deny"));
 
-        // 1st-3rd denial: suggested command
-        if let Some(preset) = suggest_preset(&verb_str_owned) {
-            eprintln!("  To allow this: clash allow {}", preset);
+        if is_explicit_deny {
+            eprintln!("  This action is explicitly denied by your policy.");
+            if denial_count <= 3 {
+                eprintln!("  Run \"clash policy list\" to see your rules.");
+            }
         } else {
-            eprintln!(
-                "  To allow this: clash policy add-rule \"allow {} {}\"",
-                verb_str_owned, noun_summary
-            );
-        }
+            // Default-deny: suggest the quick fix
+            if denial_count <= 1 {
+                let explanation = denial_explanation(&verb_str_owned);
+                eprintln!("  {}", explanation);
+            }
 
-        // 1st-3rd denial: help hint
-        if denial_count <= 3 {
-            eprintln!("  (run \"clash allow --help\" for more options)");
+            let suggested = suggest_allow_command(&verb_str_owned, &noun_summary);
+            eprintln!("  To allow: {}", suggested);
+
+            if denial_count <= 3 {
+                eprintln!("  Or run \"clash policy setup\" for interactive configuration.");
+            }
         }
     }
 
@@ -200,13 +204,17 @@ fn count_session_denials(session_id: &str) -> usize {
         .count()
 }
 
-/// Map a verb string to the suggested preset name for the `clash allow` command.
-fn suggest_preset(verb_str: &str) -> Option<&'static str> {
+/// Suggest a `clash policy allow` command for a denied verb.
+///
+/// Returns a bare-verb shorthand when possible (e.g. `clash policy allow edit`),
+/// or a full rule command for unknown verbs.
+fn suggest_allow_command(verb_str: &str, noun_summary: &str) -> String {
     match verb_str {
-        "edit" | "write" => Some("editing"),
-        "bash" => Some("commands"),
-        "webfetch" | "websearch" => Some("web"),
-        _ => None,
+        "edit" | "write" => "clash policy allow edit".into(),
+        "bash" => "clash policy allow bash".into(),
+        "webfetch" | "websearch" => "clash policy allow web".into(),
+        "read" => "clash policy allow read".into(),
+        _ => format!("clash policy allow \"{} {}\"", verb_str, noun_summary),
     }
 }
 
@@ -256,12 +264,24 @@ fn build_deny_context(
 
     let description = denial_explanation(verb_str);
 
-    let suggested_action = match suggest_preset(verb_str) {
-        Some(preset) => format!("clash allow {}", preset),
-        None => format!("clash policy add-rule \"allow {} {}\"", verb_str, truncated_noun),
-    };
+    let suggested_action = suggest_allow_command(verb_str, &truncated_noun);
 
-    if denial_count >= 4 {
+    if reason_code == "explicit-deny" {
+        // User intentionally blocked this — don't suggest allowing it.
+        format!(
+            "clash: denied tool={} input={}\n\
+             reason: {}\n\
+             \n\
+             This action is explicitly denied by the user's policy.\n\
+             \n\
+             Agent instructions:\n\
+             - Tell the user this action is blocked by their clash policy\n\
+             - Suggest running \"clash policy list\" to review rules\n\
+             - Do NOT retry the tool call\n\
+             - Do NOT suggest workarounds",
+            tool_name, truncated_noun, reason_code,
+        )
+    } else if denial_count >= 4 {
         // Abbreviated context for repeat denials.
         format!(
             "clash: denied tool={} input={}\n\
@@ -278,12 +298,12 @@ fn build_deny_context(
              reason: {}\n\
              \n\
              {}\n\
-             This is likely the user's first encounter with a clash denial this session.\n\
              \n\
              Suggested action: {}\n\
              Agent instructions:\n\
              - Explain briefly that clash blocked this to protect the project\n\
              - Suggest the user run the command above\n\
+             - Mention \"clash policy setup\" for broader configuration\n\
              - Do NOT retry the tool call\n\
              - Do NOT suggest workarounds or alternative approaches",
             tool_name, truncated_noun, reason_code, description, suggested_action,
@@ -298,7 +318,6 @@ fn build_deny_context(
              \n\
              Suggested action: {}\n\
              Agent instructions:\n\
-             - Explain briefly that clash blocked this to protect the project\n\
              - Suggest the user run the command above\n\
              - Do NOT retry the tool call\n\
              - Do NOT suggest workarounds or alternative approaches",
@@ -1235,41 +1254,67 @@ profiles:
         Ok(())
     }
 
-    // --- suggest_preset tests ---
+    // --- suggest_allow_command tests ---
 
     #[test]
-    fn test_suggest_preset_edit() {
-        assert_eq!(suggest_preset("edit"), Some("editing"));
+    fn test_suggest_allow_command_edit() {
+        assert_eq!(
+            suggest_allow_command("edit", "main.rs"),
+            "clash policy allow edit"
+        );
     }
 
     #[test]
-    fn test_suggest_preset_write() {
-        assert_eq!(suggest_preset("write"), Some("editing"));
+    fn test_suggest_allow_command_write() {
+        assert_eq!(
+            suggest_allow_command("write", "main.rs"),
+            "clash policy allow edit"
+        );
     }
 
     #[test]
-    fn test_suggest_preset_bash() {
-        assert_eq!(suggest_preset("bash"), Some("commands"));
+    fn test_suggest_allow_command_bash() {
+        assert_eq!(
+            suggest_allow_command("bash", "ls -la"),
+            "clash policy allow bash"
+        );
     }
 
     #[test]
-    fn test_suggest_preset_webfetch() {
-        assert_eq!(suggest_preset("webfetch"), Some("web"));
+    fn test_suggest_allow_command_webfetch() {
+        assert_eq!(
+            suggest_allow_command("webfetch", "https://example.com"),
+            "clash policy allow web"
+        );
     }
 
     #[test]
-    fn test_suggest_preset_websearch() {
-        assert_eq!(suggest_preset("websearch"), Some("web"));
+    fn test_suggest_allow_command_websearch() {
+        assert_eq!(
+            suggest_allow_command("websearch", "test query"),
+            "clash policy allow web"
+        );
     }
 
     #[test]
-    fn test_suggest_preset_read_returns_none() {
-        assert_eq!(suggest_preset("read"), None);
+    fn test_suggest_allow_command_read() {
+        assert_eq!(
+            suggest_allow_command("read", "/etc/passwd"),
+            "clash policy allow read"
+        );
     }
 
     #[test]
-    fn test_suggest_preset_unknown_returns_none() {
-        assert_eq!(suggest_preset("unknownverb"), None);
+    fn test_suggest_allow_command_unknown_verb() {
+        let cmd = suggest_allow_command("unknownverb", "some-noun");
+        assert!(
+            cmd.contains("clash policy allow"),
+            "should suggest clash policy allow, got: {cmd}"
+        );
+        assert!(
+            cmd.contains("unknownverb"),
+            "should contain the verb, got: {cmd}"
+        );
     }
 
     // --- denial_explanation tests ---
@@ -1338,7 +1383,10 @@ profiles:
     #[test]
     fn test_denial_explanation_unknown() {
         let msg = denial_explanation("unknown");
-        assert!(!msg.is_empty(), "unknown verb should return non-empty explanation");
+        assert!(
+            !msg.is_empty(),
+            "unknown verb should return non-empty explanation"
+        );
     }
 
     // --- truncate_noun tests ---
@@ -1407,38 +1455,38 @@ profiles:
     }
 
     #[test]
-    fn test_build_deny_context_preset_eligible_verb() {
+    fn test_build_deny_context_bash_suggests_policy_allow() {
         let ctx = build_deny_context("Bash", "bash", "ls -la", None, 1);
         assert!(
-            ctx.contains("clash allow commands"),
-            "deny context for bash should suggest 'clash allow commands', got: {ctx}"
+            ctx.contains("clash policy allow bash"),
+            "deny context for bash should suggest 'clash policy allow bash', got: {ctx}"
         );
     }
 
     #[test]
-    fn test_build_deny_context_editing_preset() {
+    fn test_build_deny_context_edit_suggests_policy_allow() {
         let ctx = build_deny_context("Edit", "edit", "main.rs", None, 1);
         assert!(
-            ctx.contains("clash allow editing"),
-            "deny context for edit should suggest 'clash allow editing', got: {ctx}"
+            ctx.contains("clash policy allow edit"),
+            "deny context for edit should suggest 'clash policy allow edit', got: {ctx}"
         );
     }
 
     #[test]
-    fn test_build_deny_context_web_preset() {
+    fn test_build_deny_context_web_suggests_policy_allow() {
         let ctx = build_deny_context("WebFetch", "webfetch", "https://example.com", None, 1);
         assert!(
-            ctx.contains("clash allow web"),
-            "deny context for webfetch should suggest 'clash allow web', got: {ctx}"
+            ctx.contains("clash policy allow web"),
+            "deny context for webfetch should suggest 'clash policy allow web', got: {ctx}"
         );
     }
 
     #[test]
-    fn test_build_deny_context_unknown_verb_suggests_add_rule() {
+    fn test_build_deny_context_unknown_verb_suggests_policy_allow() {
         let ctx = build_deny_context("CustomTool", "customtool", "some-noun", None, 1);
         assert!(
-            ctx.contains("clash policy add-rule"),
-            "deny context for unknown verb should suggest 'clash policy add-rule', got: {ctx}"
+            ctx.contains("clash policy allow"),
+            "deny context for unknown verb should suggest 'clash policy allow', got: {ctx}"
         );
     }
 
@@ -1495,14 +1543,14 @@ rules:
             "deny additional_context should contain agent instructions, got: {ctx}"
         );
         assert!(
-            ctx.contains("clash allow commands"),
-            "deny additional_context for bash should suggest 'clash allow commands', got: {ctx}"
+            ctx.contains("clash policy allow bash"),
+            "deny additional_context for bash should suggest 'clash policy allow bash', got: {ctx}"
         );
         Ok(())
     }
 
     #[test]
-    fn test_deny_decision_edit_includes_editing_preset() -> Result<()> {
+    fn test_deny_decision_edit_includes_allow_suggestion() -> Result<()> {
         let settings = settings_with_policy(
             "\
 rules:
@@ -1522,8 +1570,8 @@ rules:
         );
         let ctx = get_additional_context(&result).expect("deny should have additional_context");
         assert!(
-            ctx.contains("clash allow editing"),
-            "deny additional_context for edit should suggest 'clash allow editing', got: {ctx}"
+            ctx.contains("clash policy allow edit"),
+            "deny additional_context for edit should suggest 'clash policy allow edit', got: {ctx}"
         );
         Ok(())
     }

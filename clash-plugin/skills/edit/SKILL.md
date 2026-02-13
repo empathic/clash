@@ -5,13 +5,13 @@ description: Guided editing of the clash policy file
 First, get an overview of the current policy:
 
 ```bash
-$CLASH_BIN policy show
+$CLASH_BIN status
 ```
 
 Then list the active rules:
 
 ```bash
-$CLASH_BIN policy list-rules
+$CLASH_BIN policy list
 ```
 
 If the user has already stated what they want to change, proceed. Otherwise, ask what change they would like to make. Common requests include:
@@ -22,21 +22,22 @@ If the user has already stated what they want to change, proceed. Otherwise, ask
 
 ## Adding a rule
 
-Translate the user's intent into a rule string: `effect verb noun` where:
-- **effect**: `allow`, `deny`, or `ask`
-- **verb**: `bash`, `read`, `write`, `edit`, or `*` (all tools)
-- **noun**: a glob pattern (e.g., `git push*`, `*.env`, `*`)
+Translate the user's intent into a rule. The effect (allow/deny) is part of the subcommand:
+
+- **Allow**: `$CLASH_BIN policy allow "verb noun"` where verb is `bash`, `read`, `write`, `edit`, or `*`, and noun is a glob pattern
+- **Deny**: `$CLASH_BIN policy deny "verb noun"`
+- **Bare verb shortcuts**: `$CLASH_BIN policy allow edit` (expands to allow editing with cwd-scoped filesystem access)
 
 Preview the change with `--dry-run`:
 
 ```bash
-$CLASH_BIN policy add-rule "RULE" --dry-run
+$CLASH_BIN policy allow "bash git *" --dry-run
 ```
 
 Show the preview to the user. After confirmation, apply:
 
 ```bash
-$CLASH_BIN policy add-rule "RULE"
+$CLASH_BIN policy allow "bash git *"
 ```
 
 To target a specific profile, add `--profile NAME`.
@@ -46,13 +47,13 @@ To target a specific profile, add `--profile NAME`.
 Preview the removal:
 
 ```bash
-$CLASH_BIN policy remove-rule "RULE" --dry-run
+$CLASH_BIN policy remove "allow bash *" --dry-run
 ```
 
 After confirmation:
 
 ```bash
-$CLASH_BIN policy remove-rule "RULE"
+$CLASH_BIN policy remove "allow bash *"
 ```
 
 ## Removing or changing constraints on a rule
@@ -63,20 +64,20 @@ Use a remove-then-re-add workflow:
 1. Remove the existing rule (this deletes the rule and all its constraints):
 
 ```bash
-$CLASH_BIN policy remove-rule "RULE"
+$CLASH_BIN policy remove "allow bash *"
 ```
 
 2. Re-add the rule — either without constraints, or with only the constraints you want to keep:
 
 ```bash
 # No constraints:
-$CLASH_BIN policy add-rule "RULE"
+$CLASH_BIN policy allow "bash *"
 
 # With specific constraints:
-$CLASH_BIN policy add-rule "RULE" --fs "full:subpath(~/dir)" --url "example.com" --args "--safe-flag"
+$CLASH_BIN policy allow "bash *" --fs "full:subpath(~/dir)" --url "example.com" --args "--safe-flag"
 ```
 
-Available inline constraint flags for `add-rule`:
+Available inline constraint flags:
 - `--fs` — filesystem constraints as `"caps:filter_expr"` (e.g., `"full:subpath(~/dir)"`, `"read+write:subpath(.)"`)
 - `--url` — domain patterns (e.g., `"github.com"`, `"!evil.com"` to forbid)
 - `--args` — argument constraints (e.g., `"--dry-run"`, `"!--delete"` to forbid)
@@ -88,7 +89,7 @@ Available inline constraint flags for `add-rule`:
 After applying a change, validate it by running explain with a simulated request:
 
 ```bash
-echo '{"tool_name":"Bash","tool_input":{"command":"<matching-command>"}}' | $CLASH_BIN explain
+$CLASH_BIN policy explain bash "git push"
 ```
 
 Suggest follow-up skills:

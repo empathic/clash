@@ -124,6 +124,8 @@ pub struct InlineConstraintArgs {
     pub pipe: Option<bool>,
     /// Allow shell redirects (>, >>, <).
     pub redirect: Option<bool>,
+    /// Network policy: "allow" or "deny".
+    pub network: Option<String>,
 }
 
 impl InlineConstraintArgs {
@@ -133,6 +135,7 @@ impl InlineConstraintArgs {
             && self.url.is_empty()
             && self.args.is_empty()
             && self.pipe.is_none()
+            && self.network.is_none()
             && self.redirect.is_none()
     }
 
@@ -175,6 +178,9 @@ impl InlineConstraintArgs {
         }
         if let Some(v) = self.redirect {
             lines.push(format!("{}redirect: {}", pad, v));
+        }
+        if let Some(ref v) = self.network {
+            lines.push(format!("{}network: {}", pad, v));
         }
         lines
     }

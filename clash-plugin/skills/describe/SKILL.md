@@ -2,13 +2,19 @@
 name: describe
 description: Describe the active clash policy in human-readable terms
 ---
-Read the active policy file:
+Start with a quick summary:
+
+```bash
+$CLASH_BIN status
+```
+
+Then read the active policy file for full details:
 
 ```bash
 cat ~/.clash/policy.yaml
 ```
 
-Then parse and explain the policy in human-readable terms. Cover each of the following:
+Parse and explain the policy in human-readable terms. Cover each of the following:
 
 1. **Default behavior** — What is the default permission behavior (`allow`, `deny`, or `ask`)? What profile is active?
 2. **Profiles** — Which profiles are defined and what does each one include? Show the inheritance chain if profiles use `include:`.

@@ -116,8 +116,7 @@ fn load_sandbox_for_profile(profile_name: &str, cwd: &str) -> Result<SandboxPoli
         profile: resolved_name.clone(),
     });
 
-    let compiled =
-        CompiledPolicy::compile(&doc).context("failed to compile policy")?;
+    let compiled = CompiledPolicy::compile(&doc).context("failed to compile policy")?;
 
     compiled.sandbox_for_active_profile(cwd).ok_or_else(|| {
         anyhow::anyhow!(

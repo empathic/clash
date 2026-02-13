@@ -27,6 +27,7 @@ clash_notify = { workspace = true }
 uuid = { workspace = true }
 ureq = { workspace = true }
 base64 = { workspace = true }
+dialoguer = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
