@@ -5,17 +5,18 @@ description: Show clash permission enforcement status and configuration
 
 Show the current clash configuration status.
 
-Run the following commands using Bash and report the results:
+Run:
 
 ```bash
-$CLASH_BIN policy show
+$CLASH_BIN status
 ```
 
-```bash
-$CLASH_BIN policy list-rules
-```
+Report the results to the user in plain English, including:
+1. What Claude can currently do (allowed capabilities)
+2. What is blocked
+3. The default permission behavior
 
-Report the results to the user, including:
-1. The policy file location
-2. The default permission and active profile
-3. The rules currently in effect
+For more detail, suggest:
+- `/clash:describe` for a full policy breakdown
+- `/clash:edit` to make changes
+- `clash policy setup` in the terminal for interactive reconfiguration

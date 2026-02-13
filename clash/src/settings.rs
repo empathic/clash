@@ -41,6 +41,9 @@ impl ClashSettings {
     }
 
     pub fn policy_file() -> Result<PathBuf> {
+        if let Ok(p) = std::env::var("CLASH_POLICY_FILE") {
+            return Ok(PathBuf::from(p));
+        }
         Self::settings_dir().map(|d| d.join("policy.yaml"))
     }
 

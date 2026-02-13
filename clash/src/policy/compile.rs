@@ -2444,7 +2444,8 @@ profiles:
     fn test_default_policy_clash_init_asks() {
         let policy = compile_yaml(crate::settings::DEFAULT_POLICY);
 
-        // clash init via full path → ask (mutation requires consent)
+        // clash init via full path → ask (built-in __clash_internal__ profile
+        // matches clash commands; mutations like init require consent)
         let ctx = make_ctx(
             "agent",
             &Verb::Execute,
@@ -2457,7 +2458,7 @@ profiles:
         assert_eq!(
             decision.effect,
             Effect::Ask,
-            "default policy: clash init should ask (mutation requires consent)"
+            "default policy: clash init should ask via __clash_internal__ built-in"
         );
     }
 

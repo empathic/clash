@@ -41,3 +41,4 @@ pub mod sandbox;
 pub mod sandbox_cmd;
 pub mod schema;
 pub mod settings;
+pub mod wizard;

@@ -18,3 +18,14 @@
 * ALWAYS update the relevant documentation (readme/comments) when changes have a public facing impact.
 * Prefer to "comment through context", whether that be debug logs, anyhow::Context instead of comments unless your code comments are explaining difficult to understand code
 * If you are corrected by a person when using a skill, or told you should have used the skill, then modify the plugin definition for clash to ensure this doesn't happen again.
+
+
+## Layout
+- *clash* Clash binary + library
+- *clash-plugin* Claude plugin refered to by the .claude-plugin definitions
+- *clash_notify* Helper crate for extended notifications outside of the terminal
+- *claude_settings* Helper crate for interacting with a user's ".claude" settings directories
+- *docs* Project level documentation
+- *plans* Markdown files used to collaborate on plans that may span mulitple PRs. A place for human and agent multi-turn communication
+  - *active* Currently in progress plans
+  - *history* Plans that are either complete or abandoned

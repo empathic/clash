@@ -375,6 +375,10 @@ fn parse_new_profile_def(value: &serde_yaml::Value) -> Result<ProfileDef, Policy
 
     let mut rules = Vec::new();
     if let Some(rules_val) = map.get(serde_yaml::Value::String("rules".into())) {
+        // A rules block with only comments parses as Null — treat as empty.
+        if rules_val.is_null() {
+            return Ok(ProfileDef { include, rules });
+        }
         let rules_map = rules_val.as_mapping().ok_or_else(|| {
             PolicyParseError::Yaml(serde_yaml::Error::custom("'rules' must be a mapping"))
         })?;
