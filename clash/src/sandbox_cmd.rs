@@ -12,7 +12,7 @@ pub enum SandboxCmd {
         #[arg(long)]
         policy: Option<String>,
 
-        /// Profile name from policy.yaml (default: active profile)
+        /// Profile name from policy.sexp (default: active profile)
         #[arg(long)]
         profile: Option<String>,
 
@@ -31,7 +31,7 @@ pub enum SandboxCmd {
         #[arg(long)]
         policy: Option<String>,
 
-        /// Profile name from policy.yaml (default: active profile)
+        /// Profile name from policy.sexp (default: active profile)
         #[arg(long)]
         profile: Option<String>,
 
@@ -62,7 +62,7 @@ fn resolve_cwd(cwd: &str) -> Result<String> {
 }
 
 /// Resolve sandbox policy: `--policy` JSON wins, then `--profile` name,
-/// then falls back to the active profile from policy.yaml.
+/// then falls back to the active profile from policy.sexp.
 fn resolve_sandbox_policy(
     policy_json: Option<&str>,
     profile_name: Option<&str>,
@@ -76,19 +76,19 @@ fn resolve_sandbox_policy(
     load_sandbox_for_profile(name, cwd)
 }
 
-/// Load policy.yaml, compile the named profile, and generate a sandbox policy.
+/// Load policy.sexp, compile the named profile, and generate a sandbox policy.
 ///
-/// If `profile_name` is empty, uses the active profile from policy.yaml's `default.profile`.
+/// If `profile_name` is empty, uses the active profile's `default.profile`.
 fn load_sandbox_for_profile(profile_name: &str, cwd: &str) -> Result<SandboxPolicy> {
-    use crate::policy::parse::parse_yaml;
+    use crate::policy::parse::parse_policy;
     use crate::policy::{CompiledPolicy, DefaultConfig, Effect};
     use crate::settings::ClashSettings;
 
     let path = ClashSettings::policy_file()?;
-    let yaml = std::fs::read_to_string(&path)
+    let text = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     let mut doc =
-        parse_yaml(&yaml).with_context(|| format!("failed to parse {}", path.display()))?;
+        parse_policy(&text).with_context(|| format!("failed to parse {}", path.display()))?;
 
     // Resolve the profile name: empty means use the configured default.
     let resolved_name = if profile_name.is_empty() {

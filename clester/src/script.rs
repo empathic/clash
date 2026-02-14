@@ -29,17 +29,17 @@ pub struct TestScript {
 /// Clash-specific settings: policy document.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClashConfig {
-    /// Policy document to write to ~/.clash/policy.yaml (old format).
+    /// Policy document to write to ~/.clash/policy.sexp (structured format).
     #[serde(default)]
     pub policy: Option<PolicySpec>,
 
-    /// Raw YAML string written directly to ~/.clash/policy.yaml (new format).
+    /// Raw s-expr string written directly to ~/.clash/policy.sexp.
     /// When present, takes precedence over `policy`.
     #[serde(default)]
     pub policy_raw: Option<String>,
 }
 
-/// Policy document specification for ~/.clash/policy.yaml.
+/// Policy document specification for ~/.clash/policy.sexp.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicySpec {
     /// Default effect when no rule matches: "allow", "deny", "ask", "delegate".

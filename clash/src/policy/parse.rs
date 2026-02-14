@@ -1,20 +1,15 @@
-//! Parsing and deserialization for policy documents.
+//! Parsing for policy documents.
 //!
 //! Handles:
-//! - YAML deserialization of policy documents
+//! - S-expression policy parsing (via parse_sexpr module)
 //! - Pest-based parsing of compact rule strings (`effect entity tool pattern`)
-//! - Custom serde for `Pattern` (with `!` negation prefix)
-//! - Custom serde for `VerbPattern` (with `*` wildcard)
 //! - Legacy `[permissions]` desugaring to statements
 
 use std::collections::HashMap;
 
 use pest::Parser;
 use pest_derive::Parser;
-use serde::de::Error as _;
-use serde::{Deserialize, Serialize};
 
-use super::ast::UrlSpec;
 use tracing::{Level, instrument};
 
 use super::error::{PolicyParseError, suggest_closest};
@@ -30,374 +25,12 @@ use crate::policy::sandbox_types::{Cap, NetworkPolicy};
 struct RuleParser;
 
 // ---------------------------------------------------------------------------
-// YAML document shape (serde)
-// ---------------------------------------------------------------------------
-
-/// Raw YAML representation that maps 1:1 to the file format.
-#[derive(Debug, Serialize, Deserialize)]
-struct RawPolicyYaml {
-    #[serde(default = "default_ask_str")]
-    default: String,
-
-    /// Named constraint primitives.
-    #[serde(default)]
-    constraints: HashMap<String, ConstraintDef>,
-
-    /// Named profiles (boolean expressions over constraint names).
-    #[serde(default)]
-    profiles: HashMap<String, ProfileExpr>,
-
-    #[serde(
-        default,
-        deserialize_with = "deserialize_rules",
-        serialize_with = "serialize_rules"
-    )]
-    rules: Vec<String>,
-
-    /// Claude Code's native permission format (allow/deny/ask lists).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    permissions: Option<ClaudePermissions>,
-}
-
-fn default_ask_str() -> String {
-    "ask".into()
-}
-
-/// Deserialize rules from either a YAML sequence (old format) or mapping (new format).
-///
-/// Old format (sequence of strings):
-/// ```yaml
-/// rules:
-///   - "allow bash git * : strict-git"
-///   - deny bash rm *
-/// ```
-///
-/// New format (mapping of rule → constraint):
-/// ```yaml
-/// rules:
-///   allow bash git * : strict-git
-///   allow bash cargo * : sandboxed
-///   deny bash rm * : []
-/// ```
-fn deserialize_rules<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::Error;
-    let value = serde_yaml::Value::deserialize(deserializer)?;
-    match value {
-        serde_yaml::Value::Sequence(seq) => seq
-            .into_iter()
-            .map(|v| match v {
-                serde_yaml::Value::String(s) => Ok(s),
-                _ => Err(Error::custom("rule must be a string")),
-            })
-            .collect(),
-        serde_yaml::Value::Mapping(map) => {
-            let mut rules = Vec::new();
-            for (key, value) in map {
-                let rule_key = match key {
-                    serde_yaml::Value::String(s) => s,
-                    _ => return Err(Error::custom("rule key must be a string")),
-                };
-                let constraint = match &value {
-                    serde_yaml::Value::String(s) => Some(s.clone()),
-                    serde_yaml::Value::Null => None,
-                    serde_yaml::Value::Sequence(seq) if seq.is_empty() => None,
-                    _ => {
-                        return Err(Error::custom(format!(
-                            "constraint for '{}' must be a string, null, or []",
-                            rule_key
-                        )));
-                    }
-                };
-                if let Some(constraint) = constraint {
-                    rules.push(format!("{} : {}", rule_key, constraint));
-                } else {
-                    rules.push(rule_key);
-                }
-            }
-            Ok(rules)
-        }
-        serde_yaml::Value::Null => Ok(Vec::new()),
-        _ => Err(Error::custom("rules must be a sequence or mapping")),
-    }
-}
-
-/// Serialize rules as a YAML mapping (new format).
-///
-/// Rules with constraints are split on the ` : ` separator.
-/// Rules without constraints get `[]` as the value.
-fn serialize_rules<S>(rules: &[String], serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    use serde::ser::SerializeMap;
-    let mut map = serializer.serialize_map(Some(rules.len()))?;
-    for rule in rules {
-        if let Some(colon_idx) = find_constraint_separator(rule) {
-            let key = rule[..colon_idx].trim_end();
-            let value = rule[colon_idx + 1..].trim();
-            map.serialize_entry(key, value)?;
-        } else {
-            let empty: Vec<String> = Vec::new();
-            map.serialize_entry(rule.trim(), &empty)?;
-        }
-    }
-    map.end()
-}
-
-// ---------------------------------------------------------------------------
 // Public parsing API
 // ---------------------------------------------------------------------------
 
-/// Parse a policy document from a YAML string.
-///
-/// Auto-detects old vs new format:
-/// - New format: `default:` is a YAML mapping `{ permission: ..., profile: ... }`
-/// - Old format: `default:` is a scalar string like `"ask"`
 #[instrument(level = Level::TRACE, skip(input))]
-pub fn parse_yaml(input: &str) -> Result<PolicyDocument, PolicyParseError> {
-    // Parse as generic Value first to detect format.
-    let value: serde_yaml::Value = serde_yaml::from_str(input)?;
-
-    if is_new_format(&value) {
-        return parse_new_format(value);
-    }
-
-    parse_old_format(input)
-}
-
-/// Detect whether the YAML value uses the new format.
-///
-/// New format has `default:` as a mapping (with `permission` and `profile` keys).
-/// Old format has `default:` as a scalar string or missing.
-fn is_new_format(value: &serde_yaml::Value) -> bool {
-    if let serde_yaml::Value::Mapping(map) = value
-        && let Some(default_val) = map.get(serde_yaml::Value::String("default".into()))
-    {
-        return default_val.is_mapping();
-    }
-    false
-}
-
-/// Parse the old/legacy policy format.
-fn parse_old_format(input: &str) -> Result<PolicyDocument, PolicyParseError> {
-    let raw: RawPolicyYaml = serde_yaml::from_str(input)?;
-
-    let default = parse_effect_str(&raw.default)?;
-
-    let mut statements = Vec::new();
-
-    // Desugar Claude Code permissions if present.
-    if let Some(ref perms) = raw.permissions {
-        statements.extend(desugar_claude_permissions(perms));
-    }
-
-    // Parse compact rule strings.
-    for rule_str in &raw.rules {
-        let stmt = parse_rule(rule_str)?;
-        statements.push(stmt);
-    }
-
-    Ok(PolicyDocument {
-        policy: PolicyConfig { default },
-        permissions: raw.permissions,
-        constraints: raw.constraints,
-        profiles: raw.profiles,
-        statements,
-        default_config: None,
-        profile_defs: Default::default(),
-    })
-}
-
-// ---------------------------------------------------------------------------
-// New-format parser
-// ---------------------------------------------------------------------------
-
-/// Parse the new profile-based policy format.
-///
-/// ```yaml
-/// default:
-///   permission: ask
-///   profile: research
-///
-/// profiles:
-///   safe-ssh:
-///     rules:
-///       deny * *:
-///         fs:
-///           read + write: subpath(~/.ssh)
-///   research:
-///     include: safe-ssh
-///     rules:
-///       allow bash *:
-///         args: ["!-delete"]
-///         fs:
-///           read: "!regex(\\./)"
-/// ```
-fn parse_new_format(value: serde_yaml::Value) -> Result<PolicyDocument, PolicyParseError> {
-    let map = match value {
-        serde_yaml::Value::Mapping(m) => m,
-        _ => {
-            return Err(PolicyParseError::Yaml(serde_yaml::Error::custom(
-                "expected mapping at top level",
-            )));
-        }
-    };
-
-    // Parse `default: { permission: ..., profile: ... }`
-    let default_val = map
-        .get(serde_yaml::Value::String("default".into()))
-        .ok_or_else(|| {
-            PolicyParseError::Yaml(serde_yaml::Error::custom("missing 'default' key"))
-        })?;
-    let default_config = parse_new_default(default_val)?;
-
-    // Parse `profiles: { name: { include: ..., rules: ... } }`
-    let mut profile_defs = HashMap::new();
-    if let Some(profiles_val) = map.get(serde_yaml::Value::String("profiles".into())) {
-        let profiles_map = profiles_val.as_mapping().ok_or_else(|| {
-            PolicyParseError::Yaml(serde_yaml::Error::custom("'profiles' must be a mapping"))
-        })?;
-        for (name_val, def_val) in profiles_map {
-            let name = name_val.as_str().ok_or_else(|| {
-                PolicyParseError::Yaml(serde_yaml::Error::custom("profile name must be a string"))
-            })?;
-            let def = parse_new_profile_def(def_val)?;
-            profile_defs.insert(name.to_string(), def);
-        }
-    }
-
-    // Validate that the active profile exists
-    if !profile_defs.contains_key(&default_config.profile) {
-        let candidates: Vec<&str> = profile_defs.keys().map(|s| s.as_str()).collect();
-        return Err(PolicyParseError::UnknownInclude {
-            name: default_config.profile.clone(),
-            suggestion: suggest_closest(&default_config.profile, &candidates),
-        });
-    }
-
-    // Validate all includes
-    for def in profile_defs.values() {
-        if let Some(ref includes) = def.include {
-            for include in includes {
-                if !profile_defs.contains_key(include) {
-                    let candidates: Vec<&str> = profile_defs.keys().map(|s| s.as_str()).collect();
-                    return Err(PolicyParseError::UnknownInclude {
-                        name: include.clone(),
-                        suggestion: suggest_closest(include, &candidates),
-                    });
-                }
-            }
-        }
-    }
-
-    // Detect circular includes
-    for name in profile_defs.keys() {
-        let mut visited = std::collections::HashSet::new();
-        let mut path = Vec::new();
-        detect_circular_include(name, &profile_defs, &mut visited, &mut path)?;
-    }
-
-    Ok(PolicyDocument {
-        policy: PolicyConfig {
-            default: default_config.permission,
-        },
-        permissions: None,
-        constraints: Default::default(),
-        profiles: Default::default(),
-        statements: Vec::new(),
-        default_config: Some(default_config),
-        profile_defs,
-    })
-}
-
-/// Parse `default: { permission: ask, profile: research }`.
-fn parse_new_default(value: &serde_yaml::Value) -> Result<DefaultConfig, PolicyParseError> {
-    let map = value.as_mapping().ok_or_else(|| {
-        PolicyParseError::Yaml(serde_yaml::Error::custom(
-            "'default' must be a mapping with 'permission' and 'profile'",
-        ))
-    })?;
-
-    let permission_str = map
-        .get(serde_yaml::Value::String("permission".into()))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            PolicyParseError::Yaml(serde_yaml::Error::custom(
-                "'default.permission' is required and must be a string",
-            ))
-        })?;
-    let permission = parse_effect_str(permission_str)?;
-
-    let profile = map
-        .get(serde_yaml::Value::String("profile".into()))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            PolicyParseError::Yaml(serde_yaml::Error::custom(
-                "'default.profile' is required and must be a string",
-            ))
-        })?
-        .to_string();
-
-    Ok(DefaultConfig {
-        permission,
-        profile,
-    })
-}
-
-/// Parse a profile definition: `{ include: ..., rules: { ... } }`.
-fn parse_new_profile_def(value: &serde_yaml::Value) -> Result<ProfileDef, PolicyParseError> {
-    let map = value.as_mapping().ok_or_else(|| {
-        PolicyParseError::Yaml(serde_yaml::Error::custom("profile def must be a mapping"))
-    })?;
-
-    let include = map
-        .get(serde_yaml::Value::String("include".into()))
-        .map(|v| match v {
-            serde_yaml::Value::String(s) => Ok(vec![s.clone()]),
-            serde_yaml::Value::Sequence(seq) => seq
-                .iter()
-                .map(|item| {
-                    item.as_str().map(|s| s.to_string()).ok_or_else(|| {
-                        PolicyParseError::Yaml(serde_yaml::Error::custom(
-                            "include list items must be strings",
-                        ))
-                    })
-                })
-                .collect(),
-            _ => Err(PolicyParseError::Yaml(serde_yaml::Error::custom(
-                "'include' must be a string or list of strings",
-            ))),
-        })
-        .transpose()?;
-
-    let mut rules = Vec::new();
-    if let Some(rules_val) = map.get(serde_yaml::Value::String("rules".into())) {
-        // A rules block with only comments parses as Null — treat as empty.
-        if rules_val.is_null() {
-            return Ok(ProfileDef { include, rules });
-        }
-        let rules_map = rules_val.as_mapping().ok_or_else(|| {
-            PolicyParseError::Yaml(serde_yaml::Error::custom("'rules' must be a mapping"))
-        })?;
-        for (key_val, constraint_val) in rules_map {
-            let key = key_val.as_str().ok_or_else(|| {
-                PolicyParseError::Yaml(serde_yaml::Error::custom("rule key must be a string"))
-            })?;
-            let (effect, verb, noun) = parse_new_rule_key(key)?;
-            let constraints = parse_inline_constraints(constraint_val)?;
-            rules.push(ProfileRule {
-                effect,
-                verb,
-                noun,
-                constraints,
-            });
-        }
-    }
-
-    Ok(ProfileDef { include, rules })
+pub fn parse_policy(input: &str) -> Result<PolicyDocument, PolicyParseError> {
+    super::parse_sexpr::parse_policy(input)
 }
 
 /// Parse a rule key like `"deny * *"` or `"allow bash *"` into (effect, verb, noun).
@@ -406,7 +39,7 @@ fn parse_new_profile_def(value: &serde_yaml::Value) -> Result<ProfileDef, Policy
 /// The entity slot is implicit (always the agent).
 /// The noun may contain multiple tokens (e.g., "deny bash rm *" → verb="bash", noun="rm *").
 pub fn parse_new_rule_key(key: &str) -> Result<(Effect, String, Pattern), PolicyParseError> {
-    // Strip trailing `:` if present (YAML mapping keys may include it)
+    // Strip trailing `:` if present
     let key = key.strip_suffix(':').unwrap_or(key).trim();
     let parts: Vec<&str> = key.split_whitespace().collect();
     if parts.len() < 3 {
@@ -426,177 +59,6 @@ pub fn parse_new_rule_key(key: &str) -> Result<(Effect, String, Pattern), Policy
     let noun = parse_pattern(&noun_str);
 
     Ok((effect, verb, noun))
-}
-
-/// Parse inline constraints from the YAML value of a rule.
-///
-/// The value can be:
-/// - null / `[]` → no constraints
-/// - a mapping with optional keys: `fs`, `args`, `network`, `pipe`, `redirect`
-fn parse_inline_constraints(
-    value: &serde_yaml::Value,
-) -> Result<Option<InlineConstraints>, PolicyParseError> {
-    match value {
-        serde_yaml::Value::Null => Ok(None),
-        serde_yaml::Value::Sequence(seq) if seq.is_empty() => Ok(None),
-        serde_yaml::Value::Mapping(map) if map.is_empty() => Ok(None),
-        serde_yaml::Value::Mapping(map) => {
-            let mut constraints = InlineConstraints::default();
-
-            if let Some(fs_val) = map.get(serde_yaml::Value::String("fs".into())) {
-                constraints.fs = Some(parse_cap_scoped_fs(fs_val)?);
-            }
-
-            if let Some(args_val) = map.get(serde_yaml::Value::String("args".into())) {
-                constraints.args = Some(parse_args_list(args_val)?);
-            }
-
-            if let Some(net_val) = map.get(serde_yaml::Value::String("network".into())) {
-                let net_str = net_val.as_str().ok_or_else(|| {
-                    PolicyParseError::Yaml(serde_yaml::Error::custom("'network' must be a string"))
-                })?;
-                constraints.network = Some(match net_str {
-                    "deny" => NetworkPolicy::Deny,
-                    "allow" => NetworkPolicy::Allow,
-                    _ => {
-                        return Err(PolicyParseError::Yaml(serde_yaml::Error::custom(format!(
-                            "unknown network policy: '{}'",
-                            net_str
-                        ))));
-                    }
-                });
-            }
-
-            if let Some(url_val) = map.get(serde_yaml::Value::String("url".into())) {
-                constraints.url = Some(parse_url_list(url_val)?);
-            }
-
-            if let Some(pipe_val) = map.get(serde_yaml::Value::String("pipe".into())) {
-                constraints.pipe = pipe_val.as_bool();
-            }
-
-            if let Some(redir_val) = map.get(serde_yaml::Value::String("redirect".into())) {
-                constraints.redirect = redir_val.as_bool();
-            }
-
-            Ok(Some(constraints))
-        }
-        _ => Err(PolicyParseError::Yaml(serde_yaml::Error::custom(
-            "rule constraint must be null, [], or a mapping",
-        ))),
-    }
-}
-
-/// Parse cap-scoped filesystem constraints.
-///
-/// ```yaml
-/// fs:
-///   read + write: subpath(~/.ssh)
-///   read: "!regex(\\./)"
-/// ```
-///
-/// Each key is a capability expression (parsed with `Cap::parse`),
-/// each value is a filter expression (parsed with `parse_filter_expr`).
-fn parse_cap_scoped_fs(
-    value: &serde_yaml::Value,
-) -> Result<Vec<(Cap, FilterExpr)>, PolicyParseError> {
-    let map = value.as_mapping().ok_or_else(|| {
-        PolicyParseError::Yaml(serde_yaml::Error::custom(
-            "'fs' must be a mapping of caps → filter expression",
-        ))
-    })?;
-
-    let mut entries = Vec::new();
-    for (cap_key, filter_val) in map {
-        let cap_str = cap_key.as_str().ok_or_else(|| {
-            PolicyParseError::InvalidCapScopedFs(
-                format!("{:?}", cap_key),
-                "cap key must be a string".into(),
-            )
-        })?;
-        let caps = Cap::parse(cap_str)
-            .map_err(|e| PolicyParseError::InvalidCapScopedFs(cap_str.to_string(), e))?;
-        let filter_str = filter_val.as_str().ok_or_else(|| {
-            PolicyParseError::InvalidCapScopedFs(
-                cap_str.to_string(),
-                "filter value must be a string".into(),
-            )
-        })?;
-        let filter = parse_filter_expr(filter_str)?;
-        entries.push((caps, filter));
-    }
-
-    Ok(entries)
-}
-
-/// Parse a `url:` constraint list.
-///
-/// ```yaml
-/// url: ["github.com", "!evil.com"]
-/// ```
-///
-/// `"!x"` → `UrlSpec::Forbid("x")`, `"x"` → `UrlSpec::Require("x")`
-fn parse_url_list(value: &serde_yaml::Value) -> Result<Vec<UrlSpec>, PolicyParseError> {
-    let seq = value
-        .as_sequence()
-        .ok_or_else(|| PolicyParseError::InvalidArg("'url' must be a sequence".into()))?;
-
-    let mut specs = Vec::new();
-    for item in seq {
-        let s = item
-            .as_str()
-            .ok_or_else(|| PolicyParseError::InvalidArg("each url must be a string".into()))?;
-        if let Some(inner) = s.strip_prefix('!') {
-            specs.push(UrlSpec::Forbid(inner.to_string()));
-        } else {
-            specs.push(UrlSpec::Require(s.to_string()));
-        }
-    }
-
-    Ok(specs)
-}
-
-/// Parse a unified `args:` list.
-///
-/// ```yaml
-/// args: ["!-delete", "--dry-run"]
-/// ```
-///
-/// `"!x"` → `ArgSpec::Forbid("x")`, `"x"` → `ArgSpec::Require("x")`
-fn parse_args_list(value: &serde_yaml::Value) -> Result<Vec<ArgSpec>, PolicyParseError> {
-    let seq = value
-        .as_sequence()
-        .ok_or_else(|| PolicyParseError::InvalidArg("'args' must be a sequence".into()))?;
-
-    let mut specs = Vec::new();
-    for item in seq {
-        let s = item
-            .as_str()
-            .ok_or_else(|| PolicyParseError::InvalidArg("each arg must be a string".into()))?;
-        if let Some(inner) = s.strip_prefix('!') {
-            specs.push(ArgSpec::Forbid(inner.to_string()));
-        } else {
-            specs.push(ArgSpec::Require(s.to_string()));
-        }
-    }
-
-    Ok(specs)
-}
-
-/// Flatten a profile by resolving its `include:` chain.
-///
-/// Parse a YAML string as a standalone profile definition (for embedded built-in profiles).
-///
-/// The YAML should have the same shape as a single entry under `profiles:`:
-/// ```yaml
-/// rules:
-///   allow read *:
-///     fs:
-///       read: subpath(~/.clash)
-/// ```
-pub fn parse_profile_def_yaml(yaml: &str) -> Result<ProfileDef, PolicyParseError> {
-    let value: serde_yaml::Value = serde_yaml::from_str(yaml).map_err(PolicyParseError::Yaml)?;
-    parse_new_profile_def(&value)
 }
 
 /// Returns rules from the included parent first, then the profile's own rules.
@@ -645,31 +107,88 @@ fn flatten_profile_inner(
     Ok(rules)
 }
 
-/// Detect circular includes by walking the include chain.
-fn detect_circular_include(
+/// Flatten sandbox config by resolving the `include:` chain.
+///
+/// Walks parent profiles collecting sandbox configs, then merges:
+/// - `fs`: union of all entries (parent entries first)
+/// - `network`: deny wins over allow
+///
+/// Returns `None` if no profile in the chain has a `sandbox:` block.
+#[instrument(level = Level::TRACE)]
+pub fn flatten_sandbox(
+    name: &str,
+    profiles: &HashMap<String, ProfileDef>,
+) -> Result<Option<SandboxConfig>, PolicyParseError> {
+    let mut visited = std::collections::HashSet::new();
+    flatten_sandbox_inner(name, profiles, &mut visited)
+}
+
+fn flatten_sandbox_inner(
     name: &str,
     profiles: &HashMap<String, ProfileDef>,
     visited: &mut std::collections::HashSet<String>,
-    path: &mut Vec<String>,
-) -> Result<(), PolicyParseError> {
+) -> Result<Option<SandboxConfig>, PolicyParseError> {
     if !visited.insert(name.to_string()) {
-        path.push(name.to_string());
-        let cycle_path = path.join(" -> ");
         return Err(PolicyParseError::CircularInclude {
             cycle: name.to_string(),
-            path: Some(cycle_path),
+            path: None,
         });
     }
-    path.push(name.to_string());
-    if let Some(def) = profiles.get(name)
-        && let Some(ref includes) = def.include
-    {
+
+    let def = profiles.get(name).ok_or_else(|| {
+        let candidates: Vec<&str> = profiles.keys().map(|s| s.as_str()).collect();
+        PolicyParseError::UnknownInclude {
+            name: name.to_string(),
+            suggestion: suggest_closest(name, &candidates),
+        }
+    })?;
+
+    // Collect sandbox configs from parents first
+    let mut merged_fs: Vec<(Cap, FilterExpr)> = Vec::new();
+    let mut merged_network: Option<NetworkPolicy> = None;
+    let mut has_any = false;
+
+    if let Some(ref includes) = def.include {
         for include in includes {
-            detect_circular_include(include, profiles, visited, path)?;
+            if let Some(parent_sb) = flatten_sandbox_inner(include, profiles, visited)? {
+                has_any = true;
+                if let Some(fs) = parent_sb.fs {
+                    merged_fs.extend(fs);
+                }
+                if parent_sb.network == Some(NetworkPolicy::Deny) {
+                    merged_network = Some(NetworkPolicy::Deny);
+                } else if merged_network.is_none() {
+                    merged_network = parent_sb.network;
+                }
+            }
         }
     }
-    path.pop();
-    Ok(())
+
+    // Then merge own sandbox config (child entries after parent)
+    if let Some(ref own_sb) = def.sandbox {
+        has_any = true;
+        if let Some(ref fs) = own_sb.fs {
+            merged_fs.extend(fs.clone());
+        }
+        if own_sb.network == Some(NetworkPolicy::Deny) {
+            merged_network = Some(NetworkPolicy::Deny);
+        } else if merged_network.is_none() {
+            merged_network = own_sb.network;
+        }
+    }
+
+    if !has_any {
+        return Ok(None);
+    }
+
+    Ok(Some(SandboxConfig {
+        fs: if merged_fs.is_empty() {
+            None
+        } else {
+            Some(merged_fs)
+        },
+        network: merged_network,
+    }))
 }
 
 /// Parse a single compact rule string into a `Statement`.
@@ -792,19 +311,6 @@ fn find_constraint_separator(input: &str) -> Option<usize> {
 // Expression parsing delegated to expr module.
 pub use super::expr::{parse_filter_expr, parse_profile_expr};
 
-/// Serialize a `PolicyDocument` back to YAML.
-#[instrument(level = Level::TRACE)]
-pub fn to_yaml(doc: &PolicyDocument) -> Result<String, serde_yaml::Error> {
-    let raw = RawPolicyYaml {
-        default: doc.policy.default.to_string(),
-        constraints: doc.constraints.clone(),
-        profiles: doc.profiles.clone(),
-        rules: doc.statements.iter().map(format_rule).collect(),
-        permissions: doc.permissions.clone(),
-    };
-    serde_yaml::to_string(&raw)
-}
-
 /// Format a `Statement` as a compact rule string.
 ///
 /// When the entity is the default (any agent), it is omitted from the output.
@@ -847,16 +353,6 @@ fn is_default_entity(entity: &Pattern) -> bool {
         }) => entity_type == "agent",
         _ => false,
     }
-}
-
-// ---------------------------------------------------------------------------
-// Kept for backward compatibility — parse TOML policy documents.
-// ---------------------------------------------------------------------------
-
-/// Parse a policy document from a TOML string.
-#[instrument(level = Level::TRACE)]
-pub fn parse_toml(input: &str) -> Result<PolicyDocument, toml::de::Error> {
-    toml::from_str(input)
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,91 +711,6 @@ mod tests {
         assert!(parse_rule("invalid * bash *").is_err());
     }
 
-    // --- YAML document parsing ---
-
-    #[test]
-    fn test_parse_yaml_simple() {
-        let yaml = r#"
-default: ask
-
-rules:
-  - allow agent:claude bash git *
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        assert_eq!(doc.policy.default, Effect::Ask);
-        assert_eq!(doc.statements.len(), 1);
-
-        let stmt = &doc.statements[0];
-        assert_eq!(stmt.effect, Effect::Allow);
-        assert!(stmt.matches("agent:claude", &Verb::Execute, "git status"));
-        assert!(!stmt.matches("agent:codex", &Verb::Execute, "git status"));
-    }
-
-    #[test]
-    fn test_parse_yaml_multiple_rules() {
-        let yaml = r#"
-default: ask
-
-rules:
-  - allow * bash cargo build *
-  - allow * bash cargo test *
-  - deny * bash rm -rf /
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        assert_eq!(doc.statements.len(), 3);
-        assert_eq!(doc.statements[0].effect, Effect::Allow);
-        assert_eq!(doc.statements[1].effect, Effect::Allow);
-        assert_eq!(doc.statements[2].effect, Effect::Deny);
-    }
-
-    #[test]
-    fn test_parse_yaml_with_negation() {
-        let yaml = r#"
-rules:
-  - deny !user read ~/config/*
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        let stmt = &doc.statements[0];
-
-        assert_eq!(stmt.effect, Effect::Deny);
-        assert!(stmt.matches("agent:claude", &Verb::Read, "~/config/test.json"));
-        assert!(!stmt.matches("user", &Verb::Read, "~/config/test.json"));
-    }
-
-    #[test]
-    fn test_parse_yaml_default_values() {
-        let yaml = "rules:\n  - allow * * *.rs\n";
-        let doc = parse_yaml(yaml).unwrap();
-        assert_eq!(doc.policy.default, Effect::Ask); // default
-        let stmt = &doc.statements[0];
-        assert!(stmt.entity.matches_entity("agent:claude"));
-        assert!(stmt.entity.matches_entity("user"));
-        assert!(stmt.verb.matches(&Verb::Read));
-        assert!(stmt.verb.matches(&Verb::Execute));
-    }
-
-    #[test]
-    fn test_parse_yaml_with_legacy_permissions() {
-        let yaml = r#"
-default: ask
-
-permissions:
-  allow:
-    - "Bash(git:*)"
-    - "Read(**/*.rs)"
-  deny:
-    - "Read(.env)"
-  ask:
-    - "Write"
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        assert!(doc.permissions.is_some());
-        let perms = doc.permissions.as_ref().unwrap();
-        assert_eq!(perms.allow.len(), 2);
-        assert_eq!(perms.deny.len(), 1);
-        assert_eq!(perms.ask.len(), 1);
-    }
-
     // --- Claude permissions desugaring ---
 
     #[test]
@@ -1513,26 +924,6 @@ permissions:
         }
     }
 
-    // --- TOML backward compat ---
-
-    #[test]
-    fn test_parse_toml_still_works() {
-        let toml_str = r#"
-[policy]
-default = "ask"
-
-[[statements]]
-effect = "allow"
-entity = "agent:claude"
-verb = "execute"
-noun = "git *"
-"#;
-        let doc = parse_toml(toml_str).unwrap();
-        assert_eq!(doc.policy.default, Effect::Ask);
-        assert_eq!(doc.statements.len(), 1);
-        assert!(doc.statements[0].matches("agent:claude", &Verb::Execute, "git status"));
-    }
-
     // --- Filter expression parsing ---
 
     #[test]
@@ -1706,386 +1097,6 @@ noun = "git *"
         assert_eq!(stmt.profile, None);
     }
 
-    // --- YAML with constraints and profiles ---
-
-    #[test]
-    fn test_parse_yaml_with_constraints() {
-        let yaml = r#"
-default: deny
-
-constraints:
-  local:
-    fs: subpath(.)
-  safe-io:
-    pipe: false
-    redirect: false
-
-profiles:
-  sandboxed: local & safe-io
-
-rules:
-  - "allow agent bash git * : sandboxed"
-  - deny agent bash rm *
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        assert_eq!(doc.policy.default, Effect::Deny);
-        assert_eq!(doc.constraints.len(), 2);
-        assert!(doc.constraints.contains_key("local"));
-        assert!(doc.constraints.contains_key("safe-io"));
-        assert_eq!(doc.profiles.len(), 1);
-        assert!(doc.profiles.contains_key("sandboxed"));
-        assert_eq!(doc.statements.len(), 2);
-
-        // First statement has a constraint
-        assert_eq!(
-            doc.statements[0].profile,
-            Some(ProfileExpr::Ref("sandboxed".into()))
-        );
-        // Second statement has no constraint
-        assert_eq!(doc.statements[1].profile, None);
-    }
-
-    // --- Mapping-format rules ---
-
-    #[test]
-    fn test_parse_yaml_mapping_format() {
-        let yaml = r#"
-default: ask
-
-rules:
-  allow bash git * : strict-git
-  allow bash cargo * : sandboxed
-  deny bash rm * : []
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        assert_eq!(doc.statements.len(), 3);
-
-        assert_eq!(doc.statements[0].effect, Effect::Allow);
-        assert_eq!(
-            doc.statements[0].profile,
-            Some(ProfileExpr::Ref("strict-git".into()))
-        );
-        assert!(doc.statements[0].matches("agent", &Verb::Execute, "git status"));
-
-        assert_eq!(doc.statements[1].effect, Effect::Allow);
-        assert_eq!(
-            doc.statements[1].profile,
-            Some(ProfileExpr::Ref("sandboxed".into()))
-        );
-
-        assert_eq!(doc.statements[2].effect, Effect::Deny);
-        assert_eq!(doc.statements[2].profile, None);
-        assert!(doc.statements[2].matches("agent", &Verb::Execute, "rm -rf /"));
-    }
-
-    #[test]
-    fn test_parse_yaml_mapping_format_no_constraint() {
-        let yaml = r#"
-rules:
-  allow bash git * : []
-  allow read * :
-  deny bash rm * : []
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        assert_eq!(doc.statements.len(), 3);
-
-        // All should have no profile/constraint
-        for stmt in &doc.statements {
-            assert_eq!(stmt.profile, None, "expected no constraint for: {:?}", stmt);
-        }
-    }
-
-    #[test]
-    fn test_parse_yaml_mapping_format_with_constraints() {
-        let yaml = r#"
-default: deny
-
-constraints:
-  local:
-    fs: subpath(.)
-  safe-io:
-    pipe: false
-    redirect: false
-
-profiles:
-  sandboxed: local & safe-io
-
-rules:
-  allow bash git * : sandboxed
-  allow read * : local
-  deny bash rm * : []
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        assert_eq!(doc.policy.default, Effect::Deny);
-        assert_eq!(doc.constraints.len(), 2);
-        assert_eq!(doc.profiles.len(), 1);
-        assert_eq!(doc.statements.len(), 3);
-
-        assert_eq!(
-            doc.statements[0].profile,
-            Some(ProfileExpr::Ref("sandboxed".into()))
-        );
-        assert_eq!(
-            doc.statements[1].profile,
-            Some(ProfileExpr::Ref("local".into()))
-        );
-        assert_eq!(doc.statements[2].profile, None);
-    }
-
-    #[test]
-    fn test_parse_yaml_mapping_format_inline_constraint() {
-        let yaml = r#"
-rules:
-  allow edit * : local & no-secrets
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        assert_eq!(doc.statements.len(), 1);
-        assert_eq!(
-            doc.statements[0].profile,
-            Some(ProfileExpr::And(
-                Box::new(ProfileExpr::Ref("local".into())),
-                Box::new(ProfileExpr::Ref("no-secrets".into()))
-            ))
-        );
-    }
-
-    #[test]
-    fn test_parse_yaml_mapping_format_with_explicit_entity() {
-        let yaml = r#"
-rules:
-  allow agent:claude bash git * : strict-git
-  deny * bash rm * : []
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        assert_eq!(doc.statements.len(), 2);
-
-        assert_eq!(
-            doc.statements[0].entity,
-            Pattern::Match(MatchExpr::Typed {
-                entity_type: "agent".into(),
-                name: Some("claude".into()),
-            })
-        );
-        assert_eq!(doc.statements[1].entity, Pattern::Match(MatchExpr::Any));
-    }
-
-    #[test]
-    fn test_yaml_mapping_serialization_roundtrip() {
-        let yaml = r#"
-default: ask
-
-constraints:
-  safe-io:
-    pipe: false
-
-rules:
-  allow bash git * : safe-io
-  deny bash rm * : []
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        let serialized = to_yaml(&doc).unwrap();
-        let reparsed = parse_yaml(&serialized).unwrap();
-
-        assert_eq!(doc.policy.default, reparsed.policy.default);
-        assert_eq!(doc.statements.len(), reparsed.statements.len());
-        for (a, b) in doc.statements.iter().zip(reparsed.statements.iter()) {
-            assert_eq!(a.effect, b.effect);
-            assert_eq!(a.profile, b.profile);
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // New-format parsing tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_parse_new_format_basic() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: basic
-
-profiles:
-  basic:
-    rules:
-      allow bash *:
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        assert!(doc.default_config.is_some());
-        let dc = doc.default_config.as_ref().unwrap();
-        assert_eq!(dc.permission, Effect::Ask);
-        assert_eq!(dc.profile, "basic");
-        assert_eq!(doc.profile_defs.len(), 1);
-        let basic = &doc.profile_defs["basic"];
-        assert_eq!(basic.rules.len(), 1);
-        assert_eq!(basic.rules[0].effect, Effect::Allow);
-        assert_eq!(basic.rules[0].verb, "bash");
-    }
-
-    #[test]
-    fn test_parse_new_format_default_struct() {
-        let yaml = r#"
-default:
-  permission: deny
-  profile: locked
-
-profiles:
-  locked:
-    rules:
-      deny * *:
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        let dc = doc.default_config.as_ref().unwrap();
-        assert_eq!(dc.permission, Effect::Deny);
-        assert_eq!(dc.profile, "locked");
-    }
-
-    #[test]
-    fn test_parse_new_format_cap_scoped_fs() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      deny * *:
-        fs:
-          read + write: "subpath(~/.ssh)"
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        let rule = &doc.profile_defs["test"].rules[0];
-        let constraints = rule.constraints.as_ref().unwrap();
-        let fs = constraints.fs.as_ref().unwrap();
-        assert_eq!(fs.len(), 1);
-        let (caps, filter) = &fs[0];
-        assert_eq!(*caps, Cap::READ | Cap::WRITE);
-        assert_eq!(*filter, FilterExpr::Subpath("~/.ssh".into()));
-    }
-
-    #[test]
-    fn test_parse_new_format_args() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow bash *:
-        args: ["!-delete", "--dry-run"]
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        let rule = &doc.profile_defs["test"].rules[0];
-        let constraints = rule.constraints.as_ref().unwrap();
-        let args = constraints.args.as_ref().unwrap();
-        assert_eq!(args.len(), 2);
-        assert_eq!(args[0], ArgSpec::Forbid("-delete".into()));
-        assert_eq!(args[1], ArgSpec::Require("--dry-run".into()));
-    }
-
-    #[test]
-    fn test_parse_new_format_include() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: child
-
-profiles:
-  parent:
-    rules:
-      deny bash rm *:
-  child:
-    include: parent
-    rules:
-      allow bash git *:
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        let child = &doc.profile_defs["child"];
-        assert_eq!(
-            child.include.as_deref(),
-            Some(["parent".to_string()].as_slice())
-        );
-        assert_eq!(child.rules.len(), 1);
-
-        // Flatten should include parent rules first
-        let flat = flatten_profile("child", &doc.profile_defs).unwrap();
-        assert_eq!(flat.len(), 2);
-        assert_eq!(flat[0].effect, Effect::Deny); // parent rule
-        assert_eq!(flat[0].verb, "bash");
-        assert_eq!(flat[1].effect, Effect::Allow); // child rule
-        assert_eq!(flat[1].verb, "bash");
-    }
-
-    #[test]
-    fn test_parse_new_format_circular_include_error() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: a
-
-profiles:
-  a:
-    include: b
-    rules:
-      allow bash *:
-  b:
-    include: a
-    rules:
-      allow read *:
-"#;
-        let result = parse_yaml(yaml);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("circular"),
-            "expected circular error, got: {}",
-            err
-        );
-    }
-
-    #[test]
-    fn test_parse_new_format_arbitrary_verb() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow safe-read *:
-        args: []
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        let rule = &doc.profile_defs["test"].rules[0];
-        assert_eq!(rule.effect, Effect::Allow);
-        assert_eq!(rule.verb, "safe-read");
-    }
-
-    #[test]
-    fn test_parse_old_format_still_works() {
-        // Ensure old format still parses correctly when new format is added
-        let yaml = r#"
-default: ask
-
-constraints:
-  local:
-    fs: subpath(.)
-
-rules:
-  - "allow * bash git * : local"
-  - deny * bash rm *
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        assert!(doc.default_config.is_none());
-        assert!(doc.profile_defs.is_empty());
-        assert_eq!(doc.policy.default, Effect::Ask);
-        assert_eq!(doc.statements.len(), 2);
-    }
-
     // --- Custom tool name tests ---
 
     #[test]
@@ -2139,74 +1150,11 @@ rules:
     }
 
     #[test]
-    fn test_parse_yaml_custom_tool() {
-        let yaml = r#"
-default: ask
-
-rules:
-  - allow * task *
-  - deny * websearch *
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        assert_eq!(doc.statements.len(), 2);
-        assert_eq!(doc.statements[0].verb, VerbPattern::Named("task".into()));
-        assert_eq!(
-            doc.statements[1].verb,
-            VerbPattern::Named("websearch".into())
-        );
-    }
-
-    #[test]
     fn test_verb_pattern_named_serde_roundtrip() {
         let pattern = VerbPattern::Named("task".into());
         let json = serde_json::to_string(&pattern).unwrap();
         let parsed: VerbPattern = serde_json::from_str(&json).unwrap();
         assert_eq!(pattern, parsed);
-    }
-
-    // --- URL constraint tests ---
-
-    #[test]
-    fn test_parse_url_list_require_and_forbid() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow webfetch *:
-        url: ["github.com", "!evil.com"]
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        let rule = &doc.profile_defs["test"].rules[0];
-        let constraints = rule.constraints.as_ref().unwrap();
-        let urls = constraints.url.as_ref().unwrap();
-        assert_eq!(urls.len(), 2);
-        assert_eq!(urls[0], UrlSpec::Require("github.com".into()));
-        assert_eq!(urls[1], UrlSpec::Forbid("evil.com".into()));
-    }
-
-    #[test]
-    fn test_parse_new_format_url_only() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow webfetch *:
-        url: ["github.com"]
-"#;
-        let doc = parse_yaml(yaml).unwrap();
-        let rule = &doc.profile_defs["test"].rules[0];
-        let constraints = rule.constraints.as_ref().unwrap();
-        assert!(constraints.url.is_some());
-        assert!(constraints.args.is_none());
-        assert!(constraints.fs.is_none());
     }
 
     #[test]

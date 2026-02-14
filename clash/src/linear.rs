@@ -265,8 +265,8 @@ mod tests {
             description: Some("Something is broken".into()),
             attachments: vec![
                 Attachment {
-                    filename: "policy.yaml".into(),
-                    content_type: "text/yaml".into(),
+                    filename: "policy.sexp".into(),
+                    content_type: "text/plain".into(),
                     title: "Policy Config".into(),
                     body: b"default: ask".to_vec(),
                 },

@@ -6,7 +6,7 @@ fn default_timeout_secs() -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Configuration types (parsed from policy.yaml root-level `notifications:` key)
+// Configuration types for notifications (defaults used; follow-up: s-expr forms).
 // ---------------------------------------------------------------------------
 
 /// Top-level notification configuration.

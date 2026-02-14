@@ -2,7 +2,7 @@
 //!
 //! Presents a terminal-based wizard using `dialoguer` that walks the user
 //! through capability, network, and git-safety choices, then applies the
-//! resulting rules to the policy YAML.
+//! resulting rules to the policy file.
 
 use anyhow::{Context, Result};
 use dialoguer::{Confirm, MultiSelect, Select, theme::ColorfulTheme};
@@ -10,6 +10,15 @@ use dialoguer::{Confirm, MultiSelect, Select, theme::ColorfulTheme};
 use crate::policy::ast::ProfileRule;
 use crate::policy::edit::{self, InlineConstraintArgs};
 use crate::policy::parse;
+
+/// Build sandbox statements for a bash profile with the given cwd and network settings.
+fn build_sandbox_statements(cwd: &str, block_network: bool) -> Vec<String> {
+    let mut stmts = vec![format!("fs full subpath({})", cwd)];
+    if block_network {
+        stmts.push("network deny".into());
+    }
+    stmts
+}
 
 // ── Capability / git-safety enums ──────────────────────────────────────
 
@@ -64,18 +73,18 @@ fn format_profile_rule(rule: &ProfileRule) -> String {
 
 // ── Public entry point ─────────────────────────────────────────────────
 
-/// Run the interactive wizard, returning the modified YAML.
+/// Run the interactive wizard, returning the modified policy text.
 ///
-/// * `yaml`    – current policy YAML content
+/// * `text`    – current policy content (s-expr format)
 /// * `profile` – target profile name (usually "main")
 /// * `cwd`     – working directory for scoping filesystem constraints
-pub fn run(yaml: &str, profile: &str, cwd: &str) -> Result<String> {
+pub fn run(text: &str, profile: &str, cwd: &str) -> Result<String> {
     let theme = ColorfulTheme::default();
 
     // ── Handle existing rules ──────────────────────────────────────────
-    let mut working_yaml = yaml.to_string();
+    let mut working = text.to_string();
 
-    let doc = parse::parse_yaml(yaml).context("failed to parse policy.yaml")?;
+    let doc = parse::parse_policy(text).context("failed to parse policy")?;
     let existing_rules = parse::flatten_profile(profile, &doc.profile_defs).unwrap_or_default();
 
     if !existing_rules.is_empty() {
@@ -93,8 +102,8 @@ pub fn run(yaml: &str, profile: &str, cwd: &str) -> Result<String> {
         if reconfigure {
             for rule in &existing_rules {
                 let rule_str = format_profile_rule(rule);
-                working_yaml = edit::remove_rule(&working_yaml, profile, &rule_str)
-                    .unwrap_or_else(|_| working_yaml.clone());
+                working = edit::remove_rule(&working, profile, &rule_str)
+                    .unwrap_or_else(|_| working.clone());
             }
             println!("Cleared existing rules.");
         }
@@ -147,6 +156,7 @@ pub fn run(yaml: &str, profile: &str, cwd: &str) -> Result<String> {
 
     // ── Build rule list from selections ────────────────────────────────
     let mut rules: Vec<(String, InlineConstraintArgs)> = Vec::new();
+    let mut sandbox_stmts: Vec<String> = Vec::new();
 
     for cap in &selected_caps {
         match cap {
@@ -176,18 +186,9 @@ pub fn run(yaml: &str, profile: &str, cwd: &str) -> Result<String> {
                 ));
             }
             Capability::Bash => {
-                rules.push((
-                    "allow bash *".into(),
-                    InlineConstraintArgs {
-                        fs: vec![format!("full:subpath({})", cwd)],
-                        network: if block_network {
-                            Some("deny".into())
-                        } else {
-                            None
-                        },
-                        ..Default::default()
-                    },
-                ));
+                // Bash rule itself has no fs/network — sandbox is profile-level
+                rules.push(("allow bash *".into(), InlineConstraintArgs::default()));
+                sandbox_stmts = build_sandbox_statements(cwd, block_network);
             }
             Capability::Web => {
                 rules.push(("allow webfetch *".into(), InlineConstraintArgs::default()));
@@ -288,15 +289,22 @@ pub fn run(yaml: &str, profile: &str, cwd: &str) -> Result<String> {
 
     if !apply {
         println!("Cancelled. No changes were made.");
-        return Ok(yaml.to_string());
+        return Ok(text.to_string());
+    }
+
+    // ── Apply sandbox (before rules, so profile block is ready) ────────
+    if !sandbox_stmts.is_empty() {
+        let stmt_refs: Vec<&str> = sandbox_stmts.iter().map(|s| s.as_str()).collect();
+        working = edit::set_sandbox(&working, profile, &stmt_refs)
+            .context("failed to set sandbox block")?;
     }
 
     // ── Apply rules ────────────────────────────────────────────────────
     for (rule_str, constraints) in &rules {
-        working_yaml = edit::add_rule(&working_yaml, profile, rule_str, constraints)
+        working = edit::add_rule(&working, profile, rule_str, constraints)
             .with_context(|| format!("failed to add rule: {}", rule_str))?;
     }
 
     println!("Policy updated.");
-    Ok(working_yaml)
+    Ok(working)
 }

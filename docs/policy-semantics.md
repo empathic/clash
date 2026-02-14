@@ -25,7 +25,7 @@ Additional context is available during evaluation:
 ## Compilation Pipeline
 
 ```
-YAML/TOML text
+S-expression text
     │
     ▼
 PolicyDocument (AST)          ← parse.rs
@@ -43,9 +43,9 @@ CompiledPolicy (IR)           ← compile.rs
     └── profiles              ← HashMap<String, ProfileExpr>
 ```
 
-### Format Unification
+### Rule Compilation
 
-Both legacy `Statement`s and new-format `ProfileRule`s are converted into `CompiledProfileRule` at compile time. This enables a single evaluation path:
+Both legacy `Statement`s (from `clash migrate`) and `ProfileRule`s are converted into `CompiledProfileRule` at compile time. This enables a single evaluation path:
 
 | Legacy field | Converted to |
 |-------------|-------------|
@@ -149,19 +149,19 @@ Within the same constraint tier, `ask > allow`.
 
 ### Examples
 
-```yaml
-allow webfetch *:
-  url: ["github.com"]    # constrained allow
-ask webfetch *:          # unconstrained ask
+```scheme
+(allow webfetch *
+  (url "github.com"))     ; constrained allow
+(ask webfetch *)          ; unconstrained ask
 ```
 
 - **github.com** → constrained allow matches (Tier 1), unconstrained ask matches (Tier 0). Tier 1 wins → **allow**
 - **example.com** → constrained allow skipped, unconstrained ask (Tier 0) → **ask**
 
-```yaml
-allow bash git *:
-  args: ["--dry-run"]    # constrained allow (require --dry-run)
-ask bash *:              # unconstrained ask
+```scheme
+(allow bash "git *"
+  (args "--dry-run"))     ; constrained allow (require --dry-run)
+(ask bash *)              ; unconstrained ask
 ```
 
 - **git push --dry-run** → constrained allow matches → **allow**
@@ -175,12 +175,12 @@ Rule order in the document does **not** affect precedence. A deny rule at the bo
 
 The `!` operator inverts pattern matching:
 
-```yaml
-# Only users can read config (deny non-users)
-deny !user read ~/config/*
+```scheme
+; Only users can read config (deny non-users)
+(deny !user read "~/config/*")
 
-# Agents can't write outside project
-deny agent:* write !~/code/proj/**
+; Agents can't write outside project
+(deny agent:* write "!~/code/proj/**")
 ```
 
 For entity patterns: `!user` matches anything that is NOT `user`.
@@ -220,38 +220,33 @@ Two sources of sandbox rules are merged:
 
 New-format rules scope filesystem constraints by capability:
 
-```yaml
-fs:
-  read + write: subpath(~/.ssh)    # READ and WRITE restricted to ~/.ssh
-  read: "!regex(\\./)"             # READ denied for dotfile-relative paths
+```scheme
+(fs (read+write (subpath "~/.ssh"))     ; READ and WRITE restricted to ~/.ssh
+    (read (not (regex "\\./")))))       ; READ denied for dotfile-relative paths
 ```
 
 Each entry maps a capability set to a filter expression. For bash commands, these become sandbox rules. For non-bash verbs, they act as permission guards (the verb is mapped to a capability and checked against matching entries).
 
 The shorthand `all` (or `full`) can be used in place of `read + write + create + delete + execute`, and the `-` operator can remove individual capabilities:
 
-```yaml
-fs:
-  all: subpath(.)              # All capabilities under CWD
-  all - write: subpath(/etc)   # Everything except write under /etc
+```scheme
+(fs (full (subpath .))              ; All capabilities under CWD
+    (full-write (subpath /etc)))    ; Everything except write under /etc
 ```
 
 ---
 
 ## Profile Inheritance
 
-New-format profiles support single or multiple inheritance via `include:`:
+Profiles support single or multiple inheritance via `include`:
 
-```yaml
-profiles:
-  base:
-    rules:
-      deny bash rm *:
+```scheme
+(profile base
+  (deny bash "rm *"))
 
-  dev:
-    include: base
-    rules:
-      allow bash git *:
+(profile dev
+  (include base)
+  (allow bash "git *"))
 ```
 
 Flattening resolves the include chain depth-first: parent rules come first (lower precedence in document order, but precedence is effect-based not order-based). Circular includes are detected at parse time.

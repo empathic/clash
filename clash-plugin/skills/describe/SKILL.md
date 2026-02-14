@@ -11,7 +11,7 @@ $CLASH_BIN status
 Then read the active policy file for full details:
 
 ```bash
-cat ~/.clash/policy.yaml
+cat ~/.clash/policy.sexp
 ```
 
 Parse and explain the policy in human-readable terms. Cover each of the following:
