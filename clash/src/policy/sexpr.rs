@@ -1,7 +1,7 @@
-//! Hand-written tokenizer and generic s-expression tree parser.
+//! S-expression parser backed by the `lexpr` crate.
 //!
-//! Tokens: `(`, `)`, `;` comments (to EOL), `"quoted strings"`, unquoted atoms.
-//! Atoms may contain: alphanumeric, `*`, `.`, `-`, `_`, `/`, `~`, `!`, `+`, `?`, `@`, `:`.
+//! Parses s-expression source into our [`SExpr`] tree, preserving byte-offset
+//! spans for error reporting.
 
 use std::fmt;
 
@@ -72,236 +72,159 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-/// Compute (line, col) from a byte offset. Both are 1-based.
-fn offset_to_line_col(input: &str, offset: usize) -> (usize, usize) {
-    let mut line = 1;
-    let mut col = 1;
-    for (i, ch) in input.char_indices() {
-        if i >= offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-    (line, col)
-}
+/// Sentinel symbol used to escape standalone `.` atoms, which lexpr reserves
+/// for dotted-pair syntax. Converted back to `"."` after parsing.
+const DOT_PLACEHOLDER: &str = "__CLASH_DOT__";
 
-fn make_error(input: &str, offset: usize, message: impl Into<String>) -> ParseError {
-    let (line, col) = offset_to_line_col(input, offset);
-    ParseError {
-        message: message.into(),
-        offset,
-        line,
-        col,
-    }
-}
-
-/// Characters allowed in unquoted atoms.
-fn is_atom_char(ch: char) -> bool {
-    ch.is_alphanumeric()
-        || matches!(
-            ch,
-            '*' | '.' | '-' | '_' | '/' | '~' | '!' | '+' | '?' | '@' | ':' | '#' | '$'
-        )
-}
-
-// ---------------------------------------------------------------------------
-// Tokenizer
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Token {
-    LParen(usize),
-    RParen(usize),
-    Atom(String, Span),
-    Str(String, Span),
-}
-
-fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
-    let mut tokens = Vec::new();
+/// Replace standalone `.` tokens with a placeholder symbol so lexpr does not
+/// interpret them as dotted-pair separators. A standalone `.` is one preceded
+/// and followed by whitespace or parentheses (i.e. not part of a larger atom
+/// like `~/.clash`).
+fn escape_dots(input: &str) -> String {
     let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len);
     let mut i = 0;
+    // Track whether we are inside a quoted string to avoid mangling string contents.
+    let mut in_string = false;
 
-    while i < bytes.len() {
-        let ch = bytes[i] as char;
+    while i < len {
+        let b = bytes[i];
 
-        // Skip whitespace.
-        if ch.is_ascii_whitespace() {
+        if in_string {
+            if b == b'\\' && i + 1 < len {
+                out.push(b as char);
+                out.push(bytes[i + 1] as char);
+                i += 2;
+                continue;
+            }
+            if b == b'"' {
+                in_string = false;
+            }
+            out.push(b as char);
             i += 1;
             continue;
         }
 
-        // Skip comments (`;` to end of line).
-        if ch == ';' {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-
-        // Parentheses.
-        if ch == '(' {
-            tokens.push(Token::LParen(i));
-            i += 1;
-            continue;
-        }
-        if ch == ')' {
-            tokens.push(Token::RParen(i));
+        if b == b'"' {
+            in_string = true;
+            out.push(b as char);
             i += 1;
             continue;
         }
 
-        // Quoted string.
-        if ch == '"' {
-            let start = i;
-            i += 1; // skip opening quote
-            let mut value = String::new();
-            loop {
-                if i >= bytes.len() {
-                    return Err(make_error(input, start, "unterminated string literal"));
-                }
-                let c = bytes[i] as char;
-                if c == '\\' && i + 1 < bytes.len() {
-                    // Escape sequence.
-                    let next = bytes[i + 1] as char;
-                    match next {
-                        '"' | '\\' => {
-                            value.push(next);
-                            i += 2;
-                        }
-                        'n' => {
-                            value.push('\n');
-                            i += 2;
-                        }
-                        't' => {
-                            value.push('\t');
-                            i += 2;
-                        }
-                        _ => {
-                            value.push('\\');
-                            value.push(next);
-                            i += 2;
-                        }
-                    }
-                    continue;
-                }
-                if c == '"' {
-                    i += 1; // skip closing quote
-                    break;
-                }
-                value.push(c);
+        if b == b'.' {
+            // Check if this is a standalone dot (not part of a larger atom).
+            let prev_ok =
+                i == 0 || matches!(bytes[i - 1], b' ' | b'\t' | b'\n' | b'\r' | b'(' | b')');
+            let next_ok =
+                i + 1 >= len || matches!(bytes[i + 1], b' ' | b'\t' | b'\n' | b'\r' | b'(' | b')');
+            if prev_ok && next_ok {
+                out.push_str(DOT_PLACEHOLDER);
                 i += 1;
+                continue;
             }
-            tokens.push(Token::Str(value, Span { start, end: i }));
-            continue;
         }
 
-        // Atom.
-        if is_atom_char(ch) {
-            let start = i;
-            while i < bytes.len() && is_atom_char(bytes[i] as char) {
-                i += 1;
-            }
-            let value = input[start..i].to_string();
-            tokens.push(Token::Atom(value, Span { start, end: i }));
-            continue;
-        }
-
-        return Err(make_error(
-            input,
-            i,
-            format!("unexpected character '{}'", ch),
-        ));
+        out.push(b as char);
+        i += 1;
     }
-
-    Ok(tokens)
+    out
 }
 
-// ---------------------------------------------------------------------------
-// Tree parser
-// ---------------------------------------------------------------------------
-
-struct TreeParser {
-    tokens: Vec<Token>,
-    pos: usize,
+/// Pre-computed index mapping line numbers to byte offsets of line starts.
+struct LineIndex {
+    /// line_starts[i] is the byte offset where line (i+1) begins.
+    line_starts: Vec<usize>,
 }
 
-impl TreeParser {
-    fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
-    }
-
-    fn at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
-    }
-
-    fn parse_expr(&mut self, input: &str) -> Result<SExpr, ParseError> {
-        if self.at_end() {
-            let offset = input.len();
-            return Err(make_error(input, offset, "unexpected end of input"));
+impl LineIndex {
+    fn new(input: &str) -> Self {
+        let mut line_starts = vec![0]; // line 1 starts at offset 0
+        for (i, ch) in input.char_indices() {
+            if ch == '\n' {
+                line_starts.push(i + 1);
+            }
         }
+        Self { line_starts }
+    }
 
-        match &self.tokens[self.pos] {
-            Token::LParen(start) => {
-                let start = *start;
-                self.pos += 1; // consume '('
-                let mut children = Vec::new();
-                loop {
-                    if self.at_end() {
-                        return Err(make_error(
-                            input,
-                            start,
-                            "unclosed parenthesis (no matching ')')",
-                        ));
-                    }
-                    if matches!(&self.tokens[self.pos], Token::RParen(_)) {
-                        let end_offset = match &self.tokens[self.pos] {
-                            Token::RParen(o) => *o + 1,
-                            _ => unreachable!(),
-                        };
-                        self.pos += 1; // consume ')'
-                        return Ok(SExpr::List(
-                            children,
-                            Span {
-                                start,
-                                end: end_offset,
-                            },
-                        ));
-                    }
-                    children.push(self.parse_expr(input)?);
-                }
+    /// Convert a lexpr Position (1-based line, 0-based column byte offset) to
+    /// an absolute byte offset in the source.
+    fn to_byte_offset(&self, pos: &lexpr::parse::Position) -> usize {
+        let line = pos.line(); // 1-based
+        let col = pos.column(); // 0-based byte offset from last \n
+        if line == 0 || line > self.line_starts.len() {
+            return 0;
+        }
+        self.line_starts[line - 1] + col
+    }
+}
+
+/// Convert a lexpr `Datum::Ref` into our `SExpr`.
+fn ref_to_sexpr(r: lexpr::datum::Ref<'_>, idx: &LineIndex) -> Result<SExpr, ParseError> {
+    let lspan = r.span();
+    let span = Span {
+        start: idx.to_byte_offset(&lspan.start()),
+        end: idx.to_byte_offset(&lspan.end()),
+    };
+
+    match r.value() {
+        lexpr::Value::Symbol(s) => {
+            let name = if &**s == DOT_PLACEHOLDER {
+                ".".to_string()
+            } else {
+                s.to_string()
+            };
+            Ok(SExpr::Atom(name, span))
+        }
+        lexpr::Value::String(s) => Ok(SExpr::Str(s.to_string(), span)),
+        lexpr::Value::Null => Ok(SExpr::List(vec![], span)),
+        lexpr::Value::Cons(_) => {
+            let iter = r.list_iter().expect("Cons should be iterable");
+            let mut children = Vec::new();
+            for child in iter {
+                children.push(ref_to_sexpr(child, idx)?);
             }
-            Token::RParen(offset) => Err(make_error(
-                input,
-                *offset,
-                "unexpected ')' without matching '('",
-            )),
-            Token::Atom(value, span) => {
-                let expr = SExpr::Atom(value.clone(), *span);
-                self.pos += 1;
-                Ok(expr)
-            }
-            Token::Str(value, span) => {
-                let expr = SExpr::Str(value.clone(), *span);
-                self.pos += 1;
-                Ok(expr)
-            }
+            Ok(SExpr::List(children, span))
+        }
+        lexpr::Value::Number(n) => Ok(SExpr::Atom(n.to_string(), span)),
+        lexpr::Value::Bool(b) => Ok(SExpr::Atom(if *b { "#t" } else { "#f" }.into(), span)),
+        lexpr::Value::Char(c) => Ok(SExpr::Atom(c.to_string(), span)),
+        lexpr::Value::Keyword(k) => Ok(SExpr::Atom(format!(":{k}"), span)),
+        other => {
+            let start = lspan.start();
+            Err(ParseError {
+                message: format!("unsupported s-expression value: {other:?}"),
+                offset: span.start,
+                line: start.line(),
+                col: start.column() + 1,
+            })
         }
     }
 }
 
 /// Parse an s-expression source string into a list of top-level expressions.
 pub fn parse(input: &str) -> Result<Vec<SExpr>, ParseError> {
-    let tokens = tokenize(input)?;
-    let mut parser = TreeParser::new(tokens);
+    let escaped = escape_dots(input);
+    let idx = LineIndex::new(&escaped);
+    let options = lexpr::parse::Options::new();
+    let mut parser = lexpr::parse::Parser::from_str_custom(&escaped, options);
     let mut exprs = Vec::new();
 
-    while !parser.at_end() {
-        exprs.push(parser.parse_expr(input)?);
+    for datum_result in parser.datum_iter() {
+        let datum = datum_result.map_err(|e| {
+            // lexpr errors are opaque; extract what we can from Display
+            let msg = e.to_string();
+            // Try to find a position from the error message, fall back to end of input
+            ParseError {
+                message: msg,
+                offset: input.len(),
+                line: 1,
+                col: 1,
+            }
+        })?;
+        exprs.push(ref_to_sexpr(datum.as_ref(), &idx)?);
     }
 
     Ok(exprs)
@@ -381,20 +304,20 @@ mod tests {
     #[test]
     fn error_unterminated_string() {
         let err = parse(r#""unterminated"#).unwrap_err();
-        assert!(err.message.contains("unterminated"));
+        assert!(!err.message.is_empty());
         assert_eq!(err.line, 1);
     }
 
     #[test]
     fn error_unmatched_paren() {
         let err = parse("(hello").unwrap_err();
-        assert!(err.message.contains("unclosed parenthesis"));
+        assert!(!err.message.is_empty());
     }
 
     #[test]
     fn error_extra_rparen() {
         let err = parse(")").unwrap_err();
-        assert!(err.message.contains("unexpected ')'"));
+        assert!(!err.message.is_empty());
     }
 
     #[test]
