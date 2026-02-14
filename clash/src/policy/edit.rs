@@ -98,6 +98,12 @@ pub fn policy_info(text: &str) -> Result<PolicyInfo> {
     policy_info_sexpr(text)
 }
 
+/// Set the active profile in the `(default ...)` form, preserving comments.
+/// Replaces `(profile <old>)` with `(profile <new>)` inside the default form.
+pub fn set_active_profile(text: &str, new_profile: &str) -> Result<String> {
+    set_active_profile_sexpr(text, new_profile)
+}
+
 // ---------------------------------------------------------------------------
 // S-expr editing helpers
 // ---------------------------------------------------------------------------
@@ -242,7 +248,27 @@ fn profile_names_sexpr(text: &str) -> Vec<String> {
     names
 }
 
-/// Extract the active profile name from an s-expr `(default <effect> <name>)` form.
+/// Extract the atom value from a labeled sub-form like `(keyword atom)` within
+/// the given text. Returns `None` if the sub-form is not found.
+fn extract_subform_atom(text: &str, keyword: &str) -> Option<String> {
+    let prefix = format!("({}", keyword);
+    let idx = text.find(&prefix)?;
+    let after = &text[idx + prefix.len()..];
+    // Must be followed by whitespace (not another identifier char)
+    if !after.starts_with(|c: char| c.is_ascii_whitespace()) {
+        return None;
+    }
+    let after = after.trim_start();
+    let end = after.find(|c: char| c.is_ascii_whitespace() || c == ')' || c == '(')?;
+    let atom = &after[..end];
+    if atom.is_empty() {
+        None
+    } else {
+        Some(atom.to_string())
+    }
+}
+
+/// Extract the active profile name from an s-expr `(default (permission ...) (profile ...))` form.
 fn active_profile_sexpr(text: &str) -> Result<String> {
     let bytes = text.as_bytes();
     let mut pos = 0;
@@ -261,12 +287,9 @@ fn active_profile_sexpr(text: &str) -> Result<String> {
         let inner_trimmed = inner.trim_start();
         if let Some(rest) = inner_trimmed.strip_prefix("default")
             && rest.starts_with(|c: char| c.is_ascii_whitespace())
+            && let Some(profile) = extract_subform_atom(rest, "profile")
         {
-            // (default <effect> <profile-name>)
-            let tokens: Vec<&str> = rest.split_whitespace().collect();
-            if tokens.len() >= 2 {
-                return Ok(tokens[1].to_string());
-            }
+            return Ok(profile);
         }
         pos = form_end;
     }
@@ -278,7 +301,7 @@ fn policy_info_sexpr(text: &str) -> Result<PolicyInfo> {
     let profile = active_profile_sexpr(text)?;
     let names = profile_names_sexpr(text);
 
-    // Parse the default effect
+    // Parse the default permission from the (default (permission ...) ...) form
     let bytes = text.as_bytes();
     let mut permission = "ask".to_string();
     let mut pos = 0;
@@ -297,11 +320,9 @@ fn policy_info_sexpr(text: &str) -> Result<PolicyInfo> {
         let inner_trimmed = inner.trim_start();
         if let Some(rest) = inner_trimmed.strip_prefix("default")
             && rest.starts_with(|c: char| c.is_ascii_whitespace())
+            && let Some(perm) = extract_subform_atom(rest, "permission")
         {
-            let tokens: Vec<&str> = rest.split_whitespace().collect();
-            if !tokens.is_empty() {
-                permission = tokens[0].to_string();
-            }
+            permission = perm;
         }
         pos = form_end;
     }
@@ -311,6 +332,57 @@ fn policy_info_sexpr(text: &str) -> Result<PolicyInfo> {
         active_profile: profile,
         profiles: names,
     })
+}
+
+/// Set the active profile by replacing `(profile <old>)` with `(profile <new>)`
+/// inside the `(default ...)` form.
+fn set_active_profile_sexpr(text: &str, new_profile: &str) -> Result<String> {
+    let bytes = text.as_bytes();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        pos = skip_sexpr_whitespace(text, pos);
+        if pos >= bytes.len() {
+            break;
+        }
+        if bytes[pos] != b'(' {
+            pos += 1;
+            continue;
+        }
+        let form_start = pos;
+        let form_end = skip_balanced_parens(text, pos);
+        let inner = &text[form_start + 1..form_end.saturating_sub(1)];
+        let inner_trimmed = inner.trim_start();
+        if let Some(rest) = inner_trimmed.strip_prefix("default")
+            && rest.starts_with(|c: char| c.is_ascii_whitespace())
+        {
+            // Find `(profile <name>)` within this default form and replace it.
+            let default_inner = &text[form_start..form_end];
+            let profile_prefix = "(profile ";
+            if let Some(profile_idx) = default_inner.find(profile_prefix) {
+                let abs_start = form_start + profile_idx;
+                // Find the closing paren of (profile <name>)
+                let after_prefix = abs_start + profile_prefix.len();
+                let close = text[after_prefix..]
+                    .find(')')
+                    .map(|i| after_prefix + i + 1)
+                    .unwrap_or(form_end);
+
+                let mut result = String::with_capacity(text.len());
+                result.push_str(&text[..abs_start]);
+                result.push_str(&format!("(profile {})", new_profile));
+                result.push_str(&text[close..]);
+
+                // Re-parse to validate
+                parse::parse_policy(&result).map_err(|e| {
+                    anyhow::anyhow!("modified s-expr failed to parse: {}. This is a bug.", e)
+                })?;
+
+                return Ok(result);
+            }
+        }
+        pos = form_end;
+    }
+    bail!("no (default ...) form found in s-expr policy")
 }
 
 /// Format a rule string ("allow bash git *") as an s-expr form.
@@ -834,7 +906,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     const TEST_SEXPR: &str = r#"; Test policy
-(default deny main)
+(default (permission deny) (profile main))
 
 (profile base
   (deny bash "rm *"))

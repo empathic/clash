@@ -6,7 +6,7 @@ meta:
 
 clash:
   policy_raw: |
-    (default deny main)
+    (default (permission deny) (profile main))
     (profile main
       (allow webfetch *
         (url "github.com"))

@@ -60,7 +60,7 @@ Each rule has three parts: **effect**, **verb**, and **noun**.
 
 ```scheme
 ; ~/.clash/policy.sexp
-(default ask main)            ; what happens when no rule matches
+(default (permission ask) (profile main))  ; what happens when no rule matches
 
 (profile main
   (allow read *)              ; let the agent read any file

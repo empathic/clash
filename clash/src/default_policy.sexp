@@ -11,7 +11,7 @@
 ;   __claude_internal__ — allows Claude Code meta-tools (AskUserQuestion,
 ;                         ExitPlanMode, task management, etc.)
 
-(default deny main)
+(default (permission deny) (profile main))
 
 (profile cwd-read
   (allow read *

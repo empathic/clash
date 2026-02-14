@@ -7,7 +7,7 @@ meta:
 
 clash:
   policy_raw: |
-    (default ask main)
+    (default (permission ask) (profile main))
     (profile cwd
       (allow * *
         (fs (read+write+execute+create+delete (subpath /home/user/project)))))

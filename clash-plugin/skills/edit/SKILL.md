@@ -18,6 +18,7 @@ If the user has already stated what they want to change, proceed. Otherwise, ask
 - Adding allow/deny/ask rules for specific commands
 - Removing existing rules
 - Changing the default permission behavior
+- Switching the active profile
 - Viewing rules in a different profile
 
 ## Adding a rule
@@ -41,6 +42,14 @@ $CLASH_BIN policy allow "bash git *"
 ```
 
 To target a specific profile, add `--profile NAME`.
+
+## Switching the active profile
+
+```bash
+$CLASH_BIN policy use PROFILE_NAME
+```
+
+This changes which profile is active without modifying any rules.
 
 ## Removing a rule
 

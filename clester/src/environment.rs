@@ -140,14 +140,14 @@ fn write_settings_file(path: &Path, spec: &SettingsSpec) -> Result<()> {
 ///
 /// Rules are written as s-expressions:
 /// ```sexp
-/// (default ask main)
+/// (default (permission ask) (profile main))
 /// (profile main
 ///   (allow bash "git *")
 ///   (deny bash "rm *"))
 /// ```
 fn write_policy_file(home_dir: &Path, policy: &PolicySpec) -> Result<()> {
     let path = home_dir.join(".clash/policy.sexp");
-    let mut content = format!("(default {} main)\n", policy.default);
+    let mut content = format!("(default (permission {}) (profile main))\n", policy.default);
 
     if !policy.rules.is_empty() {
         content.push_str("(profile main\n");
@@ -257,7 +257,7 @@ mod tests {
 
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
         let content = std::fs::read_to_string(env.home_dir.join(".clash/policy.sexp")).unwrap();
-        assert!(content.contains("(default ask main)"));
+        assert!(content.contains("(default (permission ask) (profile main))"));
         assert!(content.contains("(allow bash \"git *\")"));
         assert!(content.contains("(deny read .env)"));
     }

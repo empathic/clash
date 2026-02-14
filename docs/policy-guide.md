@@ -10,7 +10,7 @@ Clash policies live in `~/.clash/policy.sexp`. Run `clash init` to generate a sa
 
 ```scheme
 ; Default: deny everything not explicitly allowed, use profile "main"
-(default deny main)
+(default (permission deny) (profile main))
 
 (profile main
   (allow read *)
@@ -113,7 +113,7 @@ If no rules match, the default effect from `(default ...)` applies.
 Profiles group rules into reusable, composable sets. The active profile is set in the `(default ...)` form.
 
 ```scheme
-(default ask main)
+(default (permission ask) (profile main))
 
 ; Rules scoped to the current working directory
 (profile cwd
@@ -277,7 +277,7 @@ When a profile includes parents, sandbox configs are merged:
 Deny everything by default, explicitly allow only safe operations:
 
 ```scheme
-(default deny main)
+(default (permission deny) (profile main))
 
 (profile main
   (allow (fs read) (subpath .))
@@ -291,7 +291,7 @@ Deny everything by default, explicitly allow only safe operations:
 Allow reads and common dev tools, ask for writes, deny destructive operations:
 
 ```scheme
-(default ask main)
+(default (permission ask) (profile main))
 
 (profile cwd-read
   (allow (fs read) (subpath .)))
@@ -325,7 +325,7 @@ Allow reads and common dev tools, ask for writes, deny destructive operations:
 Allow almost everything, but block the truly dangerous:
 
 ```scheme
-(default allow main)
+(default (permission allow) (profile main))
 
 (profile main
   (deny bash "git push --force*")
@@ -343,7 +343,7 @@ Allow almost everything, but block the truly dangerous:
 Allow reading only, deny all modifications:
 
 ```scheme
-(default deny main)
+(default (permission deny) (profile main))
 
 (profile main
   (allow read *)

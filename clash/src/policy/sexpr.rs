@@ -285,7 +285,7 @@ mod tests {
     fn parse_comments() {
         let input = r#"
 ; This is a policy file
-(default deny main)
+(default (permission deny) (profile main))
 ; Another comment
 (profile main
   ; inner comment
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn parse_complex_policy() {
         let input = r#"
-(default deny main)
+(default (permission deny) (profile main))
 
 (profile cwd-read
   (allow (fs read) (subpath .)))

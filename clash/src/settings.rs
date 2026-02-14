@@ -236,11 +236,23 @@ impl ClashSettings {
             });
     }
 
+    /// If `CLASH_PROFILE` is set, override the active profile in the policy document.
+    fn apply_profile_override(&mut self) {
+        if let Ok(profile) = std::env::var("CLASH_PROFILE")
+            && let Some(ref mut doc) = self.policy
+            && let Some(ref mut dc) = doc.default_config
+        {
+            info!(from = %dc.profile, to = %profile, "Overriding active profile from CLASH_PROFILE");
+            dc.profile = profile;
+        }
+    }
+
     /// Load settings by resolving the policy from disk and compiling it.
     #[instrument(level = Level::TRACE)]
     pub fn load_or_create() -> Result<Self> {
         let mut this = Self::default();
         this.resolve_policy();
+        this.apply_profile_override();
         this.compile_policy();
         Ok(this)
     }

@@ -21,14 +21,14 @@ form            = default_form
 Sets the default effect and active profile.
 
 ```ebnf
-default_form    = "(" "default" effect_str profile_name ")"
+default_form    = "(" "default" "(" "permission" effect_str ")" "(" "profile" profile_name ")" ")"
 ```
 
 Examples:
 
 ```scheme
-(default deny main)
-(default ask main)
+(default (permission deny) (profile main))
+(default (permission ask) (profile main))
 ```
 
 ---

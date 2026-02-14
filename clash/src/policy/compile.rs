@@ -443,7 +443,9 @@ mod tests {
 
     #[test]
     fn test_simple_allow() {
-        let policy = compile("(default ask main)\n(profile main\n  (allow bash \"git *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash \"git *\"))\n",
+        );
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "git status");
         assert_eq!(decision.effect, Effect::Allow);
@@ -455,8 +457,9 @@ mod tests {
 
     #[test]
     fn test_deny_overrides_allow() {
-        let policy =
-            compile("(default ask main)\n(profile main\n  (allow read *)\n  (deny read .env))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (allow read *)\n  (deny read .env))\n",
+        );
 
         let decision = policy.evaluate("agent:claude", &Verb::Read, "src/main.rs");
         assert_eq!(decision.effect, Effect::Allow);
@@ -468,7 +471,7 @@ mod tests {
     #[test]
     fn test_ask_overrides_allow() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash *)\n  (ask bash \"rm *\"))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *)\n  (ask bash \"rm *\"))\n",
         );
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "ls");
@@ -480,8 +483,9 @@ mod tests {
 
     #[test]
     fn test_negated_noun() {
-        let policy =
-            compile("(default ask main)\n(profile main\n  (deny write \"!~/code/proj/**\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny write \"!~/code/proj/**\"))\n",
+        );
 
         // Writing in project → not denied (noun negation doesn't match)
         let decision = policy.evaluate("agent:claude", &Verb::Write, "~/code/proj/src/main.rs");
@@ -494,7 +498,7 @@ mod tests {
 
     #[test]
     fn test_configurable_default() {
-        let policy = compile("(default deny main)\n(profile main)\n");
+        let policy = compile("(default (permission deny) (profile main))\n(profile main)\n");
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "anything");
         assert_eq!(decision.effect, Effect::Deny);
@@ -505,7 +509,7 @@ mod tests {
     #[test]
     fn test_constraint_fs_subpath() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow read *\n    (fs (read (subpath /home/user/project)))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow read *\n    (fs (read (subpath /home/user/project)))))\n",
         );
 
         let ctx = EvalContext {
@@ -535,7 +539,7 @@ mod tests {
     #[test]
     fn test_constraint_fs_subpath_dot() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow read *\n    (fs (read (subpath .)))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow read *\n    (fs (read (subpath .)))))\n",
         );
 
         // Path under cwd → matches
@@ -566,7 +570,7 @@ mod tests {
     #[test]
     fn test_constraint_fs_literal() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow read *\n    (fs (read (not (literal .env))))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow read *\n    (fs (read (not (literal .env))))))\n",
         );
 
         // Non-.env file → allowed
@@ -596,8 +600,9 @@ mod tests {
 
     #[test]
     fn test_constraint_pipe_false() {
-        let policy =
-            compile("(default ask main)\n(profile main\n  (allow bash *\n    (pipe deny)))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (pipe deny)))\n",
+        );
 
         // Command without pipe → allowed
         let ctx = EvalContext {
@@ -626,8 +631,9 @@ mod tests {
 
     #[test]
     fn test_constraint_redirect_false() {
-        let policy =
-            compile("(default ask main)\n(profile main\n  (allow bash *\n    (redirect deny)))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (redirect deny)))\n",
+        );
 
         // Command without redirect → allowed
         let ctx = EvalContext {
@@ -657,7 +663,7 @@ mod tests {
     #[test]
     fn test_constraint_forbid_args() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash \"git *\"\n    (args (not \"--force\") (not \"--hard\"))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash \"git *\"\n    (args (not \"--force\") (not \"--hard\"))))\n",
         );
 
         // Command without forbidden args → allowed
@@ -688,7 +694,7 @@ mod tests {
     #[test]
     fn test_constraint_require_args() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash *\n    (args \"--dry-run\")))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (args \"--dry-run\")))\n",
         );
 
         // Command with --dry-run → allowed
@@ -719,7 +725,7 @@ mod tests {
     #[test]
     fn test_profile_composition() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (subpath .)))\n    (pipe deny)\n    (redirect deny)))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (fs (execute (subpath .)))\n    (pipe deny)\n    (redirect deny)))\n",
         );
 
         // Both constraints satisfied → allowed
@@ -750,7 +756,7 @@ mod tests {
     #[test]
     fn test_inline_constraint_expression() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow read *\n    (fs (read (and (subpath .) (not (literal .env)))))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow read *\n    (fs (read (and (subpath .) (not (literal .env)))))))\n",
         );
 
         // Normal file → allowed
@@ -781,7 +787,7 @@ mod tests {
     #[test]
     fn test_rules_without_constraint_still_work() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash \"git *\")\n  (deny bash \"rm *\"))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash \"git *\")\n  (deny bash \"rm *\"))\n",
         );
 
         let decision = policy.evaluate("agent", &Verb::Execute, "git status");
@@ -795,7 +801,7 @@ mod tests {
     fn test_deny_with_constraint() {
         // deny rule with constraint: only denies when constraint is satisfied
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash \"git *\")\n  (deny bash \"git push *\"\n    (args (not \"--force\"))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash \"git *\")\n  (deny bash \"git push *\"\n    (args (not \"--force\"))))\n",
         );
 
         // git push without --force → has-force constraint fails (no forbidden arg present),
@@ -896,7 +902,7 @@ mod tests {
     #[test]
     fn test_fs_filter_with_compound_expr() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow read *\n    (fs (read (or (subpath /home/user/project/src) (subpath /home/user/project/test))))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow read *\n    (fs (read (or (subpath /home/user/project/src) (subpath /home/user/project/test))))))\n",
         );
 
         // In src → allowed
@@ -941,7 +947,7 @@ mod tests {
     #[test]
     fn test_sandbox_generated_from_fs_subpath() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (full (subpath .)))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (fs (full (subpath .)))))\n",
         );
 
         let ctx = EvalContext {
@@ -971,7 +977,7 @@ mod tests {
     #[test]
     fn test_sandbox_caps_intersection() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (\"read + execute\" (subpath .)))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (fs (\"read + execute\" (subpath .)))))\n",
         );
 
         let ctx = EvalContext {
@@ -994,7 +1000,7 @@ mod tests {
     #[test]
     fn test_sandbox_network_deny_wins() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (subpath .)))\n    (network deny)))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (fs (execute (subpath .)))\n    (network deny)))\n",
         );
 
         let ctx = EvalContext {
@@ -1013,7 +1019,7 @@ mod tests {
     #[test]
     fn test_no_sandbox_for_non_bash() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow read *\n    (fs (read (subpath .)))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow read *\n    (fs (read (subpath .)))))\n",
         );
 
         // Read verb: fs acts as permission guard, no sandbox generated
@@ -1032,8 +1038,9 @@ mod tests {
 
     #[test]
     fn test_no_sandbox_without_fs() {
-        let policy =
-            compile("(default ask main)\n(profile main\n  (allow bash *\n    (pipe deny)))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (pipe deny)))\n",
+        );
 
         let ctx = EvalContext {
             entity: "agent",
@@ -1052,7 +1059,7 @@ mod tests {
     #[test]
     fn test_sandbox_not_filter_generates_deny() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (not (subpath .git))))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (fs (execute (not (subpath .git))))))\n",
         );
 
         let ctx = EvalContext {
@@ -1080,7 +1087,7 @@ mod tests {
     #[test]
     fn test_sandbox_regex_generates_rule() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (regex \"\\\\.env\")))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (fs (execute (regex \"\\\\.env\")))))\n",
         );
 
         let ctx = EvalContext {
@@ -1111,7 +1118,7 @@ mod tests {
         // Now fs is skipped for bash rules — the rule always matches
         // regardless of the command string, and fs generates sandbox instead.
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (subpath /home/user/project)))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (fs (execute (subpath /home/user/project)))))\n",
         );
 
         // Command "ls -la" doesn't look like a path under /home/user/project,
@@ -1132,7 +1139,7 @@ mod tests {
     #[test]
     fn test_sandbox_literal_non_recursive() {
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (literal .env)))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (fs (execute (literal .env)))))\n",
         );
 
         let ctx = EvalContext {
@@ -1157,7 +1164,9 @@ mod tests {
 
     #[test]
     fn test_sandbox_no_sandbox_when_allow_has_no_profile() {
-        let policy = compile("(default ask main)\n(profile main\n  (allow bash *))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *))\n",
+        );
 
         let ctx = EvalContext {
             entity: "agent",
@@ -1177,7 +1186,7 @@ mod tests {
     fn test_sandbox_network_default_allow() {
         // When no network policy is specified, default is allow
         let policy = compile(
-            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (subpath .)))))\n",
+            "(default (permission ask) (profile main))\n(profile main\n  (allow bash *\n    (fs (execute (subpath .)))))\n",
         );
 
         let ctx = EvalContext {
@@ -1200,7 +1209,7 @@ mod tests {
     #[test]
     fn test_new_format_deny_overrides_allow() {
         let policy = compile(
-            "(default ask test)\n(profile test\n  (allow bash *)\n  (deny bash \"rm *\"))\n",
+            "(default (permission ask) (profile test))\n(profile test\n  (allow bash *)\n  (deny bash \"rm *\"))\n",
         );
 
         let ctx = make_ctx(
@@ -1227,7 +1236,7 @@ mod tests {
     #[test]
     fn test_new_format_cap_scoped_fs_permission_guard() {
         let policy = compile(
-            "(default ask test)\n(profile test\n  (allow read *\n    (fs (read (subpath /home/user/project)))))\n",
+            "(default (permission ask) (profile test))\n(profile test\n  (allow read *\n    (fs (read (subpath /home/user/project)))))\n",
         );
 
         // File under project → allowed (read cap intersects fs entry)
@@ -1256,7 +1265,7 @@ mod tests {
     #[test]
     fn test_new_format_cap_scoped_fs_sandbox() {
         let policy = compile(
-            "(default ask test)\n(profile test\n  (allow bash *\n    (fs (\"read + write + create\" (subpath .)))\n    (network deny)))\n",
+            "(default (permission ask) (profile test))\n(profile test\n  (allow bash *\n    (fs (\"read + write + create\" (subpath .)))\n    (network deny)))\n",
         );
 
         let ctx = make_ctx(
@@ -1280,7 +1289,7 @@ mod tests {
     #[test]
     fn test_new_format_args_forbid() {
         let policy = compile(
-            "(default ask test)\n(profile test\n  (allow bash *\n    (args (not \"-delete\"))))\n",
+            "(default (permission ask) (profile test))\n(profile test\n  (allow bash *\n    (args (not \"-delete\"))))\n",
         );
 
         // Command without -delete → allowed
@@ -1308,7 +1317,9 @@ mod tests {
 
     #[test]
     fn test_new_format_arbitrary_verb() {
-        let policy = compile("(default deny test)\n(profile test\n  (allow safe-read *))\n");
+        let policy = compile(
+            "(default (permission deny) (profile test))\n(profile test\n  (allow safe-read *))\n",
+        );
 
         // Matching verb_str
         let ctx = make_ctx(
@@ -1336,7 +1347,7 @@ mod tests {
     #[test]
     fn test_new_format_include_rules_merged() {
         let policy = compile(
-            "(default ask child)\n(profile parent\n  (deny bash \"rm *\"))\n(profile child\n  (include parent)\n  (allow bash *))\n",
+            "(default (permission ask) (profile child))\n(profile parent\n  (deny bash \"rm *\"))\n(profile child\n  (include parent)\n  (allow bash *))\n",
         );
 
         // "git status" matches child's allow bash * → allowed
@@ -1364,7 +1375,9 @@ mod tests {
 
     #[test]
     fn test_new_format_no_match_returns_default() {
-        let policy = compile("(default deny test)\n(profile test\n  (allow bash *))\n");
+        let policy = compile(
+            "(default (permission deny) (profile test))\n(profile test\n  (allow bash *))\n",
+        );
 
         // "read" verb_str doesn't match "bash" rule → no match → default (deny)
         let ctx = make_ctx(
@@ -1381,7 +1394,7 @@ mod tests {
     #[test]
     fn test_new_format_wildcard_verb() {
         let policy = compile(
-            "(default ask test)\n(profile test\n  (deny * *\n    (fs (\"read + write\" (subpath ~/.ssh))))\n  (allow bash *))\n",
+            "(default (permission ask) (profile test))\n(profile test\n  (deny * *\n    (fs (\"read + write\" (subpath ~/.ssh))))\n  (allow bash *))\n",
         );
 
         // bash command → matches both deny * * and allow bash *
@@ -1449,7 +1462,7 @@ mod tests {
             ) {
                 // Policy with allow first, then deny on the same triple
                 let sexpr = format!(
-                    "(default ask main)\n(profile main\n  (allow {} {})\n  (deny {} {}))\n",
+                    "(default (permission ask) (profile main))\n(profile main\n  (allow {} {})\n  (deny {} {}))\n",
                     verb_str, noun_pattern, verb_str, noun_pattern
                 );
                 if let Ok(doc) = parse::parse_policy(&sexpr) {
@@ -1462,7 +1475,7 @@ mod tests {
 
                 // Reverse order: deny first, then allow
                 let sexpr = format!(
-                    "(default ask main)\n(profile main\n  (deny {} {})\n  (allow {} {}))\n",
+                    "(default (permission ask) (profile main))\n(profile main\n  (deny {} {})\n  (allow {} {}))\n",
                     verb_str, noun_pattern, verb_str, noun_pattern
                 );
                 if let Ok(doc) = parse::parse_policy(&sexpr) {
@@ -1481,7 +1494,7 @@ mod tests {
                 (noun_pattern, noun_eval) in arb_noun(),
             ) {
                 let sexpr = format!(
-                    "(default ask main)\n(profile main\n  (allow {} {})\n  (ask {} {}))\n",
+                    "(default (permission ask) (profile main))\n(profile main\n  (allow {} {})\n  (ask {} {}))\n",
                     verb_str, noun_pattern, verb_str, noun_pattern
                 );
                 if let Ok(doc) = parse::parse_policy(&sexpr) {
@@ -1500,7 +1513,7 @@ mod tests {
                 (noun_pattern, noun_eval) in arb_noun(),
             ) {
                 let sexpr = format!(
-                    "(default ask main)\n(profile main\n  (ask {} {})\n  (deny {} {}))\n",
+                    "(default (permission ask) (profile main))\n(profile main\n  (ask {} {})\n  (deny {} {}))\n",
                     verb_str, noun_pattern, verb_str, noun_pattern
                 );
                 if let Ok(doc) = parse::parse_policy(&sexpr) {
@@ -1521,7 +1534,7 @@ mod tests {
                 effect2 in arb_effect(),
             ) {
                 let sexpr = format!(
-                    "(default ask main)\n(profile main\n  ({} {} {})\n  ({} {} {}))\n",
+                    "(default (permission ask) (profile main))\n(profile main\n  ({} {} {})\n  ({} {} {}))\n",
                     effect1, verb_str, noun_pattern,
                     effect2, verb_str, noun_pattern,
                 );
@@ -1544,12 +1557,12 @@ mod tests {
             ) {
                 // Evaluate with just the base rule
                 let sexpr_base = format!(
-                    "(default ask main)\n(profile main\n  ({} {} {}))\n",
+                    "(default (permission ask) (profile main))\n(profile main\n  ({} {} {}))\n",
                     base_effect, verb_str, noun_pattern,
                 );
                 // Evaluate with base + deny
                 let sexpr_deny = format!(
-                    "(default ask main)\n(profile main\n  ({} {} {})\n  (deny {} {}))\n",
+                    "(default (permission ask) (profile main))\n(profile main\n  ({} {} {})\n  (deny {} {}))\n",
                     base_effect, verb_str, noun_pattern,
                     verb_str, noun_pattern,
                 );
@@ -1588,7 +1601,7 @@ mod tests {
             ) {
                 // Policy with rules that only match a specific noun, default: deny
                 let sexpr = format!(
-                    "(default deny main)\n(profile main\n  (allow {} specific_file))\n",
+                    "(default (permission deny) (profile main))\n(profile main\n  (allow {} specific_file))\n",
                     verb_str,
                 );
                 if let Ok(doc) = parse::parse_policy(&sexpr) {
@@ -1602,7 +1615,7 @@ mod tests {
 
                 // Same test with default: ask (the default default)
                 let sexpr = format!(
-                    "(default ask main)\n(profile main\n  (allow {} specific_file))\n",
+                    "(default (permission ask) (profile main))\n(profile main\n  (allow {} specific_file))\n",
                     verb_str,
                 );
                 if let Ok(doc) = parse::parse_policy(&sexpr) {
@@ -1619,7 +1632,7 @@ mod tests {
         #[test]
         fn noun_negation_symmetry() {
             let policy = compile(
-                "(default ask main)\n(profile main\n  (allow bash *)\n  (deny bash \"!git *\"))\n",
+                "(default (permission ask) (profile main))\n(profile main\n  (allow bash *)\n  (deny bash \"!git *\"))\n",
             );
 
             // git status should be allowed (deny !git* doesn't match git commands)
@@ -1647,12 +1660,12 @@ mod tests {
             ) {
                 // Base: rule for "git *"
                 let sexpr_base = format!(
-                    "(default ask main)\n(profile main\n  ({} {} \"git *\"))\n",
+                    "(default (permission ask) (profile main))\n(profile main\n  ({} {} \"git *\"))\n",
                     effect, verb_str,
                 );
                 // Extended: same + rule for "npm *" (never queried with npm)
                 let sexpr_ext = format!(
-                    "(default ask main)\n(profile main\n  ({} {} \"git *\")\n  ({} {} \"npm *\"))\n",
+                    "(default (permission ask) (profile main))\n(profile main\n  ({} {} \"git *\")\n  ({} {} \"npm *\"))\n",
                     effect, verb_str,
                     extra_effect, verb_str,
                 );
@@ -1680,12 +1693,12 @@ mod tests {
             ) {
                 // Base: rule for bash
                 let sexpr_base = format!(
-                    "(default ask main)\n(profile main\n  ({} bash {}))\n",
+                    "(default (permission ask) (profile main))\n(profile main\n  ({} bash {}))\n",
                     effect, noun_pattern,
                 );
                 // Extended: same + rule for read (never queried with read)
                 let sexpr_ext = format!(
-                    "(default ask main)\n(profile main\n  ({} bash {})\n  ({} read some_other_file))\n",
+                    "(default (permission ask) (profile main))\n(profile main\n  ({} bash {})\n  ({} read some_other_file))\n",
                     effect, noun_pattern,
                     extra_effect,
                 );
@@ -1719,7 +1732,9 @@ mod tests {
     #[test]
     fn test_builtin_allows_read_clash_dir() {
         // Minimal policy with no user-defined __clash_internal__
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         // Read ~/.clash/policy.sexp → allowed by built-in profile
         let noun = clash_path(".clash/policy.sexp");
@@ -1742,7 +1757,9 @@ mod tests {
     #[test]
     fn test_builtin_does_not_allow_write_clash_dir() {
         // Built-in only allows Read, not Write/Edit
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         // Write to ~/.clash/policy.sexp → NOT allowed (no built-in write rule)
         let noun = clash_path(".clash/policy.sexp");
@@ -1764,7 +1781,9 @@ mod tests {
 
     #[test]
     fn test_builtin_clash_init_asks() {
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         // `clash init` via full path → ask (mutation requires consent)
         let ctx = make_ctx(
@@ -1785,7 +1804,9 @@ mod tests {
 
     #[test]
     fn test_builtin_clash_init_force_asks() {
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         // `clash init --force` also matches → ask (mutation)
         let ctx = make_ctx(
@@ -1806,7 +1827,9 @@ mod tests {
 
     #[test]
     fn test_builtin_clash_migrate_asks() {
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         // `clash migrate` via full path → ask (mutation requires consent)
         let ctx = make_ctx(
@@ -1828,7 +1851,9 @@ mod tests {
     #[test]
     fn test_builtin_non_clash_bash_no_clash_sandbox() {
         // Non-clash bash commands should NOT get ~/.clash/ in their sandbox
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         let ctx = make_ctx(
             "agent",
@@ -1850,7 +1875,9 @@ mod tests {
     #[test]
     fn test_builtin_does_not_allow_outside_clash_dir() {
         // Policy with only deny rules — nothing else allowed
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         // Read /etc/passwd → not covered by built-in, falls to default (ask)
         let ctx = make_ctx(
@@ -1873,7 +1900,7 @@ mod tests {
     fn test_user_can_override_builtin_profile() {
         // User defines __clash_internal__ in their profile_defs — built-in should NOT be injected
         let policy = compile(
-            "(default ask main)\n(profile __clash_internal__\n  (deny read *\n    (fs (read (subpath ~/.clash)))))\n(profile main\n  (include __clash_internal__)\n  (allow bash \"git *\"))\n",
+            "(default (permission ask) (profile main))\n(profile __clash_internal__\n  (deny read *\n    (fs (read (subpath ~/.clash)))))\n(profile main\n  (include __clash_internal__)\n  (allow bash \"git *\"))\n",
         );
 
         // Read from ~/.clash/ → denied by user's override
@@ -1946,7 +1973,7 @@ mod tests {
     #[test]
     fn test_fs_rule_expansion() {
         let input = r#"
-(default deny main)
+(default (permission deny) (profile main))
 (profile main
   (allow (fs read write) (subpath .)))
 "#;
@@ -2006,7 +2033,7 @@ mod tests {
     #[test]
     fn test_fs_read_only_expansion() {
         let input = r#"
-(default deny main)
+(default (permission deny) (profile main))
 (profile main
   (allow (fs read) (subpath .)))
 "#;
@@ -2032,7 +2059,9 @@ mod tests {
 
     #[test]
     fn test_builtin_clash_policy_show_allowed() {
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         let ctx = make_ctx(
             "agent",
@@ -2052,7 +2081,9 @@ mod tests {
 
     #[test]
     fn test_builtin_clash_policy_schema_allowed() {
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         let ctx = make_ctx(
             "agent",
@@ -2072,7 +2103,9 @@ mod tests {
 
     #[test]
     fn test_builtin_clash_policy_add_rule_dry_run_allowed() {
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         // --dry-run preview → constrained-allow beats unconstrained-ask
         let ctx = make_ctx(
@@ -2093,7 +2126,9 @@ mod tests {
 
     #[test]
     fn test_builtin_clash_policy_remove_rule_dry_run_allowed() {
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         let ctx = make_ctx(
             "agent",
@@ -2117,7 +2152,9 @@ mod tests {
 
     #[test]
     fn test_builtin_clash_policy_add_rule_asks() {
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         // Without --dry-run → actual mutation → ask
         let ctx = make_ctx(
@@ -2138,7 +2175,9 @@ mod tests {
 
     #[test]
     fn test_builtin_clash_policy_remove_rule_asks() {
-        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
+        let policy = compile(
+            "(default (permission ask) (profile main))\n(profile main\n  (deny bash \"rm *\"))\n",
+        );
 
         let ctx = make_ctx(
             "agent",
@@ -2162,7 +2201,7 @@ mod tests {
 
     #[test]
     fn test_builtin_asks_askuserquestion() {
-        let policy = compile("(default deny main)\n(profile main)\n");
+        let policy = compile("(default (permission deny) (profile main))\n(profile main)\n");
 
         let ctx = make_ctx(
             "agent",
@@ -2182,7 +2221,7 @@ mod tests {
 
     #[test]
     fn test_builtin_allows_exitplanmode() {
-        let policy = compile("(default ask main)\n(profile main)\n");
+        let policy = compile("(default (permission ask) (profile main))\n(profile main)\n");
 
         let ctx = make_ctx(
             "agent",
@@ -2203,7 +2242,7 @@ mod tests {
     #[test]
     fn test_builtin_applies_correct_effect_to_all_claude_meta_tools() {
         // Use deny as default so we can distinguish allow vs ask vs default
-        let policy = compile("(default deny main)\n(profile main)\n");
+        let policy = compile("(default (permission deny) (profile main))\n(profile main)\n");
 
         for rule in super::builtin_claude_rules() {
             let ctx = make_ctx(
@@ -2226,7 +2265,7 @@ mod tests {
     #[test]
     fn test_builtin_does_not_allow_bash_via_claude_internal() {
         // Bash should NOT be allowed by __claude_internal__
-        let policy = compile("(default ask main)\n(profile main)\n");
+        let policy = compile("(default (permission ask) (profile main))\n(profile main)\n");
 
         let ctx = make_ctx(
             "agent",
@@ -2248,7 +2287,7 @@ mod tests {
     fn test_user_can_override_claude_internal_profile() {
         // User defines __claude_internal__ in their profile_defs
         let policy = compile(
-            "(default ask main)\n(profile __claude_internal__\n  (deny askuserquestion *))\n(profile main\n  (include __claude_internal__))\n",
+            "(default (permission ask) (profile main))\n(profile __claude_internal__\n  (deny askuserquestion *))\n(profile main\n  (include __claude_internal__))\n",
         );
 
         let ctx = make_ctx(
@@ -2270,7 +2309,7 @@ mod tests {
     #[test]
     fn test_new_format_url_require() {
         let policy = compile(
-            "(default ask test)\n(profile test\n  (allow webfetch *\n    (url \"github.com\")))\n",
+            "(default (permission ask) (profile test))\n(profile test\n  (allow webfetch *\n    (url \"github.com\")))\n",
         );
 
         // URL matching required domain → allowed
@@ -2301,7 +2340,7 @@ mod tests {
     #[test]
     fn test_new_format_url_forbid() {
         let policy = compile(
-            "(default allow test)\n(profile test\n  (deny webfetch *\n    (url \"evil.com\")))\n",
+            "(default (permission allow) (profile test))\n(profile test\n  (deny webfetch *\n    (url \"evil.com\")))\n",
         );
 
         // URL matching forbidden domain → denied
@@ -2332,7 +2371,7 @@ mod tests {
     #[test]
     fn test_new_format_url_wildcard_subdomain() {
         let policy = compile(
-            "(default ask test)\n(profile test\n  (allow webfetch *\n    (url \"*.github.com\")))\n",
+            "(default (permission ask) (profile test))\n(profile test\n  (allow webfetch *\n    (url \"*.github.com\")))\n",
         );
 
         // Subdomain matches → allowed
@@ -2363,7 +2402,7 @@ mod tests {
     #[test]
     fn test_new_format_url_full_glob() {
         let policy = compile(
-            "(default ask test)\n(profile test\n  (allow webfetch *\n    (url \"https://github.com/*\")))\n",
+            "(default (permission ask) (profile test))\n(profile test\n  (allow webfetch *\n    (url \"https://github.com/*\")))\n",
         );
 
         // Full URL glob matches → allowed
@@ -2395,7 +2434,7 @@ mod tests {
     fn test_url_noun_pattern_after_bug_fix() {
         // After fixing the URL-as-entity parsing bug, URL noun patterns should work
         let policy = compile(
-            "(default ask test)\n(profile test\n  (allow webfetch \"https://github.com/*\"))\n",
+            "(default (permission ask) (profile test))\n(profile test\n  (allow webfetch \"https://github.com/*\"))\n",
         );
 
         let input = serde_json::json!({"url": "https://github.com/foo"});
@@ -2429,7 +2468,7 @@ mod tests {
         // A URL-constrained allow should beat an unconstrained ask
         // when the URL matches the constraint.
         let policy = compile(
-            "(default ask test)\n(profile test\n  (allow webfetch *\n    (url \"github.com\"))\n  (ask webfetch *))\n",
+            "(default (permission ask) (profile test))\n(profile test\n  (allow webfetch *\n    (url \"github.com\"))\n  (ask webfetch *))\n",
         );
 
         // URL matches constraint → constrained allow wins over unconstrained ask
@@ -2467,7 +2506,7 @@ mod tests {
     fn test_constrained_ask_beats_constrained_allow() {
         // When both ask and allow have constraints, ask wins (same tier).
         let policy = compile(
-            "(default allow test)\n(profile test\n  (allow webfetch *\n    (url \"github.com\"))\n  (ask webfetch *\n    (url \"github.com\")))\n",
+            "(default (permission allow) (profile test))\n(profile test\n  (allow webfetch *\n    (url \"github.com\"))\n  (ask webfetch *\n    (url \"github.com\")))\n",
         );
 
         let input = serde_json::json!({"url": "https://github.com/foo"});
@@ -2486,7 +2525,7 @@ mod tests {
     fn test_deny_beats_constrained_allow() {
         // Deny always wins, even over constrained allow.
         let policy = compile(
-            "(default ask test)\n(profile test\n  (allow webfetch *\n    (url \"github.com\"))\n  (deny webfetch *))\n",
+            "(default (permission ask) (profile test))\n(profile test\n  (allow webfetch *\n    (url \"github.com\"))\n  (deny webfetch *))\n",
         );
 
         let input = serde_json::json!({"url": "https://github.com/foo"});
@@ -2507,7 +2546,7 @@ mod tests {
         // "constrained" for webfetch, since fs guards are irrelevant for
         // non-read/write/edit verbs.
         let policy = compile(
-            "(default deny test)\n(profile base\n  (allow * *\n    (fs (\"read + write + execute + create + delete\" (subpath /home/user/project)))))\n(profile test\n  (include base)\n  (ask webfetch *))\n",
+            "(default (permission deny) (profile test))\n(profile base\n  (allow * *\n    (fs (\"read + write + execute + create + delete\" (subpath /home/user/project)))))\n(profile test\n  (include base)\n  (ask webfetch *))\n",
         );
 
         // The ask webfetch * is unconstrained. The allow * * has fs constraints
@@ -2530,7 +2569,7 @@ mod tests {
         // Real-world scenario: fs-constrained broad allows + URL-constrained
         // webfetch allow + unconstrained webfetch ask.
         let policy = compile(
-            "(default ask test)\n(profile cwd\n  (allow * *\n    (fs (\"read + write + execute + create + delete\" (subpath /home/user/project)))))\n(profile test\n  (include cwd)\n  (allow webfetch *\n    (url \"github.com\"))\n  (ask webfetch *))\n",
+            "(default (permission ask) (profile test))\n(profile cwd\n  (allow * *\n    (fs (\"read + write + execute + create + delete\" (subpath /home/user/project)))))\n(profile test\n  (include cwd)\n  (allow webfetch *\n    (url \"github.com\"))\n  (ask webfetch *))\n",
         );
 
         // github.com → constrained allow (Tier 1) beats unconstrained ask (Tier 0)
@@ -2562,7 +2601,7 @@ mod tests {
     fn test_constrained_args_allow_beats_unconstrained_ask() {
         // Args-constrained allow should beat unconstrained ask for bash.
         let policy = compile(
-            "(default ask test)\n(profile test\n  (allow bash \"git *\"\n    (args \"--dry-run\"))\n  (ask bash *))\n",
+            "(default (permission ask) (profile test))\n(profile test\n  (allow bash \"git *\"\n    (args \"--dry-run\"))\n  (ask bash *))\n",
         );
 
         // git diff --dry-run → constrained allow (has require-args) beats unconstrained ask
@@ -2593,7 +2632,7 @@ mod tests {
     #[test]
     fn test_profile_sandbox_generates_sandbox_policy() {
         let policy = compile(
-            "(default deny main)\n(profile main\n  (sandbox\n    (fs read execute (subpath .))\n    (fs write create (subpath ./target))\n    (network allow))\n  (allow bash \"cargo *\")\n  (allow bash \"git status\")\n  (deny bash \"git push*\"))\n",
+            "(default (permission deny) (profile main))\n(profile main\n  (sandbox\n    (fs read execute (subpath .))\n    (fs write create (subpath ./target))\n    (network allow))\n  (allow bash \"cargo *\")\n  (allow bash \"git status\")\n  (deny bash \"git push*\"))\n",
         );
 
         // Allowed bash command gets a sandbox
@@ -2617,7 +2656,7 @@ mod tests {
     #[test]
     fn test_profile_sandbox_deny_rules_unaffected() {
         let policy = compile(
-            "(default deny main)\n(profile main\n  (sandbox\n    (fs read execute (subpath .))\n    (network allow))\n  (allow bash \"git *\")\n  (deny bash \"git push*\"))\n",
+            "(default (permission deny) (profile main))\n(profile main\n  (sandbox\n    (fs read execute (subpath .))\n    (network allow))\n  (allow bash \"git *\")\n  (deny bash \"git push*\"))\n",
         );
 
         // Denied command stays denied
@@ -2638,7 +2677,7 @@ mod tests {
     fn test_profile_sandbox_backward_compat_no_sandbox_block() {
         // When no sandbox: block exists, per-rule fs: still generates sandbox
         let policy = compile(
-            "(default deny main)\n(profile main\n  (allow bash \"cargo *\"\n    (fs (\"read + execute\" (subpath .)) (\"write + create\" (subpath ./target)))\n    (network allow)))\n",
+            "(default (permission deny) (profile main))\n(profile main\n  (allow bash \"cargo *\"\n    (fs (\"read + execute\" (subpath .)) (\"write + create\" (subpath ./target)))\n    (network allow)))\n",
         );
 
         let ctx = make_ctx(
@@ -2660,7 +2699,7 @@ mod tests {
     #[test]
     fn test_profile_sandbox_network_deny() {
         let policy = compile(
-            "(default deny main)\n(profile main\n  (sandbox\n    (fs read execute (subpath .))\n    (network deny))\n  (allow bash *))\n",
+            "(default (permission deny) (profile main))\n(profile main\n  (sandbox\n    (fs read execute (subpath .))\n    (network deny))\n  (allow bash *))\n",
         );
 
         let ctx = make_ctx(
@@ -2680,7 +2719,7 @@ mod tests {
     #[test]
     fn test_profile_sandbox_include_merge() {
         let policy = compile(
-            "(default deny child)\n(profile parent\n  (sandbox\n    (fs read execute (subpath .))\n    (network deny))\n  (allow bash \"git *\"))\n(profile child\n  (include parent)\n  (sandbox\n    (fs write create (subpath ./target))\n    (network allow))\n  (allow bash \"cargo *\"))\n",
+            "(default (permission deny) (profile child))\n(profile parent\n  (sandbox\n    (fs read execute (subpath .))\n    (network deny))\n  (allow bash \"git *\"))\n(profile child\n  (include parent)\n  (sandbox\n    (fs write create (subpath ./target))\n    (network allow))\n  (allow bash \"cargo *\"))\n",
         );
 
         let ctx = make_ctx(
@@ -2707,7 +2746,7 @@ mod tests {
     #[test]
     fn test_sandbox_for_active_profile_uses_profile_sandbox() {
         let policy = compile(
-            "(default deny main)\n(profile main\n  (sandbox\n    (fs read execute (subpath .))\n    (fs write create (subpath ./target))\n    (network deny))\n  (allow bash \"cargo *\")\n  (allow bash \"git status\"))\n",
+            "(default (permission deny) (profile main))\n(profile main\n  (sandbox\n    (fs read execute (subpath .))\n    (fs write create (subpath ./target))\n    (network deny))\n  (allow bash \"cargo *\")\n  (allow bash \"git status\"))\n",
         );
 
         let sandbox = policy

@@ -70,7 +70,7 @@ pub fn parse_policy(input: &str) -> Result<super::PolicyDocument, PolicyParseErr
 
     let dc = default_config.ok_or_else(|| PolicyParseError::InvalidRule {
         rule: "(default ...)".into(),
-        message: "missing (default <effect> <profile>) form".into(),
+        message: "missing (default (permission <effect>) (profile <name>)) form".into(),
     })?;
 
     // Validate active profile exists.
@@ -166,20 +166,64 @@ pub fn parse_profile_rules(input: &str) -> Result<ProfileDef, PolicyParseError> 
 }
 
 // ---------------------------------------------------------------------------
-// (default <effect> <profile-name>)
+// (default (permission <effect>) (profile <name>))
 // ---------------------------------------------------------------------------
 
 fn parse_default(list: &[SExpr]) -> Result<DefaultConfig, PolicyParseError> {
+    // Expect: (default (permission <effect>) (profile <name>))
+    // The sub-forms can appear in any order.
     if list.len() != 3 {
         return Err(sexpr_error(
             &list[0],
-            "expected (default <effect> <profile-name>)",
+            "expected (default (permission <effect>) (profile <name>))",
         ));
     }
-    let effect = parse_effect(&list[1])?;
-    let profile = atom_str(&list[2], "profile name")?;
+
+    let mut permission: Option<Effect> = None;
+    let mut profile: Option<String> = None;
+
+    for item in &list[1..] {
+        let sub = item.as_list().ok_or_else(|| {
+            sexpr_error(
+                item,
+                "expected (permission <effect>) or (profile <name>) inside default",
+            )
+        })?;
+        if sub.len() != 2 {
+            return Err(sexpr_error(
+                item,
+                "expected (permission <effect>) or (profile <name>)",
+            ));
+        }
+        let head = sub[0]
+            .as_str()
+            .ok_or_else(|| sexpr_error(&sub[0], "expected 'permission' or 'profile'"))?;
+        match head {
+            "permission" => {
+                permission = Some(parse_effect(&sub[1])?);
+            }
+            "profile" => {
+                profile = Some(atom_str(&sub[1], "profile name")?);
+            }
+            other => {
+                return Err(sexpr_error(
+                    &sub[0],
+                    &format!(
+                        "unknown field '{}' in default; expected 'permission' or 'profile'",
+                        other
+                    ),
+                ));
+            }
+        }
+    }
+
+    let permission = permission
+        .ok_or_else(|| sexpr_error(&list[0], "missing (permission <effect>) in default form"))?;
+    let profile =
+        profile.ok_or_else(|| sexpr_error(&list[0], "missing (profile <name>) in default form"))?;
+
     Ok(DefaultConfig {
-        permission: effect,
+        permission,
         profile,
     })
 }
@@ -786,7 +830,7 @@ mod tests {
     #[test]
     fn parse_minimal_policy() {
         let input = r#"
-(default deny main)
+(default (permission deny) (profile main))
 (profile main)
 "#;
         let doc = parse_policy(input).unwrap();
@@ -801,7 +845,7 @@ mod tests {
     #[test]
     fn parse_profile_with_rules() {
         let input = r#"
-(default deny main)
+(default (permission deny) (profile main))
 (profile main
   (allow bash *)
   (deny bash "git push*")
@@ -819,7 +863,7 @@ mod tests {
     #[test]
     fn parse_profile_with_include() {
         let input = r#"
-(default deny main)
+(default (permission deny) (profile main))
 (profile cwd-read
   (allow read *))
 (profile main
@@ -834,7 +878,7 @@ mod tests {
     #[test]
     fn parse_fs_rule() {
         let input = r#"
-(default deny main)
+(default (permission deny) (profile main))
 (profile main
   (allow (fs read write) (subpath .)))
 "#;
@@ -856,7 +900,7 @@ mod tests {
     #[test]
     fn parse_sandbox_block() {
         let input = r#"
-(default deny main)
+(default (permission deny) (profile main))
 (profile main
   (sandbox
     (fs full (subpath .))
@@ -873,7 +917,7 @@ mod tests {
     #[test]
     fn parse_tool_with_constraints() {
         let input = r#"
-(default deny main)
+(default (permission deny) (profile main))
 (profile main
   (allow bash "cargo *"
     (args (forbid "--force"))))
@@ -889,7 +933,7 @@ mod tests {
     #[test]
     fn parse_url_constraints() {
         let input = r#"
-(default deny main)
+(default (permission deny) (profile main))
 (profile main
   (allow webfetch *
     (url "github.com")))
@@ -911,7 +955,7 @@ mod tests {
     #[test]
     fn error_unknown_profile() {
         let input = r#"
-(default deny nonexistent)
+(default (permission deny) (profile nonexistent))
 (profile main)
 "#;
         let err = parse_policy(input).unwrap_err();
@@ -921,7 +965,7 @@ mod tests {
     #[test]
     fn error_circular_include() {
         let input = r#"
-(default deny a)
+(default (permission deny) (profile a))
 (profile a (include b))
 (profile b (include a))
 "#;
@@ -933,7 +977,7 @@ mod tests {
     fn parse_full_policy() {
         let input = r#"
 ; Full example policy
-(default deny main)
+(default (permission deny) (profile main))
 
 (profile cwd-read
   (allow (fs read) (subpath .)))
@@ -983,7 +1027,7 @@ mod tests {
     #[test]
     fn parse_inline_fs_constraint() {
         let input = r#"
-(default deny main)
+(default (permission deny) (profile main))
 (profile main
   (allow read *
     (fs (read (subpath .)))))

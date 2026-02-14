@@ -142,6 +142,11 @@ enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Switch the active profile
+    Use {
+        /// Profile name to activate
+        profile: String,
+    },
     /// Interactive policy configuration wizard
     Setup,
 
@@ -216,6 +221,10 @@ enum Commands {
         /// Path to policy file (default: ~/.clash/policy.sexp)
         #[arg(long)]
         policy: Option<String>,
+
+        /// Active profile override (default: from policy file)
+        #[arg(long)]
+        profile: Option<String>,
 
         /// Arguments to pass through to Claude Code
         #[arg(trailing_var_arg = true)]
@@ -301,7 +310,11 @@ fn main() -> Result<()> {
                 }
                 Ok(())
             }
-            Commands::Launch { policy, args } => run_launch(policy, args),
+            Commands::Launch {
+                policy,
+                args,
+                profile,
+            } => run_launch(policy, args, profile),
             Commands::Bug {
                 title,
                 description,
@@ -321,7 +334,11 @@ fn main() -> Result<()> {
 
 /// Launch Claude Code with clash managing hooks and sandbox enforcement.
 #[instrument(level = Level::TRACE)]
-fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
+fn run_launch(
+    policy_path: Option<String>,
+    args: Vec<String>,
+    profile: Option<String>,
+) -> Result<()> {
     // Resolve the clash binary path for hook commands
     let clash_bin = std::env::current_exe().context("failed to determine clash binary path")?;
     let clash_bin_str = clash_bin.to_string_lossy();
@@ -334,6 +351,14 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
         clash::policy::parse::parse_policy(&contents)
             .with_context(|| format!("failed to parse policy file: {}", path))?;
         info!(path, "Using policy file");
+    }
+
+    // Set CLASH_PROFILE so hook subprocesses pick up the profile override.
+    if let Some(ref p) = profile {
+        // SAFETY: This is called early in main, before spawning any threads,
+        // so modifying the environment is safe.
+        unsafe { std::env::set_var("CLASH_PROFILE", p) };
+        info!(profile = p, "Overriding active profile via CLASH_PROFILE");
     }
 
     // Build the hooks JSON that points to our own binary
@@ -528,7 +553,10 @@ fn create_fresh_policy(
     output.push_str(";   deny > ask > allow\n");
     output.push_str("; If no statement matches, the default effect is used.\n");
     output.push('\n');
-    output.push_str(&format!("(default {} main)\n\n", effect_str));
+    output.push_str(&format!(
+        "(default (permission {}) (profile main))\n\n",
+        effect_str
+    ));
     output.push_str("(profile main\n");
     for stmt in statements {
         let rule = format_rule(stmt);
@@ -1242,6 +1270,30 @@ fn handle_list_rules(profile: Option<&str>, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Handle `clash policy use <profile>`.
+fn handle_use_profile(profile: &str) -> Result<()> {
+    let (path, text) = load_policy()?;
+
+    // Validate the profile exists by parsing.
+    let doc = clash::policy::parse::parse_policy(&text).context("failed to parse policy")?;
+    if !doc.profile_defs.contains_key(profile) {
+        let mut available: Vec<&str> = doc.profile_defs.keys().map(|s| s.as_str()).collect();
+        available.sort();
+        anyhow::bail!(
+            "profile '{}' not found. Available profiles: {}",
+            profile,
+            available.join(", ")
+        );
+    }
+
+    let updated =
+        edit::set_active_profile(&text, profile).context("failed to update active profile")?;
+    std::fs::write(&path, &updated)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    println!("Active profile set to '{}'", profile);
+    Ok(())
+}
+
 /// Handle `clash policy show`.
 fn handle_show_policy(json: bool) -> Result<()> {
     let (path, text) = load_policy()?;
@@ -1454,6 +1506,7 @@ fn run_policy(cmd: PolicyCmd) -> Result<()> {
             dry_run,
         } => handle_remove_rule(&rule, profile.as_deref(), dry_run),
         PolicyCmd::List { profile, json } => handle_list_rules(profile.as_deref(), json),
+        PolicyCmd::Use { profile } => handle_use_profile(&profile),
         PolicyCmd::Setup => run_setup_wizard(),
         PolicyCmd::Show { json } => handle_show_policy(json),
         PolicyCmd::Schema { json } => handle_schema(json),

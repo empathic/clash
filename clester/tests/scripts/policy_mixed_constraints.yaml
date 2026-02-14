@@ -4,7 +4,7 @@ meta:
 
 clash:
   policy_raw: |
-    (default ask dev)
+    (default (permission ask) (profile dev))
     (profile readonly
       (allow read *)
       (deny write *)
