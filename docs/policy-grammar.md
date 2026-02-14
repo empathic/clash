@@ -1,157 +1,203 @@
 # Policy Grammar Specification
 
-Formal grammar for clash policy documents. Two formats are supported: **legacy** (flat rules + named constraints) and **new** (profile-based with inline constraints). The parser auto-detects format based on whether `default:` is a scalar or mapping.
+Formal grammar for clash policy documents in **s-expression** format.
 
 ---
 
-## Format Detection
-
-```
-if default is YAML mapping → new format
-if default is YAML scalar or absent → legacy format
-```
-
----
-
-## Legacy Format (YAML Document)
+## Top-Level Structure
 
 ```ebnf
-document        = default_decl?
-                  constraints_decl?
-                  profiles_decl?
-                  permissions_decl?
-                  rules_decl?
+document        = form*
 
-default_decl    = "default:" effect_str
-
-constraints_decl = "constraints:" NEWLINE
-                   (INDENT constraint_name ":" constraint_def)*
-
-profiles_decl   = "profiles:" NEWLINE
-                  (INDENT profile_name ":" profile_expr_str)*
-
-permissions_decl = "permissions:" NEWLINE
-                   ("allow:" string_list)?
-                   ("deny:" string_list)?
-                   ("ask:" string_list)?
-
-rules_decl      = "rules:" NEWLINE
-                  (rule_sequence | rule_mapping)
-
-rule_sequence   = ("- " rule_str)*
-rule_mapping    = (rule_str ":" (constraint_value | "[]" | null))*
-```
-
-### Constraint Definition
-
-```ebnf
-constraint_def  = (fs_field | caps_field | network_field
-                  | pipe_field | redirect_field
-                  | forbid_args_field | require_args_field)*
-
-fs_field        = "fs:" filter_expr_str
-caps_field      = "caps:" cap_expr
-network_field   = "network:" ("allow" | "deny")
-pipe_field      = "pipe:" ("true" | "false")
-redirect_field  = "redirect:" ("true" | "false")
-forbid_args_field  = "forbid-args:" string_list
-require_args_field = "require-args:" string_list
+form            = default_form
+                | profile_form
+                | comment
 ```
 
 ---
 
-## New Format (YAML Document)
+## Default Declaration
+
+Sets the default effect and active profile.
 
 ```ebnf
-document        = "default:" NEWLINE
-                    INDENT "permission:" effect_str NEWLINE
-                    INDENT "profile:" profile_name
-                  ("profiles:" NEWLINE
-                    (INDENT profile_name ":" profile_def)*)?
+default_form    = "(" "default" effect_str profile_name ")"
+```
 
-profile_def     = ("include:" (profile_name | profile_name_list))?
-                  ("rules:" NEWLINE
-                    (INDENT new_rule_key ":" inline_constraints?)*)?
+Examples:
 
-new_rule_key    = effect_str SPACE verb_str SPACE noun_pattern
-                  (* trailing ":" is stripped *)
-
-inline_constraints = (fs_cap_scoped | args_field
-                     | network_field | pipe_field | redirect_field)*
-
-fs_cap_scoped   = "fs:" NEWLINE
-                  (INDENT cap_expr ":" filter_expr_str)*
-
-args_field      = "args:" arg_spec_list
-arg_spec_list   = "[" (arg_spec ("," arg_spec)*)? "]"
-arg_spec        = "!" STRING        (* Forbid *)
-                | STRING            (* Require *)
+```scheme
+(default deny main)
+(default ask main)
 ```
 
 ---
 
-## Compact Rule String (PEG Grammar)
+## Profile Definition
 
-Used in legacy format `rules:` lists. Defined in `rule.pest`:
+```ebnf
+profile_form    = "(" "profile" profile_name body* ")"
 
-```peg
-rule            = SOI ~ effect ~ sep ~ entity ~ sep ~ tool ~ sep ~ pattern ~ EOI
-
-effect          = "allow" | "deny" | "ask" | "delegate"
-
-entity          = negation? ~ entity_value
-negation        = "!"
-entity_value    = wildcard | typed_entity | identifier
-typed_entity    = identifier ~ ":" ~ (wildcard | identifier)
-wildcard        = "*"
-identifier      = (ASCII_ALPHANUMERIC | "_" | "-" | ".")+
-
-tool            = wildcard | identifier
-
-pattern         = ANY+
-
-sep             = (" " | "\t")+
+body            = include_form
+                | rule_form
+                | sandbox_form
 ```
 
-### Entity Insertion
+### Include
 
-When the second token (after effect) is a known tool keyword (`bash`, `read`, `write`, `edit`), the entity `agent` is automatically inserted. This means:
-
-```
-allow bash git *       →  allow agent bash git *
-deny read .env         →  deny agent read .env
+```ebnf
+include_form    = "(" "include" profile_name+ ")"
 ```
 
-For custom tool names, entity insertion does not apply — you must specify the entity explicitly:
+Merges rules from parent profiles. Circular includes are detected at parse time.
 
+### Rule
+
+```ebnf
+rule_form       = "(" effect_str verb_str noun_pattern constraint* ")"
+
+effect_str      = "allow" | "deny" | "ask"
+verb_str        = "bash" | "read" | "write" | "edit" | "*" | identifier
+noun_pattern    = "*" | quoted_string | identifier
+
+constraint      = fs_constraint
+                | args_constraint
+                | pipe_constraint
+                | redirect_constraint
+                | url_constraint
+                | network_constraint
 ```
-allow * task *         # Correct: explicit wildcard entity
-allow agent task *     # Correct: explicit entity
+
+Examples:
+
+```scheme
+(allow read *)
+(deny bash "git push*")
+(ask bash "git commit*")
+(allow bash "cargo *"
+  (fs (read+execute (subpath .))
+      (write+create (subpath ./target)))
+  (network allow))
 ```
 
-### Constraint Suffix
+### Filesystem Constraint
 
-A rule string may have a ` : ` suffix binding a profile expression:
-
+```ebnf
+fs_constraint   = "(" "fs" fs_entry+ ")"
+fs_entry        = "(" cap_expr filter_expr ")"
 ```
-allow agent bash git * : strict-git & safe-io
+
+### Sandbox Block
+
+Profile-level sandbox declaration for OS-enforced restrictions on bash commands:
+
+```ebnf
+sandbox_form    = "(" "sandbox" sandbox_entry+ ")"
+sandbox_entry   = "(" "fs" cap_expr filter_expr ")"
+                | "(" "network" ("allow" | "deny") ")"
 ```
 
-The `:` must be preceded by a space. The parser scans backwards from end to find the separator, distinguishing it from entity type colons (`agent:claude`).
+Example:
+
+```scheme
+(sandbox
+  (fs read execute (subpath .))
+  (fs write create (subpath "./target"))
+  (network deny))
+```
+
+---
+
+## Cap Expression
+
+```ebnf
+cap_expr        = cap_term ('+' cap_term)*
+
+cap_term        = "read" | "write" | "create" | "delete" | "execute"
+                | "all" | "full"
+```
+
+The `+` operator combines capabilities. `all` and `full` are shorthand for all five capabilities.
+
+Examples:
+
+| Expression | Result |
+|-----------|--------|
+| `read` | READ |
+| `read+write` | READ \| WRITE |
+| `full` | READ \| WRITE \| CREATE \| DELETE \| EXECUTE |
+
+---
+
+## Filter Expression
+
+Used in `fs` entries for filesystem constraints. Supports boolean operators.
+
+```ebnf
+filter_expr     = or_expr
+or_expr         = and_expr ("or" and_expr)*
+and_expr        = unary ("and" unary)*
+unary           = "(" "not" filter_expr ")" | atom
+atom            = "(" "subpath" path ")"
+                | "(" "literal" path ")"
+                | "(" "regex" pattern ")"
+                | "(" filter_expr ")"
+```
+
+**Precedence**: `not` > `and` > `or`
+
+### Filter Functions
+
+| Function | Semantics |
+|----------|-----------|
+| `(subpath path)` | Resolved path must be under `path` (prefix match on normalized absolute path) |
+| `(literal path)` | Resolved path must equal `path` exactly |
+| `(regex pattern)` | Resolved path must match the regex `pattern` |
+
+Path resolution: relative paths are resolved against the current working directory. `.` resolves to cwd.
+
+Examples:
+
+```scheme
+(subpath .)                               ; anything under cwd
+(or (subpath "~/.ssh") (subpath "~/.aws")) ; either location
+(and (subpath .) (not (subpath "./.git"))) ; cwd except .git
+```
+
+---
+
+## Shell Constraints
+
+For bash rules, restrict command structure:
+
+```ebnf
+args_constraint     = "(" "args" arg_spec+ ")"
+arg_spec            = quoted_string              (* require arg *)
+                    | "(" "not" quoted_string ")" (* forbid arg *)
+
+pipe_constraint     = "(" "pipe" ("allow" | "deny") ")"
+redirect_constraint = "(" "redirect" ("allow" | "deny") ")"
+url_constraint      = "(" "url" quoted_string+ ")"
+network_constraint  = "(" "network" ("allow" | "deny") ")"
+```
+
+Example:
+
+```scheme
+(allow bash "git *"
+  (args "--no-force" (not "--hard"))
+  (pipe deny)
+  (redirect deny))
+```
 
 ---
 
 ## Pattern Syntax
 
-Used for entity and noun slots.
+Used for noun slots.
 
 ```ebnf
-pattern         = "!" match_expr      (* negated *)
-                | match_expr           (* positive *)
-
-match_expr      = "*"                  (* wildcard: matches anything *)
-                | type ":" name        (* typed entity: agent:claude *)
-                | type ":*"            (* typed wildcard: agent:* *)
+pattern         = "*"                  (* wildcard: matches anything *)
                 | glob_pattern         (* contains *, **, or ? *)
                 | exact_string         (* everything else *)
 ```
@@ -161,7 +207,7 @@ match_expr      = "*"                  (* wildcard: matches anything *)
 Policy globs differ from filesystem globs: `*` matches any character **including `/`**. This is because patterns apply to both file paths and command strings.
 
 ```
-git *           matches "git status", "git commit -m 'test'"
+git *           matches "git status", "git commit -m 'fix'"
 **/*.rs         matches "src/main.rs", "a/b/c.rs"
 ```
 
@@ -169,87 +215,17 @@ Glob-to-regex conversion: `.` → `\.`, `**` → `.*`, `*` → `.*`, `?` → `.`
 
 ---
 
-## Filter Expression Grammar
-
-Used in `fs:` fields for filesystem constraints. Recursive descent parser with precedence.
-
-```ebnf
-filter_expr     = or_expr
-or_expr         = and_expr ("|" and_expr)*
-and_expr        = unary ("&" unary)*
-unary           = "!" unary | atom
-atom            = "subpath(" path ")"
-                | "literal(" path ")"
-                | "regex(" pattern ")"
-                | "(" filter_expr ")"
-```
-
-**Precedence**: `!` > `&` > `|`
-
-### Filter Functions
-
-| Function | Semantics |
-|----------|-----------|
-| `subpath(path)` | Resolved path must be under `path` (prefix match on normalized absolute path) |
-| `literal(path)` | Resolved path must equal `path` exactly |
-| `regex(pattern)` | Resolved path must match the regex `pattern` |
-
-Path resolution: relative paths are resolved against the current working directory. `.` resolves to cwd. `..` components are handled lexically (no filesystem access).
-
----
-
-## Profile Expression Grammar
-
-Used for constraint bindings on rules and named profiles.
-
-```ebnf
-profile_expr    = or_expr
-or_expr         = and_expr ("|" and_expr)*
-and_expr        = unary ("&" unary)*
-unary           = "!" unary | atom
-atom            = identifier | "(" profile_expr ")"
-```
-
-**Precedence**: `!` > `&` > `|`
-
-An identifier resolves first as a named profile (composite), then as a named constraint (primitive). Unknown references cause the constraint to fail closed.
-
----
-
-## Cap Expression
-
-Used in new-format `fs:` keys for capability-scoped filesystem constraints.
-
-```ebnf
-cap_expr        = cap_term (('+' | '-') cap_term)*
-cap_term        = "read" | "write" | "create" | "delete" | "execute"
-                | "all" | "full"
-```
-
-The `+` operator adds capabilities, the `-` operator removes them. Removals take precedence over additions (consistent with deny-overrides-allow semantics). `all` and `full` are shorthand for all five capabilities.
-
-Examples:
-
-| Expression | Result |
-|-----------|--------|
-| `read + write` | READ \| WRITE |
-| `all` | READ \| WRITE \| CREATE \| DELETE \| EXECUTE |
-| `all - write` | READ \| CREATE \| DELETE \| EXECUTE |
-| `all - write - delete` | READ \| CREATE \| EXECUTE |
-
----
-
 ## Effect Values
 
 ```ebnf
-effect_str      = "allow" | "deny" | "ask" | "delegate"
+effect_str      = "allow" | "deny" | "ask"
 ```
 
 ---
 
 ## Verb / Tool Values
 
-Both legacy and new formats accept arbitrary tool names. Known tool keywords map to canonical verbs:
+Known tool keywords map to canonical verbs:
 
 | Tool keyword | Verb |
 |-------------|------|
@@ -260,13 +236,24 @@ Both legacy and new formats accept arbitrary tool names. Known tool keywords map
 | `*` | Any |
 | any other name | Named (matched by string) |
 
-Arbitrary tool names (e.g., `task`, `glob`, `websearch`) are matched against the lowercased tool name from Claude Code. For example, `allow * task *` matches tool invocations with `tool_name: "Task"`.
+Arbitrary tool names (e.g., `task`, `glob`, `websearch`) are matched against the lowercased tool name from Claude Code.
+
+---
+
+## Comments
+
+Line comments start with `;`:
+
+```scheme
+; This is a comment
+(allow read *)  ; inline comment
+```
 
 ---
 
 ## Legacy Permission Patterns
 
-From Claude Code's `permissions` format:
+From Claude Code's `permissions` format (used by `clash migrate`):
 
 ```ebnf
 legacy_pattern  = tool_name "(" arg ")"    (* tool with argument *)

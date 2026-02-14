@@ -4,23 +4,16 @@ meta:
 
 clash:
   policy_raw: |
-    default:
-      permission: ask
-      profile: main
-
-    profiles:
-      base:
-        rules:
-          deny bash rm *:
-
-      main:
-        include: base
-        rules:
-          allow bash git *:
-            args: ["!--force"]
-          allow bash cargo *:
-          allow read *:
-          deny bash curl *:
+    (default ask main)
+    (profile base
+      (deny bash "rm *"))
+    (profile main
+      (include base)
+      (allow bash "git *"
+        (args (not "--force")))
+      (allow bash "cargo *")
+      (allow read *)
+      (deny bash "curl *"))
 
 steps:
   - name: git status allowed by profile rule

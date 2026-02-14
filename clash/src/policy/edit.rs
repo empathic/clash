@@ -1,114 +1,13 @@
-//! Comment-preserving YAML editing for policy files.
+//! Comment-preserving editing for policy files (s-expr format).
 //!
-//! These functions operate on the raw YAML text via string-level operations,
-//! avoiding serde roundtrips that would strip comments. After each edit, the
+//! These functions operate on raw text via string-level operations,
+//! avoiding parse roundtrips that would strip comments. After each edit, the
 //! modified text is re-parsed to verify correctness.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
+use super::ast::{MatchExpr, Pattern};
 use super::parse;
-
-/// Compute the leading whitespace (indent) of a line.
-fn get_indent(line: &str) -> usize {
-    line.len() - line.trim_start().len()
-}
-
-/// Bail if the YAML is not in the new profile-based format.
-fn ensure_new_format(yaml: &str) -> Result<()> {
-    if !is_new_format(yaml) {
-        bail!(
-            "Old policy format detected. Run `clash init --force` to upgrade to the new profile-based format."
-        );
-    }
-    Ok(())
-}
-
-/// Validate that a profile exists in the YAML, returning a helpful error if not.
-fn validate_profile_exists(yaml: &str, profile: &str) -> Result<()> {
-    let names = profile_names(yaml)?;
-    if !names.iter().any(|n| n == profile) {
-        let suggestion = super::error::suggest_closest(
-            profile,
-            &names.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-        );
-        if let Some(s) = suggestion {
-            bail!("profile '{}' not found; did you mean '{}'?", profile, s);
-        } else {
-            bail!(
-                "profile '{}' not found. Available profiles: {}",
-                profile,
-                names.join(", ")
-            );
-        }
-    }
-    Ok(())
-}
-
-/// Join lines into a single string, preserving the original trailing newline behavior.
-fn reconstruct_yaml(lines: &[String], had_trailing_newline: bool) -> String {
-    if had_trailing_newline {
-        format!("{}\n", lines.join("\n"))
-    } else {
-        lines.join("\n")
-    }
-}
-
-/// Check whether the given YAML text uses the new profile-based format.
-///
-/// New format has `default:` as a YAML mapping (with `permission` and `profile` keys).
-/// Old format has `default:` as a scalar string or missing.
-pub fn is_new_format(yaml: &str) -> bool {
-    let value: serde_yaml::Value = match serde_yaml::from_str(yaml) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    if let serde_yaml::Value::Mapping(map) = &value
-        && let Some(default_val) = map.get(serde_yaml::Value::String("default".into()))
-    {
-        return default_val.is_mapping();
-    }
-    false
-}
-
-/// Resolve the active profile name from the YAML text.
-fn active_profile(yaml: &str) -> Result<String> {
-    let value: serde_yaml::Value =
-        serde_yaml::from_str(yaml).context("failed to parse policy YAML")?;
-    let map = value
-        .as_mapping()
-        .ok_or_else(|| anyhow::anyhow!("policy YAML is not a mapping"))?;
-    let default_val = map
-        .get(serde_yaml::Value::String("default".into()))
-        .ok_or_else(|| anyhow::anyhow!("missing 'default' key"))?;
-    let default_map = default_val
-        .as_mapping()
-        .ok_or_else(|| anyhow::anyhow!("'default' is not a mapping"))?;
-    let profile = default_map
-        .get(serde_yaml::Value::String("profile".into()))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("missing 'default.profile'"))?;
-    Ok(profile.to_string())
-}
-
-/// Return the list of profile names defined in the YAML text.
-fn profile_names(yaml: &str) -> Result<Vec<String>> {
-    let value: serde_yaml::Value =
-        serde_yaml::from_str(yaml).context("failed to parse policy YAML")?;
-    let map = value
-        .as_mapping()
-        .ok_or_else(|| anyhow::anyhow!("policy YAML is not a mapping"))?;
-    let profiles_val = match map.get(serde_yaml::Value::String("profiles".into())) {
-        Some(v) => v,
-        None => return Ok(Vec::new()),
-    };
-    let profiles_map = profiles_val
-        .as_mapping()
-        .ok_or_else(|| anyhow::anyhow!("'profiles' is not a mapping"))?;
-    Ok(profiles_map
-        .keys()
-        .filter_map(|k| k.as_str().map(|s| s.to_string()))
-        .collect())
-}
 
 /// CLI-provided inline constraints to attach below a rule.
 #[derive(Debug, Default)]
@@ -152,294 +51,39 @@ impl InlineConstraintArgs {
         }
         Ok(())
     }
-
-    /// Render constraint lines as YAML at the given indent level.
-    fn to_yaml_lines(&self, indent: usize) -> Vec<String> {
-        let mut lines = Vec::new();
-        let pad = " ".repeat(indent);
-        if !self.fs.is_empty() {
-            lines.push(format!("{}fs:", pad));
-            for entry in &self.fs {
-                if let Some((caps, filter)) = entry.split_once(':') {
-                    lines.push(format!("{}  {}: {}", pad, caps.trim(), filter.trim()));
-                }
-            }
-        }
-        if !self.url.is_empty() {
-            let items: Vec<String> = self.url.iter().map(|u| format!("\"{}\"", u)).collect();
-            lines.push(format!("{}url: [{}]", pad, items.join(", ")));
-        }
-        if !self.args.is_empty() {
-            let items: Vec<String> = self.args.iter().map(|a| format!("\"{}\"", a)).collect();
-            lines.push(format!("{}args: [{}]", pad, items.join(", ")));
-        }
-        if let Some(v) = self.pipe {
-            lines.push(format!("{}pipe: {}", pad, v));
-        }
-        if let Some(v) = self.redirect {
-            lines.push(format!("{}redirect: {}", pad, v));
-        }
-        if let Some(ref v) = self.network {
-            lines.push(format!("{}network: {}", pad, v));
-        }
-        lines
-    }
 }
 
 /// Add a rule to a profile's rules block, preserving comments.
-/// Returns the modified YAML text.
+/// Returns the modified text.
 pub fn add_rule(
-    yaml: &str,
+    text: &str,
     profile: &str,
     rule: &str,
     constraints: &InlineConstraintArgs,
 ) -> Result<String> {
-    ensure_new_format(yaml)?;
-
-    // Validate the rule string parses correctly
-    parse::parse_new_rule_key(rule).map_err(|e| {
-        let hint = e.help().map(|h| format!(" {}", h)).unwrap_or_default();
-        anyhow::anyhow!("invalid rule '{}': {}.{}", rule, e, hint)
-    })?;
-
-    // Check that the profile exists
-    validate_profile_exists(yaml, profile)?;
-
-    let lines: Vec<&str> = yaml.lines().collect();
-
-    // Find the profile's rules block
-    let (rules_line_idx, rules_indent) = find_rules_block(&lines, profile)?;
-
-    // The rule entries are at rules_indent + 2 (e.g., if `rules:` is at indent 4, entries at 6)
-    let entry_indent = rules_indent + 2;
-
-    // Format the rule as a YAML mapping key (trailing colon)
-    let rule_trimmed = rule.trim();
-    let rule_key = if rule_trimmed.ends_with(':') {
-        rule_trimmed.to_string()
-    } else {
-        format!("{}:", rule_trimmed)
-    };
-
-    let new_line = format!("{}{}", " ".repeat(entry_indent), rule_key);
-
-    // Check if the rule already exists (idempotent)
-    let rule_without_colon = rule_key.strip_suffix(':').unwrap_or(&rule_key);
-    for &line in &lines[(rules_line_idx + 1)..] {
-        let stripped = line.trim();
-        if stripped.is_empty() || stripped.starts_with('#') {
-            continue;
-        }
-        let line_indent = get_indent(line);
-        if line_indent < entry_indent {
-            break; // Left the rules block
-        }
-        if line_indent == entry_indent {
-            let key_part = stripped.strip_suffix(':').unwrap_or(stripped);
-            if key_part == rule_without_colon {
-                // Rule already exists — idempotent, return unchanged
-                return Ok(yaml.to_string());
-            }
-        }
-    }
-
-    // Find the insertion point: after the last entry in this rules block
-    let mut insert_idx = rules_line_idx + 1;
-    for (i, &line) in lines.iter().enumerate().skip(rules_line_idx + 1) {
-        let stripped = line.trim();
-        if stripped.is_empty() {
-            // Empty lines within the block — keep scanning
-            insert_idx = i + 1;
-            continue;
-        }
-        if stripped.starts_with('#') {
-            // Comment lines within the block — keep scanning
-            insert_idx = i + 1;
-            continue;
-        }
-        let line_indent = get_indent(line);
-        if line_indent < entry_indent {
-            // We've exited the rules block
-            break;
-        }
-        insert_idx = i + 1;
-    }
-
-    // Build the modified text
-    let mut result: Vec<String> = lines[..insert_idx].iter().map(|s| s.to_string()).collect();
-    result.push(new_line);
-    // Append constraint lines indented one level deeper than the rule key
-    for constraint_line in constraints.to_yaml_lines(entry_indent + 2) {
-        result.push(constraint_line);
-    }
-    for line in &lines[insert_idx..] {
-        result.push(line.to_string());
-    }
-
-    // Reconstruct the YAML text
-    let modified = reconstruct_yaml(&result, yaml.ends_with('\n'));
-
-    // Re-parse to validate the result
-    parse::parse_yaml(&modified)
-        .map_err(|e| anyhow::anyhow!("modified YAML failed to parse: {}. This is a bug.", e))?;
-
-    Ok(modified)
+    add_rule_sexpr(text, profile, rule, constraints)
 }
 
 /// Remove a rule from a profile's rules block, preserving comments.
-/// Returns the modified YAML text.
-pub fn remove_rule(yaml: &str, profile: &str, rule: &str) -> Result<String> {
-    ensure_new_format(yaml)?;
-
-    // Check that the profile exists
-    validate_profile_exists(yaml, profile)?;
-
-    let lines: Vec<&str> = yaml.lines().collect();
-
-    // Find the profile's rules block
-    let (rules_line_idx, rules_indent) = find_rules_block(&lines, profile)?;
-    let entry_indent = rules_indent + 2;
-
-    // Normalize the rule for matching
-    let rule_trimmed = rule.trim();
-    let rule_normalized = rule_trimmed.strip_suffix(':').unwrap_or(rule_trimmed);
-
-    // Find the rule line and any constraint lines below it
-    let mut found_start: Option<usize> = None;
-    let mut found_end: Option<usize> = None;
-
-    for (i, &line) in lines.iter().enumerate().skip(rules_line_idx + 1) {
-        let stripped = line.trim();
-        if stripped.is_empty() || stripped.starts_with('#') {
-            continue;
-        }
-        let line_indent = get_indent(line);
-        if line_indent < entry_indent {
-            break;
-        }
-        if line_indent == entry_indent {
-            if found_start.is_some() {
-                // We've hit the next rule — stop
-                found_end = Some(i);
-                break;
-            }
-            let key_part = stripped.strip_suffix(':').unwrap_or(stripped);
-            if key_part == rule_normalized {
-                found_start = Some(i);
-            }
-        } else if found_start.is_some() {
-            // This is a constraint line belonging to the matched rule — it'll be removed
-        }
-    }
-
-    let start = match found_start {
-        Some(s) => s,
-        None => bail!("rule '{}' not found in profile '{}'", rule, profile),
-    };
-
-    // If we didn't find the end by hitting the next rule, scan to find where the block ends
-    let end = found_end.unwrap_or_else(|| {
-        let mut e = start + 1;
-        for (i, &line) in lines.iter().enumerate().skip(start + 1) {
-            let stripped = line.trim();
-            if stripped.is_empty() || stripped.starts_with('#') {
-                e = i + 1;
-                continue;
-            }
-            let line_indent = get_indent(line);
-            if line_indent <= entry_indent {
-                break;
-            }
-            e = i + 1;
-        }
-        e
-    });
-
-    // Remove lines [start..end]
-    let mut result: Vec<String> = Vec::new();
-    for (i, line) in lines.iter().enumerate() {
-        if i >= start && i < end {
-            continue;
-        }
-        result.push(line.to_string());
-    }
-
-    let modified = reconstruct_yaml(&result, yaml.ends_with('\n'));
-
-    // Re-parse to validate
-    parse::parse_yaml(&modified)
-        .map_err(|e| anyhow::anyhow!("modified YAML failed to parse: {}. This is a bug.", e))?;
-
-    Ok(modified)
+/// Returns the modified text.
+pub fn remove_rule(text: &str, profile: &str, rule: &str) -> Result<String> {
+    remove_rule_sexpr(text, profile, rule)
 }
 
 /// Resolve the target profile: use the provided override or fall back to the active profile.
-pub fn resolve_profile(yaml: &str, profile_override: Option<&str>) -> Result<String> {
+pub fn resolve_profile(text: &str, profile_override: Option<&str>) -> Result<String> {
     match profile_override {
         Some(p) => Ok(p.to_string()),
-        None => active_profile(yaml),
+        None => active_profile_sexpr(text),
     }
 }
 
-/// Find the `rules:` line within a given profile block.
+/// Set the sandbox block on a profile, replacing any existing one.
 ///
-/// Returns `(line_index, indent_of_rules_key)`.
-fn find_rules_block(lines: &[&str], profile: &str) -> Result<(usize, usize)> {
-    // Step 1: Find `profiles:` at indent 0
-    let profiles_idx = lines
-        .iter()
-        .position(|line| {
-            let stripped = line.trim();
-            stripped == "profiles:" && get_indent(line) == 0
-        })
-        .ok_or_else(|| anyhow::anyhow!("no 'profiles:' key found in policy"))?;
-
-    // Step 2: Find `  {profile}:` at indent 2
-    let profile_key = format!("{}:", profile);
-    let mut profile_idx = None;
-    for (i, &line) in lines.iter().enumerate().skip(profiles_idx + 1) {
-        let stripped = line.trim();
-        if stripped.is_empty() || stripped.starts_with('#') {
-            continue;
-        }
-        let indent = get_indent(line);
-        if indent == 0 {
-            break; // Left the profiles block
-        }
-        if indent == 2 && stripped == profile_key {
-            profile_idx = Some(i);
-            break;
-        }
-    }
-    let profile_idx = profile_idx
-        .ok_or_else(|| anyhow::anyhow!("profile '{}' not found in profiles block", profile))?;
-
-    // Step 3: Find `    rules:` at indent 4 within this profile
-    let mut rules_idx = None;
-    for (i, &line) in lines.iter().enumerate().skip(profile_idx + 1) {
-        let stripped = line.trim();
-        if stripped.is_empty() || stripped.starts_with('#') {
-            continue;
-        }
-        let indent = get_indent(line);
-        if indent <= 2 {
-            break; // Left this profile block
-        }
-        if indent == 4 && stripped == "rules:" {
-            rules_idx = Some(i);
-            break;
-        }
-    }
-
-    match rules_idx {
-        Some(idx) => Ok((idx, 4)),
-        None => {
-            bail!(
-                "profile '{}' has no 'rules:' block. Add `    rules:` to the profile first.",
-                profile
-            );
-        }
-    }
+/// `statements` are sandbox statement strings like `"fs full subpath(.)"` or `"network deny"`.
+/// An empty slice removes the sandbox block.
+pub fn set_sandbox(text: &str, profile: &str, statements: &[&str]) -> Result<String> {
+    set_sandbox_sexpr(text, profile, statements)
 }
 
 /// Get summary information about the policy for the `show` command.
@@ -449,24 +93,218 @@ pub struct PolicyInfo {
     pub profiles: Vec<String>,
 }
 
-/// Extract policy info from the YAML text.
-pub fn policy_info(yaml: &str) -> Result<PolicyInfo> {
-    ensure_new_format(yaml)?;
+/// Extract policy info from the text.
+pub fn policy_info(text: &str) -> Result<PolicyInfo> {
+    policy_info_sexpr(text)
+}
 
-    let profile = active_profile(yaml)?;
-    let names = profile_names(yaml)?;
+// ---------------------------------------------------------------------------
+// S-expr editing helpers
+// ---------------------------------------------------------------------------
 
-    // Get default permission
-    let value: serde_yaml::Value =
-        serde_yaml::from_str(yaml).context("failed to parse policy YAML")?;
-    let permission = value
-        .as_mapping()
-        .and_then(|m| m.get(serde_yaml::Value::String("default".into())))
-        .and_then(|v| v.as_mapping())
-        .and_then(|m| m.get(serde_yaml::Value::String("permission".into())))
-        .and_then(|v| v.as_str())
-        .unwrap_or("ask")
-        .to_string();
+/// Skip whitespace and `;` comments, returning the byte offset of the next
+/// meaningful character (or `text.len()` if exhausted).
+fn skip_sexpr_whitespace(text: &str, mut pos: usize) -> usize {
+    let bytes = text.as_bytes();
+    while pos < bytes.len() {
+        if bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        } else if bytes[pos] == b';' {
+            // Skip to end of line
+            while pos < bytes.len() && bytes[pos] != b'\n' {
+                pos += 1;
+            }
+        } else {
+            break;
+        }
+    }
+    pos
+}
+
+/// Starting at an opening `(`, find the matching closing `)`.
+/// Returns the byte offset *after* the closing paren.
+fn skip_balanced_parens(text: &str, start: usize) -> usize {
+    debug_assert_eq!(text.as_bytes()[start], b'(');
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut pos = start;
+    while pos < bytes.len() {
+        match bytes[pos] {
+            b'(' => {
+                depth += 1;
+                pos += 1;
+            }
+            b')' => {
+                depth -= 1;
+                pos += 1;
+                if depth == 0 {
+                    return pos;
+                }
+            }
+            b';' => {
+                // Skip comment to end of line
+                while pos < bytes.len() && bytes[pos] != b'\n' {
+                    pos += 1;
+                }
+            }
+            b'"' => {
+                // Skip quoted string
+                pos += 1;
+                while pos < bytes.len() {
+                    if bytes[pos] == b'\\' {
+                        pos += 2; // skip escape
+                    } else if bytes[pos] == b'"' {
+                        pos += 1;
+                        break;
+                    } else {
+                        pos += 1;
+                    }
+                }
+            }
+            _ => {
+                pos += 1;
+            }
+        }
+    }
+    pos // unbalanced — return end
+}
+
+/// Find byte range `(start, end)` of a top-level `(profile <name> ...)` form.
+fn find_sexpr_profile(text: &str, name: &str) -> Result<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        pos = skip_sexpr_whitespace(text, pos);
+        if pos >= bytes.len() {
+            break;
+        }
+        if bytes[pos] != b'(' {
+            // Skip non-paren content (shouldn't happen in valid s-expr)
+            pos += 1;
+            continue;
+        }
+        let form_start = pos;
+        let form_end = skip_balanced_parens(text, pos);
+
+        // Check if this is `(profile <name> ...)`
+        let inner = &text[form_start + 1..form_end.saturating_sub(1)];
+        let inner_trimmed = inner.trim_start();
+        if let Some(rest) = inner_trimmed.strip_prefix("profile")
+            && rest.starts_with(|c: char| c.is_ascii_whitespace())
+        {
+            let after_kw = rest.trim_start();
+            // Extract the profile name (next atom)
+            let pname_end = after_kw
+                .find(|c: char| c.is_ascii_whitespace() || c == '(' || c == ')')
+                .unwrap_or(after_kw.len());
+            let pname = &after_kw[..pname_end];
+            if pname == name {
+                return Ok((form_start, form_end));
+            }
+        }
+        pos = form_end;
+    }
+    bail!("profile '{}' not found in s-expr policy", name)
+}
+
+/// List all profile names defined in an s-expr policy.
+fn profile_names_sexpr(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut names = Vec::new();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        pos = skip_sexpr_whitespace(text, pos);
+        if pos >= bytes.len() {
+            break;
+        }
+        if bytes[pos] != b'(' {
+            pos += 1;
+            continue;
+        }
+        let form_start = pos;
+        let form_end = skip_balanced_parens(text, pos);
+        let inner = &text[form_start + 1..form_end.saturating_sub(1)];
+        let inner_trimmed = inner.trim_start();
+        if let Some(rest) = inner_trimmed.strip_prefix("profile")
+            && rest.starts_with(|c: char| c.is_ascii_whitespace())
+        {
+            let after_kw = rest.trim_start();
+            let pname_end = after_kw
+                .find(|c: char| c.is_ascii_whitespace() || c == '(' || c == ')')
+                .unwrap_or(after_kw.len());
+            let pname = &after_kw[..pname_end];
+            if !pname.is_empty() {
+                names.push(pname.to_string());
+            }
+        }
+        pos = form_end;
+    }
+    names
+}
+
+/// Extract the active profile name from an s-expr `(default <effect> <name>)` form.
+fn active_profile_sexpr(text: &str) -> Result<String> {
+    let bytes = text.as_bytes();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        pos = skip_sexpr_whitespace(text, pos);
+        if pos >= bytes.len() {
+            break;
+        }
+        if bytes[pos] != b'(' {
+            pos += 1;
+            continue;
+        }
+        let form_start = pos;
+        let form_end = skip_balanced_parens(text, pos);
+        let inner = &text[form_start + 1..form_end.saturating_sub(1)];
+        let inner_trimmed = inner.trim_start();
+        if let Some(rest) = inner_trimmed.strip_prefix("default")
+            && rest.starts_with(|c: char| c.is_ascii_whitespace())
+        {
+            // (default <effect> <profile-name>)
+            let tokens: Vec<&str> = rest.split_whitespace().collect();
+            if tokens.len() >= 2 {
+                return Ok(tokens[1].to_string());
+            }
+        }
+        pos = form_end;
+    }
+    bail!("no (default ...) form found in s-expr policy")
+}
+
+/// Extract policy info from s-expr text.
+fn policy_info_sexpr(text: &str) -> Result<PolicyInfo> {
+    let profile = active_profile_sexpr(text)?;
+    let names = profile_names_sexpr(text);
+
+    // Parse the default effect
+    let bytes = text.as_bytes();
+    let mut permission = "ask".to_string();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        pos = skip_sexpr_whitespace(text, pos);
+        if pos >= bytes.len() {
+            break;
+        }
+        if bytes[pos] != b'(' {
+            pos += 1;
+            continue;
+        }
+        let form_start = pos;
+        let form_end = skip_balanced_parens(text, pos);
+        let inner = &text[form_start + 1..form_end.saturating_sub(1)];
+        let inner_trimmed = inner.trim_start();
+        if let Some(rest) = inner_trimmed.strip_prefix("default")
+            && rest.starts_with(|c: char| c.is_ascii_whitespace())
+        {
+            let tokens: Vec<&str> = rest.split_whitespace().collect();
+            if !tokens.is_empty() {
+                permission = tokens[0].to_string();
+            }
+        }
+        pos = form_end;
+    }
 
     Ok(PolicyInfo {
         default_permission: permission,
@@ -475,346 +313,714 @@ pub fn policy_info(yaml: &str) -> Result<PolicyInfo> {
     })
 }
 
+/// Format a rule string ("allow bash git *") as an s-expr form.
+/// If constraints are provided, they're appended as nested forms.
+fn format_rule_sexpr(rule: &str, constraints: &InlineConstraintArgs) -> Result<String> {
+    let (effect, verb, noun) = parse::parse_new_rule_key(rule).map_err(|e| {
+        let hint = e.help().map(|h| format!(" {}", h)).unwrap_or_default();
+        anyhow::anyhow!("invalid rule '{}': {}.{}", rule, e, hint)
+    })?;
+
+    let effect_str = format!("{}", effect).to_lowercase();
+    let noun_str = pattern_to_string(&noun);
+
+    // Quote the noun if it contains spaces or special chars
+    let noun_formatted = if noun_str.contains(' ') || noun_str.contains('"') {
+        format!(
+            "\"{}\"",
+            noun_str.replace('\\', "\\\\").replace('"', "\\\"")
+        )
+    } else {
+        noun_str
+    };
+
+    let mut parts = vec![format!("({} {} {}", effect_str, verb, noun_formatted)];
+
+    // Add constraint sub-forms
+    if !constraints.fs.is_empty() {
+        for entry in &constraints.fs {
+            if let Some((caps, filter)) = entry.split_once(':') {
+                let filter_sexpr = convert_filter_to_sexpr(filter.trim());
+                parts.push(format!("    (fs ({} {}))", caps.trim(), filter_sexpr));
+            }
+        }
+    }
+    if !constraints.url.is_empty() {
+        // (url "github.com" (not "evil.com"))
+        let items: Vec<String> = constraints
+            .url
+            .iter()
+            .map(|u| {
+                if let Some(stripped) = u.strip_prefix('!') {
+                    format!("(not \"{}\")", stripped)
+                } else {
+                    format!("\"{}\"", u)
+                }
+            })
+            .collect();
+        parts.push(format!("    (url {})", items.join(" ")));
+    }
+    if !constraints.args.is_empty() {
+        // (args "--dry-run" (not "-delete"))
+        let items: Vec<String> = constraints
+            .args
+            .iter()
+            .map(|a| {
+                if let Some(stripped) = a.strip_prefix('!') {
+                    format!("(not \"{}\")", stripped)
+                } else {
+                    format!("\"{}\"", a)
+                }
+            })
+            .collect();
+        parts.push(format!("    (args {})", items.join(" ")));
+    }
+    if let Some(v) = constraints.pipe {
+        parts.push(format!("    (pipe {})", if v { "allow" } else { "deny" }));
+    }
+    if let Some(v) = constraints.redirect {
+        parts.push(format!(
+            "    (redirect {})",
+            if v { "allow" } else { "deny" }
+        ));
+    }
+    if let Some(ref v) = constraints.network {
+        parts.push(format!("    (network {})", v));
+    }
+
+    if parts.len() == 1 {
+        // Simple rule, single line
+        Ok(format!("{})", parts[0]))
+    } else {
+        // Multi-line rule with constraints
+        let first = parts.remove(0);
+        let mut result = first;
+        for p in &parts {
+            result.push('\n');
+            result.push_str(p);
+        }
+        result.push(')');
+        Ok(result)
+    }
+}
+
+/// Find a sub-form within a profile by keyword (e.g., "sandbox").
+/// Returns byte range `(start, end)` relative to the full text, or None.
+fn find_subform_in_profile(
+    text: &str,
+    profile_start: usize,
+    profile_end: usize,
+    keyword: &str,
+) -> Option<(usize, usize)> {
+    let bytes = text.as_bytes();
+    // Skip past `(profile <name>` to get to the body
+    let mut pos = profile_start + 1; // skip opening `(`
+    // Skip "profile" keyword
+    pos = skip_sexpr_whitespace(text, pos);
+    // Skip "profile"
+    while pos < profile_end && !bytes[pos].is_ascii_whitespace() && bytes[pos] != b'(' {
+        pos += 1;
+    }
+    // Skip profile name
+    pos = skip_sexpr_whitespace(text, pos);
+    while pos < profile_end && !bytes[pos].is_ascii_whitespace() && bytes[pos] != b'(' {
+        pos += 1;
+    }
+
+    // Now scan the body for sub-forms
+    while pos < profile_end - 1 {
+        pos = skip_sexpr_whitespace(text, pos);
+        if pos >= profile_end - 1 {
+            break;
+        }
+        if bytes[pos] != b'(' {
+            pos += 1;
+            continue;
+        }
+        let form_start = pos;
+        let form_end = skip_balanced_parens(text, pos);
+        // Check if this form starts with the keyword
+        let inner_start = form_start + 1;
+        let ws_end = skip_sexpr_whitespace(text, inner_start);
+        let kw_end = text[ws_end..]
+            .find(|c: char| c.is_ascii_whitespace() || c == '(' || c == ')')
+            .map(|i| ws_end + i)
+            .unwrap_or(form_end);
+        if &text[ws_end..kw_end] == keyword {
+            return Some((form_start, form_end));
+        }
+        pos = form_end;
+    }
+    None
+}
+
+/// Check if a rule form matches the given rule string.
+/// The rule string is "effect verb noun" and we check the s-expr form `(effect verb noun ...)`.
+fn sexpr_form_matches_rule(text: &str, form_start: usize, form_end: usize, rule: &str) -> bool {
+    let (effect, verb, noun) = match parse::parse_new_rule_key(rule) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let inner = &text[form_start + 1..form_end.saturating_sub(1)];
+    let inner_trimmed = inner.trim();
+    // Parse the form's tokens
+    let effect_str = format!("{}", effect).to_lowercase();
+    // Check if form starts with the effect
+    if let Some(rest) = inner_trimmed.strip_prefix(&effect_str) {
+        if !rest.starts_with(|c: char| c.is_ascii_whitespace()) {
+            return false;
+        }
+        let rest = rest.trim_start();
+        // Check verb
+        let verb_end = rest
+            .find(|c: char| c.is_ascii_whitespace() || c == '(' || c == ')')
+            .unwrap_or(rest.len());
+        if rest[..verb_end] != verb {
+            return false;
+        }
+        let rest = rest[verb_end..].trim_start();
+        // Extract noun (may be quoted)
+        let found_noun = if let Some(inner) = rest.strip_prefix('"') {
+            // Quoted noun — extract until closing quote
+            if let Some(end_q) = inner.find('"') {
+                &inner[..end_q]
+            } else {
+                return false;
+            }
+        } else {
+            // Unquoted noun — up to next whitespace or paren or end
+            let end = rest
+                .find(|c: char| c.is_ascii_whitespace() || c == '(' || c == ')')
+                .unwrap_or(rest.len());
+            &rest[..end]
+        };
+        found_noun == pattern_to_string(&noun)
+    } else {
+        false
+    }
+}
+
+/// Convert a Pattern to its string representation for matching.
+fn pattern_to_string(pat: &Pattern) -> String {
+    match pat {
+        Pattern::Match(expr) => match_expr_to_string(expr),
+        Pattern::Not(expr) => format!("!{}", match_expr_to_string(expr)),
+    }
+}
+
+fn match_expr_to_string(expr: &MatchExpr) -> String {
+    match expr {
+        MatchExpr::Any => "*".to_string(),
+        MatchExpr::Exact(s) => s.clone(),
+        MatchExpr::Glob(s) => s.clone(),
+        MatchExpr::Typed { entity_type, name } => match name {
+            Some(n) => format!("{}:{}", entity_type, n),
+            None => entity_type.clone(),
+        },
+    }
+}
+
+/// Add a rule to an s-expr profile.
+fn add_rule_sexpr(
+    text: &str,
+    profile: &str,
+    rule: &str,
+    constraints: &InlineConstraintArgs,
+) -> Result<String> {
+    let (profile_start, profile_end) = find_sexpr_profile(text, profile)?;
+
+    // Check idempotency: scan existing forms in the profile
+    let bytes = text.as_bytes();
+    let mut pos = profile_start + 1;
+    // Skip "profile" keyword and name
+    pos = skip_sexpr_whitespace(text, pos);
+    while pos < profile_end && !bytes[pos].is_ascii_whitespace() && bytes[pos] != b'(' {
+        pos += 1;
+    }
+    pos = skip_sexpr_whitespace(text, pos);
+    while pos < profile_end && !bytes[pos].is_ascii_whitespace() && bytes[pos] != b'(' {
+        pos += 1;
+    }
+
+    while pos < profile_end - 1 {
+        pos = skip_sexpr_whitespace(text, pos);
+        if pos >= profile_end - 1 {
+            break;
+        }
+        if bytes[pos] != b'(' {
+            pos += 1;
+            continue;
+        }
+        let form_start = pos;
+        let form_end = skip_balanced_parens(text, pos);
+        if sexpr_form_matches_rule(text, form_start, form_end, rule) {
+            // Rule already exists — idempotent
+            return Ok(text.to_string());
+        }
+        pos = form_end;
+    }
+
+    // Format the new rule
+    let new_form = format_rule_sexpr(rule, constraints)?;
+
+    // Determine indentation from the profile body
+    let indent = detect_profile_indent(text, profile_start, profile_end);
+
+    // Insert before the closing `)` of the profile
+    let close_paren = profile_end - 1;
+    // Find the position just before the close paren, preserving whitespace
+    let indented_form = indent_form(&new_form, &indent);
+
+    let mut result = String::with_capacity(text.len() + indented_form.len() + 2);
+    result.push_str(&text[..close_paren]);
+    // Ensure there's a newline before the new form
+    if !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result.push_str(&indented_form);
+    result.push('\n');
+    // Re-add the closing paren with proper indentation (same as profile opening)
+    result.push(')');
+    result.push_str(&text[profile_end..]);
+
+    // Re-parse to validate
+    parse::parse_policy(&result)
+        .map_err(|e| anyhow::anyhow!("modified s-expr failed to parse: {}. This is a bug.", e))?;
+
+    Ok(result)
+}
+
+/// Remove a rule from an s-expr profile.
+fn remove_rule_sexpr(text: &str, profile: &str, rule: &str) -> Result<String> {
+    let (profile_start, profile_end) = find_sexpr_profile(text, profile)?;
+
+    let bytes = text.as_bytes();
+    let mut pos = profile_start + 1;
+    // Skip "profile" keyword and name
+    pos = skip_sexpr_whitespace(text, pos);
+    while pos < profile_end && !bytes[pos].is_ascii_whitespace() && bytes[pos] != b'(' {
+        pos += 1;
+    }
+    pos = skip_sexpr_whitespace(text, pos);
+    while pos < profile_end && !bytes[pos].is_ascii_whitespace() && bytes[pos] != b'(' {
+        pos += 1;
+    }
+
+    while pos < profile_end - 1 {
+        pos = skip_sexpr_whitespace(text, pos);
+        if pos >= profile_end - 1 {
+            break;
+        }
+        if bytes[pos] != b'(' {
+            pos += 1;
+            continue;
+        }
+        let form_start = pos;
+        let form_end = skip_balanced_parens(text, pos);
+        if sexpr_form_matches_rule(text, form_start, form_end, rule) {
+            // Remove this form, including any preceding whitespace on its line
+            let remove_start = line_start_of(text, form_start);
+            // Also consume the trailing newline if present
+            let remove_end = if form_end < text.len() && bytes[form_end] == b'\n' {
+                form_end + 1
+            } else {
+                form_end
+            };
+
+            let mut result = String::with_capacity(text.len());
+            result.push_str(&text[..remove_start]);
+            result.push_str(&text[remove_end..]);
+
+            // Re-parse to validate
+            parse::parse_policy(&result).map_err(|e| {
+                anyhow::anyhow!("modified s-expr failed to parse: {}. This is a bug.", e)
+            })?;
+
+            return Ok(result);
+        }
+        pos = form_end;
+    }
+
+    bail!("rule '{}' not found in profile '{}'", rule, profile)
+}
+
+/// Set/replace the sandbox block in an s-expr profile.
+fn set_sandbox_sexpr(text: &str, profile: &str, statements: &[&str]) -> Result<String> {
+    let (profile_start, profile_end) = find_sexpr_profile(text, profile)?;
+
+    // Find existing sandbox form
+    let existing = find_subform_in_profile(text, profile_start, profile_end, "sandbox");
+
+    let indent = detect_profile_indent(text, profile_start, profile_end);
+
+    if let Some((sb_start, sb_end)) = existing {
+        if statements.is_empty() {
+            // Remove the sandbox block
+            let remove_start = line_start_of(text, sb_start);
+            let remove_end = if sb_end < text.len() && text.as_bytes()[sb_end] == b'\n' {
+                sb_end + 1
+            } else {
+                sb_end
+            };
+            let mut result = String::with_capacity(text.len());
+            result.push_str(&text[..remove_start]);
+            result.push_str(&text[remove_end..]);
+
+            parse::parse_policy(&result).map_err(|e| {
+                anyhow::anyhow!("modified s-expr failed to parse: {}. This is a bug.", e)
+            })?;
+
+            return Ok(result);
+        }
+        // Replace existing sandbox block
+        let new_sandbox = format_sandbox_sexpr(statements, &indent);
+        let replace_start = line_start_of(text, sb_start);
+        let replace_end = if sb_end < text.len() && text.as_bytes()[sb_end] == b'\n' {
+            sb_end + 1
+        } else {
+            sb_end
+        };
+        let mut result = String::with_capacity(text.len());
+        result.push_str(&text[..replace_start]);
+        result.push_str(&new_sandbox);
+        if !new_sandbox.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push_str(&text[replace_end..]);
+
+        parse::parse_policy(&result).map_err(|e| {
+            anyhow::anyhow!("modified s-expr failed to parse: {}. This is a bug.", e)
+        })?;
+
+        return Ok(result);
+    }
+
+    if statements.is_empty() {
+        return Ok(text.to_string());
+    }
+
+    // Insert new sandbox block before the closing `)` of the profile
+    let new_sandbox = format_sandbox_sexpr(statements, &indent);
+    let close_paren = profile_end - 1;
+
+    let mut result = String::with_capacity(text.len() + new_sandbox.len() + 2);
+    result.push_str(&text[..close_paren]);
+    if !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result.push_str(&new_sandbox);
+    if !new_sandbox.ends_with('\n') {
+        result.push('\n');
+    }
+    result.push(')');
+    result.push_str(&text[profile_end..]);
+
+    parse::parse_policy(&result)
+        .map_err(|e| anyhow::anyhow!("modified s-expr failed to parse: {}. This is a bug.", e))?;
+
+    Ok(result)
+}
+
+/// Format sandbox statements as an s-expr `(sandbox ...)` form.
+///
+/// Statements come from the CLI in compact format like `"fs full subpath(.)"` or
+/// `"network deny"`. This converts them to proper s-expr:
+/// - `"fs full subpath(.)"` → `(fs full (subpath .))`
+/// - `"network deny"` → `(network deny)`
+fn format_sandbox_sexpr(statements: &[&str], indent: &str) -> String {
+    let inner_indent = format!("{}  ", indent);
+    let mut result = format!("{}(sandbox", indent);
+    for stmt in statements {
+        result.push('\n');
+        result.push_str(&inner_indent);
+        result.push('(');
+        result.push_str(&convert_sandbox_stmt_to_sexpr(stmt));
+        result.push(')');
+    }
+    result.push(')');
+    result
+}
+
+/// Convert a compact sandbox statement to s-expr content (without outer parens).
+///
+/// `"fs full subpath(.)"` → `"fs full (subpath .)"`
+/// `"network deny"` → `"network deny"`
+fn convert_sandbox_stmt_to_sexpr(stmt: &str) -> String {
+    let parts: Vec<&str> = stmt.split_whitespace().collect();
+    if parts.is_empty() {
+        return stmt.to_string();
+    }
+    match parts[0] {
+        "fs" if parts.len() >= 3 => {
+            // parts[1..n-1] are caps, parts[n-1] is the filter like "subpath(.)"
+            let filter_raw = parts[parts.len() - 1];
+            let caps = &parts[1..parts.len() - 1];
+            // Convert "subpath(.)" → "(subpath .)"
+            let filter_sexpr = convert_filter_to_sexpr(filter_raw);
+            format!("fs {} {}", caps.join(" "), filter_sexpr)
+        }
+        _ => stmt.to_string(),
+    }
+}
+
+/// Convert a compact filter expression to s-expr.
+///
+/// `"subpath(.)"` → `(subpath .)`
+/// `"literal(.env)"` → `(literal .env)`
+fn convert_filter_to_sexpr(filter: &str) -> String {
+    // Try to parse "func(arg)" format
+    if let Some(paren_pos) = filter.find('(')
+        && filter.ends_with(')')
+    {
+        let func = &filter[..paren_pos];
+        let arg = &filter[paren_pos + 1..filter.len() - 1];
+        return format!("({} {})", func, arg);
+    }
+    // Fallback: wrap as-is
+    filter.to_string()
+}
+
+/// Detect the indentation used for forms within a profile body.
+fn detect_profile_indent(text: &str, profile_start: usize, profile_end: usize) -> String {
+    let bytes = text.as_bytes();
+    // Scan for the first `(` inside the profile body (after the name)
+    let mut pos = profile_start + 1;
+    pos = skip_sexpr_whitespace(text, pos);
+    // Skip "profile"
+    while pos < profile_end && !bytes[pos].is_ascii_whitespace() && bytes[pos] != b'(' {
+        pos += 1;
+    }
+    // Skip name
+    pos = skip_sexpr_whitespace(text, pos);
+    while pos < profile_end && !bytes[pos].is_ascii_whitespace() && bytes[pos] != b'(' {
+        pos += 1;
+    }
+    pos = skip_sexpr_whitespace(text, pos);
+
+    if pos < profile_end && bytes[pos] == b'(' {
+        // Find the start of this line to determine indentation
+        let line_start = line_start_of(text, pos);
+        let indent_len = pos - line_start;
+        " ".repeat(indent_len)
+    } else {
+        "  ".to_string() // fallback
+    }
+}
+
+/// Indent a (possibly multi-line) form string with the given indent prefix.
+fn indent_form(form: &str, indent: &str) -> String {
+    let mut result = String::new();
+    for (i, line) in form.lines().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+        result.push_str(indent);
+        result.push_str(line);
+    }
+    result
+}
+
+/// Find the byte offset of the start of the line containing `pos`.
+fn line_start_of(text: &str, pos: usize) -> usize {
+    text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const TEST_POLICY: &str = r#"# Test policy
-default:
-  permission: ask
-  profile: main
+    // -----------------------------------------------------------------------
+    // S-expr format tests
+    // -----------------------------------------------------------------------
 
-profiles:
-  base:
-    rules:
-      deny bash rm *:
-  main:
-    include: [base]
-    rules:
-      # Git rules
-      allow bash git *:
-      deny bash git push*:
+    const TEST_SEXPR: &str = r#"; Test policy
+(default deny main)
+
+(profile base
+  (deny bash "rm *"))
+
+(profile main
+  (include base)
+  ; Git rules
+  (allow bash "git *")
+  (deny bash "git push*"))
 "#;
 
     #[test]
-    fn test_add_rule_basic() {
-        let result = add_rule(
-            TEST_POLICY,
-            "main",
-            "allow bash cargo *",
-            &InlineConstraintArgs::default(),
-        )
-        .unwrap();
-        assert!(result.contains("allow bash cargo *:"));
-        // Original rules still present
-        assert!(result.contains("allow bash git *:"));
-        assert!(result.contains("deny bash git push*:"));
-        // Comment preserved
-        assert!(result.contains("# Git rules"));
-        assert!(result.contains("# Test policy"));
-    }
-
-    #[test]
-    fn test_add_rule_idempotent() {
-        let result = add_rule(
-            TEST_POLICY,
-            "main",
-            "allow bash git *",
-            &InlineConstraintArgs::default(),
-        )
-        .unwrap();
-        assert_eq!(result, TEST_POLICY);
-    }
-
-    #[test]
-    fn test_add_rule_to_base_profile() {
-        let result = add_rule(
-            TEST_POLICY,
-            "base",
-            "deny bash sudo *",
-            &InlineConstraintArgs::default(),
-        )
-        .unwrap();
-        assert!(result.contains("deny bash sudo *:"));
-        assert!(result.contains("deny bash rm *:"));
-    }
-
-    #[test]
-    fn test_add_rule_invalid_rule() {
-        let result = add_rule(
-            TEST_POLICY,
-            "main",
-            "invalid",
-            &InlineConstraintArgs::default(),
-        );
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid rule"));
-    }
-
-    #[test]
-    fn test_add_rule_unknown_profile() {
-        let result = add_rule(
-            TEST_POLICY,
-            "nonexistent",
-            "allow bash git *",
-            &InlineConstraintArgs::default(),
-        );
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("not found"), "got: {}", err);
-    }
-
-    #[test]
-    fn test_add_rule_old_format_error() {
-        let old_yaml = "default: ask\nrules:\n  - allow bash git *\n";
-        let result = add_rule(
-            old_yaml,
-            "main",
-            "allow bash cargo *",
-            &InlineConstraintArgs::default(),
-        );
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Old policy format")
-        );
-    }
-
-    #[test]
-    fn test_remove_rule_basic() {
-        let result = remove_rule(TEST_POLICY, "main", "deny bash git push*").unwrap();
-        assert!(!result.contains("deny bash git push*:"));
-        // Other rules still present
-        assert!(result.contains("allow bash git *:"));
-        assert!(result.contains("# Git rules"));
-    }
-
-    #[test]
-    fn test_remove_rule_not_found() {
-        let result = remove_rule(TEST_POLICY, "main", "allow bash cargo *");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not found"));
-    }
-
-    #[test]
-    fn test_remove_rule_with_constraints() {
-        let yaml = r#"default:
-  permission: ask
-  profile: main
-
-profiles:
-  main:
-    rules:
-      allow bash *:
-        fs:
-          read + write: subpath(.)
-      deny bash rm *:
-"#;
-        let result = remove_rule(yaml, "main", "allow bash *").unwrap();
-        assert!(!result.contains("allow bash *:"));
-        assert!(!result.contains("subpath(.)"));
-        // Other rules still present
-        assert!(result.contains("deny bash rm *:"));
-    }
-
-    #[test]
-    fn test_remove_rule_old_format_error() {
-        let old_yaml = "default: ask\nrules:\n  - allow bash git *\n";
-        let result = remove_rule(old_yaml, "main", "allow bash git *");
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Old policy format")
-        );
-    }
-
-    #[test]
-    fn test_remove_rule_unknown_profile() {
-        let result = remove_rule(TEST_POLICY, "nonexistent", "allow bash git *");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not found"));
-    }
-
-    #[test]
-    fn test_is_new_format() {
-        assert!(is_new_format(TEST_POLICY));
-        assert!(!is_new_format(
-            "default: ask\nrules:\n  - allow bash git *\n"
-        ));
-    }
-
-    #[test]
-    fn test_active_profile() {
-        assert_eq!(active_profile(TEST_POLICY).unwrap(), "main");
-    }
-
-    #[test]
-    fn test_profile_names() {
-        let names = profile_names(TEST_POLICY).unwrap();
-        assert!(names.contains(&"base".to_string()));
-        assert!(names.contains(&"main".to_string()));
-    }
-
-    #[test]
-    fn test_policy_info() {
-        let info = policy_info(TEST_POLICY).unwrap();
-        assert_eq!(info.default_permission, "ask");
+    fn test_sexpr_policy_info() {
+        let info = policy_info(TEST_SEXPR).unwrap();
+        assert_eq!(info.default_permission, "deny");
         assert_eq!(info.active_profile, "main");
         assert!(info.profiles.contains(&"main".to_string()));
         assert!(info.profiles.contains(&"base".to_string()));
     }
 
     #[test]
-    fn test_resolve_profile_default() {
-        let profile = resolve_profile(TEST_POLICY, None).unwrap();
+    fn test_sexpr_resolve_profile_default() {
+        let profile = resolve_profile(TEST_SEXPR, None).unwrap();
         assert_eq!(profile, "main");
     }
 
     #[test]
-    fn test_resolve_profile_override() {
-        let profile = resolve_profile(TEST_POLICY, Some("base")).unwrap();
+    fn test_sexpr_resolve_profile_override() {
+        let profile = resolve_profile(TEST_SEXPR, Some("base")).unwrap();
         assert_eq!(profile, "base");
     }
 
     #[test]
-    fn test_add_then_remove_roundtrip() {
-        let added = add_rule(
-            TEST_POLICY,
-            "main",
-            "allow bash cargo build *",
-            &InlineConstraintArgs::default(),
-        )
-        .unwrap();
-        assert!(added.contains("allow bash cargo build *:"));
-        let removed = remove_rule(&added, "main", "allow bash cargo build *").unwrap();
-        assert!(!removed.contains("allow bash cargo build *:"));
-        // Original content still valid
-        assert!(removed.contains("allow bash git *:"));
-    }
-
-    #[test]
-    fn test_add_rule_with_trailing_colon() {
-        // Rule provided with trailing colon should work the same
+    fn test_sexpr_add_rule_basic() {
         let result = add_rule(
-            TEST_POLICY,
-            "main",
-            "allow bash cargo *:",
-            &InlineConstraintArgs::default(),
-        )
-        .unwrap();
-        assert!(result.contains("allow bash cargo *:"));
-    }
-
-    #[test]
-    fn test_add_rule_default_policy() {
-        // Test against the actual default policy template
-        let default_policy = include_str!("../default_policy.yaml");
-        let result = add_rule(
-            default_policy,
+            TEST_SEXPR,
             "main",
             "allow bash cargo *",
             &InlineConstraintArgs::default(),
         )
         .unwrap();
-        assert!(result.contains("allow bash cargo *:"));
+        assert!(result.contains("(allow bash \"cargo *\")"));
+        // Original rules still present
+        assert!(result.contains("(allow bash \"git *\")"));
+        assert!(result.contains("(deny bash \"git push*\")"));
+        // Comment preserved
+        assert!(result.contains("; Git rules"));
+        assert!(result.contains("; Test policy"));
     }
 
     #[test]
-    fn test_add_then_remove_rule_default_policy() {
-        let default_policy = include_str!("../default_policy.yaml");
-        // First add a rule to the default policy
-        let with_rule = add_rule(
-            default_policy,
+    fn test_sexpr_add_rule_idempotent() {
+        let result = add_rule(
+            TEST_SEXPR,
             "main",
-            "deny bash git push*",
+            "allow bash git *",
             &InlineConstraintArgs::default(),
         )
         .unwrap();
-        assert!(with_rule.contains("deny bash git push*:"));
-        // Then remove it
-        let result = remove_rule(&with_rule, "main", "deny bash git push*").unwrap();
-        assert!(!result.contains("deny bash git push*:"));
+        assert_eq!(result, TEST_SEXPR);
     }
 
     #[test]
-    fn test_add_rule_with_url_constraints() {
+    fn test_sexpr_add_rule_to_base_profile() {
+        let result = add_rule(
+            TEST_SEXPR,
+            "base",
+            "deny bash sudo *",
+            &InlineConstraintArgs::default(),
+        )
+        .unwrap();
+        assert!(result.contains("(deny bash \"sudo *\")"));
+        assert!(result.contains("(deny bash \"rm *\")"));
+    }
+
+    #[test]
+    fn test_sexpr_add_rule_unknown_profile() {
+        let result = add_rule(
+            TEST_SEXPR,
+            "nonexistent",
+            "allow bash git *",
+            &InlineConstraintArgs::default(),
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_sexpr_remove_rule_basic() {
+        let result = remove_rule(TEST_SEXPR, "main", "deny bash git push*").unwrap();
+        assert!(!result.contains("git push*"));
+        // Other rules still present
+        assert!(result.contains("(allow bash \"git *\")"));
+        assert!(result.contains("; Git rules"));
+    }
+
+    #[test]
+    fn test_sexpr_remove_rule_not_found() {
+        let result = remove_rule(TEST_SEXPR, "main", "allow bash cargo *");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_sexpr_add_then_remove_roundtrip() {
+        let added = add_rule(
+            TEST_SEXPR,
+            "main",
+            "allow bash cargo build *",
+            &InlineConstraintArgs::default(),
+        )
+        .unwrap();
+        assert!(added.contains("(allow bash \"cargo build *\")"));
+        let removed = remove_rule(&added, "main", "allow bash cargo build *").unwrap();
+        assert!(!removed.contains("cargo build"));
+        assert!(removed.contains("(allow bash \"git *\")"));
+    }
+
+    #[test]
+    fn test_sexpr_set_sandbox_basic() {
+        let result =
+            set_sandbox(TEST_SEXPR, "main", &["fs full subpath(.)", "network deny"]).unwrap();
+        assert!(result.contains("(sandbox"), "result:\n{}", result);
+        assert!(
+            result.contains("(fs full (subpath .))"),
+            "result:\n{}",
+            result
+        );
+        assert!(result.contains("(network deny)"), "result:\n{}", result);
+        // Rules still present
+        assert!(result.contains("(allow bash \"git *\")"));
+    }
+
+    #[test]
+    fn test_sexpr_set_sandbox_replaces_existing() {
+        let with_sandbox = set_sandbox(TEST_SEXPR, "main", &["fs full subpath(.)"]).unwrap();
+        assert!(with_sandbox.contains("(fs full (subpath .))"));
+
+        let replaced = set_sandbox(
+            &with_sandbox,
+            "main",
+            &["fs read subpath(/tmp)", "network allow"],
+        )
+        .unwrap();
+        assert!(!replaced.contains("(fs full"));
+        assert!(replaced.contains("(fs read (subpath /tmp))"));
+        assert!(replaced.contains("(network allow)"));
+    }
+
+    #[test]
+    fn test_sexpr_set_sandbox_empty_removes() {
+        let with_sandbox = set_sandbox(TEST_SEXPR, "main", &["fs full subpath(.)"]).unwrap();
+        assert!(with_sandbox.contains("(sandbox"));
+
+        let removed = set_sandbox(&with_sandbox, "main", &[]).unwrap();
+        assert!(!removed.contains("sandbox"));
+        assert!(removed.contains("(allow bash \"git *\")"));
+    }
+
+    #[test]
+    fn test_sexpr_set_sandbox_unknown_profile() {
+        let result = set_sandbox(TEST_SEXPR, "nonexistent", &["fs full subpath(.)"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sexpr_add_rule_with_url_constraints() {
         let constraints = InlineConstraintArgs {
             url: vec!["github.com".into(), "!evil.com".into()],
             ..Default::default()
         };
-        let result = add_rule(TEST_POLICY, "main", "allow webfetch *", &constraints).unwrap();
-        assert!(result.contains("allow webfetch *:"));
-        assert!(result.contains(r#"url: ["github.com", "!evil.com"]"#));
+        let result = add_rule(TEST_SEXPR, "main", "allow webfetch *", &constraints).unwrap();
+        assert!(result.contains("(allow webfetch *"));
+        assert!(result.contains("\"github.com\""));
+        assert!(result.contains("(not \"evil.com\")"));
     }
 
     #[test]
-    fn test_add_rule_with_args_constraints() {
+    fn test_sexpr_add_rule_with_args_constraints() {
         let constraints = InlineConstraintArgs {
             args: vec!["--dry-run".into(), "!-delete".into()],
             ..Default::default()
         };
-        let _existing = add_rule(TEST_POLICY, "main", "allow bash git *", &constraints).unwrap();
-        // Idempotency check matches on the rule key, so use a different rule:
-        let result = add_rule(TEST_POLICY, "main", "allow bash cargo *", &constraints).unwrap();
-        assert!(result.contains("allow bash cargo *:"));
-        assert!(result.contains(r#"args: ["--dry-run", "!-delete"]"#));
-    }
-
-    #[test]
-    fn test_add_rule_with_pipe_redirect() {
-        let constraints = InlineConstraintArgs {
-            pipe: Some(false),
-            redirect: Some(false),
-            ..Default::default()
-        };
-        let result = add_rule(TEST_POLICY, "main", "deny bash curl *", &constraints).unwrap();
-        assert!(result.contains("deny bash curl *:"));
-        assert!(result.contains("pipe: false"));
-        assert!(result.contains("redirect: false"));
-    }
-
-    #[test]
-    fn test_add_rule_with_fs_constraint() {
-        let constraints = InlineConstraintArgs {
-            fs: vec!["full:subpath(~/Library/Caches)".into()],
-            ..Default::default()
-        };
-        let result = add_rule(TEST_POLICY, "main", "allow * *", &constraints).unwrap();
-        assert!(result.contains("allow * *:"));
-        assert!(result.contains("fs:"));
-        assert!(result.contains("full: subpath(~/Library/Caches)"));
-    }
-
-    #[test]
-    fn test_add_rule_with_multi_cap_fs() {
-        let constraints = InlineConstraintArgs {
-            fs: vec![
-                "read+write:subpath(.)".into(),
-                "execute:subpath(./bin)".into(),
-            ],
-            ..Default::default()
-        };
-        let result = add_rule(TEST_POLICY, "main", "allow bash *", &constraints).unwrap();
-        assert!(result.contains("fs:"));
-        assert!(result.contains("read+write: subpath(.)"));
-        assert!(result.contains("execute: subpath(./bin)"));
-    }
-
-    #[test]
-    fn test_add_rule_with_fs_and_url() {
-        let constraints = InlineConstraintArgs {
-            fs: vec!["read:subpath(.)".into()],
-            url: vec!["github.com".into()],
-            ..Default::default()
-        };
-        let result = add_rule(TEST_POLICY, "main", "allow webfetch *", &constraints).unwrap();
-        assert!(result.contains("fs:"));
-        assert!(result.contains("read: subpath(.)"));
-        assert!(result.contains(r#"url: ["github.com"]"#));
+        let result = add_rule(TEST_SEXPR, "main", "allow bash cargo *", &constraints).unwrap();
+        assert!(result.contains("(allow bash \"cargo *\""));
+        assert!(result.contains("(args \"--dry-run\" (not \"-delete\"))"));
     }
 
     #[test]

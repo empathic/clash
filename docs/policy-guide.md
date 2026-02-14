@@ -6,21 +6,18 @@ A practical guide to writing clash policies. For formal grammar details, see [po
 
 ## Quick Start
 
-Clash policies live in `~/.clash/policy.yaml`. Run `clash init` to generate a safe starting policy, or create one manually:
+Clash policies live in `~/.clash/policy.sexp`. Run `clash init` to generate a safe starting policy, or create one manually:
 
-```yaml
-default:
-  permission: ask
-  profile: main
+```scheme
+; Default: deny everything not explicitly allowed, use profile "main"
+(default deny main)
 
-profiles:
-  main:
-    rules:
-      allow read *:
-      deny bash git push*:
+(profile main
+  (allow read *)
+  (deny bash "git push*"))
 ```
 
-This policy allows all file reads, denies git push, and prompts for everything else.
+This policy allows all file reads, denies git push, and denies everything else.
 
 ---
 
@@ -28,21 +25,20 @@ This policy allows all file reads, denies git push, and prompts for everything e
 
 | Path | Scope |
 |------|-------|
-| `~/.clash/policy.yaml` | User-level (applies to all projects) |
+| `~/.clash/policy.sexp` | User-level (applies to all projects) |
 
-The policy file is YAML. Clash reads it on every hook invocation, so changes take effect immediately without restarting Claude Code.
+Clash reads the policy on every hook invocation, so changes take effect immediately without restarting Claude Code.
 
 ---
 
 ## Rule Syntax
 
-Each rule follows the pattern: **effect verb noun**
+Each rule follows the pattern: **(effect verb noun)**
 
-```yaml
-rules:
-  allow read *:              # allow reading any file
-  deny bash rm -rf *:        # deny rm -rf commands
-  ask bash git commit*:      # prompt before git commit
+```scheme
+(allow read *)              ; allow reading any file
+(deny bash "rm -rf *")      ; deny rm -rf commands
+(ask bash "git commit*")    ; prompt before git commit
 ```
 
 ### Effect
@@ -69,16 +65,15 @@ Custom tool names also work: `task`, `glob`, `grep`, `websearch`, etc.
 
 ### Noun
 
-The noun is a glob pattern matched against the command string or file path:
+The noun is a glob pattern matched against the command string or file path. Quote nouns that contain spaces:
 
 | Pattern | Matches |
 |---------|---------|
 | `*` | Anything |
-| `git *` | Any git command |
-| `git push*` | `git push`, `git push origin main` |
+| `"git *"` | Any git command |
+| `"git push*"` | `git push`, `git push origin main` |
 | `*.env` | `.env`, `staging.env` |
-| `src/**/*.rs` | Any Rust file under `src/` |
-| `/etc/*` | Files directly in `/etc/` |
+| `"src/**/*.rs"` | Any Rust file under `src/` |
 
 Glob wildcards: `*` matches any characters (including `/`), `?` matches a single character.
 
@@ -92,116 +87,106 @@ Clash uses **specificity-aware precedence** to resolve conflicts when multiple r
 2. **Constrained beats unconstrained** — among non-deny rules, a rule with active inline constraints (url, args, pipe, redirect) takes precedence over one without
 3. **Within the same tier** — `ask > allow`
 
-```yaml
-rules:
-  allow read *:          # allow reading anything
-  deny read *.env:       # except .env files (deny wins)
+```scheme
+(allow read *)         ; allow reading anything
+(deny read *.env)      ; except .env files (deny wins)
 ```
 
 Here, reading `config.env` is denied even though the first rule allows all reads.
 
 ### Constraint specificity in action
 
-```yaml
-rules:
-  allow webfetch *:
-    url: ["github.com"]    # constrained: only github.com
-  ask webfetch *:          # unconstrained: all URLs
+```scheme
+(allow webfetch *
+  (url "github.com"))     ; constrained: only github.com
+(ask webfetch *)          ; unconstrained: all URLs
 ```
 
 A webfetch to `github.com` is **allowed** — the constrained allow rule is more specific and wins. A webfetch to `example.com` triggers **ask** — the constrained allow doesn't match, so the unconstrained ask applies.
 
-If no rules match, the `default.permission` effect applies (typically `ask`).
+If no rules match, the default effect from `(default ...)` applies.
 
 ---
 
 ## Profiles
 
-Profiles group rules into reusable, composable sets. The active profile is set in `default.profile`.
+Profiles group rules into reusable, composable sets. The active profile is set in the `(default ...)` form.
 
-```yaml
-default:
-  permission: ask
-  profile: main
+```scheme
+(default ask main)
 
-profiles:
-  # Rules scoped to the current working directory
-  cwd:
-    rules:
-      allow * *:
-        fs:
-          all: subpath(.)
+; Rules scoped to the current working directory
+(profile cwd
+  (allow (fs read write) (subpath .)))
 
-  # Deny dangerous git operations
-  safe-git:
-    rules:
-      ask bash git commit*:
-      deny bash git push*:
-      deny bash git reset --hard*:
+; Deny dangerous git operations
+(profile safe-git
+  (ask bash "git commit*")
+  (deny bash "git push*")
+  (deny bash "git reset --hard*"))
 
-  # Compose profiles with include
-  main:
-    include: [cwd, safe-git]
-    rules:
-      deny bash sudo *:
+; Compose profiles with include
+(profile main
+  (include cwd safe-git)
+  (deny bash "sudo *"))
 ```
 
 ### How Include Works
 
-`include` merges rules from parent profiles. Parent rules are evaluated alongside the current profile's rules. Multiple includes are supported:
+`(include ...)` merges rules from parent profiles. Parent rules are evaluated alongside the current profile's rules. Multiple includes are supported:
 
-```yaml
-main:
-  include: [cwd, safe-git, sensitive]
-  rules:
-    # additional rules specific to main
+```scheme
+(profile main
+  (include cwd safe-git sensitive)
+  ; additional rules specific to main
+  )
 ```
 
 Circular includes are detected at parse time and will produce an error.
 
 ---
 
-## Filesystem Constraints
+## Filesystem Access (Sandbox-First)
 
-Rules can restrict which files or directories an action applies to using `fs:` constraints. These scope rules by capability:
+The s-expr format supports **sandbox-first rules** that declare filesystem access and automatically derive tool permissions:
 
-```yaml
-rules:
-  allow * *:
-    fs:
-      all: subpath(.)               # all operations within current directory
+```scheme
+(profile main
+  ; Filesystem access declarations (auto-derives tool permissions)
+  (allow (fs read) (subpath .))          ; → allows read tool for files in cwd
+  (allow (fs read write) (subpath .))    ; → allows read, edit, write tools in cwd
 
-  allow read *:
-    fs:
-      read: subpath(~/.config)      # read-only access to ~/.config
+  ; Explicit tool rules (overrides / refinements)
+  (allow bash *)
+  (deny bash "git push*"))
 ```
+
+### How derivation works
+
+| FS declaration | Derived tool permission |
+|---------------|----------------------|
+| `(allow (fs read) ...)` | `allow read *` with fs constraint |
+| `(allow (fs write) ...)` | `allow edit *` with fs constraint |
+| `(allow (fs write) ...)` | `allow write *` with fs constraint |
+
+Explicit tool rules like `(deny bash "git push*")` are overrides applied after derivation.
 
 ### Filter Expressions
 
 | Expression | Meaning |
 |-----------|---------|
-| `subpath(path)` | Path must be under `path` |
-| `literal(path)` | Path must match exactly |
-| `regex(pattern)` | Path must match regex |
+| `(subpath path)` | Path must be under `path` |
+| `(literal path)` | Path must match exactly |
+| `(regex pattern)` | Path must match regex |
 
-Combine with operators:
+Combine with boolean operators:
 
-| Operator | Meaning |
-|----------|---------|
-| `expr & expr` | Both must match (AND) |
-| `expr \| expr` | Either can match (OR) |
-| `!expr` | Must NOT match (negation) |
-| `(expr)` | Grouping |
+```scheme
+; Read from either location
+(allow (fs read) (or (subpath "~/.ssh") (subpath "~/.aws")))
 
-```yaml
-rules:
-  allow read *:
-    fs:
-      read: subpath(~/.ssh) | subpath(~/.aws)     # read from either
-
-  allow * *:
-    fs:
-      all: subpath(.) & !subpath(./.git)           # cwd except .git
+; CWD except .git
+(allow (fs read write) (and (subpath .) (not (subpath "./.git"))))
 ```
 
 ### Capabilities
@@ -213,15 +198,7 @@ rules:
 | `create` | Create new files |
 | `delete` | Remove files |
 | `execute` | Run as programs |
-| `all` | All capabilities |
-
-Combine with `+` and `-`:
-
-```yaml
-fs:
-  read + execute: subpath(.)       # read and execute in cwd
-  all - delete: subpath(/tmp)      # everything except delete in /tmp
-```
+| `full` | All capabilities |
 
 ---
 
@@ -229,48 +206,60 @@ fs:
 
 For bash rules, you can restrict command structure:
 
-```yaml
-rules:
-  allow bash git *:
-    args:
-      - "!--force"                   # forbid --force flag
-      - "!--hard"                    # forbid --hard flag
-    pipe: false                      # disallow piping (|)
-    redirect: false                  # disallow redirects (>, <)
+```scheme
+(allow bash "git *"
+  (args "--no-force" (not "--hard"))   ; require --no-force, forbid --hard
+  (pipe deny)                          ; disallow piping (|)
+  (redirect deny))                     ; disallow redirects (>, <)
 ```
 
-- **args with `!` prefix**: forbid that argument (deny if present)
-- **args without `!` prefix**: require that argument (deny if absent)
-- **pipe: false**: deny commands containing `|`
-- **redirect: false**: deny commands containing `>` or `<`
+- **`(not "arg")`** in args: forbid that argument (deny if present)
+- **bare strings** in args: require that argument (deny if absent)
+- **`(pipe deny)`**: deny commands containing `|`
+- **`(redirect deny)`**: deny commands containing `>` or `<`
 
 ---
 
 ## Sandbox Integration
 
-When a bash rule has `fs:` constraints and the effect is `allow`, clash automatically generates a kernel-level sandbox (Landlock on Linux, Seatbelt on macOS) that enforces the filesystem restrictions.
+When a bash rule has filesystem constraints and the effect is `allow`, clash automatically generates a kernel-level sandbox (Landlock on Linux, Seatbelt on macOS) that enforces the filesystem restrictions.
 
-```yaml
-rules:
-  allow bash cargo *:
-    fs:
-      read + execute: subpath(.)
-      write + create: subpath(./target)
-    network: allow
+### Profile-Level Sandbox
+
+Declare a `(sandbox ...)` block on a profile to apply OS-level sandboxing to all allowed bash commands:
+
+```scheme
+(profile main
+  (sandbox
+    (fs read execute (subpath .))
+    (fs write create (subpath "./target"))
+    (network deny))
+
+  (allow bash "cargo *")
+  (allow bash "git status")
+  (deny bash "git push*"))
 ```
 
-This allows `cargo` to read anywhere in the project but only write to `target/`. The sandbox is enforced at the OS level - even if the process tries to escape, the kernel blocks it.
+This allows `cargo` to read anywhere in the project but only write to `target/`. Network access is blocked at the kernel level.
 
 ### Network Control
 
-```yaml
-network: deny      # block all network access
-network: allow     # allow network access (default)
+```scheme
+(sandbox
+  (network deny))     ; block all network access
+(sandbox
+  (network allow))    ; allow network access (default)
 ```
 
 ### What Happens on Violation
 
 When a sandboxed command tries to access a path outside its allowed scope, the OS returns a permission denied error. Clash translates this into an actionable message explaining which policy rule caused the restriction.
+
+### Include Merging
+
+When a profile includes parents, sandbox configs are merged:
+- `fs` entries: union (parent entries first, then child)
+- `network`: deny wins (if any profile in the chain sets `network deny`, it applies)
 
 ### Limitations
 
@@ -287,101 +276,84 @@ When a sandboxed command tries to access a path outside its allowed scope, the O
 
 Deny everything by default, explicitly allow only safe operations:
 
-```yaml
-default:
-  permission: deny
-  profile: main
+```scheme
+(default deny main)
 
-profiles:
-  main:
-    rules:
-      allow read *:
-        fs:
-          read: subpath(.)
-      ask bash *:
-      ask write *:
-      ask edit *:
+(profile main
+  (allow (fs read) (subpath .))
+  (ask bash *)
+  (ask write *)
+  (ask edit *))
 ```
 
 ### 2. Developer-Friendly
 
 Allow reads and common dev tools, ask for writes, deny destructive operations:
 
-```yaml
-default:
-  permission: ask
-  profile: main
+```scheme
+(default ask main)
 
-profiles:
-  cwd:
-    rules:
-      allow * *:
-        fs:
-          all: subpath(.)
+(profile cwd-read
+  (allow (fs read) (subpath .)))
 
-  main:
-    include: [cwd]
-    rules:
-      # Allow common dev commands
-      allow bash cargo *:
-      allow bash npm *:
-      allow bash git status:
-      allow bash git diff*:
-      allow bash git log*:
-      allow bash git add *:
+(profile main
+  (include cwd-read)
 
-      # Ask before committing
-      ask bash git commit*:
+  ; Allow common dev commands (sandboxed)
+  (sandbox
+    (fs full (subpath .))
+    (network deny))
+  (allow bash "cargo *")
+  (allow bash "npm *")
+  (allow bash "git status")
+  (allow bash "git diff*")
+  (allow bash "git log*")
+  (allow bash "git add *")
 
-      # Deny dangerous operations
-      deny bash git push*:
-      deny bash git reset --hard*:
-      deny bash sudo *:
-      deny bash rm -rf *:
+  ; Ask before committing
+  (ask bash "git commit*")
+
+  ; Deny dangerous operations
+  (deny bash "git push*")
+  (deny bash "git reset --hard*")
+  (deny bash "sudo *")
+  (deny bash "rm -rf *"))
 ```
 
 ### 3. Full Trust with Guardrails
 
 Allow almost everything, but block the truly dangerous:
 
-```yaml
-default:
-  permission: allow
-  profile: main
+```scheme
+(default allow main)
 
-profiles:
-  main:
-    rules:
-      deny bash git push --force*:
-      deny bash git reset --hard*:
-      deny bash rm -rf /*:
-      deny bash sudo *:
-      deny write *.env:
-      deny write ~/.ssh/*:
-      deny write ~/.aws/*:
-      ask bash git push*:
+(profile main
+  (deny bash "git push --force*")
+  (deny bash "git reset --hard*")
+  (deny bash "rm -rf /*")
+  (deny bash "sudo *")
+  (deny write *.env)
+  (deny write "~/.ssh/*")
+  (deny write "~/.aws/*")
+  (ask bash "git push*"))
 ```
 
 ### 4. Read-Only Audit
 
 Allow reading only, deny all modifications:
 
-```yaml
-default:
-  permission: deny
-  profile: main
+```scheme
+(default deny main)
 
-profiles:
-  main:
-    rules:
-      allow read *:
-      allow bash cat *:
-      allow bash ls *:
-      allow bash find *:
-      allow bash grep *:
-      deny write *:
-      deny edit *:
-      deny bash rm *:
+(profile main
+  (allow read *)
+  (allow bash "cat *")
+  (allow bash "ls *")
+  (allow bash "find *")
+  (allow bash "grep *")
+  (deny write *)
+  (deny edit *)
+  (deny bash "rm *"))
 ```
 
 ---
@@ -422,7 +394,7 @@ clash policy list-rules --json # machine-readable output
 
 ### Modify Policy Interactively
 
-Use the `/clash:edit` skill in Claude Code to modify your policy with guided prompts, or edit `~/.clash/policy.yaml` directly.
+Use the `/clash:edit` skill in Claude Code to modify your policy with guided prompts, or edit `~/.clash/policy.sexp` directly.
 
 ```bash
 clash policy add-rule "deny bash rm -rf *"
@@ -436,10 +408,10 @@ clash policy add-rule "allow bash cargo *" --profile main
 
 **A rule is not matching**: Use `clash explain` to check. Common causes:
 - Glob pattern does not match the full command string
-- An `fs:` constraint is restricting the path
+- An fs constraint is restricting the path
 - A deny rule elsewhere is overriding your allow
 
-**Policy parse error on startup**: Check your YAML syntax. Clash reports the line number and what it expected. Empty policy files default to `ask` for everything.
+**Policy parse error on startup**: Check your syntax (balanced parentheses, matching quotes). Clash reports the position and what it expected.
 
 ---
 

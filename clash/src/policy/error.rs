@@ -1,10 +1,10 @@
 //! Unified error types for the policy subsystem.
 
-/// Error during policy parsing (YAML, rule strings, expressions).
+/// Error during policy parsing (rule strings, expressions).
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyParseError {
-    #[error("YAML parse error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    #[error("parse error: {0}")]
+    Format(String),
 
     #[error("invalid rule '{rule}': {message}")]
     InvalidRule { rule: String, message: String },

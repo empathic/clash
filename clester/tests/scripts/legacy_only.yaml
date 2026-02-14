@@ -1,6 +1,6 @@
 meta:
   name: legacy permissions (no policy file)
-  description: Without a policy.yaml, Claude Code settings are compiled into policy rules
+  description: Without a policy.sexp, Claude Code settings are compiled into policy rules
 
 settings:
   user:

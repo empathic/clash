@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use clash::policy::edit;
 use clash::policy::parse::{desugar_claude_permissions, flatten_profile, format_rule};
-use clash::policy::{ClaudePermissions, Effect, PolicyConfig, PolicyDocument};
+use clash::policy::{ClaudePermissions, Effect};
 use tracing::level_filters::LevelFilter;
 use tracing::{Level, debug_span, error, info, instrument, warn};
 use tracing_subscriber::Layer;
@@ -152,7 +152,7 @@ enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Show the full schema of policy.yaml settings
+    /// Show the full schema of policy settings
     #[command(hide = true)]
     Schema {
         #[arg(long)]
@@ -183,7 +183,7 @@ enum PolicyCmd {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Initialize a new clash policy.yaml with a safe default configuration
+    /// Initialize a new clash policy with a safe default configuration
     Init {
         /// Skip setting bypassPermissions in Claude Code settings
         #[arg(long)]
@@ -213,7 +213,7 @@ enum Commands {
     /// Launch Claude Code with clash managing hooks and sandbox enforcement
     #[command(hide = true)]
     Launch {
-        /// Path to policy file (default: ~/.clash/policy.yaml)
+        /// Path to policy file (default: ~/.clash/policy.sexp)
         #[arg(long)]
         policy: Option<String>,
 
@@ -331,7 +331,7 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read policy file: {}", path))?;
         // Validate it parses
-        clash::policy::parse::parse_yaml(&contents)
+        clash::policy::parse::parse_policy(&contents)
             .with_context(|| format!("failed to parse policy file: {}", path))?;
         info!(path, "Using policy file");
     }
@@ -397,8 +397,8 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
 
 /// Migrate legacy Claude Code permissions into clash policy.
 ///
-/// If no policy.yaml exists, creates a fresh one. If one already exists
-/// (in the new profile-based format), merges only new rules into the active profile.
+/// If no policy file exists, creates a fresh one. If one already exists,
+/// merges only new rules into the active profile.
 #[instrument(level = Level::TRACE)]
 fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
     let default = match default_effect {
@@ -443,36 +443,29 @@ fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
     }
 }
 
-/// Merge rule strings into an existing policy.yaml's active profile.
+/// Merge rule strings into an existing policy's active profile.
 fn merge_rules_into_policy(path: &std::path::Path, rules: &[String], dry_run: bool) -> Result<()> {
-    let yaml = std::fs::read_to_string(path)
+    let text = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
 
-    if !edit::is_new_format(&yaml) {
-        anyhow::bail!(
-            "Old policy format detected at {}. Run `clash init` to upgrade to the new profile-based format.",
-            path.display()
-        );
-    }
+    let profile = edit::resolve_profile(&text, None)?;
 
-    let profile = edit::resolve_profile(&yaml, None)?;
-
-    let mut current_yaml = yaml.clone();
+    let mut current = text.clone();
     let mut added: Vec<String> = Vec::new();
     let mut skipped: usize = 0;
 
     for rule in rules {
         let modified = edit::add_rule(
-            &current_yaml,
+            &current,
             &profile,
             rule,
             &edit::InlineConstraintArgs::default(),
         )?;
-        if modified == current_yaml {
+        if modified == current {
             skipped += 1;
         } else {
             added.push(rule.clone());
-            current_yaml = modified;
+            current = modified;
         }
     }
 
@@ -498,7 +491,7 @@ fn merge_rules_into_policy(path: &std::path::Path, rules: &[String], dry_run: bo
             println!("\n({} existing rule(s) already present, skipped.)", skipped);
         }
     } else {
-        std::fs::write(path, &current_yaml)?;
+        std::fs::write(path, &current)?;
         println!(
             "Merged {} new rule(s) into profile '{}' at {}:",
             added.len(),
@@ -516,40 +509,42 @@ fn merge_rules_into_policy(path: &std::path::Path, rules: &[String], dry_run: bo
     Ok(())
 }
 
-/// Create a fresh policy.yaml from migrated statements.
+/// Create a fresh policy from migrated statements.
 fn create_fresh_policy(
     path: &std::path::Path,
     statements: &[clash::policy::Statement],
     default: Effect,
     dry_run: bool,
 ) -> Result<()> {
-    let doc = PolicyDocument {
-        policy: PolicyConfig { default },
-        permissions: None,
-        constraints: Default::default(),
-        profiles: Default::default(),
-        statements: statements.to_vec(),
-        default_config: None,
-        profile_defs: Default::default(),
-    };
+    let effect_str = default.to_string();
 
-    // Build YAML output with header comment
     let mut output = String::new();
-    output.push_str("# Policy generated by `clash migrate` from Claude Code settings.\n");
-    output.push_str("# Review and customize as needed.\n");
-    output.push_str("#\n");
+    output.push_str("; Policy generated by `clash migrate` from Claude Code settings.\n");
+    output.push_str("; Review and customize as needed.\n");
+    output.push_str(";\n");
     output.push_str(
-        "# Evaluation: all matching statements are collected, then precedence applies:\n",
+        "; Evaluation: all matching statements are collected, then precedence applies:\n",
     );
-    output.push_str("#   deny > ask > allow\n");
-    output.push_str("# If no statement matches, the default effect is used.\n");
+    output.push_str(";   deny > ask > allow\n");
+    output.push_str("; If no statement matches, the default effect is used.\n");
     output.push('\n');
-    output.push_str(&format!("default: {}\n", doc.policy.default));
-    output.push('\n');
-    output.push_str("rules:\n");
-    for stmt in &doc.statements {
-        output.push_str(&format!("  - {}\n", format_rule(stmt)));
+    output.push_str(&format!("(default {} main)\n\n", effect_str));
+    output.push_str("(profile main\n");
+    for stmt in statements {
+        let rule = format_rule(stmt);
+        // Parse rule to get effect, verb, noun for s-expr formatting
+        let parts: Vec<&str> = rule.split_whitespace().collect();
+        if parts.len() >= 3 {
+            let noun = parts[2..].join(" ");
+            let noun_fmt = if noun.contains(' ') {
+                format!("\"{}\"", noun)
+            } else {
+                noun
+            };
+            output.push_str(&format!("  ({} {} {})\n", parts[0], parts[1], noun_fmt));
+        }
     }
+    output.push_str(")\n");
 
     if dry_run {
         print!("{}", output);
@@ -562,7 +557,7 @@ fn create_fresh_policy(
         println!("Wrote policy to {}", path.display());
         println!(
             "Migrated {} rule(s) from legacy Claude Code permissions.",
-            doc.statements.len()
+            statements.len()
         );
     }
 
@@ -639,7 +634,7 @@ fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String
                 );
             } else {
                 eprintln!("No compiled policy available.");
-                eprintln!("Create ~/.clash/policy.yaml or configure Claude Code permissions.");
+                eprintln!("Create ~/.clash/policy.sexp or configure Claude Code permissions.");
             }
             return Ok(());
         }
@@ -732,7 +727,7 @@ fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String
     Ok(())
 }
 
-/// Initialize a new clash policy.yaml with deny-all defaults.
+/// Initialize a new clash policy with deny-all defaults.
 ///
 /// When a policy already exists and stdin is a TTY, offers the user a choice
 /// to reconfigure from scratch or update the existing configuration.
@@ -829,15 +824,15 @@ fn run_init(no_bypass: bool) -> Result<()> {
 
 /// Run the interactive wizard against the policy at `path`.
 fn run_init_wizard(path: &std::path::Path) -> Result<()> {
-    let yaml = std::fs::read_to_string(path)?;
-    let profile = clash::policy::edit::resolve_profile(&yaml, None)?;
+    let text = std::fs::read_to_string(path)?;
+    let profile = clash::policy::edit::resolve_profile(&text, None)?;
     let cwd = std::env::current_dir()
         .context("could not determine current directory")?
         .to_string_lossy()
         .into_owned();
 
-    let modified = clash::wizard::run(&yaml, &profile, &cwd)?;
-    if modified != yaml {
+    let modified = clash::wizard::run(&text, &profile, &cwd)?;
+    if modified != text {
         std::fs::write(path, &modified)?;
     }
     Ok(())
@@ -856,6 +851,8 @@ fn set_bypass_permissions() -> Result<()> {
 
 /// Verb shortcut: bare verb → (rule string, default fs constraints).
 /// Returns None if the input isn't a known bare verb (i.e. it's a full rule).
+///
+/// Note: bash rules have no per-rule fs constraints — sandbox is set at profile level.
 fn verb_shortcut(verb: &str, cwd: &str) -> Option<Vec<(&'static str, Vec<String>)>> {
     match verb {
         "read" => Some(vec![(
@@ -871,12 +868,20 @@ fn verb_shortcut(verb: &str, cwd: &str) -> Option<Vec<(&'static str, Vec<String>
         ]),
         "bash" | "commands" => Some(vec![(
             "allow bash *",
-            vec![format!("full:subpath({})", cwd)],
+            vec![], // No per-rule fs; sandbox is profile-level
         )]),
         "web" => Some(vec![
             ("allow webfetch *", vec![]),
             ("allow websearch *", vec![]),
         ]),
+        _ => None,
+    }
+}
+
+/// Returns sandbox statements for a bare verb shortcut, if applicable.
+fn verb_sandbox_statements(verb: &str, cwd: &str) -> Option<Vec<String>> {
+    match verb {
+        "bash" | "commands" => Some(vec![format!("fs full subpath({})", cwd)]),
         _ => None,
     }
 }
@@ -922,30 +927,41 @@ fn handle_allow_or_deny(
         && !has_explicit_constraints
         && let Some(expansions) = verb_shortcut(rule, &cwd)
     {
-        let (path, yaml) = load_policy_yaml()?;
-        let target_profile = edit::resolve_profile(&yaml, profile)?;
+        let (path, text) = load_policy()?;
+        let target_profile = edit::resolve_profile(&text, profile)?;
 
-        let mut current_yaml = yaml.clone();
+        let mut current = text.clone();
         let mut any_added = false;
+
+        // Set profile-level sandbox if this verb requires one (e.g. bash)
+        if let Some(sandbox_stmts) = verb_sandbox_statements(rule, &cwd) {
+            let stmt_refs: Vec<&str> = sandbox_stmts.iter().map(|s| s.as_str()).collect();
+            let modified = edit::set_sandbox(&current, &target_profile, &stmt_refs)?;
+            if modified != current {
+                any_added = true;
+                current = modified;
+            }
+        }
 
         for (rule_str, default_fs) in &expansions {
             let constraints = edit::InlineConstraintArgs {
                 fs: default_fs.clone(),
                 ..Default::default()
             };
-            let modified = edit::add_rule(&current_yaml, &target_profile, rule_str, &constraints)?;
-            if modified != current_yaml {
+            let modified = edit::add_rule(&current, &target_profile, rule_str, &constraints)?;
+            if modified != current {
                 any_added = true;
-                current_yaml = modified;
+                current = modified;
             }
         }
 
         if any_added {
             if dry_run {
-                print!("{}", current_yaml);
+                print!("{}", current);
             } else {
-                std::fs::write(&path, &current_yaml)?;
-                let scope = if expansions.iter().any(|(_, fs)| !fs.is_empty()) {
+                std::fs::write(&path, &current)?;
+                let has_sandbox = verb_sandbox_statements(rule, &cwd).is_some();
+                let scope = if has_sandbox || expansions.iter().any(|(_, fs)| !fs.is_empty()) {
                     format!(" (files in {})", cwd)
                 } else {
                     String::new()
@@ -962,26 +978,26 @@ fn handle_allow_or_deny(
         && !has_explicit_constraints
         && let Some(deny_rules) = deny_verb_shortcut(rule)
     {
-        let (path, yaml) = load_policy_yaml()?;
-        let target_profile = edit::resolve_profile(&yaml, profile)?;
+        let (path, text) = load_policy()?;
+        let target_profile = edit::resolve_profile(&text, profile)?;
 
-        let mut current_yaml = yaml.clone();
+        let mut current = text.clone();
         let mut any_added = false;
 
         for rule_str in &deny_rules {
             let constraints = edit::InlineConstraintArgs::default();
-            let modified = edit::add_rule(&current_yaml, &target_profile, rule_str, &constraints)?;
-            if modified != current_yaml {
+            let modified = edit::add_rule(&current, &target_profile, rule_str, &constraints)?;
+            if modified != current {
                 any_added = true;
-                current_yaml = modified;
+                current = modified;
             }
         }
 
         if any_added {
             if dry_run {
-                print!("{}", current_yaml);
+                print!("{}", current);
             } else {
-                std::fs::write(&path, &current_yaml)?;
+                std::fs::write(&path, &current)?;
                 println!("Denied: {}", rule);
             }
         } else {
@@ -1000,8 +1016,8 @@ fn handle_allow_or_deny(
 #[instrument(level = Level::TRACE)]
 fn run_status(_json: bool) -> Result<()> {
     // TODO: implement full status rendering (Task #4)
-    let (_path, yaml) = load_policy_yaml()?;
-    let doc = clash::policy::parse::parse_yaml(&yaml).context("failed to parse policy.yaml")?;
+    let (_path, text) = load_policy()?;
+    let doc = clash::policy::parse::parse_policy(&text).context("failed to parse policy file")?;
 
     let default_perm = doc.policy.default;
     let profile_name = doc
@@ -1075,24 +1091,24 @@ fn run_status(_json: bool) -> Result<()> {
 
 /// Interactive policy configuration wizard.
 fn run_setup_wizard() -> Result<()> {
-    let (path, yaml) = load_policy_yaml()?;
-    let profile = clash::policy::edit::resolve_profile(&yaml, None)?;
+    let (path, text) = load_policy()?;
+    let profile = clash::policy::edit::resolve_profile(&text, None)?;
     let cwd = std::env::current_dir()
         .context("could not determine current directory")?
         .to_string_lossy()
         .into_owned();
 
-    let modified = clash::wizard::run(&yaml, &profile, &cwd)?;
+    let modified = clash::wizard::run(&text, &profile, &cwd)?;
 
-    if modified != yaml {
+    if modified != text {
         std::fs::write(&path, &modified)?;
     }
 
     Ok(())
 }
 
-/// Load the policy.yaml file, returning its path and contents.
-fn load_policy_yaml() -> Result<(std::path::PathBuf, String)> {
+/// Load the policy file, returning its path and contents.
+fn load_policy() -> Result<(std::path::PathBuf, String)> {
     let path = ClashSettings::policy_file()?;
     if path.is_dir() {
         anyhow::bail!(
@@ -1100,17 +1116,17 @@ fn load_policy_yaml() -> Result<(std::path::PathBuf, String)> {
             path.display()
         );
     }
-    let yaml = std::fs::read_to_string(&path).with_context(|| {
+    let text = std::fs::read_to_string(&path).with_context(|| {
         if !path.exists() {
             format!(
-                "No policy.yaml found at {}. Run `clash init` first.",
+                "No policy file found at {}. Run `clash init` first.",
                 path.display()
             )
         } else {
             format!("Failed to read {}", path.display())
         }
     })?;
-    Ok((path, yaml))
+    Ok((path, text))
 }
 
 /// Handle `clash policy add-rule`.
@@ -1120,11 +1136,11 @@ fn handle_add_rule(
     constraints: &edit::InlineConstraintArgs,
     dry_run: bool,
 ) -> Result<()> {
-    let (path, yaml) = load_policy_yaml()?;
-    let target_profile = edit::resolve_profile(&yaml, profile)?;
-    let modified = edit::add_rule(&yaml, &target_profile, rule, constraints)?;
+    let (path, text) = load_policy()?;
+    let target_profile = edit::resolve_profile(&text, profile)?;
+    let modified = edit::add_rule(&text, &target_profile, rule, constraints)?;
 
-    if modified == yaml {
+    if modified == text {
         println!(
             "Rule already exists in profile '{}': {}",
             target_profile, rule
@@ -1143,9 +1159,9 @@ fn handle_add_rule(
 
 /// Handle `clash policy remove-rule`.
 fn handle_remove_rule(rule: &str, profile: Option<&str>, dry_run: bool) -> Result<()> {
-    let (path, yaml) = load_policy_yaml()?;
-    let target_profile = edit::resolve_profile(&yaml, profile)?;
-    let modified = edit::remove_rule(&yaml, &target_profile, rule)?;
+    let (path, text) = load_policy()?;
+    let target_profile = edit::resolve_profile(&text, profile)?;
+    let modified = edit::remove_rule(&text, &target_profile, rule)?;
 
     if dry_run {
         print!("{}", modified);
@@ -1158,8 +1174,8 @@ fn handle_remove_rule(rule: &str, profile: Option<&str>, dry_run: bool) -> Resul
 
 /// Handle `clash policy list-rules`.
 fn handle_list_rules(profile: Option<&str>, json: bool) -> Result<()> {
-    let (_path, yaml) = load_policy_yaml()?;
-    let doc = clash::policy::parse::parse_yaml(&yaml).context("failed to parse policy.yaml")?;
+    let (_path, text) = load_policy()?;
+    let doc = clash::policy::parse::parse_policy(&text).context("failed to parse policy file")?;
 
     // Determine target profile
     let target = match profile {
@@ -1228,8 +1244,8 @@ fn handle_list_rules(profile: Option<&str>, json: bool) -> Result<()> {
 
 /// Handle `clash policy show`.
 fn handle_show_policy(json: bool) -> Result<()> {
-    let (path, yaml) = load_policy_yaml()?;
-    let info = edit::policy_info(&yaml)?;
+    let (path, text) = load_policy()?;
+    let info = edit::policy_info(&text)?;
 
     if json {
         println!(
@@ -1326,8 +1342,8 @@ fn run_bug_report(
             std::fs::read_to_string(&p).with_context(|| format!("failed to read {}", p.display()))
         }) {
             Ok(contents) => attachments.push(linear::Attachment {
-                filename: "policy.yaml".into(),
-                content_type: "text/yaml".into(),
+                filename: "policy.sexp".into(),
+                content_type: "text/plain".into(),
                 title: "Policy Config".into(),
                 body: contents.into_bytes(),
             }),

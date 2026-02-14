@@ -1,6 +1,6 @@
 meta:
   name: policy takes precedence over legacy
-  description: Test that policy.yaml rules take precedence over legacy Claude Code permissions
+  description: Test that policy.sexp rules take precedence over legacy Claude Code permissions
 
 clash:
   policy:

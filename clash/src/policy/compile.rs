@@ -12,7 +12,7 @@ use super::ast::UrlSpec;
 use super::error::CompileError;
 use super::ir::{
     CompiledConstraintDef, CompiledFilterExpr, CompiledInlineConstraints, CompiledMatchExpr,
-    CompiledPattern, CompiledPolicy, CompiledProfileRule,
+    CompiledPattern, CompiledPolicy, CompiledProfileRule, CompiledSandboxConfig,
 };
 use super::*;
 use regex::Regex;
@@ -62,11 +62,39 @@ impl CompiledPolicy {
         }
 
         // Compile new-format profile rules if present and append after legacy rules.
+        // Also flatten and compile profile-level sandbox config.
+        let mut profile_sandbox: Option<CompiledSandboxConfig> = None;
         if let Some(ref default_config) = doc.default_config {
             let flat_rules = parse::flatten_profile(&default_config.profile, &doc.profile_defs)
                 .map_err(|e| CompileError::ProfileError(e.to_string()))?;
-            for rule in &flat_rules {
+
+            // Expand fs-level rules into concrete tool rules.
+            let expanded = expand_fs_rules(&flat_rules);
+            for rule in &expanded {
                 active_profile_rules.push(CompiledProfileRule::compile(rule)?);
+            }
+
+            // Flatten and compile profile-level sandbox
+            let flat_sandbox = parse::flatten_sandbox(&default_config.profile, &doc.profile_defs)
+                .map_err(|e| CompileError::ProfileError(e.to_string()))?;
+            if let Some(ref sb) = flat_sandbox {
+                profile_sandbox = Some(CompiledSandboxConfig::compile(sb)?);
+            }
+
+            // Warn if profile sandbox is present but bash allow rules also have fs:
+            if profile_sandbox.is_some() {
+                for rule in &expanded {
+                    if rule.effect == Effect::Allow
+                        && rule.verb == "bash"
+                        && rule.constraints.as_ref().is_some_and(|c| c.fs.is_some())
+                    {
+                        tracing::warn!(
+                            "profile '{}' has a sandbox block — `fs:` on bash rule 'allow bash {}' will be ignored for sandbox generation",
+                            default_config.profile,
+                            crate::policy::ast::format_pattern_str(&rule.noun),
+                        );
+                    }
+                }
             }
         }
 
@@ -91,32 +119,105 @@ impl CompiledPolicy {
             constraints,
             profiles: doc.profiles.clone(),
             active_profile_rules,
+            profile_sandbox,
         })
     }
 }
 
+/// Expand `__fs__` marker rules into concrete tool rules.
+///
+/// An fs rule like `(allow (fs read write) (subpath .))` was parsed as a
+/// `ProfileRule` with verb `__fs__` and the capabilities stored in constraints.fs.
+/// This function expands each such rule into concrete tool rules:
+///
+/// - `Cap::READ` → `allow read *` with fs constraint
+/// - `Cap::WRITE` → `allow edit *` with fs constraint
+/// - `Cap::WRITE | Cap::CREATE` → `allow write *` with fs constraint
+///
+/// Non-fs rules pass through unchanged.
+fn expand_fs_rules(rules: &[ProfileRule]) -> Vec<ProfileRule> {
+    use crate::policy::parse_sexpr::FS_RULE_VERB;
+    use crate::policy::sandbox_types::Cap;
+
+    let mut result = Vec::new();
+    for rule in rules {
+        if rule.verb != FS_RULE_VERB {
+            result.push(rule.clone());
+            continue;
+        }
+
+        // Extract caps and filter from the fs constraint.
+        let (caps, filter) = match rule.constraints.as_ref().and_then(|c| c.fs.as_ref()) {
+            Some(entries) if !entries.is_empty() => (entries[0].0, entries[0].1.clone()),
+            _ => continue, // malformed fs rule, skip
+        };
+
+        // READ → allow read *
+        if caps.contains(Cap::READ) {
+            result.push(ProfileRule {
+                effect: rule.effect,
+                verb: "read".to_string(),
+                noun: Pattern::Match(MatchExpr::Any),
+                constraints: Some(InlineConstraints {
+                    fs: Some(vec![(Cap::READ, filter.clone())]),
+                    ..Default::default()
+                }),
+            });
+        }
+
+        // WRITE → allow edit *
+        if caps.contains(Cap::WRITE) {
+            result.push(ProfileRule {
+                effect: rule.effect,
+                verb: "edit".to_string(),
+                noun: Pattern::Match(MatchExpr::Any),
+                constraints: Some(InlineConstraints {
+                    fs: Some(vec![(Cap::WRITE, filter.clone())]),
+                    ..Default::default()
+                }),
+            });
+        }
+
+        // WRITE or CREATE → allow write * (Write tool needs WRITE | CREATE)
+        // If the user grants either WRITE or CREATE, the Write tool is allowed.
+        if caps.contains(Cap::WRITE) || caps.contains(Cap::CREATE) {
+            let write_caps = caps & (Cap::WRITE | Cap::CREATE);
+            result.push(ProfileRule {
+                effect: rule.effect,
+                verb: "write".to_string(),
+                noun: Pattern::Match(MatchExpr::Any),
+                constraints: Some(InlineConstraints {
+                    fs: Some(vec![(write_caps, filter.clone())]),
+                    ..Default::default()
+                }),
+            });
+        }
+    }
+    result
+}
+
 /// Lazily parsed built-in rules for the `__clash_internal__` profile.
 ///
-/// See `builtin_clash_profile.yaml` for the rule definitions and rationale.
+/// See `builtin_clash_profile.sexp` for the rule definitions and rationale.
 /// Users can override by defining a profile named `__clash_internal__`
 /// in their policy's `profiles:` section.
 fn builtin_clash_rules() -> &'static [ProfileRule] {
     BUILTIN_CLASH_RULES.get_or_init(|| {
-        parse::parse_profile_def_yaml(include_str!("../builtin_clash_profile.yaml"))
-            .expect("builtin_clash_profile.yaml is invalid")
+        super::parse_sexpr::parse_profile_rules(include_str!("../builtin_clash_profile.sexp"))
+            .expect("builtin_clash_profile.sexp is invalid")
             .rules
     })
 }
 
 /// Lazily parsed built-in rules for the `__claude_internal__` profile.
 ///
-/// See `builtin_claude_profile.yaml` for the rule definitions.
+/// See `builtin_claude_profile.sexp` for the rule definitions.
 /// Users can override by defining a profile named `__claude_internal__`
 /// in their policy's `profiles:` section.
 fn builtin_claude_rules() -> &'static [ProfileRule] {
     BUILTIN_CLAUDE_RULES.get_or_init(|| {
-        parse::parse_profile_def_yaml(include_str!("../builtin_claude_profile.yaml"))
-            .expect("builtin_claude_profile.yaml is invalid")
+        super::parse_sexpr::parse_profile_rules(include_str!("../builtin_claude_profile.sexp"))
+            .expect("builtin_claude_profile.sexp is invalid")
             .rules
     })
 }
@@ -317,8 +418,8 @@ mod tests {
     use super::*;
     use crate::policy::sandbox_types::{Cap, NetworkPolicy, RuleEffect};
 
-    fn compile_yaml(yaml: &str) -> CompiledPolicy {
-        let doc = parse::parse_yaml(yaml).unwrap();
+    fn compile(input: &str) -> CompiledPolicy {
+        let doc = parse::parse_policy(input).unwrap();
         CompiledPolicy::compile(&doc).unwrap()
     }
 
@@ -342,24 +443,20 @@ mod tests {
 
     #[test]
     fn test_simple_allow() {
-        let policy = compile_yaml("rules:\n  - allow agent:claude bash git *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (allow bash \"git *\"))\n");
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "git status");
         assert_eq!(decision.effect, Effect::Allow);
 
+        // In s-expr profiles, rules match all agents implicitly
         let decision = policy.evaluate("agent:codex", &Verb::Execute, "git status");
-        assert_eq!(decision.effect, Effect::Ask); // default
+        assert_eq!(decision.effect, Effect::Allow);
     }
 
     #[test]
     fn test_deny_overrides_allow() {
-        let policy = compile_yaml(
-            "\
-rules:
-  - allow * read *
-  - deny * read .env
-",
-        );
+        let policy =
+            compile("(default ask main)\n(profile main\n  (allow read *)\n  (deny read .env))\n");
 
         let decision = policy.evaluate("agent:claude", &Verb::Read, "src/main.rs");
         assert_eq!(decision.effect, Effect::Allow);
@@ -370,12 +467,8 @@ rules:
 
     #[test]
     fn test_ask_overrides_allow() {
-        let policy = compile_yaml(
-            "\
-rules:
-  - allow agent:* bash *
-  - ask agent:* bash rm *
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash *)\n  (ask bash \"rm *\"))\n",
         );
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "ls");
@@ -386,31 +479,9 @@ rules:
     }
 
     #[test]
-    fn test_negated_entity() {
-        let policy = compile_yaml(
-            "\
-rules:
-  - allow * read ~/*
-  - deny !user read ~/config/*
-",
-        );
-
-        // Agent reading config → denied
-        let decision = policy.evaluate("agent:claude", &Verb::Read, "~/config/test.json");
-        assert_eq!(decision.effect, Effect::Deny);
-
-        // User reading config → allowed (deny doesn't match user)
-        let decision = policy.evaluate("user", &Verb::Read, "~/config/test.json");
-        assert_eq!(decision.effect, Effect::Allow);
-
-        // Agent reading non-config → allowed
-        let decision = policy.evaluate("agent:claude", &Verb::Read, "~/docs/readme.md");
-        assert_eq!(decision.effect, Effect::Allow);
-    }
-
-    #[test]
     fn test_negated_noun() {
-        let policy = compile_yaml("rules:\n  - deny agent:* write !~/code/proj/**\n");
+        let policy =
+            compile("(default ask main)\n(profile main\n  (deny write \"!~/code/proj/**\"))\n");
 
         // Writing in project → not denied (noun negation doesn't match)
         let decision = policy.evaluate("agent:claude", &Verb::Write, "~/code/proj/src/main.rs");
@@ -423,110 +494,18 @@ rules:
 
     #[test]
     fn test_configurable_default() {
-        let policy = compile_yaml("default: deny\n");
+        let policy = compile("(default deny main)\n(profile main)\n");
 
         let decision = policy.evaluate("agent:claude", &Verb::Execute, "anything");
         assert_eq!(decision.effect, Effect::Deny);
-    }
-
-    #[test]
-    fn test_legacy_permissions_integration() {
-        let policy = compile_yaml(
-            "\
-permissions:
-  allow:
-    - \"Bash(git:*)\"
-    - \"Read\"
-  deny:
-    - \"Read(.env)\"
-  ask:
-    - \"Write\"
-",
-        );
-
-        let decision = policy.evaluate("agent:claude", &Verb::Execute, "git status");
-        assert_eq!(decision.effect, Effect::Allow);
-
-        let decision = policy.evaluate("agent:claude", &Verb::Read, "src/main.rs");
-        assert_eq!(decision.effect, Effect::Allow);
-
-        let decision = policy.evaluate("agent:claude", &Verb::Read, ".env");
-        assert_eq!(decision.effect, Effect::Deny);
-
-        let decision = policy.evaluate("agent:claude", &Verb::Write, "output.txt");
-        assert_eq!(decision.effect, Effect::Ask);
-    }
-
-    #[test]
-    fn test_verb_wildcard() {
-        let policy = compile_yaml("rules:\n  - deny agent:untrusted * ~/sensitive/**\n");
-
-        let decision = policy.evaluate("agent:untrusted", &Verb::Read, "~/sensitive/secrets.json");
-        assert_eq!(decision.effect, Effect::Deny);
-
-        let decision = policy.evaluate("agent:untrusted", &Verb::Write, "~/sensitive/secrets.json");
-        assert_eq!(decision.effect, Effect::Deny);
-
-        let decision = policy.evaluate(
-            "agent:untrusted",
-            &Verb::Execute,
-            "~/sensitive/secrets.json",
-        );
-        assert_eq!(decision.effect, Effect::Deny);
-
-        // Different entity → not matched
-        let decision = policy.evaluate("agent:claude", &Verb::Read, "~/sensitive/secrets.json");
-        assert_eq!(decision.effect, Effect::Ask); // default
-    }
-
-    #[test]
-    fn test_mixed_legacy_and_rules() {
-        let policy = compile_yaml(
-            "\
-permissions:
-  allow:
-    - \"Bash(git:*)\"
-rules:
-  - deny * bash git push *
-",
-        );
-
-        // git status → allowed by legacy
-        let decision = policy.evaluate("agent:claude", &Verb::Execute, "git status");
-        assert_eq!(decision.effect, Effect::Allow);
-
-        // git push → denied by explicit rule (deny > allow)
-        let decision = policy.evaluate("agent:claude", &Verb::Execute, "git push origin main");
-        assert_eq!(decision.effect, Effect::Deny);
-    }
-
-    #[test]
-    fn test_entity_type_hierarchy() {
-        let policy = compile_yaml("rules:\n  - allow agent:* read *\n");
-
-        let decision = policy.evaluate("agent:claude", &Verb::Read, "test.txt");
-        assert_eq!(decision.effect, Effect::Allow);
-
-        let decision = policy.evaluate("agent:codex", &Verb::Read, "test.txt");
-        assert_eq!(decision.effect, Effect::Allow);
-
-        // "user" is not an agent
-        let decision = policy.evaluate("user", &Verb::Read, "test.txt");
-        assert_eq!(decision.effect, Effect::Ask); // default
     }
 
     // --- Constraint tests ---
 
     #[test]
     fn test_constraint_fs_subpath() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  local:
-    fs: subpath(/home/user/project)
-rules:
-  - \"allow * read * : local\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow read *\n    (fs (read (subpath /home/user/project)))))\n",
         );
 
         let ctx = EvalContext {
@@ -555,14 +534,8 @@ rules:
 
     #[test]
     fn test_constraint_fs_subpath_dot() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  local:
-    fs: subpath(.)
-rules:
-  - \"allow * read * : local\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow read *\n    (fs (read (subpath .)))))\n",
         );
 
         // Path under cwd → matches
@@ -592,14 +565,8 @@ rules:
 
     #[test]
     fn test_constraint_fs_literal() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  no-env:
-    fs: \"!literal(.env)\"
-rules:
-  - \"allow * read * : no-env\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow read *\n    (fs (read (not (literal .env))))))\n",
         );
 
         // Non-.env file → allowed
@@ -629,15 +596,8 @@ rules:
 
     #[test]
     fn test_constraint_pipe_false() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  safe-io:
-    pipe: false
-rules:
-  - \"allow * bash * : safe-io\"
-",
-        );
+        let policy =
+            compile("(default ask main)\n(profile main\n  (allow bash *\n    (pipe deny)))\n");
 
         // Command without pipe → allowed
         let ctx = EvalContext {
@@ -666,15 +626,8 @@ rules:
 
     #[test]
     fn test_constraint_redirect_false() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  safe-io:
-    redirect: false
-rules:
-  - \"allow * bash * : safe-io\"
-",
-        );
+        let policy =
+            compile("(default ask main)\n(profile main\n  (allow bash *\n    (redirect deny)))\n");
 
         // Command without redirect → allowed
         let ctx = EvalContext {
@@ -703,16 +656,8 @@ rules:
 
     #[test]
     fn test_constraint_forbid_args() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  git-safe:
-    forbid-args:
-      - --force
-      - --hard
-rules:
-  - \"allow * bash git * : git-safe\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash \"git *\"\n    (args (not \"--force\") (not \"--hard\"))))\n",
         );
 
         // Command without forbidden args → allowed
@@ -742,15 +687,8 @@ rules:
 
     #[test]
     fn test_constraint_require_args() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  dry-run:
-    require-args:
-      - --dry-run
-rules:
-  - \"allow * bash * : dry-run\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash *\n    (args \"--dry-run\")))\n",
         );
 
         // Command with --dry-run → allowed
@@ -780,19 +718,8 @@ rules:
 
     #[test]
     fn test_profile_composition() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  local:
-    fs: subpath(.)
-  safe-io:
-    pipe: false
-    redirect: false
-profiles:
-  sandboxed: local & safe-io
-rules:
-  - \"allow * bash * : sandboxed\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (subpath .)))\n    (pipe deny)\n    (redirect deny)))\n",
         );
 
         // Both constraints satisfied → allowed
@@ -821,64 +748,9 @@ rules:
     }
 
     #[test]
-    fn test_profile_nested_composition() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  local:
-    fs: subpath(.)
-  safe-io:
-    pipe: false
-    redirect: false
-  git-safe-args:
-    forbid-args:
-      - --force
-      - --hard
-profiles:
-  sandboxed: local & safe-io
-  strict-git: sandboxed & git-safe-args
-rules:
-  - \"allow * bash git * : strict-git\"
-",
-        );
-
-        // All constraints satisfied → allowed
-        let ctx = EvalContext {
-            entity: "agent",
-            verb: &Verb::Execute,
-            noun: "git status",
-            cwd: "/home/user/project",
-            tool_input: &serde_json::Value::Null,
-            verb_str: "bash",
-        };
-        let decision = policy.evaluate_with_context(&ctx);
-        assert_eq!(decision.effect, Effect::Allow);
-
-        // --force violates git-safe-args → fails
-        let ctx = EvalContext {
-            entity: "agent",
-            verb: &Verb::Execute,
-            noun: "git push --force origin main",
-            cwd: "/home/user/project",
-            tool_input: &serde_json::Value::Null,
-            verb_str: "bash",
-        };
-        let decision = policy.evaluate_with_context(&ctx);
-        assert_eq!(decision.effect, Effect::Ask);
-    }
-
-    #[test]
     fn test_inline_constraint_expression() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  local:
-    fs: subpath(.)
-  no-secrets:
-    fs: \"!literal(.env)\"
-rules:
-  - \"allow * read * : local & no-secrets\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow read *\n    (fs (read (and (subpath .) (not (literal .env)))))))\n",
         );
 
         // Normal file → allowed
@@ -908,12 +780,8 @@ rules:
 
     #[test]
     fn test_rules_without_constraint_still_work() {
-        let policy = compile_yaml(
-            "\
-rules:
-  - allow * bash git *
-  - deny * bash rm *
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash \"git *\")\n  (deny bash \"rm *\"))\n",
         );
 
         let decision = policy.evaluate("agent", &Verb::Execute, "git status");
@@ -926,16 +794,8 @@ rules:
     #[test]
     fn test_deny_with_constraint() {
         // deny rule with constraint: only denies when constraint is satisfied
-        let policy = compile_yaml(
-            "\
-constraints:
-  has-force:
-    forbid-args:
-      - --force
-rules:
-  - allow * bash git *
-  - \"deny * bash git push * : has-force\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash \"git *\")\n  (deny bash \"git push *\"\n    (args (not \"--force\"))))\n",
         );
 
         // git push without --force → has-force constraint fails (no forbidden arg present),
@@ -1028,21 +888,15 @@ rules:
         assert_eq!(resolve_path("~", "/cwd"), home);
         assert_eq!(resolve_path("~/.clash", "/cwd"), home.join(".clash"));
         assert_eq!(
-            resolve_path("~/.clash/policy.yaml", "/cwd"),
-            home.join(".clash/policy.yaml")
+            resolve_path("~/.clash/policy.sexp", "/cwd"),
+            home.join(".clash/policy.sexp")
         );
     }
 
     #[test]
     fn test_fs_filter_with_compound_expr() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  test-dirs:
-    fs: \"subpath(/home/user/project/src) | subpath(/home/user/project/test)\"
-rules:
-  - \"allow * read * : test-dirs\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow read *\n    (fs (read (or (subpath /home/user/project/src) (subpath /home/user/project/test))))))\n",
         );
 
         // In src → allowed
@@ -1086,14 +940,8 @@ rules:
 
     #[test]
     fn test_sandbox_generated_from_fs_subpath() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  local:
-    fs: subpath(.)
-rules:
-  - \"allow * bash * : local\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (full (subpath .)))))\n",
         );
 
         let ctx = EvalContext {
@@ -1122,16 +970,8 @@ rules:
 
     #[test]
     fn test_sandbox_caps_intersection() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  local:
-    fs: subpath(.)
-  read-only:
-    caps: read + execute
-rules:
-  - \"allow * bash * : local & read-only\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (\"read + execute\" (subpath .)))))\n",
         );
 
         let ctx = EvalContext {
@@ -1153,15 +993,8 @@ rules:
 
     #[test]
     fn test_sandbox_network_deny_wins() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  local:
-    fs: subpath(.)
-    network: deny
-rules:
-  - \"allow * bash * : local\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (subpath .)))\n    (network deny)))\n",
         );
 
         let ctx = EvalContext {
@@ -1179,14 +1012,8 @@ rules:
 
     #[test]
     fn test_no_sandbox_for_non_bash() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  local:
-    fs: subpath(.)
-rules:
-  - \"allow * read * : local\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow read *\n    (fs (read (subpath .)))))\n",
         );
 
         // Read verb: fs acts as permission guard, no sandbox generated
@@ -1205,15 +1032,8 @@ rules:
 
     #[test]
     fn test_no_sandbox_without_fs() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  safe-io:
-    pipe: false
-rules:
-  - \"allow * bash * : safe-io\"
-",
-        );
+        let policy =
+            compile("(default ask main)\n(profile main\n  (allow bash *\n    (pipe deny)))\n");
 
         let ctx = EvalContext {
             entity: "agent",
@@ -1231,14 +1051,8 @@ rules:
 
     #[test]
     fn test_sandbox_not_filter_generates_deny() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  no-git:
-    fs: \"!subpath(.git)\"
-rules:
-  - \"allow * bash * : no-git\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (not (subpath .git))))))\n",
         );
 
         let ctx = EvalContext {
@@ -1265,14 +1079,8 @@ rules:
 
     #[test]
     fn test_sandbox_regex_generates_rule() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  no-env:
-    fs: \"regex(\\\\.env)\"
-rules:
-  - \"allow * bash * : no-env\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (regex \"\\\\.env\")))))\n",
         );
 
         let ctx = EvalContext {
@@ -1302,14 +1110,8 @@ rules:
         // fs: subpath(.) used to check the command string as a path (broken).
         // Now fs is skipped for bash rules — the rule always matches
         // regardless of the command string, and fs generates sandbox instead.
-        let policy = compile_yaml(
-            "\
-constraints:
-  local:
-    fs: subpath(/home/user/project)
-rules:
-  - \"allow * bash * : local\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (subpath /home/user/project)))))\n",
         );
 
         // Command "ls -la" doesn't look like a path under /home/user/project,
@@ -1329,14 +1131,8 @@ rules:
 
     #[test]
     fn test_sandbox_literal_non_recursive() {
-        let policy = compile_yaml(
-            "\
-constraints:
-  env-file:
-    fs: literal(.env)
-rules:
-  - \"allow * bash * : env-file\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (literal .env)))))\n",
         );
 
         let ctx = EvalContext {
@@ -1361,12 +1157,7 @@ rules:
 
     #[test]
     fn test_sandbox_no_sandbox_when_allow_has_no_profile() {
-        let policy = compile_yaml(
-            "\
-rules:
-  - allow * bash *
-",
-        );
+        let policy = compile("(default ask main)\n(profile main\n  (allow bash *))\n");
 
         let ctx = EvalContext {
             entity: "agent",
@@ -1385,14 +1176,8 @@ rules:
     #[test]
     fn test_sandbox_network_default_allow() {
         // When no network policy is specified, default is allow
-        let policy = compile_yaml(
-            "\
-constraints:
-  local:
-    fs: subpath(.)
-rules:
-  - \"allow * bash * : local\"
-",
+        let policy = compile(
+            "(default ask main)\n(profile main\n  (allow bash *\n    (fs (execute (subpath .)))))\n",
         );
 
         let ctx = EvalContext {
@@ -1414,18 +1199,9 @@ rules:
 
     #[test]
     fn test_new_format_deny_overrides_allow() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow bash *:
-      deny bash rm *:
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile test\n  (allow bash *)\n  (deny bash \"rm *\"))\n",
+        );
 
         let ctx = make_ctx(
             "agent",
@@ -1450,19 +1226,9 @@ profiles:
 
     #[test]
     fn test_new_format_cap_scoped_fs_permission_guard() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow read *:
-        fs:
-          read: subpath(/home/user/project)
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile test\n  (allow read *\n    (fs (read (subpath /home/user/project)))))\n",
+        );
 
         // File under project → allowed (read cap intersects fs entry)
         let ctx = make_ctx(
@@ -1489,20 +1255,9 @@ profiles:
 
     #[test]
     fn test_new_format_cap_scoped_fs_sandbox() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow bash *:
-        fs:
-          read + write + create: subpath(.)
-        network: deny
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile test\n  (allow bash *\n    (fs (\"read + write + create\" (subpath .)))\n    (network deny)))\n",
+        );
 
         let ctx = make_ctx(
             "agent",
@@ -1524,18 +1279,9 @@ profiles:
 
     #[test]
     fn test_new_format_args_forbid() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow bash *:
-        args: ["!-delete"]
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile test\n  (allow bash *\n    (args (not \"-delete\"))))\n",
+        );
 
         // Command without -delete → allowed
         let ctx = make_ctx(
@@ -1562,18 +1308,7 @@ profiles:
 
     #[test]
     fn test_new_format_arbitrary_verb() {
-        let yaml = r#"
-default:
-  permission: deny
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow safe-read *:
-        args: []
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile("(default deny test)\n(profile test\n  (allow safe-read *))\n");
 
         // Matching verb_str
         let ctx = make_ctx(
@@ -1600,21 +1335,9 @@ profiles:
 
     #[test]
     fn test_new_format_include_rules_merged() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: child
-
-profiles:
-  parent:
-    rules:
-      deny bash rm *:
-  child:
-    include: parent
-    rules:
-      allow bash *:
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask child)\n(profile parent\n  (deny bash \"rm *\"))\n(profile child\n  (include parent)\n  (allow bash *))\n",
+        );
 
         // "git status" matches child's allow bash * → allowed
         let ctx = make_ctx(
@@ -1641,17 +1364,7 @@ profiles:
 
     #[test]
     fn test_new_format_no_match_returns_default() {
-        let yaml = r#"
-default:
-  permission: deny
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow bash *:
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile("(default deny test)\n(profile test\n  (allow bash *))\n");
 
         // "read" verb_str doesn't match "bash" rule → no match → default (deny)
         let ctx = make_ctx(
@@ -1667,20 +1380,9 @@ profiles:
 
     #[test]
     fn test_new_format_wildcard_verb() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      deny * *:
-        fs:
-          read + write: "subpath(~/.ssh)"
-      allow bash *:
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile test\n  (deny * *\n    (fs (\"read + write\" (subpath ~/.ssh))))\n  (allow bash *))\n",
+        );
 
         // bash command → matches both deny * * and allow bash *
         // But the deny has an fs guard which is cap-scoped — for bash/execute,
@@ -1717,26 +1419,17 @@ profiles:
             ]
         }
 
-        /// Strategy for generating entity strings.
-        fn arb_entity() -> impl Strategy<Value = String> {
-            prop_oneof![
-                Just("agent:claude".to_string()),
-                Just("agent:codex".to_string()),
-                Just("user".to_string()),
-                Just("*".to_string()),
-            ]
-        }
-
         /// Strategy for generating noun/pattern strings.
-        fn arb_noun() -> impl Strategy<Value = String> {
+        /// Nouns with spaces must be quoted in s-expr.
+        fn arb_noun() -> impl Strategy<Value = (String, String)> {
             prop_oneof![
-                Just("*".to_string()),
-                Just("git *".to_string()),
-                Just("rm *".to_string()),
-                Just("ls".to_string()),
-                Just("/tmp/*".to_string()),
-                Just("src/main.rs".to_string()),
-                Just(".env".to_string()),
+                Just(("*".to_string(), "*".to_string())),
+                Just(("\"git *\"".to_string(), "git status".to_string())),
+                Just(("\"rm *\"".to_string(), "rm -rf".to_string())),
+                Just(("ls".to_string(), "ls".to_string())),
+                Just(("\"/tmp/*\"".to_string(), "/tmp/foo".to_string())),
+                Just(("src/main.rs".to_string(), "src/main.rs".to_string())),
+                Just((".env".to_string(), ".env".to_string())),
             ]
         }
 
@@ -1751,33 +1444,32 @@ profiles:
             /// Deny always beats allow regardless of rule order.
             #[test]
             fn deny_overrides_allow(
-                entity in arb_entity(),
                 (verb_str, verb) in arb_verb(),
-                noun in arb_noun(),
+                (noun_pattern, noun_eval) in arb_noun(),
             ) {
                 // Policy with allow first, then deny on the same triple
-                let yaml = format!(
-                    "rules:\n  - allow {} {} {}\n  - deny {} {} {}\n",
-                    entity, verb_str, noun, entity, verb_str, noun
+                let sexpr = format!(
+                    "(default ask main)\n(profile main\n  (allow {} {})\n  (deny {} {}))\n",
+                    verb_str, noun_pattern, verb_str, noun_pattern
                 );
-                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                if let Ok(doc) = parse::parse_policy(&sexpr) {
                     if let Ok(policy) = CompiledPolicy::compile(&doc) {
-                        let decision = policy.evaluate(&entity, &verb, &noun);
+                        let decision = policy.evaluate("agent:claude", &verb, &noun_eval);
                         prop_assert_eq!(decision.effect, Effect::Deny,
-                            "deny should override allow for {} {} {}", entity, verb_str, noun);
+                            "deny should override allow for {} {}", verb_str, noun_eval);
                     }
                 }
 
                 // Reverse order: deny first, then allow
-                let yaml = format!(
-                    "rules:\n  - deny {} {} {}\n  - allow {} {} {}\n",
-                    entity, verb_str, noun, entity, verb_str, noun
+                let sexpr = format!(
+                    "(default ask main)\n(profile main\n  (deny {} {})\n  (allow {} {}))\n",
+                    verb_str, noun_pattern, verb_str, noun_pattern
                 );
-                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                if let Ok(doc) = parse::parse_policy(&sexpr) {
                     if let Ok(policy) = CompiledPolicy::compile(&doc) {
-                        let decision = policy.evaluate(&entity, &verb, &noun);
+                        let decision = policy.evaluate("agent:claude", &verb, &noun_eval);
                         prop_assert_eq!(decision.effect, Effect::Deny,
-                            "deny should override allow (reversed) for {} {} {}", entity, verb_str, noun);
+                            "deny should override allow (reversed) for {} {}", verb_str, noun_eval);
                     }
                 }
             }
@@ -1785,19 +1477,18 @@ profiles:
             /// Ask overrides allow regardless of rule order.
             #[test]
             fn ask_overrides_allow(
-                entity in arb_entity(),
                 (verb_str, verb) in arb_verb(),
-                noun in arb_noun(),
+                (noun_pattern, noun_eval) in arb_noun(),
             ) {
-                let yaml = format!(
-                    "rules:\n  - allow {} {} {}\n  - ask {} {} {}\n",
-                    entity, verb_str, noun, entity, verb_str, noun
+                let sexpr = format!(
+                    "(default ask main)\n(profile main\n  (allow {} {})\n  (ask {} {}))\n",
+                    verb_str, noun_pattern, verb_str, noun_pattern
                 );
-                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                if let Ok(doc) = parse::parse_policy(&sexpr) {
                     if let Ok(policy) = CompiledPolicy::compile(&doc) {
-                        let decision = policy.evaluate(&entity, &verb, &noun);
+                        let decision = policy.evaluate("agent:claude", &verb, &noun_eval);
                         prop_assert_eq!(decision.effect, Effect::Ask,
-                            "ask should override allow for {} {} {}", entity, verb_str, noun);
+                            "ask should override allow for {} {}", verb_str, noun_eval);
                     }
                 }
             }
@@ -1805,19 +1496,18 @@ profiles:
             /// Deny overrides ask regardless of rule order.
             #[test]
             fn deny_overrides_ask(
-                entity in arb_entity(),
                 (verb_str, verb) in arb_verb(),
-                noun in arb_noun(),
+                (noun_pattern, noun_eval) in arb_noun(),
             ) {
-                let yaml = format!(
-                    "rules:\n  - ask {} {} {}\n  - deny {} {} {}\n",
-                    entity, verb_str, noun, entity, verb_str, noun
+                let sexpr = format!(
+                    "(default ask main)\n(profile main\n  (ask {} {})\n  (deny {} {}))\n",
+                    verb_str, noun_pattern, verb_str, noun_pattern
                 );
-                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                if let Ok(doc) = parse::parse_policy(&sexpr) {
                     if let Ok(policy) = CompiledPolicy::compile(&doc) {
-                        let decision = policy.evaluate(&entity, &verb, &noun);
+                        let decision = policy.evaluate("agent:claude", &verb, &noun_eval);
                         prop_assert_eq!(decision.effect, Effect::Deny,
-                            "deny should override ask for {} {} {}", entity, verb_str, noun);
+                            "deny should override ask for {} {}", verb_str, noun_eval);
                     }
                 }
             }
@@ -1825,21 +1515,20 @@ profiles:
             /// Determinism: same policy + same input → same output.
             #[test]
             fn deterministic_evaluation(
-                entity in arb_entity(),
                 (verb_str, verb) in arb_verb(),
-                noun in arb_noun(),
+                (noun_pattern, noun_eval) in arb_noun(),
                 effect1 in arb_effect(),
                 effect2 in arb_effect(),
             ) {
-                let yaml = format!(
-                    "rules:\n  - {} {} {} {}\n  - {} {} {} {}\n",
-                    effect1, entity, verb_str, noun,
-                    effect2, entity, verb_str, noun,
+                let sexpr = format!(
+                    "(default ask main)\n(profile main\n  ({} {} {})\n  ({} {} {}))\n",
+                    effect1, verb_str, noun_pattern,
+                    effect2, verb_str, noun_pattern,
                 );
-                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                if let Ok(doc) = parse::parse_policy(&sexpr) {
                     if let Ok(policy) = CompiledPolicy::compile(&doc) {
-                        let d1 = policy.evaluate(&entity, &verb, &noun);
-                        let d2 = policy.evaluate(&entity, &verb, &noun);
+                        let d1 = policy.evaluate("agent:claude", &verb, &noun_eval);
+                        let d2 = policy.evaluate("agent:claude", &verb, &noun_eval);
                         prop_assert_eq!(d1.effect, d2.effect,
                             "same policy + input should give same result");
                     }
@@ -1849,31 +1538,30 @@ profiles:
             /// Monotonicity: adding a deny rule never produces a less-restrictive result.
             #[test]
             fn monotonicity_deny_addition(
-                entity in arb_entity(),
                 (verb_str, verb) in arb_verb(),
-                noun in arb_noun(),
+                (noun_pattern, noun_eval) in arb_noun(),
                 base_effect in arb_effect(),
             ) {
                 // Evaluate with just the base rule
-                let yaml_base = format!(
-                    "rules:\n  - {} {} {} {}\n",
-                    base_effect, entity, verb_str, noun,
+                let sexpr_base = format!(
+                    "(default ask main)\n(profile main\n  ({} {} {}))\n",
+                    base_effect, verb_str, noun_pattern,
                 );
                 // Evaluate with base + deny
-                let yaml_deny = format!(
-                    "rules:\n  - {} {} {} {}\n  - deny {} {} {}\n",
-                    base_effect, entity, verb_str, noun,
-                    entity, verb_str, noun,
+                let sexpr_deny = format!(
+                    "(default ask main)\n(profile main\n  ({} {} {})\n  (deny {} {}))\n",
+                    base_effect, verb_str, noun_pattern,
+                    verb_str, noun_pattern,
                 );
 
                 if let (Ok(doc_base), Ok(doc_deny)) =
-                    (parse::parse_yaml(&yaml_base), parse::parse_yaml(&yaml_deny))
+                    (parse::parse_policy(&sexpr_base), parse::parse_policy(&sexpr_deny))
                 {
                     if let (Ok(p_base), Ok(p_deny)) =
                         (CompiledPolicy::compile(&doc_base), CompiledPolicy::compile(&doc_deny))
                     {
-                        let d_base = p_base.evaluate(&entity, &verb, &noun);
-                        let d_deny = p_deny.evaluate(&entity, &verb, &noun);
+                        let d_base = p_base.evaluate("agent:claude", &verb, &noun_eval);
+                        let d_deny = p_deny.evaluate("agent:claude", &verb, &noun_eval);
 
                         // Restrictiveness: Deny > Ask > Allow
                         let restrictiveness = |e: Effect| -> u8 {
@@ -1898,14 +1586,14 @@ profiles:
             fn default_fallback(
                 (verb_str, verb) in arb_verb(),
             ) {
-                // Policy with rules that only match a specific entity/noun, default: deny
-                let yaml = format!(
-                    "default: deny\nrules:\n  - allow agent:special {} specific_file\n",
+                // Policy with rules that only match a specific noun, default: deny
+                let sexpr = format!(
+                    "(default deny main)\n(profile main\n  (allow {} specific_file))\n",
                     verb_str,
                 );
-                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                if let Ok(doc) = parse::parse_policy(&sexpr) {
                     if let Ok(policy) = CompiledPolicy::compile(&doc) {
-                        // Query with non-matching entity/noun
+                        // Query with non-matching noun
                         let decision = policy.evaluate("agent:other", &verb, "other_file");
                         prop_assert_eq!(decision.effect, Effect::Deny,
                             "no match should fall back to configured default (deny)");
@@ -1913,11 +1601,11 @@ profiles:
                 }
 
                 // Same test with default: ask (the default default)
-                let yaml = format!(
-                    "default: ask\nrules:\n  - allow agent:special {} specific_file\n",
+                let sexpr = format!(
+                    "(default ask main)\n(profile main\n  (allow {} specific_file))\n",
                     verb_str,
                 );
-                if let Ok(doc) = parse::parse_yaml(&yaml) {
+                if let Ok(doc) = parse::parse_policy(&sexpr) {
                     if let Ok(policy) = CompiledPolicy::compile(&doc) {
                         let decision = policy.evaluate("agent:other", &verb, "other_file");
                         prop_assert_eq!(decision.effect, Effect::Ask,
@@ -1927,37 +1615,12 @@ profiles:
             }
         }
 
-        /// Negation symmetry: `!pattern` matches iff `pattern` doesn't match.
-        /// This is a regular test using targeted cases since proptest can't easily
-        /// generate the internal types.
-        #[test]
-        fn negation_symmetry() {
-            // Allow everything, deny not-user (i.e., only user can read)
-            let yaml = "\
-rules:
-  - allow * read *
-  - deny !user read ~/config/*
-";
-            let policy = compile_yaml(yaml);
-
-            // user should be allowed (deny !user doesn't match user)
-            let decision = policy.evaluate("user", &Verb::Read, "~/config/settings");
-            assert_eq!(decision.effect, Effect::Allow);
-
-            // agent:claude should be denied (deny !user matches agent:claude)
-            let decision = policy.evaluate("agent:claude", &Verb::Read, "~/config/settings");
-            assert_eq!(decision.effect, Effect::Deny);
-        }
-
         /// Negation symmetry on nouns.
         #[test]
         fn noun_negation_symmetry() {
-            let yaml = "\
-rules:
-  - allow * bash *
-  - deny * bash !git *
-";
-            let policy = compile_yaml(yaml);
+            let policy = compile(
+                "(default ask main)\n(profile main\n  (allow bash *)\n  (deny bash \"!git *\"))\n",
+            );
 
             // git status should be allowed (deny !git* doesn't match git commands)
             let decision = policy.evaluate("agent:claude", &Verb::Execute, "git status");
@@ -1975,40 +1638,6 @@ rules:
         proptest! {
             #![proptest_config(ProptestConfig::with_cases(200))]
 
-            /// Adding an unreachable rule (for a different entity) doesn't change the result.
-            #[test]
-            fn unreachable_entity_rule_is_inert(
-                (verb_str, verb) in arb_verb(),
-                effect in arb_effect(),
-                extra_effect in arb_effect(),
-                noun in arb_noun(),
-            ) {
-                // Base policy: one rule for agent:claude
-                let yaml_base = format!(
-                    "rules:\n  - {} agent:claude {} {}\n",
-                    effect, verb_str, noun,
-                );
-                // Extended: same + an extra rule for agent:unreachable (never queried)
-                let yaml_ext = format!(
-                    "rules:\n  - {} agent:claude {} {}\n  - {} agent:unreachable {} {}\n",
-                    effect, verb_str, noun,
-                    extra_effect, verb_str, noun,
-                );
-
-                if let (Ok(doc_base), Ok(doc_ext)) =
-                    (parse::parse_yaml(&yaml_base), parse::parse_yaml(&yaml_ext))
-                {
-                    if let (Ok(p_base), Ok(p_ext)) =
-                        (CompiledPolicy::compile(&doc_base), CompiledPolicy::compile(&doc_ext))
-                    {
-                        let d_base = p_base.evaluate("agent:claude", &verb, &noun);
-                        let d_ext = p_ext.evaluate("agent:claude", &verb, &noun);
-                        prop_assert_eq!(d_base.effect, d_ext.effect,
-                            "unreachable entity rule should not change result");
-                    }
-                }
-            }
-
             /// Adding a rule for a non-matching noun doesn't change the result.
             #[test]
             fn unreachable_noun_rule_is_inert(
@@ -2017,19 +1646,19 @@ rules:
                 extra_effect in arb_effect(),
             ) {
                 // Base: rule for "git *"
-                let yaml_base = format!(
-                    "rules:\n  - {} * {} git *\n",
+                let sexpr_base = format!(
+                    "(default ask main)\n(profile main\n  ({} {} \"git *\"))\n",
                     effect, verb_str,
                 );
                 // Extended: same + rule for "npm *" (never queried with npm)
-                let yaml_ext = format!(
-                    "rules:\n  - {} * {} git *\n  - {} * {} npm *\n",
+                let sexpr_ext = format!(
+                    "(default ask main)\n(profile main\n  ({} {} \"git *\")\n  ({} {} \"npm *\"))\n",
                     effect, verb_str,
                     extra_effect, verb_str,
                 );
 
                 if let (Ok(doc_base), Ok(doc_ext)) =
-                    (parse::parse_yaml(&yaml_base), parse::parse_yaml(&yaml_ext))
+                    (parse::parse_policy(&sexpr_base), parse::parse_policy(&sexpr_ext))
                 {
                     if let (Ok(p_base), Ok(p_ext)) =
                         (CompiledPolicy::compile(&doc_base), CompiledPolicy::compile(&doc_ext))
@@ -2047,28 +1676,28 @@ rules:
             fn unreachable_verb_rule_is_inert(
                 effect in arb_effect(),
                 extra_effect in arb_effect(),
-                noun in arb_noun(),
+                (noun_pattern, noun_eval) in arb_noun(),
             ) {
                 // Base: rule for bash
-                let yaml_base = format!(
-                    "rules:\n  - {} * bash {}\n",
-                    effect, noun,
+                let sexpr_base = format!(
+                    "(default ask main)\n(profile main\n  ({} bash {}))\n",
+                    effect, noun_pattern,
                 );
                 // Extended: same + rule for read (never queried with read)
-                let yaml_ext = format!(
-                    "rules:\n  - {} * bash {}\n  - {} * read some_other_file\n",
-                    effect, noun,
+                let sexpr_ext = format!(
+                    "(default ask main)\n(profile main\n  ({} bash {})\n  ({} read some_other_file))\n",
+                    effect, noun_pattern,
                     extra_effect,
                 );
 
                 if let (Ok(doc_base), Ok(doc_ext)) =
-                    (parse::parse_yaml(&yaml_base), parse::parse_yaml(&yaml_ext))
+                    (parse::parse_policy(&sexpr_base), parse::parse_policy(&sexpr_ext))
                 {
                     if let (Ok(p_base), Ok(p_ext)) =
                         (CompiledPolicy::compile(&doc_base), CompiledPolicy::compile(&doc_ext))
                     {
-                        let d_base = p_base.evaluate("agent:claude", &Verb::Execute, &noun);
-                        let d_ext = p_ext.evaluate("agent:claude", &Verb::Execute, &noun);
+                        let d_base = p_base.evaluate("agent:claude", &Verb::Execute, &noun_eval);
+                        let d_ext = p_ext.evaluate("agent:claude", &Verb::Execute, &noun_eval);
                         prop_assert_eq!(d_base.effect, d_ext.effect,
                             "unreachable verb rule should not change result");
                     }
@@ -2090,10 +1719,10 @@ rules:
     #[test]
     fn test_builtin_allows_read_clash_dir() {
         // Minimal policy with no user-defined __clash_internal__
-        let policy = compile_yaml("rules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
-        // Read ~/.clash/policy.yaml → allowed by built-in profile
-        let noun = clash_path(".clash/policy.yaml");
+        // Read ~/.clash/policy.sexp → allowed by built-in profile
+        let noun = clash_path(".clash/policy.sexp");
         let ctx = make_ctx(
             "agent",
             &Verb::Read,
@@ -2113,10 +1742,10 @@ rules:
     #[test]
     fn test_builtin_does_not_allow_write_clash_dir() {
         // Built-in only allows Read, not Write/Edit
-        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
-        // Write to ~/.clash/policy.yaml → NOT allowed (no built-in write rule)
-        let noun = clash_path(".clash/policy.yaml");
+        // Write to ~/.clash/policy.sexp → NOT allowed (no built-in write rule)
+        let noun = clash_path(".clash/policy.sexp");
         let ctx = make_ctx(
             "agent",
             &Verb::Write,
@@ -2135,7 +1764,7 @@ rules:
 
     #[test]
     fn test_builtin_clash_init_asks() {
-        let policy = compile_yaml("rules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
         // `clash init` via full path → ask (mutation requires consent)
         let ctx = make_ctx(
@@ -2156,7 +1785,7 @@ rules:
 
     #[test]
     fn test_builtin_clash_init_force_asks() {
-        let policy = compile_yaml("rules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
         // `clash init --force` also matches → ask (mutation)
         let ctx = make_ctx(
@@ -2177,7 +1806,7 @@ rules:
 
     #[test]
     fn test_builtin_clash_migrate_asks() {
-        let policy = compile_yaml("rules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
         // `clash migrate` via full path → ask (mutation requires consent)
         let ctx = make_ctx(
@@ -2199,7 +1828,7 @@ rules:
     #[test]
     fn test_builtin_non_clash_bash_no_clash_sandbox() {
         // Non-clash bash commands should NOT get ~/.clash/ in their sandbox
-        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
         let ctx = make_ctx(
             "agent",
@@ -2221,7 +1850,7 @@ rules:
     #[test]
     fn test_builtin_does_not_allow_outside_clash_dir() {
         // Policy with only deny rules — nothing else allowed
-        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
         // Read /etc/passwd → not covered by built-in, falls to default (ask)
         let ctx = make_ctx(
@@ -2243,26 +1872,12 @@ rules:
     #[test]
     fn test_user_can_override_builtin_profile() {
         // User defines __clash_internal__ in their profile_defs — built-in should NOT be injected
-        let yaml = r#"
-default:
-  permission: ask
-  profile: main
-
-profiles:
-  __clash_internal__:
-    rules:
-      deny read *:
-        fs:
-          read: subpath(~/.clash)
-  main:
-    include: [__clash_internal__]
-    rules:
-      allow bash git *:
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask main)\n(profile __clash_internal__\n  (deny read *\n    (fs (read (subpath ~/.clash)))))\n(profile main\n  (include __clash_internal__)\n  (allow bash \"git *\"))\n",
+        );
 
         // Read from ~/.clash/ → denied by user's override
-        let noun = clash_path(".clash/policy.yaml");
+        let noun = clash_path(".clash/policy.sexp");
         let ctx = make_ctx(
             "agent",
             &Verb::Read,
@@ -2282,10 +1897,10 @@ profiles:
     #[test]
     fn test_default_policy_includes_builtin() {
         // The default policy template should work with the built-in profile
-        let policy = compile_yaml(crate::settings::DEFAULT_POLICY);
+        let policy = compile(crate::settings::DEFAULT_POLICY);
 
-        // Read ~/.clash/policy.yaml from a project dir → allowed
-        let noun = clash_path(".clash/policy.yaml");
+        // Read ~/.clash/policy.sexp from a project dir → allowed
+        let noun = clash_path(".clash/policy.sexp");
         let ctx = make_ctx(
             "agent",
             &Verb::Read,
@@ -2304,7 +1919,7 @@ profiles:
 
     #[test]
     fn test_default_policy_clash_init_asks() {
-        let policy = compile_yaml(crate::settings::DEFAULT_POLICY);
+        let policy = compile(crate::settings::DEFAULT_POLICY);
 
         // clash init via full path → ask (built-in __clash_internal__ profile
         // matches clash commands; mutations like init require consent)
@@ -2325,12 +1940,99 @@ profiles:
     }
 
     // -----------------------------------------------------------------------
+    // Sandbox-first fs rule expansion
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_fs_rule_expansion() {
+        let input = r#"
+(default deny main)
+(profile main
+  (allow (fs read write) (subpath .)))
+"#;
+        let policy = compile(input);
+        let cwd = "/home/user/project";
+
+        // Read tool should be allowed within cwd
+        let ti = serde_json::json!({"file_path": "./src/main.rs"});
+        let ctx = make_ctx("agent", &Verb::Read, "./src/main.rs", cwd, &ti, "read");
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "fs read should allow Read tool"
+        );
+
+        // Edit tool should be allowed within cwd
+        let ti = serde_json::json!({"file_path": "./src/main.rs"});
+        let ctx = make_ctx("agent", &Verb::Edit, "./src/main.rs", cwd, &ti, "edit");
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "fs write should allow Edit tool"
+        );
+
+        // Write tool should be allowed (write + create)
+        let ti = serde_json::json!({"file_path": "./src/new_file.rs"});
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Write,
+            "./src/new_file.rs",
+            cwd,
+            &ti,
+            "write",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "fs write should allow Write tool"
+        );
+
+        // Bash should NOT be allowed (no explicit bash rule)
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "ls",
+            cwd,
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Deny, "no bash rule means deny");
+    }
+
+    #[test]
+    fn test_fs_read_only_expansion() {
+        let input = r#"
+(default deny main)
+(profile main
+  (allow (fs read) (subpath .)))
+"#;
+        let policy = compile(input);
+        let cwd = "/home/user/project";
+
+        // Read should be allowed
+        let ti = serde_json::json!({"file_path": "./file.txt"});
+        let ctx = make_ctx("agent", &Verb::Read, "./file.txt", cwd, &ti, "read");
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+
+        // Edit should NOT be allowed (read-only)
+        let ti = serde_json::json!({"file_path": "./file.txt"});
+        let ctx = make_ctx("agent", &Verb::Edit, "./file.txt", cwd, &ti, "edit");
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    // -----------------------------------------------------------------------
     // Read-only clash commands: allow without prompting
     // -----------------------------------------------------------------------
 
     #[test]
     fn test_builtin_clash_policy_show_allowed() {
-        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
         let ctx = make_ctx(
             "agent",
@@ -2350,7 +2052,7 @@ profiles:
 
     #[test]
     fn test_builtin_clash_policy_schema_allowed() {
-        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
         let ctx = make_ctx(
             "agent",
@@ -2370,7 +2072,7 @@ profiles:
 
     #[test]
     fn test_builtin_clash_policy_add_rule_dry_run_allowed() {
-        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
         // --dry-run preview → constrained-allow beats unconstrained-ask
         let ctx = make_ctx(
@@ -2391,7 +2093,7 @@ profiles:
 
     #[test]
     fn test_builtin_clash_policy_remove_rule_dry_run_allowed() {
-        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
         let ctx = make_ctx(
             "agent",
@@ -2415,7 +2117,7 @@ profiles:
 
     #[test]
     fn test_builtin_clash_policy_add_rule_asks() {
-        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
         // Without --dry-run → actual mutation → ask
         let ctx = make_ctx(
@@ -2436,7 +2138,7 @@ profiles:
 
     #[test]
     fn test_builtin_clash_policy_remove_rule_asks() {
-        let policy = compile_yaml("default: ask\nrules:\n  - deny * bash rm *\n");
+        let policy = compile("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
 
         let ctx = make_ctx(
             "agent",
@@ -2460,7 +2162,7 @@ profiles:
 
     #[test]
     fn test_builtin_asks_askuserquestion() {
-        let policy = compile_yaml("default: deny\n");
+        let policy = compile("(default deny main)\n(profile main)\n");
 
         let ctx = make_ctx(
             "agent",
@@ -2480,7 +2182,7 @@ profiles:
 
     #[test]
     fn test_builtin_allows_exitplanmode() {
-        let policy = compile_yaml("default: ask\n");
+        let policy = compile("(default ask main)\n(profile main)\n");
 
         let ctx = make_ctx(
             "agent",
@@ -2501,7 +2203,7 @@ profiles:
     #[test]
     fn test_builtin_applies_correct_effect_to_all_claude_meta_tools() {
         // Use deny as default so we can distinguish allow vs ask vs default
-        let policy = compile_yaml("default: deny\n");
+        let policy = compile("(default deny main)\n(profile main)\n");
 
         for rule in super::builtin_claude_rules() {
             let ctx = make_ctx(
@@ -2524,7 +2226,7 @@ profiles:
     #[test]
     fn test_builtin_does_not_allow_bash_via_claude_internal() {
         // Bash should NOT be allowed by __claude_internal__
-        let policy = compile_yaml("default: ask\n");
+        let policy = compile("(default ask main)\n(profile main)\n");
 
         let ctx = make_ctx(
             "agent",
@@ -2545,19 +2247,9 @@ profiles:
     #[test]
     fn test_user_can_override_claude_internal_profile() {
         // User defines __claude_internal__ in their profile_defs
-        let yaml = r#"
-default:
-  permission: ask
-  profile: main
-
-profiles:
-  __claude_internal__:
-    rules:
-      deny askuserquestion *:
-  main:
-    include: [__claude_internal__]
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask main)\n(profile __claude_internal__\n  (deny askuserquestion *))\n(profile main\n  (include __claude_internal__))\n",
+        );
 
         let ctx = make_ctx(
             "agent",
@@ -2577,18 +2269,9 @@ profiles:
 
     #[test]
     fn test_new_format_url_require() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow webfetch *:
-        url: ["github.com"]
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile test\n  (allow webfetch *\n    (url \"github.com\")))\n",
+        );
 
         // URL matching required domain → allowed
         let input = serde_json::json!({"url": "https://github.com/foo/bar"});
@@ -2617,18 +2300,9 @@ profiles:
 
     #[test]
     fn test_new_format_url_forbid() {
-        let yaml = r#"
-default:
-  permission: allow
-  profile: test
-
-profiles:
-  test:
-    rules:
-      deny webfetch *:
-        url: ["evil.com"]
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default allow test)\n(profile test\n  (deny webfetch *\n    (url \"evil.com\")))\n",
+        );
 
         // URL matching forbidden domain → denied
         let input = serde_json::json!({"url": "https://evil.com/malware"});
@@ -2657,18 +2331,9 @@ profiles:
 
     #[test]
     fn test_new_format_url_wildcard_subdomain() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow webfetch *:
-        url: ["*.github.com"]
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile test\n  (allow webfetch *\n    (url \"*.github.com\")))\n",
+        );
 
         // Subdomain matches → allowed
         let input = serde_json::json!({"url": "https://api.github.com/repos"});
@@ -2697,18 +2362,9 @@ profiles:
 
     #[test]
     fn test_new_format_url_full_glob() {
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow webfetch *:
-        url: ["https://github.com/*"]
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile test\n  (allow webfetch *\n    (url \"https://github.com/*\")))\n",
+        );
 
         // Full URL glob matches → allowed
         let input = serde_json::json!({"url": "https://github.com/anthropics/claude"});
@@ -2738,17 +2394,9 @@ profiles:
     #[test]
     fn test_url_noun_pattern_after_bug_fix() {
         // After fixing the URL-as-entity parsing bug, URL noun patterns should work
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow webfetch https://github.com/*: []
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile test\n  (allow webfetch \"https://github.com/*\"))\n",
+        );
 
         let input = serde_json::json!({"url": "https://github.com/foo"});
         let ctx = make_ctx(
@@ -2780,19 +2428,9 @@ profiles:
     fn test_constrained_allow_beats_unconstrained_ask() {
         // A URL-constrained allow should beat an unconstrained ask
         // when the URL matches the constraint.
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow webfetch *:
-        url: ["github.com"]
-      ask webfetch *:
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile test\n  (allow webfetch *\n    (url \"github.com\"))\n  (ask webfetch *))\n",
+        );
 
         // URL matches constraint → constrained allow wins over unconstrained ask
         let input = serde_json::json!({"url": "https://github.com/anthropics/claude"});
@@ -2828,20 +2466,9 @@ profiles:
     #[test]
     fn test_constrained_ask_beats_constrained_allow() {
         // When both ask and allow have constraints, ask wins (same tier).
-        let yaml = r#"
-default:
-  permission: allow
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow webfetch *:
-        url: ["github.com"]
-      ask webfetch *:
-        url: ["github.com"]
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default allow test)\n(profile test\n  (allow webfetch *\n    (url \"github.com\"))\n  (ask webfetch *\n    (url \"github.com\")))\n",
+        );
 
         let input = serde_json::json!({"url": "https://github.com/foo"});
         let ctx = make_ctx(
@@ -2858,19 +2485,9 @@ profiles:
     #[test]
     fn test_deny_beats_constrained_allow() {
         // Deny always wins, even over constrained allow.
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow webfetch *:
-        url: ["github.com"]
-      deny webfetch *:
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile test\n  (allow webfetch *\n    (url \"github.com\"))\n  (deny webfetch *))\n",
+        );
 
         let input = serde_json::json!({"url": "https://github.com/foo"});
         let ctx = make_ctx(
@@ -2889,23 +2506,9 @@ profiles:
         // An allow * * rule with only fs constraints should NOT count as
         // "constrained" for webfetch, since fs guards are irrelevant for
         // non-read/write/edit verbs.
-        let yaml = r#"
-default:
-  permission: deny
-  profile: test
-
-profiles:
-  base:
-    rules:
-      allow * *:
-        fs:
-          read + write + execute + create + delete: subpath(/home/user/project)
-  test:
-    include: [base]
-    rules:
-      ask webfetch *:
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default deny test)\n(profile base\n  (allow * *\n    (fs (\"read + write + execute + create + delete\" (subpath /home/user/project)))))\n(profile test\n  (include base)\n  (ask webfetch *))\n",
+        );
 
         // The ask webfetch * is unconstrained. The allow * * has fs constraints
         // but those are not "active" for webfetch. Both are Tier 0.
@@ -2926,25 +2529,9 @@ profiles:
     fn test_constrained_allow_with_fs_broad_allow_and_ask() {
         // Real-world scenario: fs-constrained broad allows + URL-constrained
         // webfetch allow + unconstrained webfetch ask.
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  cwd:
-    rules:
-      allow * *:
-        fs:
-          read + write + execute + create + delete: subpath(/home/user/project)
-  test:
-    include: [cwd]
-    rules:
-      allow webfetch *:
-        url: ["github.com"]
-      ask webfetch *:
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile cwd\n  (allow * *\n    (fs (\"read + write + execute + create + delete\" (subpath /home/user/project)))))\n(profile test\n  (include cwd)\n  (allow webfetch *\n    (url \"github.com\"))\n  (ask webfetch *))\n",
+        );
 
         // github.com → constrained allow (Tier 1) beats unconstrained ask (Tier 0)
         let input = serde_json::json!({"url": "https://github.com/foo"});
@@ -2974,19 +2561,9 @@ profiles:
     #[test]
     fn test_constrained_args_allow_beats_unconstrained_ask() {
         // Args-constrained allow should beat unconstrained ask for bash.
-        let yaml = r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow bash git *:
-        args: ["--dry-run"]
-      ask bash *:
-"#;
-        let policy = compile_yaml(yaml);
+        let policy = compile(
+            "(default ask test)\n(profile test\n  (allow bash \"git *\"\n    (args \"--dry-run\"))\n  (ask bash *))\n",
+        );
 
         // git diff --dry-run → constrained allow (has require-args) beats unconstrained ask
         let ctx = make_ctx(
@@ -3009,5 +2586,134 @@ profiles:
             "bash",
         );
         assert_eq!(policy.evaluate_with_context(&ctx).effect, Effect::Ask);
+    }
+
+    // --- Profile-level sandbox tests ---
+
+    #[test]
+    fn test_profile_sandbox_generates_sandbox_policy() {
+        let policy = compile(
+            "(default deny main)\n(profile main\n  (sandbox\n    (fs read execute (subpath .))\n    (fs write create (subpath ./target))\n    (network allow))\n  (allow bash \"cargo *\")\n  (allow bash \"git status\")\n  (deny bash \"git push*\"))\n",
+        );
+
+        // Allowed bash command gets a sandbox
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "cargo build",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        let sandbox = decision
+            .sandbox
+            .expect("profile sandbox should produce SandboxPolicy");
+        assert!(!sandbox.rules.is_empty(), "sandbox should have rules");
+        assert_eq!(sandbox.network, NetworkPolicy::Allow);
+    }
+
+    #[test]
+    fn test_profile_sandbox_deny_rules_unaffected() {
+        let policy = compile(
+            "(default deny main)\n(profile main\n  (sandbox\n    (fs read execute (subpath .))\n    (network allow))\n  (allow bash \"git *\")\n  (deny bash \"git push*\"))\n",
+        );
+
+        // Denied command stays denied
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "git push origin main",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Deny);
+        assert!(decision.sandbox.is_none());
+    }
+
+    #[test]
+    fn test_profile_sandbox_backward_compat_no_sandbox_block() {
+        // When no sandbox: block exists, per-rule fs: still generates sandbox
+        let policy = compile(
+            "(default deny main)\n(profile main\n  (allow bash \"cargo *\"\n    (fs (\"read + execute\" (subpath .)) (\"write + create\" (subpath ./target)))\n    (network allow)))\n",
+        );
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "cargo build",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        let sandbox = decision
+            .sandbox
+            .expect("per-rule fs should still generate sandbox");
+        assert!(!sandbox.rules.is_empty());
+    }
+
+    #[test]
+    fn test_profile_sandbox_network_deny() {
+        let policy = compile(
+            "(default deny main)\n(profile main\n  (sandbox\n    (fs read execute (subpath .))\n    (network deny))\n  (allow bash *))\n",
+        );
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "curl example.com",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        let sandbox = decision.sandbox.expect("should have sandbox");
+        assert_eq!(sandbox.network, NetworkPolicy::Deny);
+    }
+
+    #[test]
+    fn test_profile_sandbox_include_merge() {
+        let policy = compile(
+            "(default deny child)\n(profile parent\n  (sandbox\n    (fs read execute (subpath .))\n    (network deny))\n  (allow bash \"git *\"))\n(profile child\n  (include parent)\n  (sandbox\n    (fs write create (subpath ./target))\n    (network allow))\n  (allow bash \"cargo *\"))\n",
+        );
+
+        let ctx = make_ctx(
+            "agent",
+            &Verb::Execute,
+            "cargo build",
+            "/home/user/project",
+            &serde_json::Value::Null,
+            "bash",
+        );
+        let decision = policy.evaluate_with_context(&ctx);
+        assert_eq!(decision.effect, Effect::Allow);
+        let sandbox = decision.sandbox.expect("should have merged sandbox");
+        // deny wins for network
+        assert_eq!(sandbox.network, NetworkPolicy::Deny);
+        // Should have rules from both parent and child fs entries
+        assert!(
+            sandbox.rules.len() >= 2,
+            "should have rules from both parent and child, got {}",
+            sandbox.rules.len()
+        );
+    }
+
+    #[test]
+    fn test_sandbox_for_active_profile_uses_profile_sandbox() {
+        let policy = compile(
+            "(default deny main)\n(profile main\n  (sandbox\n    (fs read execute (subpath .))\n    (fs write create (subpath ./target))\n    (network deny))\n  (allow bash \"cargo *\")\n  (allow bash \"git status\"))\n",
+        );
+
+        let sandbox = policy
+            .sandbox_for_active_profile("/home/user/project")
+            .expect("profile sandbox should generate SandboxPolicy");
+        assert_eq!(sandbox.network, NetworkPolicy::Deny);
+        assert!(!sandbox.rules.is_empty());
     }
 }

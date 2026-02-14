@@ -225,7 +225,7 @@ impl CompiledPolicy {
             }
             // has_constrained_allow only
             let sandbox = if ctx.verb_str == "bash" {
-                self.generate_unified_sandbox(
+                self.resolve_sandbox(
                     &allow_fs_entries,
                     merged_network,
                     &allow_profile_guards,
@@ -268,7 +268,7 @@ impl CompiledPolicy {
         }
         if has_allow {
             let sandbox = if ctx.verb_str == "bash" {
-                self.generate_unified_sandbox(
+                self.resolve_sandbox(
                     &allow_fs_entries,
                     merged_network,
                     &allow_profile_guards,
@@ -310,7 +310,15 @@ impl CompiledPolicy {
     /// specific request), this collects sandbox-relevant constraints from every
     /// allow rule regardless of matching. This provides a profile-wide sandbox
     /// for the `clash sandbox exec --profile` CLI.
+    ///
+    /// If a profile-level sandbox is configured, it takes precedence over
+    /// per-rule `fs:` constraints.
     pub fn sandbox_for_active_profile(&self, cwd: &str) -> Option<SandboxPolicy> {
+        // Profile-level sandbox takes precedence
+        if let Some(sandbox) = self.generate_sandbox_from_profile_config(cwd) {
+            return Some(sandbox);
+        }
+
         let mut inline_fs_entries: Vec<(&CompiledFilterExpr, Cap)> = Vec::new();
         let mut merged_network = NetworkPolicy::Allow;
         let mut profile_guards: Vec<&ProfileExpr> = Vec::new();
@@ -381,6 +389,63 @@ impl CompiledPolicy {
             default: Cap::READ | Cap::EXECUTE,
             rules,
             network,
+        })
+    }
+
+    /// Resolve sandbox policy: profile-level sandbox takes precedence,
+    /// otherwise fall back to per-rule sandbox generation.
+    fn resolve_sandbox(
+        &self,
+        inline_fs_entries: &[(&CompiledFilterExpr, Cap)],
+        inline_network: NetworkPolicy,
+        profile_guards: &[&ProfileExpr],
+        cwd: &str,
+    ) -> Option<SandboxPolicy> {
+        if let Some(sandbox) = self.generate_sandbox_from_profile_config(cwd) {
+            return Some(sandbox);
+        }
+        self.generate_unified_sandbox(inline_fs_entries, inline_network, profile_guards, cwd)
+    }
+
+    /// Generate a sandbox policy from the profile-level `sandbox:` block.
+    ///
+    /// Returns `None` if no profile-level sandbox is configured.
+    fn generate_sandbox_from_profile_config(&self, cwd: &str) -> Option<SandboxPolicy> {
+        let config = self.profile_sandbox.as_ref()?;
+
+        if config.fs.is_empty() {
+            // No fs entries — still return a sandbox if network is restricted
+            if config.network == NetworkPolicy::Deny {
+                return Some(SandboxPolicy {
+                    default: Cap::READ | Cap::EXECUTE,
+                    rules: Vec::new(),
+                    network: NetworkPolicy::Deny,
+                });
+            }
+            return None;
+        }
+
+        let mut rules = Vec::new();
+        for (caps, compiled_fs) in &config.fs {
+            filter_to_sandbox_rules(compiled_fs, RuleEffect::Allow, *caps, cwd, &mut rules);
+        }
+
+        // Same heuristic as sandbox_gen: if all rules are Deny (from negation-only
+        // filters), grant full requested caps as default.
+        let default = if rules.iter().all(|r| r.effect == RuleEffect::Deny) {
+            // Union all caps from the fs entries
+            config
+                .fs
+                .iter()
+                .fold(Cap::empty(), |acc, (caps, _)| acc | *caps)
+        } else {
+            Cap::READ | Cap::EXECUTE
+        };
+
+        Some(SandboxPolicy {
+            default,
+            rules,
+            network: config.network,
         })
     }
 

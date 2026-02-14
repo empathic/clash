@@ -9,7 +9,37 @@ use std::collections::HashMap;
 use regex::Regex;
 
 use super::{Effect, ProfileExpr};
+use crate::policy::ast::SandboxConfig;
 use crate::policy::sandbox_types::{Cap, NetworkPolicy, SandboxPolicy};
+
+/// Compiled profile-level sandbox configuration.
+///
+/// When present on a `CompiledPolicy`, overrides per-rule `fs:` for sandbox generation.
+#[derive(Debug)]
+pub(crate) struct CompiledSandboxConfig {
+    pub(crate) fs: Vec<(Cap, CompiledFilterExpr)>,
+    pub(crate) network: NetworkPolicy,
+}
+
+impl CompiledSandboxConfig {
+    /// Compile a parsed `SandboxConfig` into compiled form.
+    pub(crate) fn compile(config: &SandboxConfig) -> Result<Self, super::error::CompileError> {
+        let fs = match &config.fs {
+            Some(entries) => {
+                let mut compiled = Vec::new();
+                for (caps, filter) in entries {
+                    compiled.push((*caps, CompiledFilterExpr::compile(filter)?));
+                }
+                compiled
+            }
+            None => Vec::new(),
+        };
+
+        let network = config.network.unwrap_or(NetworkPolicy::Allow);
+
+        Ok(CompiledSandboxConfig { fs, network })
+    }
+}
 
 /// A compiled policy ready for fast evaluation.
 #[derive(Debug)]
@@ -23,6 +53,9 @@ pub struct CompiledPolicy {
     /// Unified rule list for evaluation. Contains both legacy-converted rules
     /// (with entity_matcher/profile_guard) and new-format profile rules.
     pub(crate) active_profile_rules: Vec<CompiledProfileRule>,
+    /// Profile-level sandbox configuration. When present, overrides per-rule
+    /// `fs:` on bash allow rules for sandbox generation.
+    pub(crate) profile_sandbox: Option<CompiledSandboxConfig>,
 }
 
 /// A compiled constraint definition with pre-compiled regexes.

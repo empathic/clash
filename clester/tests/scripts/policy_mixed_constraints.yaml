@@ -4,24 +4,17 @@ meta:
 
 clash:
   policy_raw: |
-    default:
-      permission: ask
-      profile: dev
-
-    profiles:
-      readonly:
-        rules:
-          allow read *:
-          deny write *:
-          deny edit *:
-
-      dev:
-        include: readonly
-        rules:
-          allow bash git *:
-            args: ["!--force", "!-f"]
-          allow bash cargo *:
-          deny bash rm *:
+    (default ask dev)
+    (profile readonly
+      (allow read *)
+      (deny write *)
+      (deny edit *))
+    (profile dev
+      (include readonly)
+      (allow bash "git *"
+        (args (not "--force") (not "-f")))
+      (allow bash "cargo *")
+      (deny bash "rm *"))
 
 steps:
   - name: git status allowed by dev profile

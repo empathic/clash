@@ -31,7 +31,7 @@ clash init [OPTIONS]
 
 **What it does:**
 
-1. Creates `~/.clash/policy.yaml` with a safe default policy (or reconfigures an existing one)
+1. Creates `~/.clash/policy.sexp` with a safe default policy (or reconfigures an existing one)
 2. Sets `bypassPermissions: true` in Claude Code settings so clash is the sole permission handler
 3. Offers an interactive wizard to configure capabilities
 
@@ -64,7 +64,7 @@ clash launch [OPTIONS] [ARGS]...
 
 | Flag | Description |
 |------|-------------|
-| `--policy <POLICY>` | Path to policy file (default: `~/.clash/policy.yaml`) |
+| `--policy <POLICY>` | Path to policy file (default: `~/.clash/policy.sexp`) |
 
 **Arguments:**
 
@@ -79,7 +79,7 @@ clash launch [OPTIONS] [ARGS]...
 clash launch
 
 # Launch with a custom policy
-clash launch --policy ./project-policy.yaml
+clash launch --policy ./project-policy.sexp
 
 # Pass arguments to Claude Code
 clash launch -- --model sonnet
@@ -145,7 +145,7 @@ clash migrate [OPTIONS]
 
 **Behavior:**
 
-- If no `policy.yaml` exists, creates one with migrated rules
+- If no `policy.sexp` exists, creates one with migrated rules
 - If one already exists, merges new rules into the active profile
 
 **Examples:**
@@ -280,7 +280,7 @@ clash policy remove-rule "deny bash git push*" --profile safe-git
 
 ### clash policy schema
 
-Show the full schema of `policy.yaml` settings — sections, fields, types, and defaults.
+Show the full schema of policy settings — sections, fields, types, and defaults.
 
 ```
 clash policy schema [OPTIONS]

@@ -7,36 +7,19 @@ meta:
 
 clash:
   policy_raw: |
-    default:
-      permission: ask
-      profile: main
-
-    profiles:
-      cwd:
-        rules:
-          allow * *:
-            fs:
-              read + write + execute + create + delete: subpath(/home/user/project)
-
-      main:
-        include: [cwd]
-        rules:
-          # URL-constrained allow for specific domain
-          allow webfetch *:
-            url: ["github.com"]
-
-          # Unconstrained ask for all webfetch (should lose to constrained allow)
-          ask webfetch *:
-
-          # Args-constrained allow for git with --dry-run
-          allow bash git *:
-            args: ["--dry-run"]
-
-          # Unconstrained ask for all bash (should lose to constrained allow)
-          ask bash *:
-
-          # Deny always wins regardless of specificity
-          deny bash rm *:
+    (default ask main)
+    (profile cwd
+      (allow * *
+        (fs (read+write+execute+create+delete (subpath /home/user/project)))))
+    (profile main
+      (include cwd)
+      (allow webfetch *
+        (url "github.com"))
+      (ask webfetch *)
+      (allow bash "git *"
+        (args "--dry-run"))
+      (ask bash *)
+      (deny bash "rm *"))
 
 steps:
   # ── URL constraint specificity ──────────────────────────────────────

@@ -369,7 +369,7 @@ mod tests {
     use super::*;
     use crate::hooks::ToolUseHookInput;
     use crate::policy::parse::desugar_claude_permissions;
-    use crate::policy::parse::parse_yaml;
+    use crate::policy::parse::parse_policy;
     use crate::policy::{ClaudePermissions, PolicyConfig, PolicyDocument};
     use anyhow::Result;
     use serde_json::json;
@@ -389,8 +389,8 @@ mod tests {
         }
     }
 
-    fn settings_with_policy(yaml: &str) -> ClashSettings {
-        let doc = parse_yaml(yaml).expect("valid YAML");
+    fn settings_with_policy(sexpr: &str) -> ClashSettings {
+        let doc = parse_policy(sexpr).expect("valid s-expr policy");
         let mut settings = ClashSettings::default();
         settings.set_policy(doc);
         settings
@@ -473,7 +473,8 @@ mod tests {
 
     #[test]
     fn test_policy_allow_bash() -> Result<()> {
-        let settings = settings_with_policy("rules:\n  - allow * bash git *\n");
+        let settings =
+            settings_with_policy("(default ask main)\n(profile main\n  (allow bash \"git *\"))\n");
         let result = check_permission(&bash_input("git status"), &settings)?;
         assert_decision(
             &result,
@@ -485,7 +486,8 @@ mod tests {
 
     #[test]
     fn test_policy_deny_bash() -> Result<()> {
-        let settings = settings_with_policy("rules:\n  - deny * bash rm *\n");
+        let settings =
+            settings_with_policy("(default ask main)\n(profile main\n  (deny bash \"rm *\"))\n");
         let result = check_permission(&bash_input("rm -rf /"), &settings)?;
         assert_decision(
             &result,
@@ -497,8 +499,10 @@ mod tests {
 
     #[test]
     fn test_policy_ask_default() -> Result<()> {
-        let settings = settings_with_policy("rules:\n  - allow user bash *\n");
-        // entity is "agent" by default, so this allow for "user" won't match
+        // No rules match the command, so the default (ask) is applied
+        let settings = settings_with_policy(
+            "(default ask main)\n(profile main\n  (allow bash \"only-this-command\"))\n",
+        );
         let result = check_permission(&bash_input("ls"), &settings)?;
         assert_decision(
             &result,
@@ -510,7 +514,8 @@ mod tests {
 
     #[test]
     fn test_policy_read_file() -> Result<()> {
-        let settings = settings_with_policy("rules:\n  - allow * read *.rs\n");
+        let settings =
+            settings_with_policy("(default ask main)\n(profile main\n  (allow read *.rs))\n");
         let result = check_permission(&read_input("src/main.rs"), &settings)?;
         assert_decision(
             &result,
@@ -523,11 +528,7 @@ mod tests {
     #[test]
     fn test_policy_deny_overrides_allow() -> Result<()> {
         let settings = settings_with_policy(
-            "\
-rules:
-  - allow * read *
-  - deny * read .env
-",
+            "(default ask main)\n(profile main\n  (allow read *)\n  (deny read .env))\n",
         );
         let result = check_permission(&read_input(".env"), &settings)?;
         assert_decision(
@@ -540,7 +541,8 @@ rules:
 
     #[test]
     fn test_auto_mode_uses_policy_when_available() -> Result<()> {
-        let doc = parse_yaml("rules:\n  - allow * bash echo *\n").unwrap();
+        let doc = parse_policy("(default ask main)\n(profile main\n  (allow bash \"echo *\"))\n")
+            .unwrap();
         let mut settings = ClashSettings::default();
         settings.set_policy(doc);
         let result = check_permission(&bash_input("echo hello"), &settings)?;
@@ -588,13 +590,10 @@ rules:
     #[test]
     fn test_constraint_pipe_blocks_piped_command() -> Result<()> {
         let settings = settings_with_policy(
-            "\
-constraints:
-  safe-io:
-    pipe: false
-rules:
-  - \"allow * bash * : safe-io\"
-",
+            "(default ask main)\n\
+             (profile main\n\
+               (allow bash *\n\
+                 (pipe deny)))\n",
         );
         // Command without pipe → allowed
         let result = check_permission(&bash_input("ls -la"), &settings)?;
@@ -617,15 +616,10 @@ rules:
     #[test]
     fn test_constraint_forbid_args_blocks_force_push() -> Result<()> {
         let settings = settings_with_policy(
-            "\
-constraints:
-  git-safe:
-    forbid-args:
-      - --force
-      - --force-with-lease
-rules:
-  - \"allow * bash git * : git-safe\"
-",
+            "(default ask main)\n\
+             (profile main\n\
+               (allow bash \"git *\"\n\
+                 (args (not \"--force\") (not \"--force-with-lease\"))))\n",
         );
         // git push without --force → allowed
         let result = check_permission(&bash_input("git push origin main"), &settings)?;
@@ -648,13 +642,10 @@ rules:
     #[test]
     fn test_constraint_fs_subpath_with_cwd() -> Result<()> {
         let settings = settings_with_policy(
-            "\
-constraints:
-  local:
-    fs: subpath(.)
-rules:
-  - \"allow * read * : local\"
-",
+            "(default ask main)\n\
+             (profile main\n\
+               (allow read *\n\
+                 (fs (read (subpath .)))))\n",
         );
         // File under cwd → allowed
         let result = check_permission(
@@ -728,26 +719,20 @@ rules:
     #[test]
     fn test_profile_composition_integration() -> Result<()> {
         let settings = settings_with_policy(
-            "\
-constraints:
-  local:
-    fs: subpath(.)
-  safe-io:
-    pipe: false
-    redirect: false
-  git-safe:
-    forbid-args:
-      - --force
-      - --hard
-profiles:
-  sandboxed: local & safe-io
-  strict-git: sandboxed & git-safe
-rules:
-  - \"allow * bash git * : strict-git\"
-  - \"allow * bash cargo * : sandboxed\"
-  - \"allow * read * : local\"
-  - deny * bash rm *
-",
+            "(default ask main)\n\
+             (profile main\n\
+               (allow bash \"git *\"\n\
+                 (fs (full (subpath .)))\n\
+                 (pipe deny)\n\
+                 (redirect deny)\n\
+                 (args (not \"--force\") (not \"--hard\")))\n\
+               (allow bash \"cargo *\"\n\
+                 (fs (full (subpath .)))\n\
+                 (pipe deny)\n\
+                 (redirect deny))\n\
+               (allow read *\n\
+                 (fs (read (subpath .))))\n\
+               (deny bash \"rm *\"))\n",
         );
 
         // git status (no pipe, no force, within cwd) → allowed with sandbox
@@ -810,7 +795,8 @@ rules:
 
     #[test]
     fn test_explanation_contains_matched_rule() -> Result<()> {
-        let settings = settings_with_policy("rules:\n  - allow * bash git *\n");
+        let settings =
+            settings_with_policy("(default ask main)\n(profile main\n  (allow bash \"git *\"))\n");
         let result = check_permission(&bash_input("git status"), &settings)?;
         let ctx = get_additional_context(&result).expect("should have additional_context");
         assert!(
@@ -827,11 +813,7 @@ rules:
     #[test]
     fn test_explanation_deny_overrides_allow_detail() -> Result<()> {
         let settings = settings_with_policy(
-            "\
-rules:
-  - allow * read *
-  - deny * read .env
-",
+            "(default ask main)\n(profile main\n  (allow read *)\n  (deny read .env))\n",
         );
         let result = check_permission(&read_input(".env"), &settings)?;
         let ctx = get_additional_context(&result).expect("should have additional_context");
@@ -845,13 +827,10 @@ rules:
     #[test]
     fn test_explanation_constraint_failure() -> Result<()> {
         let settings = settings_with_policy(
-            "\
-constraints:
-  safe-io:
-    pipe: false
-rules:
-  - \"allow * bash * : safe-io\"
-",
+            "(default ask main)\n\
+             (profile main\n\
+               (allow bash *\n\
+                 (pipe deny)))\n",
         );
         // Command with pipe → constraint fails
         let result = check_permission(&bash_input("cat foo | grep bar"), &settings)?;
@@ -865,7 +844,9 @@ rules:
 
     #[test]
     fn test_explanation_no_rules_matched() -> Result<()> {
-        let settings = settings_with_policy("rules:\n  - allow user bash *\n");
+        let settings = settings_with_policy(
+            "(default ask main)\n(profile main\n  (allow bash \"only-this-command\"))\n",
+        );
         let result = check_permission(&bash_input("ls"), &settings)?;
         let ctx = get_additional_context(&result).expect("should have additional_context");
         assert!(
@@ -1176,17 +1157,10 @@ rules:
     #[test]
     fn test_webfetch_url_constraint_allows_matching_domain() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow webfetch *:
-        url: ["github.com"]
-"#,
+            "(default ask test)\n\
+             (profile test\n\
+               (allow webfetch *\n\
+                 (url \"github.com\")))\n",
         );
         let result = check_permission(&webfetch_input("https://github.com/foo"), &settings)?;
         assert_decision(
@@ -1200,17 +1174,10 @@ profiles:
     #[test]
     fn test_webfetch_url_constraint_falls_to_default_for_non_matching() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-default:
-  permission: ask
-  profile: test
-
-profiles:
-  test:
-    rules:
-      allow webfetch *:
-        url: ["github.com"]
-"#,
+            "(default ask test)\n\
+             (profile test\n\
+               (allow webfetch *\n\
+                 (url \"github.com\")))\n",
         );
         let result = check_permission(&webfetch_input("https://evil.com/malware"), &settings)?;
         assert_decision(
@@ -1224,17 +1191,10 @@ profiles:
     #[test]
     fn test_webfetch_url_forbid_denies_matching() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-default:
-  permission: allow
-  profile: test
-
-profiles:
-  test:
-    rules:
-      deny webfetch *:
-        url: ["evil.com"]
-"#,
+            "(default allow test)\n\
+             (profile test\n\
+               (deny webfetch *\n\
+                 (url \"evil.com\")))\n",
         );
         // Forbidden domain → denied
         let result = check_permission(&webfetch_input("https://evil.com/malware"), &settings)?;
@@ -1521,12 +1481,8 @@ profiles:
 
     #[test]
     fn test_deny_decision_includes_agent_context() -> Result<()> {
-        let settings = settings_with_policy(
-            "\
-rules:
-  - deny * bash *
-",
-        );
+        let settings =
+            settings_with_policy("(default ask main)\n(profile main\n  (deny bash *))\n");
         let result = check_permission(&bash_input("ls -la"), &settings)?;
         assert_decision(
             &result,
@@ -1551,12 +1507,8 @@ rules:
 
     #[test]
     fn test_deny_decision_edit_includes_allow_suggestion() -> Result<()> {
-        let settings = settings_with_policy(
-            "\
-rules:
-  - deny * edit *
-",
-        );
+        let settings =
+            settings_with_policy("(default ask main)\n(profile main\n  (deny edit *))\n");
         let input = ToolUseHookInput {
             tool_name: "Edit".into(),
             tool_input: json!({"file_path": "main.rs", "old_string": "a", "new_string": "b"}),
@@ -1580,16 +1532,7 @@ rules:
     fn test_default_deny_includes_agent_context() -> Result<()> {
         // When no rules match and default is deny, the additional_context
         // should still contain structured deny context.
-        let settings = settings_with_policy(
-            "\
-default:
-  permission: deny
-  profile: main
-profiles:
-  main:
-    rules:
-",
-        );
+        let settings = settings_with_policy("(default deny main)\n(profile main)\n");
         let result = check_permission(&bash_input("echo hello"), &settings)?;
         assert_decision(
             &result,

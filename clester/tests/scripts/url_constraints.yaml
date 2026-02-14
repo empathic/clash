@@ -4,18 +4,13 @@ meta:
 
 clash:
   policy_raw: |
-    default:
-      permission: ask
-      profile: main
-
-    profiles:
-      main:
-        rules:
-          allow webfetch *:
-            url: ["github.com"]
-          deny webfetch *:
-            url: ["evil.com"]
-          ask webfetch *:
+    (default ask main)
+    (profile main
+      (allow webfetch *
+        (url "github.com"))
+      (deny webfetch *
+        (url "evil.com"))
+      (ask webfetch *))
 
 steps:
   - name: webfetch to github.com allowed by constrained allow (specificity)

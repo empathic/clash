@@ -14,14 +14,14 @@ use regex::Regex;
 use super::{Effect, Verb};
 use crate::policy::sandbox_types::{Cap, NetworkPolicy};
 
-/// A complete policy document, as loaded from a YAML/TOML file.
+/// A complete policy document, as loaded from an s-expr file.
 ///
 /// Supports two formats:
 /// - **Legacy/old format**: uses `policy`, `constraints`, `profiles` (boolean exprs),
 ///   `statements`, and optional `permissions`.
 /// - **New format**: uses `default_config` and `profile_defs` with inline rules.
 ///
-/// Both formats are produced by `parse_yaml()` which auto-detects the format.
+/// Produced by `parse_policy()` from s-expr input.
 /// `CompiledPolicy::compile()` dispatches based on which fields are populated.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyDocument {
@@ -406,10 +406,24 @@ pub struct DefaultConfig {
     pub profile: String,
 }
 
+/// Profile-level sandbox configuration.
+///
+/// When present, applies to ALL allowed bash commands in this profile.
+/// Per-rule `fs:` on bash rules is ignored for sandbox generation when
+/// a profile-level sandbox is configured.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    /// Cap-scoped filesystem constraints (same syntax as rule-level `fs:`).
+    pub fs: Option<Vec<(Cap, FilterExpr)>>,
+    /// Network access policy. Default: allow.
+    pub network: Option<NetworkPolicy>,
+}
+
 /// A named profile definition with optional single inheritance and inline rules.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileDef {
     pub include: Option<Vec<String>>,
+    pub sandbox: Option<SandboxConfig>,
     pub rules: Vec<ProfileRule>,
 }
 

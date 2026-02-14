@@ -1,4 +1,4 @@
-//! Self-describing schema for policy.yaml configuration.
+//! Self-describing schema for policy configuration.
 //!
 //! Provides a structured representation of every configurable section, field,
 //! type, and default value in the policy format. Used by `clash policy schema`
@@ -9,7 +9,7 @@ use serde::Serialize;
 /// A single field in a configuration section.
 #[derive(Debug, Clone, Serialize)]
 pub struct SchemaField {
-    /// YAML key name.
+    /// Key name.
     pub key: &'static str,
     /// Human-readable type (e.g. "bool", "integer", "string", "enum", "object").
     #[serde(rename = "type")]
@@ -29,10 +29,10 @@ pub struct SchemaField {
     pub fields: Option<Vec<SchemaField>>,
 }
 
-/// A top-level section of the policy.yaml.
+/// A top-level section of the policy.
 #[derive(Debug, Clone, Serialize)]
 pub struct SchemaSection {
-    /// YAML key name (e.g. "default", "notifications").
+    /// Key name (e.g. "default", "notifications").
     pub key: &'static str,
     /// What this section configures.
     pub description: &'static str,
@@ -235,6 +235,15 @@ fn profiles_section() -> SchemaSection {
                 key: "include",
                 type_name: "list",
                 description: "Parent profile(s) to inherit rules from",
+                default: None,
+                values: None,
+                required: false,
+                fields: None,
+            },
+            SchemaField {
+                key: "sandbox",
+                type_name: "list",
+                description: "Profile-level sandbox — list of statements that apply to ALL allowed bash commands. When present, per-rule fs: on bash rules is ignored for sandbox generation. Statements: 'fs <caps> <filter>' (e.g. 'fs read + execute subpath(.)'), 'network allow|deny'.",
                 default: None,
                 values: None,
                 required: false,

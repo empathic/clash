@@ -53,14 +53,16 @@ pub mod expr;
 pub mod ir;
 pub mod legacy;
 pub mod parse;
+pub mod parse_sexpr;
 pub mod sandbox_gen;
 pub mod sandbox_types;
+pub mod sexpr;
 
 // Re-export AST types for backward compatibility.
 pub use ast::{
     ArgSpec, ClaudePermissions, ConstraintDef, DefaultConfig, FilterExpr, InlineConstraints,
     MatchExpr, Pattern, PolicyConfig, PolicyDocument, ProfileDef, ProfileExpr, ProfileRule,
-    Statement, VerbPattern,
+    SandboxConfig, Statement, VerbPattern,
 };
 pub use error::{CompileError, PolicyError, PolicyParseError};
 pub use ir::{
@@ -118,7 +120,7 @@ impl Verb {
         }
     }
 
-    /// Return the short tool name used in YAML rule syntax.
+    /// Return the short tool name used in rule syntax.
     #[instrument(level = Level::TRACE, skip(self))]
     pub fn rule_name(&self) -> &'static str {
         match self {

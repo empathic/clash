@@ -6,18 +6,12 @@ meta:
 
 clash:
   policy_raw: |
-    default:
-      permission: deny
-      profile: main
-
-    profiles:
-      main:
-        rules:
-          # Both rules have URL constraints — same specificity tier
-          allow webfetch *:
-            url: ["github.com"]
-          ask webfetch *:
-            url: ["github.com"]
+    (default deny main)
+    (profile main
+      (allow webfetch *
+        (url "github.com"))
+      (ask webfetch *
+        (url "github.com")))
 
 steps:
   - name: constrained ask beats constrained allow (same tier)

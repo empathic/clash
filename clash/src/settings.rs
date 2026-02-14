@@ -6,31 +6,24 @@ use crate::policy::{ClaudePermissions, PolicyConfig, PolicyDocument};
 use anyhow::Result;
 use claude_settings::ClaudeSettings;
 use dirs::home_dir;
-use serde::Deserialize;
 use tracing::{Level, info, instrument, warn};
-
-use crate::audit::AuditConfig;
-use crate::notifications::NotificationConfig;
 
 #[derive(Debug, Default)]
 pub struct ClashSettings {
-    /// Parsed policy document loaded at runtime from policy.yaml or compiled from Claude settings.
+    /// Parsed policy document loaded at runtime from policy file or compiled from Claude settings.
     pub(crate) policy: Option<PolicyDocument>,
 
     /// Pre-compiled policy for fast evaluation. Compiled once during `load_or_create()`.
     compiled: Option<CompiledPolicy>,
 
-    /// Notification and external service configuration, loaded from policy.yaml.
-    pub notifications: NotificationConfig,
-
-    /// Warning message if parsing the notifications config failed or was incomplete.
-    pub notification_warning: Option<String>,
-
-    /// Audit logging configuration, loaded from policy.yaml.
-    pub audit: AuditConfig,
-
-    /// Error message if policy.yaml failed to parse or compile.
+    /// Error message if policy file failed to parse or compile.
     policy_error: Option<String>,
+
+    /// Notification configuration (defaults for now; follow-up: s-expr forms).
+    pub notifications: crate::notifications::NotificationConfig,
+
+    /// Audit configuration (defaults for now; follow-up: s-expr forms).
+    pub audit: crate::audit::AuditConfig,
 }
 
 impl ClashSettings {
@@ -44,7 +37,8 @@ impl ClashSettings {
         if let Ok(p) = std::env::var("CLASH_POLICY_FILE") {
             return Ok(PathBuf::from(p));
         }
-        Self::settings_dir().map(|d| d.join("policy.yaml"))
+        let dir = Self::settings_dir()?;
+        Ok(dir.join("policy.sexp"))
     }
 
     /// Return the policy parse/compile error, if any.
@@ -65,7 +59,7 @@ impl ClashSettings {
     /// to avoid excessive memory usage from accidentally pointing at the wrong file.
     const MAX_POLICY_SIZE: u64 = 1024 * 1024;
 
-    /// Try to load and compile the policy document from ~/.clash/policy.yaml.
+    /// Try to load and compile the policy document from ~/.clash/policy.sexp.
     #[instrument(level = Level::TRACE, skip(self))]
     fn load_policy_file(&mut self) -> Option<PolicyDocument> {
         let path = match Self::policy_file() {
@@ -88,9 +82,9 @@ impl ClashSettings {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
             Err(e) => {
-                warn!(path = %path.display(), error = %e, "Failed to stat policy.yaml");
+                warn!(path = %path.display(), error = %e, "Failed to stat policy file");
                 self.policy_error = Some(format!(
-                    "Cannot read policy.yaml at {}: {}",
+                    "Cannot read policy file at {}: {}",
                     path.display(),
                     e
                 ));
@@ -103,20 +97,20 @@ impl ClashSettings {
                 "{} is a directory, not a file. Remove it and run `clash init` to create a policy.",
                 path.display()
             );
-            warn!(path = %path.display(), "policy.yaml is a directory");
+            warn!(path = %path.display(), "policy file is a directory");
             self.policy_error = Some(msg);
             return None;
         }
 
         if metadata.len() > Self::MAX_POLICY_SIZE {
             let msg = format!(
-                "policy.yaml is too large ({} bytes, max {} bytes). \
+                "Policy file is too large ({} bytes, max {} bytes). \
                  Check that {} is the correct file.",
                 metadata.len(),
                 Self::MAX_POLICY_SIZE,
                 path.display()
             );
-            warn!(path = %path.display(), size = metadata.len(), "policy.yaml exceeds size limit");
+            warn!(path = %path.display(), size = metadata.len(), "policy file exceeds size limit");
             self.policy_error = Some(msg);
             return None;
         }
@@ -131,7 +125,7 @@ impl ClashSettings {
                 warn!(
                     path = %path.display(),
                     mode = format!("{:o}", mode),
-                    "policy.yaml is readable by other users; consider `chmod 600`"
+                    "policy file is readable by other users; consider `chmod 600`"
                 );
             }
         }
@@ -139,29 +133,23 @@ impl ClashSettings {
         match std::fs::read_to_string(path) {
             Ok(contents) => {
                 if contents.trim().is_empty() {
-                    warn!(path = %path.display(), "policy.yaml is empty — using default (ask for everything)");
+                    warn!(path = %path.display(), "policy file is empty — using default (ask for everything)");
                     self.policy_error = Some(
-                        "policy.yaml is empty. All actions will default to 'ask'. \
+                        "Policy file is empty. All actions will default to 'ask'. \
                          Run `clash init --force` to generate a starter policy."
                             .into(),
                     );
                     return None;
                 }
 
-                // Parse notification and audit configs from the same YAML file.
-                let (notif_config, notif_warning) = parse_notification_config(&contents);
-                self.notifications = notif_config;
-                self.notification_warning = notif_warning;
-                self.audit = parse_audit_config(&contents);
-
-                match crate::policy::parse::parse_yaml(&contents) {
+                match crate::policy::parse::parse_policy(&contents) {
                     Ok(doc) => {
                         info!(path = %path.display(), "Loaded policy document");
                         Some(doc)
                     }
                     Err(e) => {
-                        let msg = format!("Failed to parse policy.yaml: {}", e);
-                        warn!(path = %path.display(), error = %e, "Failed to parse policy.yaml");
+                        let msg = format!("Failed to parse policy file: {}", e);
+                        warn!(path = %path.display(), error = %e, "Failed to parse policy file");
                         self.policy_error = Some(msg);
                         None
                     }
@@ -173,9 +161,9 @@ impl ClashSettings {
                         "Permission denied reading {}. Check file ownership and permissions.",
                         path.display()
                     ),
-                    _ => format!("Failed to read policy.yaml: {}", e),
+                    _ => format!("Failed to read policy file: {}", e),
                 };
-                warn!(path = %path.display(), error = %e, "Failed to read policy.yaml");
+                warn!(path = %path.display(), error = %e, "Failed to read policy file");
                 self.policy_error = Some(msg);
                 None
             }
@@ -219,7 +207,7 @@ impl ClashSettings {
         })
     }
 
-    /// Resolve the policy: use policy.yaml if it exists, else compile Claude settings.
+    /// Resolve the policy: use policy file if it exists, else compile Claude settings.
     #[instrument(level = Level::TRACE, skip(self))]
     fn resolve_policy(&mut self) {
         self.policy = self
@@ -258,48 +246,8 @@ impl ClashSettings {
     }
 }
 
-/// Extract the `notifications:` section from a policy YAML string.
-///
-/// This is parsed independently of the policy rules so that the notification
-/// config doesn't need to live in the `claude_settings` library.
-///
-/// Returns the parsed config (falling back to defaults on error) and an
-/// optional warning message if parsing failed.
-pub fn parse_notification_config(yaml_str: &str) -> (NotificationConfig, Option<String>) {
-    #[derive(Deserialize)]
-    struct RawYaml {
-        #[serde(default)]
-        notifications: Option<NotificationConfig>,
-    }
-
-    match serde_yaml::from_str::<RawYaml>(yaml_str) {
-        Ok(raw) => (raw.notifications.unwrap_or_default(), None),
-        Err(e) => {
-            let warning = format!("notifications config parse error: {}", e);
-            warn!(error = %e, "Failed to parse notifications config from policy.yaml");
-            (NotificationConfig::default(), Some(warning))
-        }
-    }
-}
-
-/// Default policy template written by `clash init`.
-pub const DEFAULT_POLICY: &str = include_str!("default_policy.yaml");
-
-/// Extract the `audit:` section from a policy YAML string.
-///
-/// Returns the parsed config, falling back to defaults on error.
-fn parse_audit_config(yaml_str: &str) -> AuditConfig {
-    #[derive(Deserialize)]
-    struct RawYaml {
-        #[serde(default)]
-        audit: Option<AuditConfig>,
-    }
-
-    match serde_yaml::from_str::<RawYaml>(yaml_str) {
-        Ok(raw) => raw.audit.unwrap_or_default(),
-        Err(_) => AuditConfig::default(),
-    }
-}
+/// Default policy template written by `clash init` (s-expr format).
+pub const DEFAULT_POLICY: &str = include_str!("default_policy.sexp");
 
 #[cfg(test)]
 mod test {
@@ -308,7 +256,7 @@ mod test {
 
     #[test]
     fn default_policy_parses() -> anyhow::Result<()> {
-        let pol = crate::policy::parse::parse_yaml(super::DEFAULT_POLICY)?;
+        let pol = crate::policy::parse::parse_policy(super::DEFAULT_POLICY)?;
         assert!(pol.profile_defs.len() > 0, "{pol:#?}");
         Ok(())
     }
@@ -316,7 +264,7 @@ mod test {
     #[test]
     fn load_missing_file_returns_none() {
         let mut settings = ClashSettings::default();
-        let path = std::path::Path::new("/tmp/clash-test-nonexistent-policy.yaml");
+        let path = std::path::Path::new("/tmp/clash-test-nonexistent-policy.sexp");
         let _ = std::fs::remove_file(path); // ensure it doesn't exist
         let result = settings.load_policy_from_path(path);
         assert!(result.is_none());
@@ -329,7 +277,7 @@ mod test {
     #[test]
     fn load_directory_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.yaml");
+        let policy_path = dir.path().join("policy.sexp");
         std::fs::create_dir(&policy_path).unwrap();
 
         let mut settings = ClashSettings::default();
@@ -345,7 +293,7 @@ mod test {
     #[test]
     fn load_empty_file_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.yaml");
+        let policy_path = dir.path().join("policy.sexp");
         std::fs::write(&policy_path, "").unwrap();
 
         let mut settings = ClashSettings::default();
@@ -361,7 +309,7 @@ mod test {
     #[test]
     fn load_whitespace_only_file_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.yaml");
+        let policy_path = dir.path().join("policy.sexp");
         std::fs::write(&policy_path, "   \n\n  \t  \n").unwrap();
 
         let mut settings = ClashSettings::default();
@@ -377,7 +325,7 @@ mod test {
     #[test]
     fn load_oversized_file_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.yaml");
+        let policy_path = dir.path().join("policy.sexp");
         // Write a file just over the 1 MiB limit.
         let mut f = std::fs::File::create(&policy_path).unwrap();
         let chunk = vec![b'#'; 8192];
@@ -399,7 +347,7 @@ mod test {
     #[test]
     fn load_valid_policy_succeeds() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.yaml");
+        let policy_path = dir.path().join("policy.sexp");
         std::fs::write(&policy_path, DEFAULT_POLICY).unwrap();
 
         let mut settings = ClashSettings::default();
@@ -409,10 +357,10 @@ mod test {
     }
 
     #[test]
-    fn load_malformed_yaml_sets_error() {
+    fn load_malformed_policy_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.yaml");
-        std::fs::write(&policy_path, "{{{{invalid yaml: [}}}").unwrap();
+        let policy_path = dir.path().join("policy.sexp");
+        std::fs::write(&policy_path, "((( invalid s-expr").unwrap();
 
         let mut settings = ClashSettings::default();
         let result = settings.load_policy_from_path(&policy_path);

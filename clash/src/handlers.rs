@@ -9,7 +9,7 @@ use tracing::{Level, debug, info, instrument, warn};
 use crate::hooks::{HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput};
 use crate::notifications;
 use crate::permissions::check_permission;
-use crate::settings::{self, ClashSettings};
+use crate::settings::ClashSettings;
 
 use claude_settings::PermissionRule;
 
@@ -281,22 +281,22 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
         Ok(policy_path) if policy_path.exists() => match std::fs::read_to_string(&policy_path) {
             Ok(contents) => Some(contents),
             Err(e) => {
-                lines.push(format!("ISSUE: policy.yaml read error: {}", e));
+                lines.push(format!("ISSUE: policy file read error: {}", e));
                 None
             }
         },
         Ok(_) => {
-            lines.push("policy.yaml: not found (using legacy permissions)".into());
+            lines.push("policy file: not found (using legacy permissions)".into());
             None
         }
         Err(e) => {
-            lines.push(format!("ISSUE: policy.yaml path error: {}", e));
+            lines.push(format!("ISSUE: policy file path error: {}", e));
             None
         }
     };
 
     if let Some(ref contents) = policy_contents {
-        match crate::policy::parse::parse_yaml(contents) {
+        match crate::policy::parse::parse_policy(contents) {
             Ok(doc) => {
                 let rule_count = doc.statements.len()
                     + doc
@@ -312,7 +312,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
                 match crate::policy::CompiledPolicy::compile(&doc) {
                     Ok(_) => {
                         lines.push(format!(
-                            "policy.yaml: OK ({} rules, format={}, default={})",
+                            "policy file: OK ({} rules, format={}, default={})",
                             rule_count, format, doc.policy.default,
                         ));
 
@@ -347,7 +347,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
                     }
                     Err(e) => {
                         lines.push(format!(
-                            "ISSUE: policy.yaml compile error: {}. All actions will default to 'ask'.",
+                            "ISSUE: policy file compile error: {}. All actions will default to 'ask'.",
                             e
                         ));
                     }
@@ -355,26 +355,10 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
             }
             Err(e) => {
                 lines.push(format!(
-                    "ISSUE: policy.yaml parse error: {}. All actions will default to 'ask'.",
+                    "ISSUE: policy file parse error: {}. All actions will default to 'ask'.",
                     e
                 ));
             }
-        }
-
-        // 2. Validate notification config from the same policy file
-        let (notif_config, notif_warning) = settings::parse_notification_config(contents);
-        if let Some(warning) = notif_warning {
-            lines.push(format!("ISSUE: {}", warning));
-        } else {
-            let zulip_status = if notif_config.zulip.is_some() {
-                "configured"
-            } else {
-                "not configured"
-            };
-            lines.push(format!(
-                "notifications: OK (desktop={}, zulip={})",
-                notif_config.desktop, zulip_status
-            ));
         }
     }
 
