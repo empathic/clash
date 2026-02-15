@@ -1,0 +1,53 @@
+meta:
+  name: v2 sexpr policy — subpath filters
+  description: Test (subpath ...) path filters for filesystem rules
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (fs read (subpath "/tmp")))
+      (allow (fs write (subpath "/tmp/out"))))
+
+steps:
+  - name: read /tmp/foo allowed by subpath
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/foo.txt
+    expect:
+      decision: allow
+
+  - name: read /tmp/deep/nested allowed by subpath
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/deep/nested/file.txt
+    expect:
+      decision: allow
+
+  - name: read /etc/hosts denied
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /etc/hosts
+    expect:
+      decision: deny
+
+  - name: write /tmp/out/file.txt allowed
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/out/file.txt
+      content: hello
+    expect:
+      decision: allow
+
+  - name: write /tmp/other.txt denied
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/other.txt
+      content: hello
+    expect:
+      decision: deny

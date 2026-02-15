@@ -1,7 +1,7 @@
-//! Self-describing schema for policy.yaml configuration.
+//! Self-describing schema for the policy format.
 //!
-//! Provides a structured representation of every configurable section, field,
-//! type, and default value in the policy format. Used by `clash policy schema`
+//! Provides a structured representation of the v2 s-expression policy
+//! language and companion YAML configuration. Used by `clash policy schema`
 //! to make the CLI self-documenting.
 
 use serde::Serialize;
@@ -9,9 +9,9 @@ use serde::Serialize;
 /// A single field in a configuration section.
 #[derive(Debug, Clone, Serialize)]
 pub struct SchemaField {
-    /// YAML key name.
+    /// Key or syntax name.
     pub key: &'static str,
-    /// Human-readable type (e.g. "bool", "integer", "string", "enum", "object").
+    /// Human-readable type (e.g. "bool", "integer", "string", "enum", "form").
     #[serde(rename = "type")]
     pub type_name: &'static str,
     /// What this field does.
@@ -29,10 +29,10 @@ pub struct SchemaField {
     pub fields: Option<Vec<SchemaField>>,
 }
 
-/// A top-level section of the policy.yaml.
+/// A top-level section of the configuration.
 #[derive(Debug, Clone, Serialize)]
 pub struct SchemaSection {
-    /// YAML key name (e.g. "default", "notifications").
+    /// Section key.
     pub key: &'static str,
     /// What this section configures.
     pub description: &'static str,
@@ -40,21 +40,21 @@ pub struct SchemaSection {
     pub fields: Vec<SchemaField>,
 }
 
-/// Description of the rule syntax.
+/// Description of the v2 s-expression rule syntax.
 #[derive(Debug, Clone, Serialize)]
 pub struct RuleSyntax {
     /// Format string showing rule structure.
     pub format: &'static str,
     /// Available effects.
     pub effects: Vec<&'static str>,
-    /// Available verbs (tool types).
-    pub verbs: Vec<&'static str>,
-    /// Available constraint types on rules.
-    pub constraints: Vec<SchemaField>,
-    /// Filter functions for filesystem constraints.
-    pub fs_filters: Vec<SchemaField>,
-    /// Filesystem capability names.
-    pub capabilities: Vec<&'static str>,
+    /// Capability domains.
+    pub domains: Vec<SchemaField>,
+    /// Pattern types used in matchers.
+    pub patterns: Vec<SchemaField>,
+    /// Path filter types for fs rules.
+    pub path_filters: Vec<SchemaField>,
+    /// Filesystem operation names.
+    pub fs_operations: Vec<&'static str>,
 }
 
 /// Complete schema output.
@@ -65,43 +65,47 @@ pub struct PolicySchema {
 }
 
 // ---------------------------------------------------------------------------
-// Schema registry — the single source of truth for all settings
+// Schema registry
 // ---------------------------------------------------------------------------
 
 /// Build the complete policy schema.
 pub fn policy_schema() -> PolicySchema {
     PolicySchema {
-        sections: vec![
-            default_section(),
-            notifications_section(),
-            audit_section(),
-            profiles_section(),
-        ],
+        sections: vec![policy_section(), notifications_section(), audit_section()],
         rule_syntax: rule_syntax(),
     }
 }
 
-fn default_section() -> SchemaSection {
+fn policy_section() -> SchemaSection {
     SchemaSection {
-        key: "default",
-        description: "Default behavior when no policy rule matches a request",
+        key: "policy",
+        description: "S-expression policy file (policy.sexpr) — defines rules using (effect (capability ...)) forms",
         fields: vec![
             SchemaField {
-                key: "permission",
-                type_name: "enum",
-                description: "Effect applied when no rule matches",
-                default: Some(serde_json::json!("ask")),
-                values: Some(vec!["ask", "allow", "deny"]),
+                key: "(default effect \"policy-name\")",
+                type_name: "form",
+                description: "Sets the default effect (allow/deny/ask) and names the active policy",
+                default: Some(serde_json::json!("(default deny \"main\")")),
+                values: None,
                 required: true,
                 fields: None,
             },
             SchemaField {
-                key: "profile",
-                type_name: "string",
-                description: "Name of the active profile to evaluate",
+                key: "(policy \"name\" ...rules)",
+                type_name: "form",
+                description: "A named policy block containing rules and (include ...) directives",
                 default: None,
                 values: None,
                 required: true,
+                fields: None,
+            },
+            SchemaField {
+                key: "(include \"other-policy\")",
+                type_name: "form",
+                description: "Import rules from another policy block by name",
+                default: None,
+                values: None,
+                required: false,
                 fields: None,
             },
         ],
@@ -111,7 +115,7 @@ fn default_section() -> SchemaSection {
 fn notifications_section() -> SchemaSection {
     SchemaSection {
         key: "notifications",
-        description: "How you get notified about permission prompts",
+        description: "How you get notified about permission prompts (configured in companion policy.yaml)",
         fields: vec![
             SchemaField {
                 key: "desktop",
@@ -202,7 +206,7 @@ fn notifications_section() -> SchemaSection {
 fn audit_section() -> SchemaSection {
     SchemaSection {
         key: "audit",
-        description: "Audit logging — records every policy decision to a JSON Lines file",
+        description: "Audit logging — records every policy decision to a JSON Lines file (configured in companion policy.yaml)",
         fields: vec![
             SchemaField {
                 key: "enabled",
@@ -226,124 +230,116 @@ fn audit_section() -> SchemaSection {
     }
 }
 
-fn profiles_section() -> SchemaSection {
-    SchemaSection {
-        key: "profiles",
-        description: "Named profiles containing policy rules — the active profile (set in default.profile) is evaluated on each request",
-        fields: vec![
-            SchemaField {
-                key: "include",
-                type_name: "list",
-                description: "Parent profile(s) to inherit rules from",
-                default: None,
-                values: None,
-                required: false,
-                fields: None,
-            },
-            SchemaField {
-                key: "rules",
-                type_name: "mapping",
-                description: "Policy rules in 'effect verb noun' format (e.g. 'deny bash git push*')",
-                default: None,
-                values: None,
-                required: false,
-                fields: None,
-            },
-        ],
-    }
-}
-
 fn rule_syntax() -> RuleSyntax {
     RuleSyntax {
-        format: "effect verb noun",
+        format: "(effect (capability ...))",
         effects: vec!["allow", "deny", "ask"],
-        verbs: vec!["bash", "read", "write", "edit", "*"],
-        constraints: vec![
+        domains: vec![
+            SchemaField {
+                key: "exec",
+                type_name: "capability",
+                description: "Command execution: (exec [binary] [args...]). Matches Bash tool invocations.",
+                default: None,
+                values: None,
+                required: false,
+                fields: None,
+            },
             SchemaField {
                 key: "fs",
-                type_name: "mapping",
-                description: "Filesystem constraints — keys are capability expressions, values are filter expressions",
+                type_name: "capability",
+                description: "Filesystem access: (fs [operation] [path-filter]). Matches Read, Write, Edit, Glob, Grep tools.",
                 default: None,
                 values: None,
                 required: false,
                 fields: None,
             },
             SchemaField {
-                key: "args",
-                type_name: "list",
-                description: "Argument restrictions — prefix with ! to forbid (e.g. '!--force'), otherwise requires at least one match",
-                default: None,
-                values: None,
-                required: false,
-                fields: None,
-            },
-            SchemaField {
-                key: "network",
-                type_name: "enum",
-                description: "Network access policy for sandboxed bash commands",
-                default: Some(serde_json::json!("allow")),
-                values: Some(vec!["allow", "deny"]),
-                required: false,
-                fields: None,
-            },
-            SchemaField {
-                key: "pipe",
-                type_name: "bool",
-                description: "Whether pipe operators (|) are allowed in bash commands",
-                default: None,
-                values: None,
-                required: false,
-                fields: None,
-            },
-            SchemaField {
-                key: "redirect",
-                type_name: "bool",
-                description: "Whether I/O redirects (>, <, >>) are allowed in bash commands",
-                default: None,
-                values: None,
-                required: false,
-                fields: None,
-            },
-            SchemaField {
-                key: "url",
-                type_name: "list",
-                description: "URL domain restrictions — plain domains match the host (e.g. 'github.com'), patterns with :// match the full URL. Prefix with ! to forbid.",
+                key: "net",
+                type_name: "capability",
+                description: "Network access: (net [domain-pattern]). Matches WebFetch and WebSearch tools.",
                 default: None,
                 values: None,
                 required: false,
                 fields: None,
             },
         ],
-        fs_filters: vec![
+        patterns: vec![
             SchemaField {
-                key: "subpath(path)",
-                type_name: "function",
-                description: "Match files under a directory (e.g. subpath(~/.ssh), subpath(.))",
+                key: "*",
+                type_name: "pattern",
+                description: "Wildcard — matches anything",
                 default: None,
                 values: None,
                 required: false,
                 fields: None,
             },
             SchemaField {
-                key: "literal(path)",
-                type_name: "function",
-                description: "Match an exact file path",
+                key: "\"literal\"",
+                type_name: "pattern",
+                description: "Exact string match (quoted)",
                 default: None,
                 values: None,
                 required: false,
                 fields: None,
             },
             SchemaField {
-                key: "regex(pattern)",
-                type_name: "function",
-                description: "Match paths by regular expression (e.g. regex(\\.env$))",
+                key: "/regex/",
+                type_name: "pattern",
+                description: "Regular expression match",
+                default: None,
+                values: None,
+                required: false,
+                fields: None,
+            },
+            SchemaField {
+                key: "(or p1 p2 ...)",
+                type_name: "combinator",
+                description: "Match any of the listed patterns",
+                default: None,
+                values: None,
+                required: false,
+                fields: None,
+            },
+            SchemaField {
+                key: "(not p)",
+                type_name: "combinator",
+                description: "Negate a pattern",
                 default: None,
                 values: None,
                 required: false,
                 fields: None,
             },
         ],
-        capabilities: vec!["read", "write", "create", "delete", "execute", "full"],
+        path_filters: vec![
+            SchemaField {
+                key: "(subpath expr)",
+                type_name: "filter",
+                description: "Recursive subtree match. expr can be \"path\" or (env VAR).",
+                default: None,
+                values: None,
+                required: false,
+                fields: None,
+            },
+            SchemaField {
+                key: "\"path\"",
+                type_name: "filter",
+                description: "Exact file path match (quoted)",
+                default: None,
+                values: None,
+                required: false,
+                fields: None,
+            },
+            SchemaField {
+                key: "/regex/",
+                type_name: "filter",
+                description: "Regex match on resolved path",
+                default: None,
+                values: None,
+                required: false,
+                fields: None,
+            },
+        ],
+        fs_operations: vec!["read", "write", "create", "delete"],
     }
 }
 
@@ -364,13 +360,12 @@ mod tests {
     fn schema_has_all_sections() {
         let schema = policy_schema();
         let keys: Vec<&str> = schema.sections.iter().map(|s| s.key).collect();
-        assert!(keys.contains(&"default"), "missing 'default' section");
+        assert!(keys.contains(&"policy"), "missing 'policy' section");
         assert!(
             keys.contains(&"notifications"),
             "missing 'notifications' section"
         );
         assert!(keys.contains(&"audit"), "missing 'audit' section");
-        assert!(keys.contains(&"profiles"), "missing 'profiles' section");
     }
 
     #[test]
@@ -440,38 +435,26 @@ mod tests {
     }
 
     #[test]
-    fn rule_syntax_has_all_effects_and_verbs() {
+    fn rule_syntax_has_all_effects() {
         let schema = policy_schema();
         assert_eq!(schema.rule_syntax.effects, vec!["allow", "deny", "ask"]);
-        assert_eq!(
-            schema.rule_syntax.verbs,
-            vec!["bash", "read", "write", "edit", "*"]
-        );
     }
 
     #[test]
-    fn rule_syntax_has_all_constraint_types() {
+    fn rule_syntax_has_all_domains() {
         let schema = policy_schema();
-        let constraint_keys: Vec<&str> = schema
-            .rule_syntax
-            .constraints
-            .iter()
-            .map(|c| c.key)
-            .collect();
-        assert!(constraint_keys.contains(&"fs"));
-        assert!(constraint_keys.contains(&"args"));
-        assert!(constraint_keys.contains(&"network"));
-        assert!(constraint_keys.contains(&"pipe"));
-        assert!(constraint_keys.contains(&"redirect"));
-        assert!(constraint_keys.contains(&"url"));
+        let domain_keys: Vec<&str> = schema.rule_syntax.domains.iter().map(|d| d.key).collect();
+        assert!(domain_keys.contains(&"exec"));
+        assert!(domain_keys.contains(&"fs"));
+        assert!(domain_keys.contains(&"net"));
     }
 
     #[test]
-    fn rule_syntax_has_all_capabilities() {
+    fn rule_syntax_has_all_fs_operations() {
         let schema = policy_schema();
         assert_eq!(
-            schema.rule_syntax.capabilities,
-            vec!["read", "write", "create", "delete", "execute", "full"]
+            schema.rule_syntax.fs_operations,
+            vec!["read", "write", "create", "delete"]
         );
     }
 }

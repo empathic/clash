@@ -62,6 +62,12 @@ impl TestEnvironment {
             write_policy_file(&home_dir, policy)?;
         }
 
+        // Write ~/.clash/policy.sexpr — v2 s-expression policy.
+        if let Some(sexpr) = clash.and_then(|c| c.policy_sexpr.as_ref()) {
+            let path = home_dir.join(".clash/policy.sexpr");
+            std::fs::write(&path, sexpr).context("failed to write policy.sexpr")?;
+        }
+
         Ok(Self {
             _temp: temp,
             home_dir,
@@ -230,6 +236,7 @@ mod tests {
                 rules: vec!["allow * bash git *".into(), "deny * read .env".into()],
             }),
             policy_raw: None,
+            policy_sexpr: None,
         };
 
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
@@ -246,9 +253,29 @@ mod tests {
         let clash = ClashConfig {
             policy: None,
             policy_raw: None,
+            policy_sexpr: None,
         };
 
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
         assert!(!env.home_dir.join(".clash/policy.yaml").exists());
+        assert!(!env.home_dir.join(".clash/policy.sexpr").exists());
+    }
+
+    #[test]
+    fn test_policy_sexpr_file_written() {
+        let config = SettingsConfig::default();
+        let sexpr = r#"(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))"#;
+        let clash = ClashConfig {
+            policy: None,
+            policy_raw: None,
+            policy_sexpr: Some(sexpr.to_string()),
+        };
+
+        let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
+        let content = std::fs::read_to_string(env.home_dir.join(".clash/policy.sexpr")).unwrap();
+        assert!(content.contains("(default deny"));
+        assert!(content.contains("(allow (exec"));
     }
 }

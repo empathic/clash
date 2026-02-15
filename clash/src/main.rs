@@ -651,12 +651,13 @@ fn handle_schema(json: bool) -> Result<()> {
         println!("Rule Syntax:");
         println!("  Format: {}\n", schema.rule_syntax.format);
         println!("  Effects: {}", schema.rule_syntax.effects.join(", "));
-        println!("  Verbs:   {}", schema.rule_syntax.verbs.join(", "));
-        println!("  Caps:    {}", schema.rule_syntax.capabilities.join(", "));
-        println!("\n  Constraints:");
-        print_fields(&schema.rule_syntax.constraints, 4);
-        println!("\n  Filesystem filters:");
-        print_fields(&schema.rule_syntax.fs_filters, 4);
+        println!("  Fs ops:  {}", schema.rule_syntax.fs_operations.join(", "));
+        println!("\n  Capability domains:");
+        print_fields(&schema.rule_syntax.domains, 4);
+        println!("\n  Patterns:");
+        print_fields(&schema.rule_syntax.patterns, 4);
+        println!("\n  Path filters:");
+        print_fields(&schema.rule_syntax.path_filters, 4);
     }
     Ok(())
 }
@@ -768,9 +769,7 @@ fn run_policy(cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::Remove { rule, dry_run } => handle_remove(&rule, dry_run),
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Show { json } => handle_show(json),
-        PolicyCmd::Setup => {
-            anyhow::bail!("interactive setup not yet implemented — edit the policy file directly")
-        }
+        PolicyCmd::Setup => clash::wizard::run(),
     }
 }
 

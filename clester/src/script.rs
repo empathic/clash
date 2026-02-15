@@ -37,6 +37,11 @@ pub struct ClashConfig {
     /// When present, takes precedence over `policy`.
     #[serde(default)]
     pub policy_raw: Option<String>,
+
+    /// Raw s-expression string written to ~/.clash/policy.sexpr (v2 format).
+    /// When present, this is the v2 policy engine input.
+    #[serde(default)]
+    pub policy_sexpr: Option<String>,
 }
 
 /// Policy document specification for ~/.clash/policy.yaml.
