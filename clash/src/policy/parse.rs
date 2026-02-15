@@ -1,4 +1,4 @@
-//! Parser: s-expression tokens → v2 AST.
+//! Parser: s-expression tokens → AST.
 //!
 //! Consumes the generic `SExpr` tree from `sexpr.rs` and produces typed
 //! `TopLevel` nodes. Errors are reported with source spans.

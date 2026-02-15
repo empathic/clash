@@ -1,6 +1,6 @@
 //! Self-describing schema for the policy format.
 //!
-//! Provides a structured representation of the v2 s-expression policy
+//! Provides a structured representation of the s-expression policy
 //! language and companion YAML configuration. Used by `clash policy schema`
 //! to make the CLI self-documenting.
 
@@ -40,7 +40,7 @@ pub struct SchemaSection {
     pub fields: Vec<SchemaField>,
 }
 
-/// Description of the v2 s-expression rule syntax.
+/// Description of the s-expression rule syntax.
 #[derive(Debug, Clone, Serialize)]
 pub struct RuleSyntax {
     /// Format string showing rule structure.

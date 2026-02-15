@@ -1,6 +1,6 @@
 //! Intermediate representation (IR) types for compiled policies.
 //!
-//! These are the shared decision types used by both the v2 policy engine
+//! These are the shared decision types used by the policy engine
 //! and the rest of the system (permissions, audit, handlers).
 
 use crate::policy::Effect;

@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use super::ir::{CompiledRule, DecisionTree};
+use super::decision_tree::{CompiledRule, DecisionTree};
 
 /// Format a decision tree as a human-readable summary.
 pub fn print_tree(tree: &DecisionTree) -> String {
@@ -45,7 +45,7 @@ impl fmt::Display for DecisionTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::v2::compile::{EnvResolver, compile_policy_with_env};
+    use crate::policy::compile::{EnvResolver, compile_policy_with_env};
     use std::collections::HashMap;
 
     struct TestEnv(HashMap<String, String>);

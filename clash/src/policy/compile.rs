@@ -11,7 +11,7 @@ use regex::Regex;
 use crate::policy::Effect;
 
 use super::ast::*;
-use super::ir::*;
+use super::decision_tree::*;
 use super::specificity::Specificity;
 
 /// Environment variable resolver used during compilation to expand `(env NAME)`.

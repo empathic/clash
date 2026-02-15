@@ -7,9 +7,9 @@ use std::path::PathBuf;
 
 use tracing::{debug, trace};
 
+use crate::policy::ast::FsOp;
+use crate::policy::decision_tree::{CompiledMatcher, CompiledRule, DecisionTree};
 use crate::policy::ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
-use crate::policy::v2::ast::FsOp;
-use crate::policy::v2::ir::{CompiledMatcher, CompiledRule, DecisionTree};
 
 /// A capability-level query derived from a tool invocation.
 #[derive(Debug)]
@@ -298,7 +298,7 @@ mod tests {
     use serde_json::json;
 
     use crate::policy::Effect;
-    use crate::policy::v2::compile::{EnvResolver, compile_policy_with_env};
+    use crate::policy::compile::{EnvResolver, compile_policy_with_env};
 
     /// Test env resolver with fixed values.
     struct TestEnv(HashMap<String, String>);
@@ -323,7 +323,7 @@ mod tests {
         }
     }
 
-    fn compile(source: &str) -> crate::policy::v2::ir::DecisionTree {
+    fn compile(source: &str) -> crate::policy::decision_tree::DecisionTree {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         compile_policy_with_env(source, &env).unwrap()
     }

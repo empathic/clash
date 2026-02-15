@@ -290,17 +290,17 @@ mod tests {
             ..Default::default()
         }
     }
-    fn settings_with_v2(source: &str) -> ClashSettings {
+    fn settings_with_policy(source: &str) -> ClashSettings {
         let mut settings = ClashSettings::default();
-        settings.set_v2_source(source);
+        settings.set_policy_source(source);
         settings
     }
 
-    // --- v2 policy engine tests ---
+    // --- policy engine tests ---
 
     #[test]
     fn test_policy_allow_git_status() -> Result<()> {
-        let settings = settings_with_v2(
+        let settings = settings_with_policy(
             r#"
 (default deny "main")
 (policy "main"
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_policy_deny_git_push() -> Result<()> {
-        let settings = settings_with_v2(
+        let settings = settings_with_policy(
             r#"
 (default deny "main")
 (policy "main"
@@ -330,14 +330,14 @@ mod tests {
         assert_decision(
             &result,
             claude_settings::PermissionRule::Deny,
-            None, // v2 uses rule description as reason, not "policy: denied"
+            None, // uses rule description as reason, not "policy: denied"
         );
         Ok(())
     }
 
     #[test]
     fn test_policy_default_deny() -> Result<()> {
-        let settings = settings_with_v2(
+        let settings = settings_with_policy(
             r#"
 (default deny "main")
 (policy "main"
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_policy_read_under_cwd() -> Result<()> {
-        let settings = settings_with_v2(
+        let settings = settings_with_policy(
             r#"
 (default deny "main")
 (policy "main"
@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn test_policy_read_outside_cwd_denied() -> Result<()> {
-        let settings = settings_with_v2(
+        let settings = settings_with_policy(
             r#"
 (default deny "main")
 (policy "main"
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_explanation_contains_matched_rule() -> Result<()> {
-        let settings = settings_with_v2(
+        let settings = settings_with_policy(
             r#"
 (default deny "main")
 (policy "main"
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_explanation_no_rules_matched() -> Result<()> {
-        let settings = settings_with_v2(
+        let settings = settings_with_policy(
             r#"
 (default ask "main")
 (policy "main"
@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn test_deny_decision_includes_agent_context() -> Result<()> {
-        let settings = settings_with_v2(
+        let settings = settings_with_policy(
             r#"
 (default deny "main")
 (policy "main"

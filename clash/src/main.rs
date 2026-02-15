@@ -302,7 +302,7 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     if let Some(ref path) = policy_path {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read policy file: {}", path))?;
-        clash::policy::v2::compile_policy(&contents)
+        clash::policy::compile_policy(&contents)
             .with_context(|| format!("failed to compile policy file: {}", path))?;
         info!(path, "Using policy file");
     }
@@ -788,7 +788,7 @@ fn load_policy_source() -> Result<(std::path::PathBuf, String)> {
 /// Write policy source back to disk after validating it compiles.
 fn write_policy(path: &std::path::Path, source: &str) -> Result<()> {
     // Validate before writing — never write a broken policy.
-    clash::policy::v2::compile_policy(source)
+    clash::policy::compile_policy(source)
         .context("modified policy failed to compile — not writing")?;
     std::fs::write(path, source)
         .with_context(|| format!("failed to write policy file: {}", path.display()))?;
@@ -799,8 +799,8 @@ fn write_policy(path: &std::path::Path, source: &str) -> Result<()> {
 // CLI rule parsing: bare verbs and s-expr syntax
 // ---------------------------------------------------------------------------
 
-use clash::policy::v2::ast::Rule as AstRule;
-use clash::policy::v2::ast::{
+use clash::policy::ast::Rule as AstRule;
+use clash::policy::ast::{
     CapMatcher, ExecMatcher, FsMatcher, FsOp, NetMatcher, OpPattern, PathExpr, PathFilter, Pattern,
 };
 
@@ -813,13 +813,13 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
         // Power-user s-expr: parse as a capability matcher body and wrap with effect.
         let full = format!("(policy \"_\" ({effect} {rule_str}))");
         let top_levels =
-            clash::policy::v2::parse::parse(&full).context("failed to parse s-expr rule")?;
+            clash::policy::parse::parse(&full).context("failed to parse s-expr rule")?;
         match top_levels.into_iter().next() {
-            Some(clash::policy::v2::ast::TopLevel::Policy { mut body, .. }) => {
+            Some(clash::policy::ast::TopLevel::Policy { mut body, .. }) => {
                 let rules: Vec<AstRule> = body
                     .drain(..)
                     .filter_map(|item| match item {
-                        clash::policy::v2::ast::PolicyItem::Rule(r) => Some(r),
+                        clash::policy::ast::PolicyItem::Rule(r) => Some(r),
                         _ => None,
                     })
                     .collect();
@@ -961,7 +961,7 @@ fn handle_list(json: bool) -> Result<()> {
         }
     };
 
-    let all_rules: Vec<&clash::policy::v2::ir::CompiledRule> = tree
+    let all_rules: Vec<&clash::policy::decision_tree::CompiledRule> = tree
         .exec_rules
         .iter()
         .chain(&tree.fs_rules)
@@ -1020,7 +1020,7 @@ fn handle_show(json: bool) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        print!("{}", clash::policy::v2::print_tree(tree));
+        print!("{}", clash::policy::print_tree(tree));
         let policy_path = ClashSettings::policy_file()?;
         println!("\nPolicy file: {}", policy_path.display());
     }

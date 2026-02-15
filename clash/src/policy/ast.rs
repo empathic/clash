@@ -1,4 +1,4 @@
-//! AST types for the v2 policy language.
+//! AST types for the policy language.
 //!
 //! Every node implements `Display` so the AST round-trips to valid source text.
 

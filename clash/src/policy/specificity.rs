@@ -1,4 +1,4 @@
-//! Specificity computation for v2 policy rules.
+//! Specificity computation for policy rules.
 //!
 //! Rules are ranked by containment: if every request matching rule A also
 //! matches rule B, then A is more specific than B. More specific rules take

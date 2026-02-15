@@ -6,15 +6,24 @@
 //! The policy speaks in capabilities, not Claude Code tool names — the eval
 //! layer maps tools to capabilities.
 
+pub mod ast;
+pub mod compile;
+pub mod decision_tree;
 pub mod edit;
 pub mod error;
+pub mod eval;
 pub mod ir;
+pub mod parse;
+pub mod print;
 pub mod sandbox_types;
 pub mod sexpr;
-pub mod v2;
+pub mod specificity;
 
+pub use compile::compile_policy;
+pub use decision_tree::DecisionTree;
 pub use error::{CompileError, PolicyError, PolicyParseError};
 pub use ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
+pub use print::print_tree;
 
 use std::fmt;
 

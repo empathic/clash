@@ -1,4 +1,4 @@
-//! Decision tree IR — the compiled form of a v2 policy.
+//! Decision tree IR — the compiled form of a policy.
 //!
 //! Rules are pre-compiled with regex patterns and sorted by specificity.
 //! The decision tree groups rules by capability domain for efficient lookup.
@@ -102,7 +102,7 @@ pub enum CompiledPathFilter {
 impl DecisionTree {
     /// Build a `SandboxPolicy` from a named sandbox policy's compiled rules.
     ///
-    /// Walks the pre-compiled fs/net rules, converting v2 AST types into
+    /// Walks the pre-compiled fs/net rules, converting AST types into
     /// sandbox types (Cap, SandboxRule, NetworkPolicy). Returns `None` if
     /// no fs rules are found (no filesystem restrictions = no sandbox needed).
     pub fn build_sandbox_policy(&self, name: &str, _cwd: &str) -> Option<SandboxPolicy> {
@@ -383,7 +383,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::policy::v2::compile::{EnvResolver, compile_policy_with_env};
+    use crate::policy::compile::{EnvResolver, compile_policy_with_env};
 
     struct TestEnv(HashMap<String, String>);
 

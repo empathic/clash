@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 use dialoguer::{Confirm, Input, MultiSelect, Select};
 
 use crate::policy::Effect;
+use crate::policy::ast::*;
 use crate::policy::edit;
-use crate::policy::v2::ast::*;
 use crate::settings::ClashSettings;
 
 // ---------------------------------------------------------------------------
@@ -523,7 +523,7 @@ fn prompt_rule() -> Result<Option<Rule>> {
 
 /// Display all rules in the current policy.
 fn show_rules(source: &str) -> Result<()> {
-    let top_levels = crate::policy::v2::parse::parse(source)?;
+    let top_levels = crate::policy::parse::parse(source)?;
     let mut rules: Vec<Rule> = Vec::new();
     let mut policy_name = String::from("main");
 
@@ -556,7 +556,7 @@ fn show_rules(source: &str) -> Result<()> {
 
 /// Collect rules from the active policy for removal selection.
 fn collect_rules(source: &str) -> Result<Vec<Rule>> {
-    let top_levels = crate::policy::v2::parse::parse(source)?;
+    let top_levels = crate::policy::parse::parse(source)?;
     let policy_name = edit::active_policy(source)?;
     let mut rules = Vec::new();
 
@@ -648,7 +648,7 @@ pub fn run() -> Result<()> {
     }
 
     // Validate and write.
-    crate::policy::v2::compile_policy(&source).context("policy validation failed")?;
+    crate::policy::compile_policy(&source).context("policy validation failed")?;
     std::fs::write(&path, &source).context("failed to write policy file")?;
 
     println!("\nPolicy saved to {}", path.display());

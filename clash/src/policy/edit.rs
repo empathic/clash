@@ -1,13 +1,13 @@
-//! AST-based editing for v2 policy files.
+//! AST-based editing for policy files.
 //!
 //! Parses the source → mutates the AST → serializes back via `Display`.
 //! Comments are lost on edit, but the policy stays valid (round-trip proven
-//! by the `round_trip_parse_display_parse` test in `v2::parse`).
+//! by the `round_trip_parse_display_parse` test in `parse`).
 
 use anyhow::{Result, bail};
 
-use crate::policy::v2::ast::{PolicyItem, Rule, TopLevel};
-use crate::policy::v2::parse;
+use crate::policy::ast::{PolicyItem, Rule, TopLevel};
+use crate::policy::parse;
 
 /// Add a rule to the named policy block. Returns modified source.
 ///
@@ -84,7 +84,7 @@ fn find_policy_mut<'a>(items: &'a mut [TopLevel], name: &str) -> Result<&'a mut 
 mod tests {
     use super::*;
     use crate::policy::Effect;
-    use crate::policy::v2::ast::*;
+    use crate::policy::ast::*;
 
     fn default_policy() -> &'static str {
         crate::settings::DEFAULT_POLICY

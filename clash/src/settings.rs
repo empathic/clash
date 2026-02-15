@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::policy::v2::DecisionTree;
+use crate::policy::DecisionTree;
 use anyhow::Result;
 use dirs::home_dir;
 use serde::Deserialize;
@@ -9,12 +9,12 @@ use tracing::{Level, info, instrument, warn};
 use crate::audit::AuditConfig;
 use crate::notifications::NotificationConfig;
 
-/// Default v2 policy source embedded at compile time.
+/// Default policy source embedded at compile time.
 pub const DEFAULT_POLICY: &str = include_str!("default_policy.sexpr");
 
 #[derive(Debug, Default)]
 pub struct ClashSettings {
-    /// Pre-compiled v2 decision tree for fast evaluation.
+    /// Pre-compiled decision tree for fast evaluation.
     compiled: Option<DecisionTree>,
 
     /// Notification and external service configuration, loaded from policy.yaml.
@@ -49,16 +49,16 @@ impl ClashSettings {
         self.policy_error.as_deref()
     }
 
-    /// Set the v2 policy source directly (compile from s-expression text).
-    pub fn set_v2_source(&mut self, source: &str) {
-        match crate::policy::v2::compile_policy(source) {
+    /// Set the policy source directly (compile from s-expression text).
+    pub fn set_policy_source(&mut self, source: &str) {
+        match crate::policy::compile_policy(source) {
             Ok(tree) => {
                 self.compiled = Some(tree);
                 self.policy_error = None;
             }
             Err(e) => {
                 let msg = format!("Failed to compile policy: {}", e);
-                warn!(error = %e, "Failed to compile v2 policy");
+                warn!(error = %e, "Failed to compile policy");
                 self.policy_error = Some(msg);
                 self.compiled = None;
             }
@@ -168,9 +168,9 @@ impl ClashSettings {
                 // policy.yaml for notification/audit config.
                 self.load_notification_audit_config();
 
-                match crate::policy::v2::compile_policy(&contents) {
+                match crate::policy::compile_policy(&contents) {
                     Ok(tree) => {
-                        info!(path = %path.display(), "Loaded v2 policy");
+                        info!(path = %path.display(), "Loaded policy");
                         self.compiled = Some(tree);
                         true
                     }
@@ -263,7 +263,7 @@ mod test {
     use std::io::Write;
 
     struct TestEnv;
-    impl crate::policy::v2::compile::EnvResolver for TestEnv {
+    impl crate::policy::compile::EnvResolver for TestEnv {
         fn resolve(&self, name: &str) -> anyhow::Result<String> {
             match name {
                 "PWD" => Ok("/tmp".into()),
@@ -274,7 +274,7 @@ mod test {
 
     #[test]
     fn default_policy_compiles() -> anyhow::Result<()> {
-        let tree = crate::policy::v2::compile::compile_policy_with_env(DEFAULT_POLICY, &TestEnv)?;
+        let tree = crate::policy::compile::compile_policy_with_env(DEFAULT_POLICY, &TestEnv)?;
         assert!(
             !tree.fs_rules.is_empty(),
             "default policy should have fs rules"
@@ -403,7 +403,7 @@ mod test {
     }
 
     #[test]
-    fn set_v2_source_works() {
+    fn set_policy_source_works() {
         // Use a policy without (env PWD) to avoid needing env vars in tests.
         let simple_policy = r#"
 (default deny "main")
@@ -411,7 +411,7 @@ mod test {
   (allow (fs read (subpath "/tmp"))))
 "#;
         let mut settings = ClashSettings::default();
-        settings.set_v2_source(simple_policy);
+        settings.set_policy_source(simple_policy);
         assert!(settings.decision_tree().is_some());
         assert!(settings.policy_error.is_none());
     }

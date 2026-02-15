@@ -182,8 +182,8 @@ fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSetti
     }
 }
 
-/// Collect human-readable deny rule descriptions from a v2 DecisionTree.
-fn collect_deny_descriptions(tree: &crate::policy::v2::DecisionTree) -> Vec<String> {
+/// Collect human-readable deny rule descriptions from a DecisionTree.
+fn collect_deny_descriptions(tree: &crate::policy::DecisionTree) -> Vec<String> {
     let mut descriptions = Vec::new();
 
     for rule in &tree.exec_rules {
@@ -255,7 +255,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
     if policy_path.exists() {
         match std::fs::read_to_string(&policy_path) {
             Ok(contents) => {
-                match crate::policy::v2::compile_policy(&contents) {
+                match crate::policy::compile_policy(&contents) {
                     Ok(tree) => {
                         let rule_count =
                             tree.exec_rules.len() + tree.fs_rules.len() + tree.net_rules.len();
