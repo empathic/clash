@@ -142,7 +142,7 @@ impl ClashSettings {
         }
 
         match std::fs::read_to_string(path) {
-            Ok(contents) => {
+            Ok(mut contents) => {
                 if contents.trim().is_empty() {
                     warn!(path = %path.display(), "policy file is empty — using default (ask for everything)");
                     self.policy_error = Some(
@@ -151,6 +151,16 @@ impl ClashSettings {
                             .into(),
                     );
                     return false;
+                }
+
+                // Auto-migrate: (env CWD) was renamed to (env PWD).
+                if contents.contains("(env CWD)") {
+                    contents = contents.replace("(env CWD)", "(env PWD)");
+                    if let Err(e) = std::fs::write(path, &contents) {
+                        warn!(path = %path.display(), error = %e, "Failed to auto-migrate CWD→PWD");
+                    } else {
+                        info!(path = %path.display(), "Auto-migrated (env CWD) → (env PWD)");
+                    }
                 }
 
                 // Try to parse notification/audit config from YAML comments or
