@@ -1,0 +1,15 @@
+; Clash policy — deny-all default for new users.
+;
+; Everything is blocked except reading files in your project.
+; Use "clash policy allow edit", "clash policy allow bash", or
+; "clash policy allow web" to unlock capabilities as you need them.
+;
+; Run "clash policy setup" for interactive configuration.
+
+(default deny "main")
+
+(policy "cwd-access"
+  (allow (fs read (subpath (env CWD)))))
+
+(policy "main"
+  (include "cwd-access"))
