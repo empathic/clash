@@ -60,7 +60,10 @@ pub enum CompiledMatcher {
 #[derive(Debug)]
 pub struct CompiledExec {
     pub bin: CompiledPattern,
+    /// Positional argument patterns.
     pub args: Vec<CompiledPattern>,
+    /// Orderless `:has` argument patterns.
+    pub has_args: Vec<CompiledPattern>,
 }
 
 /// Pre-compiled fs matcher.
@@ -217,8 +220,8 @@ impl CompiledExec {
         if !self.bin.matches(bin) {
             return false;
         }
-        // Each pattern position must match the corresponding arg.
-        // If we have more patterns than args, unmatched patterns must be Any.
+
+        // 1. Check positional args left-to-right.
         for (i, pat) in self.args.iter().enumerate() {
             match args.get(i) {
                 Some(arg) => {
@@ -232,6 +235,41 @@ impl CompiledExec {
                         return false;
                     }
                 }
+            }
+        }
+
+        // 2. If we have :has patterns, check them against the remaining args
+        //    (those not consumed by positional matching).
+        if !self.has_args.is_empty() {
+            let remaining = if self.args.is_empty() {
+                args
+            } else {
+                args.get(self.args.len()..).unwrap_or(&[])
+            };
+            if !Self::matches_has(&self.has_args, remaining) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Set-membership matching: each non-wildcard pattern must match at least
+    /// one argument, regardless of order. Each argument can satisfy at most one
+    /// pattern (greedy left-to-right).
+    fn matches_has(patterns: &[CompiledPattern], args: &[&str]) -> bool {
+        let mut used = vec![false; args.len()];
+        for pat in patterns {
+            if matches!(pat, CompiledPattern::Any) {
+                continue; // wildcard is redundant in :has mode
+            }
+            let found = args
+                .iter()
+                .enumerate()
+                .find(|(i, arg)| !used[*i] && pat.matches(arg));
+            match found {
+                Some((i, _)) => used[i] = true,
+                None => return false,
             }
         }
         true
@@ -410,6 +448,147 @@ mod tests {
 
         // Net: allow (because we have an allow net rule)
         assert_eq!(sandbox.network, NetworkPolicy::Allow);
+    }
+
+    #[test]
+    fn has_mode_order_independent() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "git" :has "push" "--force")))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let rule = &tree.exec_rules[0];
+        let m = match &rule.matcher {
+            CompiledMatcher::Exec(e) => e,
+            _ => panic!(),
+        };
+
+        // Order shouldn't matter.
+        assert!(m.matches("git", &["push", "--force"]));
+        assert!(m.matches("git", &["--force", "push"]));
+        assert!(m.matches("git", &["--force", "push", "origin"]));
+        assert!(m.matches("git", &["--verbose", "push", "--force"]));
+
+        // Missing a required arg should fail.
+        assert!(!m.matches("git", &["push"]));
+        assert!(!m.matches("git", &["--force"]));
+        assert!(!m.matches("git", &[]));
+
+        // Wrong binary should fail.
+        assert!(!m.matches("hg", &["push", "--force"]));
+    }
+
+    #[test]
+    fn has_mode_with_regex() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "git" :has "push" /--force/)))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let rule = &tree.exec_rules[0];
+        let m = match &rule.matcher {
+            CompiledMatcher::Exec(e) => e,
+            _ => panic!(),
+        };
+
+        assert!(m.matches("git", &["push", "--force"]));
+        assert!(m.matches("git", &["--force-with-lease", "push"]));
+        assert!(!m.matches("git", &["push", "--verbose"]));
+    }
+
+    #[test]
+    fn has_mode_with_wildcard_redundant() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "git" :has "push" *)))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let rule = &tree.exec_rules[0];
+        let m = match &rule.matcher {
+            CompiledMatcher::Exec(e) => e,
+            _ => panic!(),
+        };
+
+        // Wildcard is redundant in :has — only "push" matters.
+        assert!(m.matches("git", &["push"]));
+        assert!(m.matches("git", &["push", "origin"]));
+        assert!(!m.matches("git", &["pull"]));
+    }
+
+    #[test]
+    fn has_mode_single_arg() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "git" :has "push")))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let rule = &tree.exec_rules[0];
+        let m = match &rule.matcher {
+            CompiledMatcher::Exec(e) => e,
+            _ => panic!(),
+        };
+
+        assert!(m.matches("git", &["push"]));
+        assert!(m.matches("git", &["--verbose", "push"]));
+        assert!(m.matches("git", &["push", "origin", "main"]));
+        assert!(!m.matches("git", &["pull"]));
+        assert!(!m.matches("git", &[]));
+    }
+
+    #[test]
+    fn has_mode_mixed_positional() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "git" "push" :has "--force")))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let rule = &tree.exec_rules[0];
+        let m = match &rule.matcher {
+            CompiledMatcher::Exec(e) => e,
+            _ => panic!(),
+        };
+
+        // arg[0] must be "push", remaining must contain "--force".
+        assert!(m.matches("git", &["push", "--force"]));
+        assert!(m.matches("git", &["push", "--force", "origin"]));
+        assert!(m.matches("git", &["push", "origin", "--force"]));
+
+        // "--force" before "push" fails because "push" is positional at arg[0].
+        assert!(!m.matches("git", &["--force", "push"]));
+        // Missing --force.
+        assert!(!m.matches("git", &["push", "origin"]));
+        // Wrong subcommand.
+        assert!(!m.matches("git", &["pull", "--force"]));
     }
 
     #[test]

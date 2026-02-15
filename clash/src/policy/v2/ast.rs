@@ -41,13 +41,29 @@ pub enum CapMatcher {
     Net(NetMatcher),
 }
 
-/// Matches command execution: `(exec [bin] [args...])`.
+/// Matches command execution: `(exec bin [args...] [:has patterns...])`.
+///
+/// Arguments before `:has` are matched positionally (left-to-right).
+/// Arguments after `:has` are matched orderlessly — each pattern must match
+/// at least one of the remaining arguments, regardless of position.
+///
+/// Examples:
+/// ```text
+/// (exec "git" "push" *)                 ; positional only
+/// (exec "git" :has "push" "--force")     ; orderless only
+/// (exec "git" "push" :has "--force")     ; positional "push", then --force anywhere
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecMatcher {
     /// Binary pattern. `Pattern::Any` if omitted.
     pub bin: Pattern,
-    /// Argument patterns, positional. Empty = match any args.
+    /// Positional argument patterns. Each pattern matches the arg at the same
+    /// index. Empty = match any args.
     pub args: Vec<Pattern>,
+    /// Orderless argument patterns (after `:has`). Each pattern must match at
+    /// least one of the remaining args (those not consumed by positional).
+    /// Empty = no orderless constraint.
+    pub has_args: Vec<Pattern>,
 }
 
 /// Matches filesystem operations: `(fs [op] [path])`.
@@ -178,11 +194,18 @@ impl fmt::Display for CapMatcher {
 impl fmt::Display for ExecMatcher {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "(exec")?;
-        if self.bin != Pattern::Any || !self.args.is_empty() {
+        let has_content = !self.args.is_empty() || !self.has_args.is_empty();
+        if self.bin != Pattern::Any || has_content {
             write!(f, " {}", self.bin)?;
         }
         for arg in &self.args {
             write!(f, " {arg}")?;
+        }
+        if !self.has_args.is_empty() {
+            write!(f, " :has")?;
+            for arg in &self.has_args {
+                write!(f, " {arg}")?;
+            }
         }
         write!(f, ")")
     }
@@ -313,6 +336,7 @@ mod tests {
                     matcher: CapMatcher::Exec(ExecMatcher {
                         bin: Pattern::Literal("git".into()),
                         args: vec![Pattern::Any],
+                        has_args: vec![],
                     }),
                     sandbox: None,
                 }),
@@ -330,6 +354,7 @@ mod tests {
             matcher: CapMatcher::Exec(ExecMatcher {
                 bin: Pattern::Literal("cargo".into()),
                 args: vec![Pattern::Any],
+                has_args: vec![],
             }),
             sandbox: Some("cargo-env".into()),
         };

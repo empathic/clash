@@ -96,6 +96,7 @@ mod tests {
             matcher: CapMatcher::Exec(ExecMatcher {
                 bin: Pattern::Any,
                 args: vec![],
+                has_args: vec![],
             }),
             sandbox: None,
         }
@@ -107,6 +108,7 @@ mod tests {
             matcher: CapMatcher::Exec(ExecMatcher {
                 bin: Pattern::Literal("git".into()),
                 args: vec![Pattern::Literal("push".into()), Pattern::Any],
+                has_args: vec![],
             }),
             sandbox: None,
         }

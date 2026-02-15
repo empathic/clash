@@ -838,6 +838,7 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
                 matcher: CapMatcher::Exec(ExecMatcher {
                     bin: Pattern::Any,
                     args: vec![],
+                    has_args: vec![],
                 }),
                 sandbox: None,
             }]),

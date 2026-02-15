@@ -111,13 +111,35 @@ fn parse_exec_matcher(args: &[SExpr]) -> Result<ExecMatcher> {
         return Ok(ExecMatcher {
             bin: Pattern::Any,
             args: vec![],
+            has_args: vec![],
         });
     }
     let bin = parse_pattern(&args[0])?;
-    let arg_patterns = args[1..].iter().map(parse_pattern).collect::<Result<_>>()?;
+
+    // Parse positional args until we hit `:has`, then parse the rest as
+    // orderless patterns.
+    let mut positional = Vec::new();
+    let mut has = Vec::new();
+    let mut saw_has = false;
+
+    for expr in &args[1..] {
+        if !saw_has {
+            if let SExpr::Atom(s, _) = expr
+                && s == ":has"
+            {
+                saw_has = true;
+                continue;
+            }
+            positional.push(parse_pattern(expr)?);
+        } else {
+            has.push(parse_pattern(expr)?);
+        }
+    }
+
     Ok(ExecMatcher {
         bin,
-        args: arg_patterns,
+        args: positional,
+        has_args: has,
     })
 }
 
@@ -552,6 +574,137 @@ mod tests {
             .join("\n");
         let ast2 = parse(&printed).unwrap();
         assert_eq!(ast1, ast2, "round-trip failed:\n{printed}");
+    }
+
+    #[test]
+    fn parse_has_keyword() {
+        let ast = parse(r#"(policy "p" (deny (exec "git" :has "push" "--force")))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Exec(m) => {
+                assert_eq!(m.bin, Pattern::Literal("git".into()));
+                assert!(m.args.is_empty());
+                assert_eq!(m.has_args.len(), 2);
+                assert_eq!(m.has_args[0], Pattern::Literal("push".into()));
+                assert_eq!(m.has_args[1], Pattern::Literal("--force".into()));
+            }
+            _ => panic!("expected Exec"),
+        }
+    }
+
+    #[test]
+    fn parse_has_with_positional_prefix() {
+        let ast = parse(r#"(policy "p" (deny (exec "git" "push" :has "--force" "--no-verify")))"#)
+            .unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Exec(m) => {
+                assert_eq!(m.bin, Pattern::Literal("git".into()));
+                assert_eq!(m.args.len(), 1);
+                assert_eq!(m.args[0], Pattern::Literal("push".into()));
+                assert_eq!(m.has_args.len(), 2);
+                assert_eq!(m.has_args[0], Pattern::Literal("--force".into()));
+                assert_eq!(m.has_args[1], Pattern::Literal("--no-verify".into()));
+            }
+            _ => panic!("expected Exec"),
+        }
+    }
+
+    #[test]
+    fn parse_has_with_regex() {
+        let ast = parse(r#"(policy "p" (deny (exec "git" :has "push" /--force/)))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Exec(m) => {
+                assert!(!m.has_args.is_empty());
+                assert_eq!(m.has_args[1], Pattern::Regex("--force".into()));
+            }
+            _ => panic!("expected Exec"),
+        }
+    }
+
+    #[test]
+    fn parse_has_with_not() {
+        let ast =
+            parse(r#"(policy "p" (deny (exec "git" :has "push" (not "--dry-run"))))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Exec(m) => {
+                assert!(!m.has_args.is_empty());
+                assert_eq!(
+                    m.has_args[1],
+                    Pattern::Not(Box::new(Pattern::Literal("--dry-run".into())))
+                );
+            }
+            _ => panic!("expected Exec"),
+        }
+    }
+
+    #[test]
+    fn round_trip_has() {
+        let source = r#"(policy "p" (deny (exec "git" :has "push" "--force")))"#;
+        let ast1 = parse(source).unwrap();
+        let printed = ast1[0].to_string();
+        let ast2 = parse(&printed).unwrap();
+        assert_eq!(ast1, ast2, "round-trip failed:\n{printed}");
+    }
+
+    #[test]
+    fn round_trip_mixed_positional_has() {
+        let source = r#"(policy "p" (deny (exec "git" "push" :has "--force")))"#;
+        let ast1 = parse(source).unwrap();
+        let printed = ast1[0].to_string();
+        let ast2 = parse(&printed).unwrap();
+        assert_eq!(ast1, ast2, "round-trip failed:\n{printed}");
+    }
+
+    #[test]
+    fn parse_positional_unchanged() {
+        // Ensure regular positional parsing still works and does not produce has_args.
+        let ast = parse(r#"(policy "p" (deny (exec "git" "push" *)))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Exec(m) => {
+                assert!(m.has_args.is_empty());
+                assert_eq!(m.args.len(), 2);
+            }
+            _ => panic!("expected Exec"),
+        }
     }
 
     #[test]

@@ -215,7 +215,11 @@ fn matchers_may_overlap(a: &CapMatcher, b: &CapMatcher) -> bool {
             if !patterns_may_overlap(&ea.bin, &eb.bin) {
                 return false;
             }
-            // Check positional args pairwise.
+            // If either has :has patterns, be conservative (may overlap).
+            if !ea.has_args.is_empty() || !eb.has_args.is_empty() {
+                return true;
+            }
+            // Both purely positional: check args pairwise.
             for (pa, pb) in ea.args.iter().zip(eb.args.iter()) {
                 if !patterns_may_overlap(pa, pb) {
                     return false;
@@ -271,7 +275,16 @@ fn compile_matcher(matcher: &CapMatcher, env: &dyn EnvResolver) -> Result<Compil
         CapMatcher::Exec(m) => {
             let bin = compile_pattern(&m.bin)?;
             let args = m.args.iter().map(compile_pattern).collect::<Result<_>>()?;
-            Ok(CompiledMatcher::Exec(CompiledExec { bin, args }))
+            let has_args = m
+                .has_args
+                .iter()
+                .map(compile_pattern)
+                .collect::<Result<_>>()?;
+            Ok(CompiledMatcher::Exec(CompiledExec {
+                bin,
+                args,
+                has_args,
+            }))
         }
         CapMatcher::Fs(m) => {
             let path = match &m.path {

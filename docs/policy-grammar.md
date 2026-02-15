@@ -45,14 +45,20 @@ Rules target one of three capability domains: exec, fs, or net.
 ```ebnf
 cap_matcher     = exec_matcher | fs_matcher | net_matcher
 
-exec_matcher    = "(" "exec" pattern? pattern* ")"
+exec_matcher    = "(" "exec" pattern? args_spec ")"
+args_spec       = pattern*                         ; positional (default)
+                | ":has" pattern+                  ; orderless set-membership
 fs_matcher      = "(" "fs" op_pattern? path_filter? ")"
 net_matcher     = "(" "net" pattern? ")"
 ```
 
 ### Exec Matcher
 
-Matches command execution. The first pattern matches the binary name, subsequent patterns match positional arguments.
+Matches command execution. The first pattern matches the binary name. Arguments can be matched positionally (default) or in any order using `:has`.
+
+#### Positional matching (default)
+
+Subsequent patterns match positional arguments left-to-right.
 
 ```
 (exec)                        ; match any command
@@ -61,6 +67,33 @@ Matches command execution. The first pattern matches the binary name, subsequent
 (exec "git" "push" *)         ; match git push with any trailing args
 (exec "git" "push" "origin")  ; match git push origin exactly
 ```
+
+#### Orderless matching (`:has`)
+
+The `:has` keyword switches to set-membership matching for the remaining patterns: each pattern must match at least one argument, regardless of position. Extra unmatched arguments are always allowed.
+
+`:has` can appear after positional arguments, enabling mixed matching: fixed subcommands followed by order-independent flags.
+
+```
+;; Pure orderless:
+(exec "git" :has "push")                ; args contain "push" somewhere
+(exec "git" :has "push" "--force")      ; args contain both "push" AND "--force"
+(exec "git" :has "push" /--force/)      ; "push" literal + regex match
+
+;; Mixed positional + orderless:
+(exec "git" "push" :has "--force")      ; arg[0]="push", remaining contain "--force"
+(exec "git" "push" :has "--force" "--no-verify")  ; subcommand + two required flags
+```
+
+For example, `(exec "git" "push" :has "--force")` matches:
+- `git push --force`
+- `git push --force origin`
+- `git push origin --force main`
+
+But does not match:
+- `git push origin` (missing `--force`)
+- `git --force push` (arg[0] is `--force`, not `push`)
+- `git pull --force` (arg[0] is `pull`, not `push`)
 
 ### Fs Matcher
 
@@ -176,7 +209,10 @@ effect          = "allow" | "deny" | "ask"
 
 ## Keyword Arguments
 
-Rules support keyword arguments after the capability matcher. Keywords are atoms starting with `:`.
+Keywords are atoms starting with `:`. They appear in two positions:
+
+- **Inside exec matchers:** `:has` (see [Exec Matcher](#exec-matcher) above)
+- **After capability matchers:** `:sandbox` (see below)
 
 ### `:sandbox`
 

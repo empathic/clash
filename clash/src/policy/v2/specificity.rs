@@ -37,12 +37,17 @@ impl Specificity {
         let primary = pattern_rank(&m.bin);
         // More args = more specific (each arg narrows the match).
         // Literal args count more than wildcards.
-        let secondary = m
+        let mut secondary = m
             .args
             .iter()
             .map(pattern_rank)
             .sum::<u8>()
             .saturating_add(m.args.len() as u8);
+        // :has patterns add specificity but less than positional (orderless
+        // is a weaker constraint). Each has-pattern adds its rank but not a
+        // bonus for position count.
+        let has_score: u8 = m.has_args.iter().map(pattern_rank).sum();
+        secondary = secondary.saturating_add(has_score);
         Self { primary, secondary }
     }
 
@@ -125,10 +130,12 @@ mod tests {
         let a = Specificity::from_matcher(&CapMatcher::Exec(ExecMatcher {
             bin: Pattern::Literal("git".into()),
             args: vec![],
+            has_args: vec![],
         }));
         let b = Specificity::from_matcher(&CapMatcher::Exec(ExecMatcher {
             bin: Pattern::Any,
             args: vec![],
+            has_args: vec![],
         }));
         assert!(a > b);
     }
@@ -138,10 +145,12 @@ mod tests {
         let a = Specificity::from_matcher(&CapMatcher::Exec(ExecMatcher {
             bin: Pattern::Literal("git".into()),
             args: vec![Pattern::Literal("push".into()), Pattern::Any],
+            has_args: vec![],
         }));
         let b = Specificity::from_matcher(&CapMatcher::Exec(ExecMatcher {
             bin: Pattern::Literal("git".into()),
             args: vec![Pattern::Any],
+            has_args: vec![],
         }));
         assert!(a > b);
     }
@@ -188,11 +197,50 @@ mod tests {
         let a = Specificity::from_matcher(&CapMatcher::Exec(ExecMatcher {
             bin: Pattern::Literal("git".into()),
             args: vec![Pattern::Any],
+            has_args: vec![],
         }));
         let b = Specificity::from_matcher(&CapMatcher::Exec(ExecMatcher {
             bin: Pattern::Literal("npm".into()),
             args: vec![Pattern::Any],
+            has_args: vec![],
         }));
         assert_eq!(a.partial_cmp(&b), Some(std::cmp::Ordering::Equal));
+    }
+
+    #[test]
+    fn has_less_specific_than_positional() {
+        // (exec "git" "push" *) — positional, secondary = rank(push) + rank(*) + 2 = 3+0+2 = 5
+        let positional = Specificity::from_matcher(&CapMatcher::Exec(ExecMatcher {
+            bin: Pattern::Literal("git".into()),
+            args: vec![Pattern::Literal("push".into()), Pattern::Any],
+            has_args: vec![],
+        }));
+        // (exec "git" :has "push") — has only, secondary = rank(push) = 3 (no position bonus)
+        let has = Specificity::from_matcher(&CapMatcher::Exec(ExecMatcher {
+            bin: Pattern::Literal("git".into()),
+            args: vec![],
+            has_args: vec![Pattern::Literal("push".into())],
+        }));
+        assert!(positional > has);
+    }
+
+    #[test]
+    fn mixed_positional_has_more_specific_than_has_only() {
+        // (exec "git" "push" :has "--force") — positional "push" + has "--force"
+        let mixed = Specificity::from_matcher(&CapMatcher::Exec(ExecMatcher {
+            bin: Pattern::Literal("git".into()),
+            args: vec![Pattern::Literal("push".into())],
+            has_args: vec![Pattern::Literal("--force".into())],
+        }));
+        // (exec "git" :has "push" "--force") — both orderless
+        let has_only = Specificity::from_matcher(&CapMatcher::Exec(ExecMatcher {
+            bin: Pattern::Literal("git".into()),
+            args: vec![],
+            has_args: vec![
+                Pattern::Literal("push".into()),
+                Pattern::Literal("--force".into()),
+            ],
+        }));
+        assert!(mixed > has_only);
     }
 }
