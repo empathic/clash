@@ -389,18 +389,6 @@ fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookIn
         }
     }
 
-    // 5b. Export CLASH_BIN and CLASH_SESSION_DIR via CLAUDE_ENV_FILE
-    if let Ok(env_file) = std::env::var("CLAUDE_ENV_FILE") {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&env_file) {
-            let home = std::env::var("HOME").unwrap_or_default();
-            let bin_path = std::path::Path::new(&home).join(".local/bin/clash");
-            let _ = writeln!(f, "CLASH_BIN={}", bin_path.display());
-            let session_dir = crate::audit::session_dir(&input.session_id);
-            let _ = writeln!(f, "CLASH_SESSION_DIR={}", session_dir.display());
-        }
-    }
-
     // 6. Session metadata
     if let Some(ref source) = input.source {
         lines.push(format!("session source: {}", source));

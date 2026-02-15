@@ -1,6 +1,6 @@
 //! Capability-based policy language with s-expression syntax.
 //!
-//! Three capability domains: `exec` (commands), `fs` (filesystem), `net` (network).
+//! Four capability domains: `exec` (commands), `fs` (filesystem), `net` (network), `tool` (agent tools).
 //! Rules are `(effect (capability ...))` forms, e.g. `(deny (exec "git" "push" *))`.
 //!
 //! The policy speaks in capabilities, not Claude Code tool names — the eval
@@ -19,7 +19,7 @@ pub mod sandbox_types;
 pub mod sexpr;
 pub mod specificity;
 
-pub use compile::compile_policy;
+pub use compile::{compile_policy, compile_policy_with_internals};
 pub use decision_tree::DecisionTree;
 pub use error::{CompileError, PolicyError, PolicyParseError};
 pub use ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};

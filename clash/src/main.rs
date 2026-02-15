@@ -802,6 +802,7 @@ fn write_policy(path: &std::path::Path, source: &str) -> Result<()> {
 use clash::policy::ast::Rule as AstRule;
 use clash::policy::ast::{
     CapMatcher, ExecMatcher, FsMatcher, FsOp, NetMatcher, OpPattern, PathExpr, PathFilter, Pattern,
+    ToolMatcher,
 };
 
 /// Parse a CLI rule string into one or more AST rules.
@@ -865,8 +866,13 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
                 }),
                 sandbox: None,
             }]),
+            "tool" => Ok(vec![AstRule {
+                effect,
+                matcher: CapMatcher::Tool(ToolMatcher { name: Pattern::Any }),
+                sandbox: None,
+            }]),
             other => bail!(
-                "unknown verb: {other}\n\nSupported verbs: bash, edit, read, web\n\
+                "unknown verb: {other}\n\nSupported verbs: bash, edit, read, web, tool\n\
                  Or pass an s-expr: clash policy allow '(exec \"git\" *)'"
             ),
         }
@@ -929,6 +935,9 @@ fn friendly_confirmation(effect: Effect, verb: &str) -> Option<String> {
         )),
         "read" => Some(format!("Claude {action} read files in {cwd}.")),
         "web" => Some(format!("Claude {action} search the web and fetch URLs.")),
+        "tool" => Some(format!(
+            "Claude {action} use agent tools (Skill, Task, etc.)."
+        )),
         _ => None,
     }
 }
@@ -972,9 +981,13 @@ fn handle_list(json: bool) -> Result<()> {
         let entries: Vec<serde_json::Value> = all_rules
             .iter()
             .map(|r| {
+                let origin = r.origin_policy.as_deref().unwrap_or(&tree.policy_name);
+                let builtin = origin.starts_with("__internal_");
                 serde_json::json!({
                     "effect": format!("{}", r.effect),
                     "rule": r.source.to_string(),
+                    "origin": origin,
+                    "builtin": builtin,
                 })
             })
             .collect();

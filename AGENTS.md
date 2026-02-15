@@ -13,6 +13,11 @@
 * End-to-end test scripts are YAML files in `clester/tests/scripts/`
 * The `clester` crate is the end-to-end test harness; see its source for script format
 
+## Running clash
+* `clash` is an installed binary on the user's PATH. ALWAYS run it directly as `clash` (e.g., `clash status`, `clash policy list`).
+* NEVER use `cargo run --bin clash` to run clash. That is for building/testing the crate, not for invoking the tool.
+* Skills reference `clash` commands — execute them exactly as written.
+
 ## Development
 * Always check the documentation after your changes to ensure they are logically consistent with what you have done. This should be the last step after you have validated your changes work.
 * ALWAYS update the relevant documentation (readme/comments) when changes have a public facing impact.

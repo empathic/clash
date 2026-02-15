@@ -102,6 +102,7 @@ fn parse_cap_matcher(expr: &SExpr) -> Result<CapMatcher> {
         "exec" => parse_exec_matcher(&list[1..]).map(CapMatcher::Exec),
         "fs" => parse_fs_matcher(&list[1..]).map(CapMatcher::Fs),
         "net" => parse_net_matcher(&list[1..]).map(CapMatcher::Net),
+        "tool" => parse_tool_matcher(&list[1..]).map(CapMatcher::Tool),
         other => bail!("unknown capability: {other}"),
     }
 }
@@ -168,6 +169,15 @@ fn parse_net_matcher(args: &[SExpr]) -> Result<NetMatcher> {
     ensure!(args.len() == 1, "(net) expects at most 1 argument");
     let domain = parse_pattern(&args[0])?;
     Ok(NetMatcher { domain })
+}
+
+fn parse_tool_matcher(args: &[SExpr]) -> Result<ToolMatcher> {
+    if args.is_empty() {
+        return Ok(ToolMatcher { name: Pattern::Any });
+    }
+    ensure!(args.len() == 1, "(tool) expects at most 1 argument");
+    let name = parse_pattern(&args[0])?;
+    Ok(ToolMatcher { name })
 }
 
 fn parse_op_pattern(expr: &SExpr) -> Result<OpPattern> {
@@ -278,6 +288,14 @@ fn parse_path_expr(expr: &SExpr) -> Result<PathExpr> {
                     ensure!(children.len() == 2, "(env) expects exactly 1 argument");
                     let name = require_string_or_atom(&children[1], "env var name")?;
                     Ok(PathExpr::Env(name.to_string()))
+                }
+                "join" => {
+                    ensure!(children.len() >= 3, "(join) expects at least 2 arguments");
+                    let parts = children[1..]
+                        .iter()
+                        .map(parse_path_expr)
+                        .collect::<Result<_>>()?;
+                    Ok(PathExpr::Join(parts))
                 }
                 other => bail!("unknown path expression form: {other}"),
             }
@@ -705,6 +723,78 @@ mod tests {
             }
             _ => panic!("expected Exec"),
         }
+    }
+
+    #[test]
+    fn parse_join_path_expr() {
+        let ast = parse(r#"(policy "p" (allow (fs read (subpath (join (env HOME) "/.clash")))))"#)
+            .unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Fs(m) => match &m.path {
+                Some(PathFilter::Subpath(PathExpr::Join(parts))) => {
+                    assert_eq!(parts.len(), 2);
+                    assert_eq!(parts[0], PathExpr::Env("HOME".into()));
+                    assert_eq!(parts[1], PathExpr::Static("/.clash".into()));
+                }
+                other => panic!("expected Subpath(Join(...)), got {other:?}"),
+            },
+            _ => panic!("expected Fs"),
+        }
+    }
+
+    #[test]
+    fn round_trip_join() {
+        let source = r#"(policy "p" (allow (fs read (subpath (join (env HOME) "/.clash")))))"#;
+        let ast1 = parse(source).unwrap();
+        let printed = ast1[0].to_string();
+        let ast2 = parse(&printed).unwrap();
+        assert_eq!(ast1, ast2, "round-trip failed:\n{printed}");
+    }
+
+    #[test]
+    fn parse_nested_join() {
+        let ast = parse(
+            r#"(policy "p" (allow (fs read (subpath (join (join (env HOME) "/.config") "/clash")))))"#,
+        )
+        .unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Fs(m) => match &m.path {
+                Some(PathFilter::Subpath(PathExpr::Join(parts))) => {
+                    assert_eq!(parts.len(), 2);
+                    assert!(matches!(&parts[0], PathExpr::Join(_)));
+                }
+                other => panic!("expected Subpath(Join(...)), got {other:?}"),
+            },
+            _ => panic!("expected Fs"),
+        }
+    }
+
+    #[test]
+    fn parse_join_needs_two_args() {
+        let err =
+            parse(r#"(policy "p" (allow (fs read (subpath (join (env HOME))))))"#).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("(join) expects at least 2 arguments"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]

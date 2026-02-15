@@ -40,16 +40,17 @@ Policy names, include targets, and keyword argument values must be quoted string
 
 ## Capability Matchers
 
-Rules target one of three capability domains: exec, fs, or net.
+Rules target one of four capability domains: exec, fs, net, or tool.
 
 ```ebnf
-cap_matcher     = exec_matcher | fs_matcher | net_matcher
+cap_matcher     = exec_matcher | fs_matcher | net_matcher | tool_matcher
 
 exec_matcher    = "(" "exec" pattern? args_spec ")"
 args_spec       = pattern*                         ; positional (default)
                 | ":has" pattern+                  ; orderless set-membership
 fs_matcher      = "(" "fs" op_pattern? path_filter? ")"
 net_matcher     = "(" "net" pattern? ")"
+tool_matcher    = "(" "tool" pattern? ")"
 ```
 
 ### Exec Matcher
@@ -116,6 +117,16 @@ Matches network access by domain.
 (net /.*\.example\.com/)       ; match example.com subdomains
 ```
 
+### Tool Matcher
+
+Matches agent tools by name. Applies to Claude Code tools that don't map to exec/fs/net (e.g. Skill, Task, AskUserQuestion, EnterPlanMode).
+
+```
+(tool)                         ; match any agent tool
+(tool "Skill")                 ; match the Skill tool exactly
+(tool (or "Skill" "Task"))     ; match Skill or Task
+```
+
 ---
 
 ## Patterns
@@ -169,6 +180,7 @@ path_filter     = "(" "subpath" path_expr ")"  ; recursive subtree match
 
 path_expr       = QUOTED_STRING                ; static path
                 | "(" "env" ENV_NAME ")"       ; environment variable (resolved at compile time)
+                | "(" "join" path_expr path_expr+ ")"  ; concatenate resolved parts
 ```
 
 ### Subpath Matching
@@ -190,6 +202,42 @@ path_expr       = QUOTED_STRING                ; static path
 (subpath (env PWD))    ; expands to the current working directory
 (subpath (env HOME))   ; expands to the user's home directory
 ```
+
+### Path Concatenation
+
+`(join expr1 expr2 ...)` concatenates two or more path expressions. Each part is resolved individually and the results are concatenated:
+
+```
+(subpath (join (env HOME) "/.clash"))   ; expands to e.g. /home/user/.clash
+(subpath (join (env HOME) "/.claude"))  ; expands to e.g. /home/user/.claude
+```
+
+`join` can be nested:
+
+```
+(subpath (join (join (env HOME) "/.config") "/clash"))
+```
+
+---
+
+## Internal Policies
+
+Clash embeds internal policies that are always active. These provide sensible defaults for Clash self-management and Claude workspace access. Internal policy names use the `__internal_*__` naming convention (e.g. `__internal_clash__`, `__internal_claude__`).
+
+Internal policies are automatically included in the active policy via `(include ...)`. They appear in `clash policy list` and `clash policy show` output with a `[builtin]` tag.
+
+### Overriding Internal Policies
+
+To override an internal policy, define a policy with the same name in your policy file:
+
+```
+; Override the built-in Claude workspace policy with custom rules
+(policy "__internal_claude__"
+  (allow (fs read (subpath (join (env HOME) "/.claude"))))
+  (deny  (fs write (subpath (join (env HOME) "/.claude")))))
+```
+
+When a user-defined policy shares the name of an internal policy, the user's version completely replaces the built-in one.
 
 ---
 

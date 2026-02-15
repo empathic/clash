@@ -38,6 +38,7 @@ fn describe_matcher(matcher: &CapMatcher) -> String {
         CapMatcher::Exec(m) => describe_exec(m),
         CapMatcher::Fs(m) => describe_fs(m),
         CapMatcher::Net(m) => describe_net(m),
+        CapMatcher::Tool(m) => describe_tool(m),
     }
 }
 
@@ -106,6 +107,11 @@ fn describe_net(m: &NetMatcher) -> String {
     format!("network access to {domain}")
 }
 
+fn describe_tool(m: &ToolMatcher) -> String {
+    let name = describe_pattern(&m.name);
+    format!("tool {name}")
+}
+
 fn describe_pattern(p: &Pattern) -> String {
     match p {
         Pattern::Any => "anything".into(),
@@ -123,6 +129,17 @@ fn describe_path_filter(pf: &PathFilter) -> String {
     match pf {
         PathFilter::Subpath(PathExpr::Env(name)) => format!("files under ${name}"),
         PathFilter::Subpath(PathExpr::Static(s)) => format!("files under {s}"),
+        PathFilter::Subpath(PathExpr::Join(parts)) => {
+            let desc: Vec<String> = parts
+                .iter()
+                .map(|p| match p {
+                    PathExpr::Env(name) => format!("${name}"),
+                    PathExpr::Static(s) => s.clone(),
+                    PathExpr::Join(_) => "(join ...)".into(),
+                })
+                .collect();
+            format!("files under {}", desc.concat())
+        }
         PathFilter::Literal(s) => format!("\"{s}\""),
         PathFilter::Regex(r) => format!("paths matching /{r}/"),
         PathFilter::Or(fs) => {

@@ -7,9 +7,9 @@ Help the user add a **deny** rule to their clash policy.
 ## Steps
 
 1. **Determine the rule** from the conversation context. Consider what the user wants to block:
-   - Example: `$CLASH_BIN policy deny "bash git push*"` (block git push)
-   - Example: `$CLASH_BIN policy deny "bash sudo *"` (block sudo commands)
-   - Example: `$CLASH_BIN policy deny "* *" --fs "write+delete:subpath(~/important)"` (block writes to a directory)
+   - Example: `clash policy deny "bash git push*"` (block git push)
+   - Example: `clash policy deny "bash sudo *"` (block sudo commands)
+   - Example: `clash policy deny "* *" --fs "write+delete:subpath(~/important)"` (block writes to a directory)
    - If unsure, ask the user what they want to deny.
 
 2. **Confirm with the user** before making any changes:
@@ -19,13 +19,13 @@ Help the user add a **deny** rule to their clash policy.
 
 3. **Dry-run first** to preview the change:
    ```bash
-   $CLASH_BIN policy deny "RULE" --dry-run
+   clash policy deny "RULE" --dry-run
    ```
    Show the output to the user.
 
 4. **Get confirmation**, then apply:
    ```bash
-   $CLASH_BIN policy deny "RULE"
+   clash policy deny "RULE"
    ```
 
 5. **Report success** and explain that the deny rule is now active.

@@ -28,14 +28,82 @@ impl EnvResolver for StdEnvResolver {
     }
 }
 
-/// Compile a policy source string into a decision tree.
+/// Compile a policy source string into a decision tree, injecting internal policies.
 pub fn compile_policy(source: &str) -> Result<DecisionTree> {
-    compile_policy_with_env(source, &StdEnvResolver)
+    compile_policy_with_internals(source, &StdEnvResolver, crate::settings::INTERNAL_POLICIES)
 }
 
 /// Compile with a custom environment resolver (useful for testing).
+/// Does NOT inject internal policies — existing tests use this directly.
 pub fn compile_policy_with_env(source: &str, env: &dyn EnvResolver) -> Result<DecisionTree> {
     let ast = super::parse::parse(source)?;
+    compile_ast(&ast, env)
+}
+
+/// Compile with internal policies injected.
+///
+/// 1. Parses user source
+/// 2. Checks which internal policy names the user already defined (override)
+/// 3. For non-overridden ones, parses embedded source, appends TopLevel::Policy items
+/// 4. Prepends `(include "__internal_X__")` to the active policy body
+/// 5. Calls existing compile_ast
+pub fn compile_policy_with_internals(
+    source: &str,
+    env: &dyn EnvResolver,
+    internals: &[(&str, &str)],
+) -> Result<DecisionTree> {
+    let mut ast = super::parse::parse(source)?;
+
+    // Collect user-defined policy names.
+    let user_policies: std::collections::HashSet<String> = ast
+        .iter()
+        .filter_map(|tl| match tl {
+            TopLevel::Policy { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    // Find the active policy name.
+    let active_policy = ast
+        .iter()
+        .find_map(|tl| match tl {
+            TopLevel::Default { policy, .. } => Some(policy.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "main".to_string());
+
+    // Parse and inject non-overridden internal policies.
+    let mut internal_includes = Vec::new();
+    for (name, int_source) in internals {
+        if user_policies.contains(*name) {
+            continue; // user overrides this internal policy
+        }
+        let int_ast = super::parse::parse(int_source)?;
+        for tl in int_ast {
+            if let TopLevel::Policy { .. } = &tl {
+                ast.push(tl);
+                internal_includes.push(name.to_string());
+            }
+        }
+    }
+
+    // Prepend include directives for internal policies to the active policy.
+    if !internal_includes.is_empty() {
+        for tl in &mut ast {
+            if let TopLevel::Policy { name, body } = tl
+                && *name == active_policy
+            {
+                let mut new_body: Vec<PolicyItem> = internal_includes
+                    .iter()
+                    .map(|n| PolicyItem::Include(n.clone()))
+                    .collect();
+                new_body.append(body);
+                *body = new_body;
+                break;
+            }
+        }
+    }
+
     compile_ast(&ast, env)
 }
 
@@ -61,7 +129,7 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
     }
 
     // Flatten the active policy, resolving includes.
-    let mut rules = Vec::new();
+    let mut rules: Vec<(Rule, String)> = Vec::new();
     let mut visited = Vec::new();
     flatten_policy(active_policy, &policies, &mut rules, &mut visited)?;
 
@@ -69,8 +137,9 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
     let mut exec_rules = Vec::new();
     let mut fs_rules = Vec::new();
     let mut net_rules = Vec::new();
+    let mut tool_rules = Vec::new();
 
-    for rule in &rules {
+    for (rule, origin) in &rules {
         // Validate sandbox references point to existing policies.
         if let Some(ref sandbox_name) = rule.sandbox
             && !policies.contains_key(sandbox_name.as_str())
@@ -90,11 +159,13 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
             source: rule.clone(),
             specificity,
             sandbox: rule.sandbox.clone(),
+            origin_policy: Some(origin.clone()),
         };
         match &rule.matcher {
             CapMatcher::Exec(_) => exec_rules.push(compiled),
             CapMatcher::Fs(_) => fs_rules.push(compiled),
             CapMatcher::Net(_) => net_rules.push(compiled),
+            CapMatcher::Tool(_) => tool_rules.push(compiled),
         }
     }
 
@@ -107,11 +178,13 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
     exec_rules.sort_by(sort_fn);
     fs_rules.sort_by(sort_fn);
     net_rules.sort_by(sort_fn);
+    tool_rules.sort_by(sort_fn);
 
     // Detect conflicts: same specificity, different effects.
     detect_conflicts(&exec_rules, "exec")?;
     detect_conflicts(&fs_rules, "fs")?;
     detect_conflicts(&net_rules, "net")?;
+    detect_conflicts(&tool_rules, "tool")?;
 
     // Compile sandbox policies: for each sandbox reference, compile the
     // referenced policy's rules into a standalone rule set.
@@ -136,6 +209,7 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
                         source: rule.clone(),
                         specificity,
                         sandbox: None,
+                        origin_policy: None,
                     });
                 }
             }
@@ -149,15 +223,17 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
         exec_rules,
         fs_rules,
         net_rules,
+        tool_rules,
         sandbox_policies,
     })
 }
 
 /// Recursively flatten a policy, resolving `(include ...)` references.
+/// Each rule is tagged with the name of the policy it originated from.
 fn flatten_policy(
     name: &str,
     policies: &HashMap<&str, &[PolicyItem]>,
-    rules: &mut Vec<Rule>,
+    rules: &mut Vec<(Rule, String)>,
     visited: &mut Vec<String>,
 ) -> Result<()> {
     if visited.contains(&name.to_string()) {
@@ -175,7 +251,7 @@ fn flatten_policy(
                 flatten_policy(target, policies, rules, visited)?;
             }
             PolicyItem::Rule(rule) => {
-                rules.push(rule.clone());
+                rules.push((rule.clone(), name.to_string()));
             }
         }
     }
@@ -237,6 +313,7 @@ fn matchers_may_overlap(a: &CapMatcher, b: &CapMatcher) -> bool {
             }
         }
         (CapMatcher::Net(na), CapMatcher::Net(nb)) => patterns_may_overlap(&na.domain, &nb.domain),
+        (CapMatcher::Tool(ta), CapMatcher::Tool(tb)) => patterns_may_overlap(&ta.name, &tb.name),
         // Different capability domains never overlap.
         _ => false,
     }
@@ -300,6 +377,10 @@ fn compile_matcher(matcher: &CapMatcher, env: &dyn EnvResolver) -> Result<Compil
             let domain = compile_pattern(&m.domain)?;
             Ok(CompiledMatcher::Net(CompiledNet { domain }))
         }
+        CapMatcher::Tool(m) => {
+            let name = compile_pattern(&m.name)?;
+            Ok(CompiledMatcher::Tool(CompiledTool { name }))
+        }
     }
 }
 
@@ -352,6 +433,13 @@ fn resolve_path_expr(expr: &PathExpr, env: &dyn EnvResolver) -> Result<String> {
     match expr {
         PathExpr::Static(s) => Ok(s.clone()),
         PathExpr::Env(name) => env.resolve(name),
+        PathExpr::Join(parts) => {
+            let mut result = String::new();
+            for part in parts {
+                result.push_str(&resolve_path_expr(part, env)?);
+            }
+            Ok(result)
+        }
     }
 }
 
@@ -502,6 +590,25 @@ mod tests {
     }
 
     #[test]
+    fn compile_join_resolution() {
+        let source = r#"
+(default deny "main")
+(policy "main"
+  (allow (fs read (subpath (join (env HOME) "/.clash")))))
+"#;
+        let env = TestEnv::new(&[("HOME", "/home/user")]);
+        let tree = compile_policy_with_env(source, &env).unwrap();
+        assert_eq!(tree.fs_rules.len(), 1);
+        match &tree.fs_rules[0].matcher {
+            CompiledMatcher::Fs(f) => match &f.path {
+                Some(CompiledPathFilter::Subpath(p)) => assert_eq!(p, "/home/user/.clash"),
+                other => panic!("expected Subpath, got {other:?}"),
+            },
+            other => panic!("expected Fs, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn compile_missing_env_error() {
         let source = r#"
 (default deny "main")
@@ -581,6 +688,86 @@ mod tests {
             "got: {}",
             err
         );
+    }
+
+    #[test]
+    fn compile_with_internals_injects_rules() {
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))
+"#;
+        let internal = r#"
+(policy "__internal_test__"
+  (allow (fs read (subpath "/test"))))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree =
+            compile_policy_with_internals(user_source, &env, &[("__internal_test__", internal)])
+                .unwrap();
+        // User rule + internal rule.
+        assert_eq!(tree.exec_rules.len(), 1);
+        assert_eq!(tree.fs_rules.len(), 1);
+        // Check provenance.
+        assert_eq!(tree.exec_rules[0].origin_policy.as_deref(), Some("main"));
+        assert_eq!(
+            tree.fs_rules[0].origin_policy.as_deref(),
+            Some("__internal_test__")
+        );
+    }
+
+    #[test]
+    fn compile_with_internals_user_overrides() {
+        let user_source = r#"
+(default deny "main")
+(policy "__internal_test__"
+  (deny (fs read (subpath "/custom"))))
+(policy "main"
+  (include "__internal_test__")
+  (allow (exec "git" *)))
+"#;
+        let internal = r#"
+(policy "__internal_test__"
+  (allow (fs read (subpath "/test"))))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree =
+            compile_policy_with_internals(user_source, &env, &[("__internal_test__", internal)])
+                .unwrap();
+        // User override should win — deny instead of allow.
+        assert_eq!(tree.fs_rules.len(), 1);
+        assert_eq!(tree.fs_rules[0].effect, Effect::Deny);
+    }
+
+    #[test]
+    fn compile_with_internals_no_internals() {
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_internals(user_source, &env, &[]).unwrap();
+        assert_eq!(tree.exec_rules.len(), 1);
+        assert!(tree.fs_rules.is_empty());
+    }
+
+    #[test]
+    fn compile_provenance_tracking() {
+        let source = r#"
+(default deny "main")
+(policy "shared"
+  (allow (fs read (subpath "/shared"))))
+(policy "main"
+  (include "shared")
+  (deny (exec "git" "push" *))
+  (allow (exec "git" *)))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(source, &env).unwrap();
+        assert_eq!(tree.fs_rules[0].origin_policy.as_deref(), Some("shared"));
+        assert_eq!(tree.exec_rules[0].origin_policy.as_deref(), Some("main"));
+        assert_eq!(tree.exec_rules[1].origin_policy.as_deref(), Some("main"));
     }
 
     #[test]

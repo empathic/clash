@@ -262,6 +262,15 @@ fn rule_syntax() -> RuleSyntax {
                 required: false,
                 fields: None,
             },
+            SchemaField {
+                key: "tool",
+                type_name: "capability",
+                description: "Agent tool access: (tool [name-pattern]). Matches tools not covered by exec/fs/net (e.g. Skill, Task, AskUserQuestion, EnterPlanMode).",
+                default: None,
+                values: None,
+                required: false,
+                fields: None,
+            },
         ],
         patterns: vec![
             SchemaField {
@@ -447,6 +456,7 @@ mod tests {
         assert!(domain_keys.contains(&"exec"));
         assert!(domain_keys.contains(&"fs"));
         assert!(domain_keys.contains(&"net"));
+        assert!(domain_keys.contains(&"tool"));
     }
 
     #[test]

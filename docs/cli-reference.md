@@ -244,7 +244,7 @@ clash hook permission-request
 
 ### clash hook session-start
 
-Called when a Claude Code session begins. Initializes session state, exports environment variables (`CLASH_BIN`, `CLASH_SESSION_DIR`), and injects system prompt context. Reads hook input from stdin as JSON.
+Called when a Claude Code session begins. Initializes session state, symlinks the clash binary into `~/.local/bin/`, and injects system prompt context. Reads hook input from stdin as JSON.
 
 ```
 clash hook session-start
@@ -288,15 +288,6 @@ clash bug "Policy not matching git commands" \
 ```
 
 ---
-
-## Environment Variables
-
-Clash exports these environment variables during a session:
-
-| Variable | Description |
-|----------|-------------|
-| `CLASH_BIN` | Absolute path to the clash binary |
-| `CLASH_SESSION_DIR` | Path to the per-session temp directory (`/tmp/clash-<session_id>/`) |
 
 ---
 

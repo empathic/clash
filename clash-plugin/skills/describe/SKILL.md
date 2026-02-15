@@ -5,7 +5,7 @@ description: Describe the active clash policy in human-readable terms
 Start with a quick summary:
 
 ```bash
-$CLASH_BIN status
+clash status
 ```
 
 Then read the active policy file for full details:

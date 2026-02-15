@@ -8,7 +8,7 @@ Show the current clash configuration status.
 Run:
 
 ```bash
-$CLASH_BIN status
+clash status
 ```
 
 Report the results to the user in plain English, including:

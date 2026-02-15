@@ -30,6 +30,7 @@ impl Specificity {
             CapMatcher::Exec(m) => Self::from_exec(m),
             CapMatcher::Fs(m) => Self::from_fs(m),
             CapMatcher::Net(m) => Self::from_net(m),
+            CapMatcher::Tool(m) => Self::from_tool(m),
         }
     }
 
@@ -63,6 +64,13 @@ impl Specificity {
     fn from_net(m: &NetMatcher) -> Self {
         Self {
             primary: pattern_rank(&m.domain),
+            secondary: 0,
+        }
+    }
+
+    fn from_tool(m: &ToolMatcher) -> Self {
+        Self {
+            primary: pattern_rank(&m.name),
             secondary: 0,
         }
     }

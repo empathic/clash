@@ -1,0 +1,26 @@
+; Internal: Clash self-management
+(policy "__internal_clash__"
+  ; Read clash config
+  (allow (fs read (subpath (join (env HOME) "/.clash"))))
+
+  ; Read-only commands
+  (allow (exec "clash" "status" *))
+  (allow (exec "clash" "policy" "list" *))
+  (allow (exec "clash" "policy" "show" *))
+  (allow (exec "clash" "policy" "explain" *))
+  (allow (exec "clash" "policy" "schema" *))
+
+  ; Dry-run modifications
+  (allow (exec "clash" "allow" :has "--dry-run"))
+  (allow (exec "clash" "deny" :has "--dry-run"))
+  (allow (exec "clash" "policy" "allow" :has "--dry-run"))
+  (allow (exec "clash" "policy" "deny" :has "--dry-run"))
+  (allow (exec "clash" "policy" "remove" :has "--dry-run"))
+
+  ; Actual modifications require confirmation
+  (ask (exec "clash" "allow" *))
+  (ask (exec "clash" "deny" *))
+  (ask (exec "clash" "policy" "allow" *))
+  (ask (exec "clash" "policy" "deny" *))
+  (ask (exec "clash" "policy" "remove" *))
+  (ask (exec "clash" "policy" "setup")))

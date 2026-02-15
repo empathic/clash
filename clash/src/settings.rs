@@ -12,6 +12,13 @@ use crate::notifications::NotificationConfig;
 /// Default policy source embedded at compile time.
 pub const DEFAULT_POLICY: &str = include_str!("default_policy.sexpr");
 
+/// Internal policies embedded at compile time. Each entry is (name, source).
+/// These are always active unless the user defines a policy with the same name.
+pub const INTERNAL_POLICIES: &[(&str, &str)] = &[
+    ("__internal_clash__", include_str!("internal_clash.sexpr")),
+    ("__internal_claude__", include_str!("internal_claude.sexpr")),
+];
+
 #[derive(Debug, Default)]
 pub struct ClashSettings {
     /// Pre-compiled decision tree for fast evaluation.

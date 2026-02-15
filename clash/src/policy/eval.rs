@@ -17,6 +17,7 @@ pub enum CapQuery {
     Exec { bin: String, args: Vec<String> },
     Fs { op: FsOp, path: String },
     Net { domain: String },
+    Tool { name: String },
 }
 
 /// Map a tool invocation to capability queries.
@@ -95,11 +96,10 @@ pub fn tool_to_queries(
             }]
         }
         _ => {
-            debug!(
-                tool_name,
-                "unknown tool — no capability query, using default"
-            );
-            vec![]
+            debug!(tool_name, "tool — using tool capability query");
+            vec![CapQuery::Tool {
+                name: tool_name.to_string(),
+            }]
         }
     }
 }
@@ -182,6 +182,7 @@ impl DecisionTree {
                 CapQuery::Exec { .. } => &self.exec_rules,
                 CapQuery::Fs { .. } => &self.fs_rules,
                 CapQuery::Net { .. } => &self.net_rules,
+                CapQuery::Tool { .. } => &self.tool_rules,
             };
 
             for (idx, rule) in rules.iter().enumerate() {
@@ -192,6 +193,7 @@ impl DecisionTree {
                     }
                     (CompiledMatcher::Fs(m), CapQuery::Fs { op, path }) => m.matches(*op, path),
                     (CompiledMatcher::Net(m), CapQuery::Net { domain }) => m.matches(domain),
+                    (CompiledMatcher::Tool(m), CapQuery::Tool { name }) => m.matches(name),
                     _ => false,
                 };
 

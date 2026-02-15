@@ -33,12 +33,13 @@ pub struct Rule {
     pub sandbox: Option<String>,
 }
 
-/// A capability matcher — one of the three capability domains.
+/// A capability matcher — one of the four capability domains.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapMatcher {
     Exec(ExecMatcher),
     Fs(FsMatcher),
     Net(NetMatcher),
+    Tool(ToolMatcher),
 }
 
 /// Matches command execution: `(exec bin [args...] [:has patterns...])`.
@@ -80,6 +81,16 @@ pub struct FsMatcher {
 pub struct NetMatcher {
     /// Domain pattern. `Pattern::Any` if omitted.
     pub domain: Pattern,
+}
+
+/// Matches Claude Code tools by name: `(tool [name])`.
+///
+/// This capability domain matches tools that don't map to exec/fs/net,
+/// such as `Skill`, `Task`, `AskUserQuestion`, `EnterPlanMode`, etc.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolMatcher {
+    /// Tool name pattern. `Pattern::Any` if omitted.
+    pub name: Pattern,
 }
 
 /// A filesystem operation pattern.
@@ -139,6 +150,8 @@ pub enum PathExpr {
     Static(String),
     /// `(env NAME)` — resolved at compile time.
     Env(String),
+    /// `(join expr1 expr2 ...)` — concatenate resolved parts.
+    Join(Vec<PathExpr>),
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +200,7 @@ impl fmt::Display for CapMatcher {
             CapMatcher::Exec(m) => write!(f, "{m}"),
             CapMatcher::Fs(m) => write!(f, "{m}"),
             CapMatcher::Net(m) => write!(f, "{m}"),
+            CapMatcher::Tool(m) => write!(f, "{m}"),
         }
     }
 }
@@ -229,6 +243,16 @@ impl fmt::Display for NetMatcher {
         write!(f, "(net")?;
         if self.domain != Pattern::Any {
             write!(f, " {}", self.domain)?;
+        }
+        write!(f, ")")
+    }
+}
+
+impl fmt::Display for ToolMatcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(tool")?;
+        if self.name != Pattern::Any {
+            write!(f, " {}", self.name)?;
         }
         write!(f, ")")
     }
@@ -308,6 +332,13 @@ impl fmt::Display for PathExpr {
                 write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
             }
             PathExpr::Env(name) => write!(f, "(env {name})"),
+            PathExpr::Join(parts) => {
+                write!(f, "(join")?;
+                for part in parts {
+                    write!(f, " {part}")?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }
@@ -379,6 +410,15 @@ mod tests {
             domain: Pattern::Regex(r".*\.evil\.com".into()),
         };
         assert_eq!(m.to_string(), r"(net /.*\.evil\.com/)");
+    }
+
+    #[test]
+    fn display_path_join() {
+        let expr = PathExpr::Join(vec![
+            PathExpr::Env("HOME".into()),
+            PathExpr::Static("/.clash".into()),
+        ]);
+        assert_eq!(expr.to_string(), r#"(join (env HOME) "/.clash")"#);
     }
 
     #[test]

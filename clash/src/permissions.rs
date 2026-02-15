@@ -123,6 +123,10 @@ fn tool_to_verb_str(tool_name: &str) -> String {
         "Read" | "Glob" | "Grep" => "read".into(),
         "Write" | "Edit" => "edit".into(),
         "WebFetch" | "WebSearch" => "web".into(),
+        "Skill" | "Task" | "TaskCreate" | "TaskUpdate" | "TaskList" | "TaskGet" | "TaskStop"
+        | "TaskOutput" | "AskUserQuestion" | "EnterPlanMode" | "ExitPlanMode" | "NotebookEdit" => {
+            "tool".into()
+        }
         _ => tool_name.to_lowercase(),
     }
 }
@@ -185,7 +189,7 @@ fn count_session_denials(session_id: &str) -> usize {
 /// Suggest a `clash allow` command for a denied verb.
 fn suggest_allow_command(verb_str: &str) -> String {
     match verb_str {
-        "edit" | "bash" | "read" | "web" => format!("clash allow {verb_str}"),
+        "edit" | "bash" | "read" | "web" | "tool" => format!("clash allow {verb_str}"),
         _ => format!("clash allow '{verb_str}'"),
     }
 }
@@ -267,6 +271,7 @@ pub fn extract_noun(tool_name: &str, tool_input: &serde_json::Value) -> String {
         "url",       // WebFetch
         "path",      // Glob, Grep (secondary field)
         "prompt",    // Task
+        "skill",     // Skill
     ];
     for field in &fields {
         if let Some(val) = tool_input.get(*field).and_then(|v| v.as_str()) {

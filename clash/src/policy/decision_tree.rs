@@ -28,6 +28,8 @@ pub struct DecisionTree {
     pub fs_rules: Vec<CompiledRule>,
     /// Compiled net rules, sorted by specificity (most specific first).
     pub net_rules: Vec<CompiledRule>,
+    /// Compiled tool rules, sorted by specificity (most specific first).
+    pub tool_rules: Vec<CompiledRule>,
     /// Pre-compiled sandbox policy rules indexed by name. Each contains the
     /// compiled fs/net rules from the referenced `(policy ...)` block.
     pub sandbox_policies: HashMap<String, Vec<CompiledRule>>,
@@ -46,6 +48,8 @@ pub struct CompiledRule {
     pub specificity: Specificity,
     /// Optional sandbox policy name (only for exec rules).
     pub sandbox: Option<String>,
+    /// The policy this rule originated from (e.g. "main", "__internal_clash__").
+    pub origin_policy: Option<String>,
 }
 
 /// A pre-compiled capability matcher.
@@ -54,6 +58,7 @@ pub enum CompiledMatcher {
     Exec(CompiledExec),
     Fs(CompiledFs),
     Net(CompiledNet),
+    Tool(CompiledTool),
 }
 
 /// Pre-compiled exec matcher.
@@ -77,6 +82,12 @@ pub struct CompiledFs {
 #[derive(Debug)]
 pub struct CompiledNet {
     pub domain: CompiledPattern,
+}
+
+/// Pre-compiled tool matcher.
+#[derive(Debug)]
+pub struct CompiledTool {
+    pub name: CompiledPattern,
 }
 
 /// A pattern with pre-compiled regex (if applicable).
@@ -141,8 +152,8 @@ impl DecisionTree {
                         network = NetworkPolicy::Allow;
                     }
                 }
-                CompiledMatcher::Exec(_) => {
-                    // Sandbox restricts fs/net, not nested exec — skip.
+                CompiledMatcher::Exec(_) | CompiledMatcher::Tool(_) => {
+                    // Sandbox restricts fs/net, not exec/tool — skip.
                 }
             }
         }
@@ -159,7 +170,12 @@ impl DecisionTree {
     }
 
     /// Reconstruct the source text from the preserved AST nodes.
+    ///
+    /// Groups rules by their origin policy, emitting separate `(policy ...)`
+    /// blocks and `(include ...)` directives for included policies.
     pub fn to_source(&self) -> String {
+        use std::collections::BTreeMap;
+
         let mut out = String::new();
         out.push_str(&format!(
             "(default {} \"{}\")\n",
@@ -171,15 +187,55 @@ impl DecisionTree {
             .iter()
             .chain(&self.fs_rules)
             .chain(&self.net_rules)
+            .chain(&self.tool_rules)
             .collect();
 
-        if !all_rules.is_empty() {
+        if all_rules.is_empty() {
+            return out;
+        }
+
+        // Group rules by origin policy, preserving insertion order via BTreeMap.
+        let mut groups: BTreeMap<&str, Vec<&CompiledRule>> = BTreeMap::new();
+        let mut seen_origins: Vec<&str> = Vec::new();
+        for rule in &all_rules {
+            let origin = rule.origin_policy.as_deref().unwrap_or(&self.policy_name);
+            if !seen_origins.contains(&origin) {
+                seen_origins.push(origin);
+            }
+            groups.entry(origin).or_default().push(rule);
+        }
+
+        // Emit non-active policies first, then the active policy with includes.
+        let mut included = Vec::new();
+        for &origin in &seen_origins {
+            if origin != self.policy_name {
+                let rules = &groups[origin];
+                out.push_str(&format!("\n(policy \"{}\"", origin));
+                for rule in rules {
+                    out.push_str(&format!("\n  {}", rule.source));
+                }
+                out.push_str(")\n");
+                included.push(origin);
+            }
+        }
+
+        // Active policy with includes.
+        if let Some(active_rules) = groups.get(self.policy_name.as_str()) {
             out.push_str(&format!("\n(policy \"{}\"", self.policy_name));
-            for rule in &all_rules {
+            for inc in &included {
+                out.push_str(&format!("\n  (include \"{}\")", inc));
+            }
+            for rule in active_rules {
                 out.push_str(&format!("\n  {}", rule.source));
             }
-            out.push(')');
-            out.push('\n');
+            out.push_str(")\n");
+        } else if !included.is_empty() {
+            // Active policy has no direct rules but includes others.
+            out.push_str(&format!("\n(policy \"{}\"", self.policy_name));
+            for inc in &included {
+                out.push_str(&format!("\n  (include \"{}\")", inc));
+            }
+            out.push_str(")\n");
         }
 
         out
@@ -305,6 +361,13 @@ impl CompiledNet {
     /// Test if this net matcher matches a domain string.
     pub fn matches(&self, domain: &str) -> bool {
         self.domain.matches(domain)
+    }
+}
+
+impl CompiledTool {
+    /// Test if this tool matcher matches a tool name.
+    pub fn matches(&self, name: &str) -> bool {
+        self.name.matches(name)
     }
 }
 
