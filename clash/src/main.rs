@@ -151,6 +151,22 @@ enum Commands {
         json: bool,
     },
 
+    /// Allow a capability (bash, edit, read, web) or s-expr rule
+    Allow {
+        /// Verb or s-expr rule
+        rule: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Deny a capability (bash, edit, read, web) or s-expr rule
+    Deny {
+        /// Verb or s-expr rule
+        rule: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// View and edit policy rules
     #[command(subcommand)]
     Policy(PolicyCmd),
@@ -245,6 +261,8 @@ fn main() -> Result<()> {
         let resp = match cli.command {
             Commands::Init { no_bypass } => run_init(no_bypass),
             Commands::Status { json } => run_status(json),
+            Commands::Allow { rule, dry_run } => handle_allow_deny(Effect::Allow, &rule, dry_run),
+            Commands::Deny { rule, dry_run } => handle_allow_deny(Effect::Deny, &rule, dry_run),
             Commands::Policy(cmd) => run_policy(cmd),
             Commands::Sandbox(cmd) => run_sandbox(cmd),
             Commands::Hook(hook_cmd) => {
@@ -531,7 +549,7 @@ fn run_init(no_bypass: bool) -> Result<()> {
     println!("  - Everything else (editing, commands, web access) is blocked");
     println!("  - When Claude hits a block, you will see how to allow it");
     println!();
-    println!("Edit {} to customize your policy.", path.display());
+    println!("Run \"clash allow --help\" to see what you can unlock.");
 
     Ok(())
 }
@@ -859,7 +877,7 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
 // Subcommand handlers
 // ---------------------------------------------------------------------------
 
-/// Handle `clash policy allow` and `clash policy deny`.
+/// Handle `clash allow`, `clash deny`, `clash policy allow`, and `clash policy deny`.
 fn handle_allow_deny(effect: Effect, rule_str: &str, dry_run: bool) -> Result<()> {
     let (path, source) = load_policy_source()?;
     let policy_name = clash::policy::edit::active_policy(&source)?;
@@ -876,11 +894,43 @@ fn handle_allow_deny(effect: Effect, rule_str: &str, dry_run: bool) -> Result<()
         println!("Rule already exists (no change).");
     } else {
         write_policy(&path, &modified)?;
-        for rule in &rules {
-            println!("Added: {rule}");
+        // Print a friendly confirmation for bare verbs, raw s-expr for power users.
+        if let Some(msg) = friendly_confirmation(effect, rule_str) {
+            println!("{msg}");
+        } else {
+            for rule in &rules {
+                println!("Added: {rule}");
+            }
         }
     }
     Ok(())
+}
+
+/// Return a human-friendly confirmation message for bare verb shortcuts.
+fn friendly_confirmation(effect: Effect, verb: &str) -> Option<String> {
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| ".".into());
+
+    let action = match effect {
+        Effect::Allow => "can now",
+        Effect::Deny => "can no longer",
+        Effect::Ask => "will be asked before",
+    };
+
+    match verb {
+        "edit" => Some(format!(
+            "Claude {action} edit files in {cwd}.\n  \
+             Files outside this directory are still protected."
+        )),
+        "bash" => Some(format!(
+            "Claude {action} run commands.\n  \
+             Use 'clash deny' to block specific dangerous commands."
+        )),
+        "read" => Some(format!("Claude {action} read files in {cwd}.")),
+        "web" => Some(format!("Claude {action} search the web and fetch URLs.")),
+        _ => None,
+    }
 }
 
 /// Handle `clash policy remove`.

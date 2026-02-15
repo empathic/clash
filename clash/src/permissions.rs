@@ -54,7 +54,6 @@ pub fn check_permission(
 
     // Print a concise denial message to stderr so the user sees it in the terminal.
     if decision.effect == Effect::Deny {
-        let denial_count = count_session_denials(&input.session_id);
         let verb_str = tool_to_verb_str(&input.tool_name);
         let noun_summary = truncate_noun(&noun, 60);
 
@@ -67,22 +66,12 @@ pub fn check_permission(
 
         if is_explicit_deny {
             eprintln!("  This action is explicitly denied by your policy.");
-            if denial_count <= 3 {
-                eprintln!("  Run \"clash policy list\" to see your rules.");
-            }
         } else {
-            if denial_count <= 1 {
-                let explanation = denial_explanation(&verb_str);
-                eprintln!("  {}", explanation);
-            }
-
-            let suggested = suggest_allow_command(&verb_str, &noun_summary);
-            eprintln!("  To allow: {}", suggested);
-
-            if denial_count <= 3 {
-                eprintln!("  Or run \"clash policy setup\" for interactive configuration.");
-            }
+            eprintln!("  {}", denial_explanation(&verb_str));
         }
+
+        eprintln!("  To allow this: {}", suggest_allow_command(&verb_str));
+        eprintln!("  (run \"clash allow --help\" for more options)");
     }
 
     let verb_str = tool_to_verb_str(&input.tool_name);
@@ -125,15 +114,15 @@ pub fn check_permission(
 }
 
 /// Map a tool name to a short verb string for user-facing messages.
+///
+/// Verbs align with the bare verb shortcuts in `clash allow <verb>`:
+/// bash, edit, read, web.
 fn tool_to_verb_str(tool_name: &str) -> String {
     match tool_name {
         "Bash" => "bash".into(),
-        "Read" => "read".into(),
-        "Write" => "write".into(),
-        "Edit" => "edit".into(),
-        "WebFetch" => "webfetch".into(),
-        "WebSearch" => "websearch".into(),
-        "Glob" | "Grep" => "read".into(),
+        "Read" | "Glob" | "Grep" => "read".into(),
+        "Write" | "Edit" => "edit".into(),
+        "WebFetch" | "WebSearch" => "web".into(),
         _ => tool_name.to_lowercase(),
     }
 }
@@ -193,25 +182,22 @@ fn count_session_denials(session_id: &str) -> usize {
         .count()
 }
 
-/// Suggest a `clash policy allow` command for a denied verb.
-fn suggest_allow_command(verb_str: &str, noun_summary: &str) -> String {
+/// Suggest a `clash allow` command for a denied verb.
+fn suggest_allow_command(verb_str: &str) -> String {
     match verb_str {
-        "edit" | "write" => "clash policy allow edit".into(),
-        "bash" => "clash policy allow bash".into(),
-        "webfetch" | "websearch" => "clash policy allow web".into(),
-        "read" => "clash policy allow read".into(),
-        _ => format!("clash policy allow \"{} {}\"", verb_str, noun_summary),
+        "edit" | "bash" | "read" | "web" => format!("clash allow {verb_str}"),
+        _ => format!("clash allow '{verb_str}'"),
     }
 }
 
 /// Return a plain-English explanation for why a verb was denied.
 fn denial_explanation(verb_str: &str) -> &'static str {
     match verb_str {
-        "edit" | "write" => "Claude can't edit files yet.",
-        "bash" => "Claude can't run commands yet.",
-        "webfetch" | "websearch" => "Claude can't access the web yet.",
-        "read" => "Claude can't read files outside the project.",
-        _ => "This action isn't allowed yet.",
+        "edit" => "File editing is not allowed by your current policy.",
+        "bash" => "Command execution is not allowed by your current policy.",
+        "web" => "Web access is not allowed by your current policy.",
+        "read" => "File reading outside the project is not allowed by your current policy.",
+        _ => "This action is not allowed by your current policy.",
     }
 }
 
@@ -234,69 +220,41 @@ fn build_deny_context(
 ) -> String {
     let truncated_noun = truncate_noun(noun, 80);
 
-    let reason_code = match reason {
-        Some(r) if r.contains("denied") || r.contains("deny") => "explicit-deny",
-        _ => "default-deny",
+    let is_explicit_deny = reason.is_some_and(|r| r.contains("denied") || r.contains("deny"));
+    let reason_code = if is_explicit_deny {
+        "explicit-deny"
+    } else {
+        "default-deny"
     };
 
-    let description = denial_explanation(verb_str);
+    let suggested = suggest_allow_command(verb_str);
 
-    let suggested_action = suggest_allow_command(verb_str, &truncated_noun);
+    let mut lines = vec![format!(
+        "BLOCKED: {reason_code} tool={tool_name} input={truncated_noun}"
+    )];
 
-    if reason_code == "explicit-deny" {
-        format!(
-            "clash: denied tool={} input={}\n\
-             reason: {}\n\
-             \n\
-             This action is explicitly denied by the user's policy.\n\
-             \n\
-             Agent instructions:\n\
-             - Tell the user this action is blocked by their clash policy\n\
-             - Suggest running \"clash policy list\" to review rules\n\
-             - Do NOT retry the tool call\n\
-             - Do NOT suggest workarounds",
-            tool_name, truncated_noun, reason_code,
-        )
-    } else if denial_count >= 4 {
-        format!(
-            "clash: denied tool={} input={}\n\
-             reason: {}\n\
-             Suggested action: {}\n\
-             Agent instructions:\n\
-             - Suggest the command above",
-            tool_name, truncated_noun, reason_code, suggested_action,
-        )
-    } else if denial_count <= 1 {
-        format!(
-            "clash: denied tool={} input={}\n\
-             reason: {}\n\
-             \n\
-             {}\n\
-             \n\
-             Suggested action: {}\n\
-             Agent instructions:\n\
-             - Explain briefly that clash blocked this to protect the project\n\
-             - Suggest the user run the command above\n\
-             - Mention \"clash policy setup\" for broader configuration\n\
-             - Do NOT retry the tool call\n\
-             - Do NOT suggest workarounds or alternative approaches",
-            tool_name, truncated_noun, reason_code, description, suggested_action,
-        )
+    if is_explicit_deny {
+        lines.push("This action is explicitly blocked by the user's clash policy.".into());
     } else {
-        format!(
-            "clash: denied tool={} input={}\n\
-             reason: {}\n\
-             \n\
-             {}\n\
-             \n\
-             Suggested action: {}\n\
-             Agent instructions:\n\
-             - Suggest the user run the command above\n\
-             - Do NOT retry the tool call\n\
-             - Do NOT suggest workarounds or alternative approaches",
-            tool_name, truncated_noun, reason_code, description, suggested_action,
-        )
+        lines.push(format!(
+            "{} Suggested action: {}",
+            denial_explanation(verb_str),
+            suggested,
+        ));
     }
+
+    lines.push(String::new());
+    lines.push("Agent instructions:".into());
+    lines.push(format!(
+        "- Tell the user this was blocked by clash and suggest: {suggested}"
+    ));
+    lines.push("- Do NOT retry the same tool call".into());
+    lines.push("- Do NOT attempt workarounds (e.g., curl instead of WebFetch)".into());
+    if denial_count <= 2 && !is_explicit_deny {
+        lines.push("- The user may be new to clash — be brief and reassuring".into());
+    }
+
+    lines.join("\n")
 }
 
 /// Extract the noun (resource identifier) from tool input JSON.
@@ -625,26 +583,17 @@ mod tests {
 
     #[test]
     fn test_suggest_allow_command_edit() {
-        assert_eq!(
-            suggest_allow_command("edit", "main.rs"),
-            "clash policy allow edit"
-        );
+        assert_eq!(suggest_allow_command("edit"), "clash allow edit");
     }
 
     #[test]
     fn test_suggest_allow_command_bash() {
-        assert_eq!(
-            suggest_allow_command("bash", "ls -la"),
-            "clash policy allow bash"
-        );
+        assert_eq!(suggest_allow_command("bash"), "clash allow bash");
     }
 
     #[test]
     fn test_suggest_allow_command_web() {
-        assert_eq!(
-            suggest_allow_command("webfetch", "https://example.com"),
-            "clash policy allow web"
-        );
+        assert_eq!(suggest_allow_command("web"), "clash allow web");
     }
 
     #[test]
@@ -664,7 +613,7 @@ mod tests {
     fn test_build_deny_context_contains_tool_name() {
         let ctx = build_deny_context("Bash", "bash", "ls -la", None, 1);
         assert!(ctx.contains("Bash"));
-        assert!(ctx.contains("clash: denied"));
+        assert!(ctx.contains("BLOCKED:"));
         assert!(ctx.contains("Agent instructions"));
     }
 
@@ -683,7 +632,7 @@ mod tests {
             Some(claude_settings::PermissionRule::Deny),
         );
         let ctx = get_additional_context(&result).expect("deny should have additional_context");
-        assert!(ctx.contains("clash: denied"), "got: {ctx}");
+        assert!(ctx.contains("BLOCKED:"), "got: {ctx}");
         Ok(())
     }
 }
