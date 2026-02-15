@@ -141,7 +141,7 @@ impl DecisionTree {
     /// Evaluate a tool request against this decision tree.
     ///
     /// Returns a `PolicyDecision` with the effect (allow/deny/ask), a reason,
-    /// a decision trace, and no sandbox (v2 sandbox is a future PR).
+    /// a decision trace, and an optional sandbox policy.
     pub fn evaluate(
         &self,
         tool_name: &str,
@@ -175,6 +175,8 @@ impl DecisionTree {
             };
         }
 
+        let mut sandbox_name: Option<String> = None;
+
         for query in &queries {
             let rules: &[CompiledRule] = match query {
                 CapQuery::Exec { .. } => &self.exec_rules,
@@ -194,11 +196,15 @@ impl DecisionTree {
                 };
 
                 let mut description = rule.source.to_string();
-                if let Some(ref sandbox_name) = rule.sandbox {
-                    description.push_str(&format!(" [sandbox: {sandbox_name}]"));
+                if let Some(ref sb_name) = rule.sandbox {
+                    description.push_str(&format!(" [sandbox: {sb_name}]"));
                 }
                 if matches {
                     trace!(idx, %description, effect = %rule.effect, "rule matched");
+                    // Capture sandbox reference from matching exec rule.
+                    if rule.sandbox.is_some() && sandbox_name.is_none() {
+                        sandbox_name.clone_from(&rule.sandbox);
+                    }
                     matched_rules.push(RuleMatch {
                         rule_index: idx,
                         description,
@@ -264,6 +270,14 @@ impl DecisionTree {
             format!("resolved {} from [{}]", effect, effects.join(", "))
         };
 
+        // Build sandbox policy if the winning exec rule references one and
+        // the final effect is Allow.
+        let sandbox = if effect == crate::policy::Effect::Allow {
+            sandbox_name.and_then(|name| self.build_sandbox_policy(&name, cwd))
+        } else {
+            None
+        };
+
         PolicyDecision {
             effect,
             reason,
@@ -272,7 +286,7 @@ impl DecisionTree {
                 skipped_rules,
                 final_resolution,
             },
-            sandbox: None,
+            sandbox,
         }
     }
 }
@@ -648,6 +662,153 @@ mod tests {
                 .contains("[sandbox: cargo-env]"),
             "trace should mention sandbox: {}",
             decision.trace.matched_rules[0].description
+        );
+    }
+
+    #[test]
+    fn exec_with_sandbox_produces_sandbox_policy() {
+        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "cargo-env"
+  (allow (fs read (subpath (env CWD)))))
+(policy "main"
+  (allow (exec "cargo" *) :sandbox "cargo-env"))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "cargo build"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+        let sandbox = decision.sandbox.expect("sandbox should be present");
+        assert_eq!(sandbox.rules.len(), 1);
+        assert_eq!(sandbox.rules[0].path, "/home/user/project");
+        assert_eq!(
+            sandbox.rules[0].path_match,
+            crate::policy::sandbox_types::PathMatch::Subpath
+        );
+        assert_eq!(
+            sandbox.rules[0].caps,
+            crate::policy::sandbox_types::Cap::READ
+        );
+        assert_eq!(
+            sandbox.rules[0].effect,
+            crate::policy::sandbox_types::RuleEffect::Allow
+        );
+    }
+
+    #[test]
+    fn sandbox_network_defaults_to_deny() {
+        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "restricted"
+  (allow (fs read (subpath (env CWD)))))
+(policy "main"
+  (allow (exec "cargo" *) :sandbox "restricted"))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "cargo build"}),
+            "/home/user/project",
+        );
+        let sandbox = decision.sandbox.expect("sandbox should be present");
+        assert_eq!(
+            sandbox.network,
+            crate::policy::sandbox_types::NetworkPolicy::Deny
+        );
+    }
+
+    #[test]
+    fn sandbox_with_allow_net_sets_network_allow() {
+        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "with-net"
+  (allow (fs read (subpath (env CWD))))
+  (allow (net "crates.io")))
+(policy "main"
+  (allow (exec "cargo" *) :sandbox "with-net"))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "cargo build"}),
+            "/home/user/project",
+        );
+        let sandbox = decision.sandbox.expect("sandbox should be present");
+        assert_eq!(
+            sandbox.network,
+            crate::policy::sandbox_types::NetworkPolicy::Allow
+        );
+    }
+
+    #[test]
+    fn sandbox_no_fs_rules_returns_none() {
+        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "net-only"
+  (allow (net "crates.io")))
+(policy "main"
+  (allow (exec "cargo" *) :sandbox "net-only"))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "cargo build"}),
+            "/home/user/project",
+        );
+        assert!(
+            decision.sandbox.is_none(),
+            "sandbox with only net rules should be None"
+        );
+    }
+
+    #[test]
+    fn sandbox_denied_exec_has_no_sandbox() {
+        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "cargo-env"
+  (allow (fs read (subpath (env CWD)))))
+(policy "main"
+  (deny  (exec "cargo" "publish" *))
+  (allow (exec "cargo" *) :sandbox "cargo-env"))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "cargo publish"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+        assert!(
+            decision.sandbox.is_none(),
+            "denied exec should not produce sandbox"
         );
     }
 }
