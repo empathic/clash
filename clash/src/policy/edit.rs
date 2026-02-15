@@ -1,91 +1,177 @@
-//! Comment-preserving YAML editing for policy files.
+//! AST-based editing for v2 policy files.
 //!
-//! Not yet implemented for the v2 policy format. The public functions are
-//! stubbed so that callers compile but bail at runtime until v2 editing
-//! support is added.
+//! Parses the source → mutates the AST → serializes back via `Display`.
+//! Comments are lost on edit, but the policy stays valid (round-trip proven
+//! by the `round_trip_parse_display_parse` test in `v2::parse`).
 
 use anyhow::{Result, bail};
 
-/// CLI-provided inline constraints to attach below a rule.
-#[derive(Debug, Default)]
-pub struct InlineConstraintArgs {
-    /// Filesystem constraints: `"caps:filter_expr"` pairs.
-    /// e.g. `"full:subpath(~/Library/Caches)"`, `"read+write:subpath(.)"`.
-    pub fs: Vec<String>,
-    /// URL domain patterns: `"github.com"` (require), `"!evil.com"` (forbid).
-    pub url: Vec<String>,
-    /// Argument constraints: `"--dry-run"` (require), `"!-delete"` (forbid).
-    pub args: Vec<String>,
-    /// Allow piping (stdin/stdout redirection between commands).
-    pub pipe: Option<bool>,
-    /// Allow shell redirects (>, >>, <).
-    pub redirect: Option<bool>,
-    /// Network policy: "allow" or "deny".
-    pub network: Option<String>,
-}
+use crate::policy::v2::ast::{PolicyItem, Rule, TopLevel};
+use crate::policy::v2::parse;
 
-impl InlineConstraintArgs {
-    /// Returns true if there are no constraints to emit.
-    pub fn is_empty(&self) -> bool {
-        self.fs.is_empty()
-            && self.url.is_empty()
-            && self.args.is_empty()
-            && self.pipe.is_none()
-            && self.network.is_none()
-            && self.redirect.is_none()
+/// Add a rule to the named policy block. Returns modified source.
+///
+/// Idempotent: if an identical rule already exists (compared via Display), the
+/// source is returned unchanged.
+pub fn add_rule(source: &str, policy_name: &str, rule: &Rule) -> Result<String> {
+    let mut top_levels = parse::parse(source)?;
+    let body = find_policy_mut(&mut top_levels, policy_name)?;
+
+    let rule_str = rule.to_string();
+    if body.iter().any(|item| match item {
+        PolicyItem::Rule(r) => r.to_string() == rule_str,
+        _ => false,
+    }) {
+        return Ok(source.to_string());
     }
 
-    /// Validate that all `--fs` entries have the required `caps:filter` format.
-    pub fn validate(&self) -> Result<()> {
-        for entry in &self.fs {
-            if entry.split_once(':').is_none() {
-                bail!(
-                    "invalid --fs value '{}': expected 'caps:filter_expr' \
-                     (e.g. 'full:subpath(~/dir)', 'read+write:subpath(.)') ",
-                    entry
-                );
-            }
+    body.push(PolicyItem::Rule(rule.clone()));
+    Ok(serialize_top_levels(&top_levels))
+}
+
+/// Remove a rule matching the given Display text. Returns modified source.
+pub fn remove_rule(source: &str, policy_name: &str, rule_text: &str) -> Result<String> {
+    let mut top_levels = parse::parse(source)?;
+    let body = find_policy_mut(&mut top_levels, policy_name)?;
+
+    let before = body.len();
+    body.retain(|item| match item {
+        PolicyItem::Rule(r) => r.to_string() != rule_text,
+        _ => true,
+    });
+
+    if body.len() == before {
+        bail!("rule not found: {}", rule_text);
+    }
+
+    Ok(serialize_top_levels(&top_levels))
+}
+
+/// Return the active policy name from the `(default ...)` declaration.
+pub fn active_policy(source: &str) -> Result<String> {
+    let top_levels = parse::parse(source)?;
+    for tl in &top_levels {
+        if let TopLevel::Default { policy, .. } = tl {
+            return Ok(policy.clone());
         }
-        Ok(())
     }
+    bail!("no (default ...) declaration found in policy")
 }
 
-/// Add a rule to a profile's rules block, preserving comments.
-/// Returns the modified YAML text.
-pub fn add_rule(
-    _yaml: &str,
-    _profile: &str,
-    _rule: &str,
-    _constraints: &InlineConstraintArgs,
-) -> Result<String> {
-    bail!("not yet implemented for v2 policy format")
+/// Serialize `Vec<TopLevel>` back to source text.
+fn serialize_top_levels(items: &[TopLevel]) -> String {
+    items
+        .iter()
+        .map(|tl| tl.to_string())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        + "\n"
 }
 
-/// Remove a rule from a profile's rules block, preserving comments.
-/// Returns the modified YAML text.
-pub fn remove_rule(_yaml: &str, _profile: &str, _rule: &str) -> Result<String> {
-    bail!("not yet implemented for v2 policy format")
+/// Find a mutable reference to the body of the named policy.
+fn find_policy_mut<'a>(items: &'a mut [TopLevel], name: &str) -> Result<&'a mut Vec<PolicyItem>> {
+    for item in items.iter_mut() {
+        if let TopLevel::Policy { name: pname, body } = item
+            && pname == name
+        {
+            return Ok(body);
+        }
+    }
+    bail!("policy not found: {}", name)
 }
 
-/// Resolve the target profile: use the provided override or fall back to the active profile.
-pub fn resolve_profile(_yaml: &str, _profile_override: Option<&str>) -> Result<String> {
-    bail!("not yet implemented for v2 policy format")
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::Effect;
+    use crate::policy::v2::ast::*;
 
-/// Check whether the given YAML text uses the new profile-based format.
-pub fn is_new_format(_yaml: &str) -> bool {
-    // Stub: v2 format detection not yet implemented.
-    false
-}
+    fn default_policy() -> &'static str {
+        crate::settings::DEFAULT_POLICY
+    }
 
-/// Summary information about the policy for the `show` command.
-pub struct PolicyInfo {
-    pub default_permission: String,
-    pub active_profile: String,
-    pub profiles: Vec<String>,
-}
+    fn exec_any_rule(effect: Effect) -> Rule {
+        Rule {
+            effect,
+            matcher: CapMatcher::Exec(ExecMatcher {
+                bin: Pattern::Any,
+                args: vec![],
+            }),
+            sandbox: None,
+        }
+    }
 
-/// Extract policy info from the YAML text.
-pub fn policy_info(_yaml: &str) -> Result<PolicyInfo> {
-    bail!("not yet implemented for v2 policy format")
+    fn git_push_deny() -> Rule {
+        Rule {
+            effect: Effect::Deny,
+            matcher: CapMatcher::Exec(ExecMatcher {
+                bin: Pattern::Literal("git".into()),
+                args: vec![Pattern::Literal("push".into()), Pattern::Any],
+            }),
+            sandbox: None,
+        }
+    }
+
+    #[test]
+    fn active_policy_from_default() {
+        let name = active_policy(default_policy()).unwrap();
+        assert_eq!(name, "main");
+    }
+
+    #[test]
+    fn add_rule_to_default_policy() {
+        let rule = exec_any_rule(Effect::Allow);
+        let result = add_rule(default_policy(), "main", &rule).unwrap();
+        assert!(
+            result.contains("(allow (exec))"),
+            "expected exec rule in output:\n{result}"
+        );
+        // Should still parse cleanly
+        let ast = parse::parse(&result).unwrap();
+        assert!(ast.len() >= 2);
+    }
+
+    #[test]
+    fn add_rule_idempotent() {
+        let rule = exec_any_rule(Effect::Allow);
+        let first = add_rule(default_policy(), "main", &rule).unwrap();
+        let second = add_rule(&first, "main", &rule).unwrap();
+        assert_eq!(first, second, "adding same rule twice should be idempotent");
+    }
+
+    #[test]
+    fn remove_rule_works() {
+        let rule = git_push_deny();
+        let added = add_rule(default_policy(), "main", &rule).unwrap();
+        let rule_text = rule.to_string();
+        let removed = remove_rule(&added, "main", &rule_text).unwrap();
+        assert!(
+            !removed.contains("git"),
+            "rule should be removed:\n{removed}"
+        );
+    }
+
+    #[test]
+    fn remove_rule_not_found() {
+        let err = remove_rule(default_policy(), "main", "(deny (exec))").unwrap_err();
+        assert!(err.to_string().contains("rule not found"));
+    }
+
+    #[test]
+    fn round_trip_preserves_validity() {
+        let rule = git_push_deny();
+        let modified = add_rule(default_policy(), "main", &rule).unwrap();
+        // Re-parse and re-serialize should produce identical output
+        let ast = parse::parse(&modified).unwrap();
+        let reserialized = serialize_top_levels(&ast);
+        let ast2 = parse::parse(&reserialized).unwrap();
+        assert_eq!(ast, ast2);
+    }
+
+    #[test]
+    fn add_rule_policy_not_found() {
+        let rule = exec_any_rule(Effect::Allow);
+        let err = add_rule(default_policy(), "nonexistent", &rule).unwrap_err();
+        assert!(err.to_string().contains("policy not found"));
+    }
 }
