@@ -55,6 +55,8 @@ pub mod legacy;
 pub mod parse;
 pub mod sandbox_gen;
 pub mod sandbox_types;
+pub mod sexpr;
+pub mod v2;
 
 // Re-export AST types for backward compatibility.
 pub use ast::{
