@@ -8,9 +8,9 @@
 //! ## Example
 //!
 //! ```text
-//! (default deny main)
+//! (default deny "main")
 //!
-//! (policy main
+//! (policy "main"
 //!   (deny  (exec "git" "push" *))
 //!   (allow (exec "git" *))
 //!   (allow (fs read (subpath (env CWD))))

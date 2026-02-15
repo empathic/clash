@@ -71,6 +71,17 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
     let mut net_rules = Vec::new();
 
     for rule in &rules {
+        // Validate sandbox references point to existing policies.
+        if let Some(ref sandbox_name) = rule.sandbox
+            && !policies.contains_key(sandbox_name.as_str())
+        {
+            bail!(
+                "sandbox reference \"{}\" not found: no (policy \"{}\") defined",
+                sandbox_name,
+                sandbox_name
+            );
+        }
+
         let specificity = Specificity::from_matcher(&rule.matcher);
         let compiled_matcher = compile_matcher(&rule.matcher, env)?;
         let compiled = CompiledRule {
@@ -78,6 +89,7 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
             matcher: compiled_matcher,
             source: rule.clone(),
             specificity,
+            sandbox: rule.sandbox.clone(),
         };
         match &rule.matcher {
             CapMatcher::Exec(_) => exec_rules.push(compiled),
@@ -101,12 +113,43 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
     detect_conflicts(&fs_rules, "fs")?;
     detect_conflicts(&net_rules, "net")?;
 
+    // Compile sandbox policies: for each sandbox reference, compile the
+    // referenced policy's rules into a standalone rule set.
+    let mut sandbox_policies = HashMap::new();
+    let sandbox_names: Vec<String> = exec_rules
+        .iter()
+        .filter_map(|r| r.sandbox.clone())
+        .collect();
+    for sandbox_name in &sandbox_names {
+        if sandbox_policies.contains_key(sandbox_name) {
+            continue;
+        }
+        if let Some(body) = policies.get(sandbox_name.as_str()) {
+            let mut sandbox_rules = Vec::new();
+            for item in *body {
+                if let PolicyItem::Rule(rule) = item {
+                    let specificity = Specificity::from_matcher(&rule.matcher);
+                    let compiled_matcher = compile_matcher(&rule.matcher, env)?;
+                    sandbox_rules.push(CompiledRule {
+                        effect: rule.effect,
+                        matcher: compiled_matcher,
+                        source: rule.clone(),
+                        specificity,
+                        sandbox: None,
+                    });
+                }
+            }
+            sandbox_policies.insert(sandbox_name.clone(), sandbox_rules);
+        }
+    }
+
     Ok(DecisionTree {
         default: default_effect,
         policy_name: active_policy.to_string(),
         exec_rules,
         fs_rules,
         net_rules,
+        sandbox_policies,
     })
 }
 
@@ -329,8 +372,8 @@ mod tests {
     #[test]
     fn compile_basic_policy() {
         let source = r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (exec "git" *))
   (deny  (exec "git" "push" *)))
 "#;
@@ -347,11 +390,11 @@ mod tests {
     #[test]
     fn compile_with_includes() {
         let source = r#"
-(default deny main)
-(policy cwd-access
+(default deny "main")
+(policy "cwd-access"
   (allow (fs read (subpath (env CWD)))))
-(policy main
-  (include cwd-access)
+(policy "main"
+  (include "cwd-access")
   (allow (exec "git" *)))
 "#;
         let env = TestEnv::new(&[("CWD", "/home/user/project")]);
@@ -363,9 +406,9 @@ mod tests {
     #[test]
     fn compile_circular_include_error() {
         let source = r#"
-(default deny a)
-(policy a (include b))
-(policy b (include a))
+(default deny "a")
+(policy "a" (include "b"))
+(policy "b" (include "a"))
 "#;
         let env = TestEnv::new(&[]);
         let err = compile_policy_with_env(source, &env).unwrap_err();
@@ -375,8 +418,8 @@ mod tests {
     #[test]
     fn compile_conflict_detection() {
         let source = r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (exec "git" *))
   (deny  (exec "git" *)))
 "#;
@@ -388,11 +431,9 @@ mod tests {
 
     #[test]
     fn no_conflict_different_literals() {
-        // "git *" and "npm *" have the same specificity but can never match
-        // the same request (different binary literals), so no conflict.
         let source = r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (exec "git" *))
   (deny  (exec "npm" *)))
 "#;
@@ -404,8 +445,8 @@ mod tests {
     #[test]
     fn compile_no_conflict_same_effect() {
         let source = r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (exec "git" *))
   (allow (exec "npm" *)))
 "#;
@@ -417,29 +458,27 @@ mod tests {
     #[test]
     fn compile_no_conflict_different_specificity() {
         let source = r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (deny  (exec "git" "push" *))
   (allow (exec "git" *)))
 "#;
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 2);
-        // deny "git push *" is more specific, should be first
         assert_eq!(tree.exec_rules[0].effect, Effect::Deny);
     }
 
     #[test]
     fn compile_env_resolution() {
         let source = r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (fs read (subpath (env HOME)))))
 "#;
         let env = TestEnv::new(&[("HOME", "/home/user")]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.fs_rules.len(), 1);
-        // Verify the subpath was resolved.
         match &tree.fs_rules[0].matcher {
             CompiledMatcher::Fs(f) => match &f.path {
                 Some(CompiledPathFilter::Subpath(p)) => assert_eq!(p, "/home/user"),
@@ -452,8 +491,8 @@ mod tests {
     #[test]
     fn compile_missing_env_error() {
         let source = r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (fs read (subpath (env NONEXISTENT)))))
 "#;
         let env = TestEnv::new(&[]);
@@ -464,8 +503,8 @@ mod tests {
     #[test]
     fn compile_regex_patterns() {
         let source = r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (deny (net /.*\.evil\.com/)))
 "#;
         let env = TestEnv::new(&[]);
@@ -483,29 +522,64 @@ mod tests {
     #[test]
     fn round_trip_to_source() {
         let source = r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (deny  (exec "git" "push" *))
   (allow (exec "git" *)))
 "#;
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         let regenerated = tree.to_source();
-        assert!(regenerated.contains("(default deny main)"));
+        assert!(regenerated.contains(r#"(default deny "main")"#));
         assert!(regenerated.contains("(deny (exec \"git\" \"push\" *))"));
         assert!(regenerated.contains("(allow (exec \"git\" *))"));
     }
 
     #[test]
+    fn compile_sandbox_reference_valid() {
+        let source = r#"
+(default deny "main")
+(policy "cargo-env"
+  (allow (fs read (subpath (env CWD))))
+  (allow (net "crates.io")))
+(policy "main"
+  (allow (exec "cargo" *) :sandbox "cargo-env"))
+"#;
+        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(source, &env).unwrap();
+        assert_eq!(tree.exec_rules.len(), 1);
+        assert_eq!(tree.exec_rules[0].sandbox, Some("cargo-env".into()));
+        assert!(tree.sandbox_policies.contains_key("cargo-env"));
+        assert_eq!(tree.sandbox_policies["cargo-env"].len(), 2);
+    }
+
+    #[test]
+    fn compile_sandbox_reference_missing() {
+        let source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "cargo" *) :sandbox "nonexistent"))
+"#;
+        let env = TestEnv::new(&[]);
+        let err = compile_policy_with_env(source, &env).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("sandbox reference \"nonexistent\" not found"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
     fn compile_full_example() {
         let source = r#"
-(default deny main)
+(default deny "main")
 
-(policy cwd-access
+(policy "cwd-access"
   (allow (fs read (subpath (env CWD)))))
 
-(policy main
-  (include cwd-access)
+(policy "main"
+  (include "cwd-access")
 
   (deny  (exec "git" "push" *))
   (deny  (exec "git" "reset" *))
@@ -522,16 +596,9 @@ mod tests {
         let tree = compile_policy_with_env(source, &env).unwrap();
 
         assert_eq!(tree.default, Effect::Deny);
-        // 4 exec rules + 0 from include
         assert_eq!(tree.exec_rules.len(), 4);
-        // 2 fs rules from main + 1 from cwd-access include
         assert_eq!(tree.fs_rules.len(), 3);
-        // 2 net rules
         assert_eq!(tree.net_rules.len(), 2);
-
-        // Most specific exec rules first
-        // "git push *", "git reset *", "git commit *" all have same specificity (literal bin + 2 args)
-        // "git *" has lower specificity (literal bin + 1 arg)
         assert_eq!(tree.exec_rules.last().unwrap().effect, Effect::Allow);
     }
 }

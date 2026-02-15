@@ -3,6 +3,8 @@
 //! Rules are pre-compiled with regex patterns and sorted by specificity.
 //! The decision tree groups rules by capability domain for efficient lookup.
 
+use std::collections::HashMap;
+
 use regex::Regex;
 
 use crate::policy::Effect;
@@ -23,6 +25,9 @@ pub struct DecisionTree {
     pub fs_rules: Vec<CompiledRule>,
     /// Compiled net rules, sorted by specificity (most specific first).
     pub net_rules: Vec<CompiledRule>,
+    /// Pre-compiled sandbox policy rules indexed by name. Each contains the
+    /// compiled fs/net rules from the referenced `(policy ...)` block.
+    pub sandbox_policies: HashMap<String, Vec<CompiledRule>>,
 }
 
 /// A single compiled rule with pre-built regexes and a specificity rank.
@@ -36,6 +41,8 @@ pub struct CompiledRule {
     pub source: Rule,
     /// Computed specificity rank.
     pub specificity: Specificity,
+    /// Optional sandbox policy name (only for exec rules).
+    pub sandbox: Option<String>,
 }
 
 /// A pre-compiled capability matcher.
@@ -91,7 +98,7 @@ impl DecisionTree {
     pub fn to_source(&self) -> String {
         let mut out = String::new();
         out.push_str(&format!(
-            "(default {} {})\n",
+            "(default {} \"{}\")\n",
             self.default, self.policy_name
         ));
 
@@ -103,7 +110,7 @@ impl DecisionTree {
             .collect();
 
         if !all_rules.is_empty() {
-            out.push_str(&format!("\n(policy {}", self.policy_name));
+            out.push_str(&format!("\n(policy \"{}\"", self.policy_name));
             for rule in &all_rules {
                 out.push_str(&format!("\n  {}", rule.source));
             }

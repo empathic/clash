@@ -32,7 +32,7 @@ fn parse_default(list: &[SExpr]) -> Result<TopLevel> {
         "(default) expects exactly 2 arguments: effect and policy name"
     );
     let effect = parse_effect(&list[1])?;
-    let policy = require_string_or_atom(&list[2], "policy name")?;
+    let policy = require_string(&list[2], "policy name")?;
     Ok(TopLevel::Default {
         effect,
         policy: policy.to_string(),
@@ -41,7 +41,7 @@ fn parse_default(list: &[SExpr]) -> Result<TopLevel> {
 
 fn parse_policy(list: &[SExpr]) -> Result<TopLevel> {
     ensure!(list.len() >= 2, "(policy) requires a name");
-    let name = require_string_or_atom(&list[1], "policy name")?.to_string();
+    let name = require_string(&list[1], "policy name")?.to_string();
     let body = list[2..]
         .iter()
         .map(parse_policy_item)
@@ -55,19 +55,43 @@ fn parse_policy_item(expr: &SExpr) -> Result<PolicyItem> {
     match head {
         "include" => {
             ensure!(list.len() == 2, "(include) expects exactly 1 argument");
-            let name = require_string_or_atom(&list[1], "include target")?;
+            let name = require_string(&list[1], "include target")?;
             Ok(PolicyItem::Include(name.to_string()))
         }
         "allow" | "deny" | "ask" => {
             let effect = parse_effect_str(head)?;
             ensure!(
-                list.len() == 2,
-                "({head}) expects exactly 1 capability matcher"
+                list.len() >= 2,
+                "({head}) expects at least 1 capability matcher"
             );
             let matcher = parse_cap_matcher(&list[1])?;
-            Ok(PolicyItem::Rule(Rule { effect, matcher }))
+
+            // Scan remaining elements for :sandbox "name" keyword arg.
+            let sandbox = parse_keyword_sandbox(&list[2..])?;
+
+            Ok(PolicyItem::Rule(Rule {
+                effect,
+                matcher,
+                sandbox,
+            }))
         }
         other => bail!("unknown policy item: {other}"),
+    }
+}
+
+/// Parse an optional `:sandbox "name"` keyword argument from remaining elements.
+fn parse_keyword_sandbox(rest: &[SExpr]) -> Result<Option<String>> {
+    if let Some((i, expr)) = rest.iter().enumerate().next() {
+        match expr {
+            SExpr::Atom(s, _) if s == ":sandbox" => {
+                ensure!(i + 1 < rest.len(), ":sandbox requires a string argument");
+                let name = require_string(&rest[i + 1], ":sandbox value")?;
+                Ok(Some(name.to_string()))
+            }
+            other => bail!("unexpected element in rule: {:?}", other),
+        }
+    } else {
+        Ok(None)
     }
 }
 
@@ -270,6 +294,16 @@ fn require_atom<'a>(expr: &'a SExpr, context: &str) -> Result<&'a str> {
     }
 }
 
+fn require_string<'a>(expr: &'a SExpr, context: &str) -> Result<&'a str> {
+    match expr {
+        SExpr::Str(s, _) => Ok(s.as_str()),
+        _ => bail!(
+            "expected quoted string for {context}, got {:?} (names must be quoted)",
+            expr
+        ),
+    }
+}
+
 fn require_string_or_atom<'a>(expr: &'a SExpr, context: &str) -> Result<&'a str> {
     expr.as_str()
         .ok_or_else(|| anyhow::anyhow!("expected string or atom for {context}, got {:?}", expr))
@@ -281,7 +315,7 @@ mod tests {
 
     #[test]
     fn parse_default_form() {
-        let ast = parse("(default deny main)").unwrap();
+        let ast = parse(r#"(default deny "main")"#).unwrap();
         assert_eq!(ast.len(), 1);
         match &ast[0] {
             TopLevel::Default { effect, policy } => {
@@ -294,7 +328,7 @@ mod tests {
 
     #[test]
     fn parse_empty_policy() {
-        let ast = parse("(policy empty)").unwrap();
+        let ast = parse(r#"(policy "empty")"#).unwrap();
         match &ast[0] {
             TopLevel::Policy { name, body } => {
                 assert_eq!(name, "empty");
@@ -306,7 +340,7 @@ mod tests {
 
     #[test]
     fn parse_exec_rule() {
-        let ast = parse(r#"(policy p (deny (exec "git" "push" *)))"#).unwrap();
+        let ast = parse(r#"(policy "p" (deny (exec "git" "push" *)))"#).unwrap();
         let body = match &ast[0] {
             TopLevel::Policy { body, .. } => body,
             _ => panic!(),
@@ -316,6 +350,7 @@ mod tests {
             _ => panic!(),
         };
         assert_eq!(rule.effect, Effect::Deny);
+        assert_eq!(rule.sandbox, None);
         match &rule.matcher {
             CapMatcher::Exec(m) => {
                 assert_eq!(m.bin, Pattern::Literal("git".into()));
@@ -329,7 +364,8 @@ mod tests {
 
     #[test]
     fn parse_fs_rule() {
-        let ast = parse("(policy p (allow (fs (or read write) (subpath (env CWD)))))").unwrap();
+        let ast =
+            parse(r#"(policy "p" (allow (fs (or read write) (subpath (env CWD)))))"#).unwrap();
         let body = match &ast[0] {
             TopLevel::Policy { body, .. } => body,
             _ => panic!(),
@@ -354,7 +390,7 @@ mod tests {
 
     #[test]
     fn parse_net_regex() {
-        let ast = parse(r#"(policy p (deny (net /.*\.evil\.com/)))"#).unwrap();
+        let ast = parse(r#"(policy "p" (deny (net /.*\.evil\.com/)))"#).unwrap();
         let body = match &ast[0] {
             TopLevel::Policy { body, .. } => body,
             _ => panic!(),
@@ -373,7 +409,7 @@ mod tests {
 
     #[test]
     fn parse_include() {
-        let ast = parse("(policy main (include cwd-access))").unwrap();
+        let ast = parse(r#"(policy "main" (include "cwd-access"))"#).unwrap();
         let body = match &ast[0] {
             TopLevel::Policy { body, .. } => body,
             _ => panic!(),
@@ -386,7 +422,7 @@ mod tests {
 
     #[test]
     fn parse_or_pattern() {
-        let ast = parse(r#"(policy p (allow (exec (or "npm" "cargo" "pip") *)))"#).unwrap();
+        let ast = parse(r#"(policy "p" (allow (exec (or "npm" "cargo" "pip") *)))"#).unwrap();
         let body = match &ast[0] {
             TopLevel::Policy { body, .. } => body,
             _ => panic!(),
@@ -408,15 +444,70 @@ mod tests {
     }
 
     #[test]
+    fn parse_sandbox_keyword() {
+        let ast = parse(r#"(policy "p" (allow (exec "cargo" *) :sandbox "cargo-env"))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        assert_eq!(rule.effect, Effect::Allow);
+        assert_eq!(rule.sandbox, Some("cargo-env".into()));
+    }
+
+    #[test]
+    fn parse_error_sandbox_without_value() {
+        let err = parse(r#"(policy "p" (allow (exec "cargo" *) :sandbox))"#).unwrap_err();
+        assert!(
+            err.to_string().contains(":sandbox requires a string"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parse_error_bare_atom_policy_name() {
+        let err = parse("(policy main (allow (exec)))").unwrap_err();
+        assert!(
+            err.to_string().contains("expected quoted string"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parse_error_bare_atom_default_name() {
+        let err = parse("(default deny main)").unwrap_err();
+        assert!(
+            err.to_string().contains("expected quoted string"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parse_error_bare_atom_include_name() {
+        let err = parse(r#"(policy "main" (include cwd-access))"#).unwrap_err();
+        assert!(
+            err.to_string().contains("expected quoted string"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
     fn parse_full_example() {
         let source = r#"
-(default deny main)
+(default deny "main")
 
-(policy cwd-access
+(policy "cwd-access"
   (allow (fs read (subpath (env CWD)))))
 
-(policy main
-  (include cwd-access)
+(policy "main"
+  (include "cwd-access")
 
   (deny  (exec "git" "push" *))
   (deny  (exec "git" "reset" *))
@@ -437,15 +528,16 @@ mod tests {
     #[test]
     fn round_trip_parse_display_parse() {
         let source = r#"
-(default deny main)
+(default deny "main")
 
-(policy cwd-access
+(policy "cwd-access"
   (allow (fs read (subpath (env CWD)))))
 
-(policy main
-  (include cwd-access)
+(policy "main"
+  (include "cwd-access")
   (deny  (exec "git" "push" *))
   (allow (exec "git" *))
+  (allow (exec "cargo" *) :sandbox "cargo-env")
   (allow (fs (or read write) (subpath (env CWD))))
   (deny  (fs write ".env"))
   (allow (net (or "github.com" "crates.io")))
@@ -464,13 +556,13 @@ mod tests {
 
     #[test]
     fn parse_error_unknown_effect() {
-        let err = parse("(policy p (boom (exec)))").unwrap_err();
+        let err = parse(r#"(policy "p" (boom (exec)))"#).unwrap_err();
         assert!(err.to_string().contains("unknown policy item: boom"));
     }
 
     #[test]
     fn parse_error_unknown_capability() {
-        let err = parse("(policy p (allow (foobar)))").unwrap_err();
+        let err = parse(r#"(policy "p" (allow (foobar)))"#).unwrap_err();
         assert!(err.to_string().contains("unknown capability: foobar"));
     }
 }

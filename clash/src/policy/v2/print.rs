@@ -61,8 +61,8 @@ mod tests {
     #[test]
     fn print_tree_output() {
         let source = r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (deny  (exec "git" "push" *))
   (allow (exec "git" *))
   (allow (net "github.com")))

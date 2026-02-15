@@ -10,9 +10,9 @@ Policy files use the `.policy` extension and contain s-expressions. Comments sta
 
 ```
 ; This is a comment
-(default deny main)
+(default deny "main")
 
-(policy main
+(policy "main"
   (deny  (exec "git" "push" *))
   (allow (exec "git" *)))
 ```
@@ -25,13 +25,16 @@ Policy files use the `.policy` extension and contain s-expressions. Comments sta
 document        = top_level*
 top_level       = default_decl | policy_decl
 
-default_decl    = "(" "default" effect policy_name ")"
-policy_decl     = "(" "policy" policy_name policy_item* ")"
+default_decl    = "(" "default" effect QUOTED_STRING ")"
+policy_decl     = "(" "policy" QUOTED_STRING policy_item* ")"
 
 policy_item     = include | rule
-include         = "(" "include" policy_name ")"
-rule            = "(" effect cap_matcher ")"
+include         = "(" "include" QUOTED_STRING ")"
+rule            = "(" effect cap_matcher keyword_args* ")"
+keyword_args    = ":sandbox" QUOTED_STRING
 ```
+
+Policy names, include targets, and keyword argument values must be quoted strings. Bare atoms are reserved for language keywords.
 
 ---
 
@@ -171,16 +174,32 @@ effect          = "allow" | "deny" | "ask"
 
 ---
 
-## Policy Composition
+## Keyword Arguments
 
-Policies can include other policies using `(include name)`:
+Rules support keyword arguments after the capability matcher. Keywords are atoms starting with `:`.
+
+### `:sandbox`
+
+The `:sandbox` keyword on exec rules references a named policy whose rules define the kernel-level sandbox for matching commands:
 
 ```
-(policy cwd-access
+(allow (exec "cargo" *) :sandbox "cargo-env")
+```
+
+When the exec rule matches, the referenced policy's fs/net rules are used to build a sandbox for the spawned process. See the [sandbox section](./policy-guide.md#sandbox-policies) in the policy guide.
+
+---
+
+## Policy Composition
+
+Policies can include other policies using `(include "name")`:
+
+```
+(policy "cwd-access"
   (allow (fs read (subpath (env CWD)))))
 
-(policy main
-  (include cwd-access)
+(policy "main"
+  (include "cwd-access")
   (allow (exec "git" *)))
 ```
 
@@ -190,13 +209,13 @@ Include is resolved at compile time by inlining the referenced policy's rules. C
 
 ## Default Declaration
 
-Every policy file should have a `(default effect name)` form that specifies:
+Every policy file should have a `(default effect "name")` form that specifies:
 - The default effect when no rule matches a request
 - The name of the active policy to evaluate
 
 ```
-(default deny main)    ; default deny, evaluate the "main" policy
-(default ask main)     ; default ask, evaluate the "main" policy
+(default deny "main")    ; default deny, evaluate the "main" policy
+(default ask "main")     ; default ask, evaluate the "main" policy
 ```
 
 If no default declaration is present, the compiler uses `deny` with the policy named `main`.
@@ -210,6 +229,7 @@ QUOTED_STRING   = '"' (CHAR | ESCAPE)* '"'
 ESCAPE          = '\\' ('"' | '\\')
 REGEX           = '/' (CHAR_NO_SLASH)* '/'
 ENV_NAME        = [A-Z_][A-Z0-9_]*
+KEYWORD         = ':' ATOM                     ; e.g. :sandbox
 COMMENT         = ';' (any char)* NEWLINE
 WHITESPACE      = ' ' | '\t' | '\n' | '\r'
 ```

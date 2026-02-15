@@ -39,19 +39,22 @@ DecisionTree (IR)               ← compile.rs
     ├── policy_name: String
     ├── exec_rules: Vec<CompiledRule>   (sorted by specificity)
     ├── fs_rules: Vec<CompiledRule>     (sorted by specificity)
-    └── net_rules: Vec<CompiledRule>    (sorted by specificity)
+    ├── net_rules: Vec<CompiledRule>    (sorted by specificity)
+    └── sandbox_policies: HashMap<String, Vec<CompiledRule>>
 ```
 
 ### Compilation Steps
 
 1. **Parse** — s-expression text → AST (`Vec<TopLevel>`)
-2. **Find default** — extract the `(default effect name)` declaration
-3. **Build policy map** — index all `(policy name ...)` blocks by name
+2. **Find default** — extract the `(default effect "name")` declaration
+3. **Build policy map** — index all `(policy "name" ...)` blocks by name
 4. **Flatten** — recursively resolve `(include ...)` into a flat rule list
-5. **Group** — split rules by capability domain (exec/fs/net)
-6. **Compile matchers** — convert AST patterns to IR with pre-compiled regexes, resolve `(env NAME)` references
-7. **Sort by specificity** — most specific rules first within each domain
-8. **Detect conflicts** — reject rules with equal specificity but different effects that could match the same request
+5. **Validate sandbox references** — verify each `:sandbox "name"` points to an existing policy
+6. **Group** — split rules by capability domain (exec/fs/net)
+7. **Compile matchers** — convert AST patterns to IR with pre-compiled regexes, resolve `(env NAME)` references
+8. **Sort by specificity** — most specific rules first within each domain
+9. **Detect conflicts** — reject rules with equal specificity but different effects that could match the same request
+10. **Compile sandbox policies** — for each sandbox reference, compile the referenced policy's rules into standalone rule sets
 
 ---
 
@@ -108,6 +111,7 @@ evaluate(tool_name, tool_input, cwd):
     3. Walk the rule list (sorted most-specific-first):
        - Test if the compiled matcher matches the query
        - First match wins → record effect
+       - If the matching rule has :sandbox, note sandbox name in trace
        - Non-matching rules are recorded as skipped
 
     4. If no queries produced matches → return default effect
@@ -135,7 +139,7 @@ Relative paths in tool inputs are resolved against the current working directory
 
 Every evaluation produces a `DecisionTrace` recording:
 
-- **matched_rules**: rules where the matcher passed, with their effect
+- **matched_rules**: rules where the matcher passed, with their effect and sandbox reference (if any)
 - **skipped_rules**: rules that were considered but didn't match, with reason
 - **final_resolution**: human-readable summary of how the final effect was determined
 
@@ -145,11 +149,15 @@ This enables the `clash explain` command and structured audit logging.
 
 ## Sandbox Generation
 
-*(Future PR — not yet implemented for v2)*
+When an exec allow rule matches with `:sandbox "name"`, the referenced policy's rules are pre-compiled in `sandbox_policies`. These rules define the filesystem and network permissions for the spawned process.
 
-When an `allow` rule matches a Bash command and has filesystem path filters, a kernel-level sandbox (Landlock on Linux, Seatbelt on macOS) will be generated from the `fs_rules` to enforce restrictions at the OS level.
+The sandbox policy is enforced at the kernel level:
+- **Linux**: Landlock LSM restricts file and network access
+- **macOS**: Seatbelt sandbox profiles restrict file and network access
 
-For non-bash tools (Read, Write, Edit), path filters act as permission guards — the eval layer checks the path before allowing the tool call.
+When no `:sandbox` is specified on an exec allow, the spawned process gets a deny-all sandbox by default.
+
+*(Note: Kernel-level sandbox enforcement is a future PR. Currently the sandbox reference is validated and compiled but not yet enforced.)*
 
 ---
 

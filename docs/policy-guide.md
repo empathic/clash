@@ -9,9 +9,9 @@ A practical guide to writing clash policies. For formal grammar details, see [po
 Clash policies use an s-expression format with three capability domains: **exec** (shell commands), **fs** (file operations), and **net** (network access).
 
 ```
-(default deny main)
+(default deny "main")
 
-(policy main
+(policy "main"
   (allow (exec "git" *))
   (deny  (exec "git" "push" *))
   (allow (fs read (subpath (env CWD))))
@@ -41,7 +41,7 @@ Clash controls three capability domains, not individual tools. A single rule can
 ```
 (allow (exec "git" *))              ; allow all git commands
 (deny  (exec "git" "push" *))       ; deny git push specifically
-(ask   (exec "rm" *))               ; prompt before any rm
+(ask   (exec "git" "commit" *))     ; prompt before any rm
 (allow (exec "cargo" "test" *))     ; allow cargo test
 ```
 
@@ -117,25 +117,56 @@ If no rules match, the `default` effect applies.
 Break policies into reusable pieces with `(include ...)`:
 
 ```
-(default deny main)
+(default deny "main")
 
-(policy cwd-access
+(policy "cwd-access"
   (allow (fs read (subpath (env CWD))))
   (allow (fs write (subpath (env CWD)))))
 
-(policy safe-git
+(policy "safe-git"
   (deny  (exec "git" "push" *))
   (deny  (exec "git" "reset" *))
   (ask   (exec "git" "commit" *))
   (allow (exec "git" *)))
 
-(policy main
-  (include cwd-access)
-  (include safe-git)
+(policy "main"
+  (include "cwd-access")
+  (include "safe-git")
   (allow (net (or "github.com" "crates.io"))))
 ```
 
 Include inlines the referenced policy's rules. Circular includes are rejected at compile time.
+
+---
+
+## Sandbox Policies
+
+Exec rules can reference a **sandbox policy** using the `:sandbox` keyword. The sandbox policy defines what filesystem and network access a spawned process gets:
+
+```
+(default deny "main")
+
+(policy "cargo-env"
+  (allow (fs read (subpath (env CWD))))
+  (allow (fs write (subpath "./target")))
+  (allow (net "crates.io")))
+
+(policy "git-env"
+  (allow (fs read (subpath (env CWD)))))
+
+(policy "main"
+  (deny  (exec "git" "push" *))
+  (allow (exec "cargo" *) :sandbox "cargo-env")
+  (allow (exec "git" *)   :sandbox "git-env")
+  (allow (fs read (subpath (env CWD))))
+  (allow (net "github.com")))
+```
+
+When `cargo build` matches the exec rule, the `"cargo-env"` policy defines the sandbox: the process can read the project, write to `./target`, and access `crates.io`. When `git status` matches, it gets only read access to the project via `"git-env"`.
+
+When no `:sandbox` is specified on an exec allow, the spawned process gets no filesystem/network access beyond bare minimum (deny-all sandbox by default).
+
+The `:sandbox` keyword must reference a policy name defined with `(policy "name" ...)` in the same file. A compile error is raised if the referenced policy doesn't exist.
 
 ---
 
@@ -208,6 +239,21 @@ Match a directory and everything beneath it:
 
 ---
 
+## Naming Convention
+
+All user-provided names must be **quoted strings**:
+
+```
+(default deny "main")             ; policy name is a string
+(policy "cwd-access" ...)         ; policy name is a string
+(include "cwd-access")            ; include target is a string
+(allow (exec "cargo" *) :sandbox "cargo-env")  ; sandbox ref is a string
+```
+
+Bare atoms (`allow`, `deny`, `exec`, `fs`, `net`, `or`, `not`, `subpath`, `env`, `include`, `default`, `policy`) are reserved for language keywords.
+
+---
+
 ## Common Recipes
 
 ### 1. Conservative (Untrusted Projects)
@@ -215,9 +261,9 @@ Match a directory and everything beneath it:
 Deny everything by default, explicitly allow only safe operations:
 
 ```
-(default deny main)
+(default deny "main")
 
-(policy main
+(policy "main"
   (allow (fs read (subpath (env CWD))))
   (ask   (exec *)))
 ```
@@ -227,13 +273,13 @@ Deny everything by default, explicitly allow only safe operations:
 Allow reads and common dev tools, ask for writes, deny destructive operations:
 
 ```
-(default ask main)
+(default ask "main")
 
-(policy cwd-access
+(policy "cwd-access"
   (allow (fs (or read write) (subpath (env CWD)))))
 
-(policy main
-  (include cwd-access)
+(policy "main"
+  (include "cwd-access")
 
   (allow (exec "cargo" *))
   (allow (exec "npm" *))
@@ -255,9 +301,9 @@ Allow reads and common dev tools, ask for writes, deny destructive operations:
 Allow almost everything, but block the truly dangerous:
 
 ```
-(default allow main)
+(default allow "main")
 
-(policy main
+(policy "main"
   (deny (exec "git" "push" "--force" *))
   (deny (exec "git" "reset" "--hard" *))
   (deny (exec "rm" "-rf" /*))
@@ -272,13 +318,36 @@ Allow almost everything, but block the truly dangerous:
 Allow reading only, deny all modifications:
 
 ```
-(default deny main)
+(default deny "main")
 
-(policy main
+(policy "main"
   (allow (fs read *))
   (allow (exec "cat" *))
   (allow (exec "ls" *))
   (allow (exec "grep" *)))
+```
+
+### 5. Sandboxed Build Tools
+
+Allow build tools with constrained sandbox environments:
+
+```
+(default deny "main")
+
+(policy "cargo-env"
+  (allow (fs read (subpath (env CWD))))
+  (allow (fs write (subpath "./target")))
+  (allow (net "crates.io")))
+
+(policy "npm-env"
+  (allow (fs read (subpath (env CWD))))
+  (allow (fs write (subpath "./node_modules")))
+  (allow (net "registry.npmjs.org")))
+
+(policy "main"
+  (allow (exec "cargo" *) :sandbox "cargo-env")
+  (allow (exec "npm" *)   :sandbox "npm-env")
+  (allow (fs read (subpath (env CWD)))))
 ```
 
 ---

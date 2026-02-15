@@ -9,7 +9,7 @@ use crate::policy::Effect;
 /// A top-level declaration in a policy file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TopLevel {
-    /// `(default deny main)` — sets the default effect and active policy name.
+    /// `(default deny "main")` — sets the default effect and active policy name.
     Default { effect: Effect, policy: String },
     /// `(policy name ...)` — a named policy containing rules and includes.
     Policy { name: String, body: Vec<PolicyItem> },
@@ -18,7 +18,7 @@ pub enum TopLevel {
 /// An item inside a `(policy ...)` block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyItem {
-    /// `(include other-policy)` — import rules from another policy by name.
+    /// `(include "other-policy")` — import rules from another policy by name.
     Include(String),
     /// A rule: `(effect (capability ...))`.
     Rule(Rule),
@@ -29,6 +29,8 @@ pub enum PolicyItem {
 pub struct Rule {
     pub effect: Effect,
     pub matcher: CapMatcher,
+    /// Optional sandbox policy reference for exec rules: `:sandbox "name"`.
+    pub sandbox: Option<String>,
 }
 
 /// A capability matcher — one of the three capability domains.
@@ -131,10 +133,10 @@ impl fmt::Display for TopLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TopLevel::Default { effect, policy } => {
-                write!(f, "(default {effect} {policy})")
+                write!(f, "(default {effect} \"{policy}\")")
             }
             TopLevel::Policy { name, body } => {
-                write!(f, "(policy {name}")?;
+                write!(f, "(policy \"{name}\"")?;
                 for item in body {
                     write!(f, "\n  {item}")?;
                 }
@@ -147,7 +149,7 @@ impl fmt::Display for TopLevel {
 impl fmt::Display for PolicyItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PolicyItem::Include(name) => write!(f, "(include {name})"),
+            PolicyItem::Include(name) => write!(f, "(include \"{name}\")"),
             PolicyItem::Rule(rule) => write!(f, "{rule}"),
         }
     }
@@ -155,7 +157,11 @@ impl fmt::Display for PolicyItem {
 
 impl fmt::Display for Rule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "({} {})", self.effect, self.matcher)
+        write!(f, "({} {}", self.effect, self.matcher)?;
+        if let Some(name) = &self.sandbox {
+            write!(f, " :sandbox \"{name}\"")?;
+        }
+        write!(f, ")")
     }
 }
 
@@ -293,7 +299,7 @@ mod tests {
             effect: Effect::Deny,
             policy: "main".into(),
         };
-        assert_eq!(d.to_string(), "(default deny main)");
+        assert_eq!(d.to_string(), r#"(default deny "main")"#);
     }
 
     #[test]
@@ -308,12 +314,29 @@ mod tests {
                         bin: Pattern::Literal("git".into()),
                         args: vec![Pattern::Any],
                     }),
+                    sandbox: None,
                 }),
             ],
         };
         let s = p.to_string();
-        assert!(s.contains("(include cwd-access)"));
+        assert!(s.contains(r#"(include "cwd-access")"#));
         assert!(s.contains("(allow (exec \"git\" *))"));
+    }
+
+    #[test]
+    fn display_rule_with_sandbox() {
+        let r = Rule {
+            effect: Effect::Allow,
+            matcher: CapMatcher::Exec(ExecMatcher {
+                bin: Pattern::Literal("cargo".into()),
+                args: vec![Pattern::Any],
+            }),
+            sandbox: Some("cargo-env".into()),
+        };
+        assert_eq!(
+            r.to_string(),
+            r#"(allow (exec "cargo" *) :sandbox "cargo-env")"#
+        );
     }
 
     #[test]

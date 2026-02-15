@@ -193,7 +193,10 @@ impl DecisionTree {
                     _ => false,
                 };
 
-                let description = rule.source.to_string();
+                let mut description = rule.source.to_string();
+                if let Some(ref sandbox_name) = rule.sandbox {
+                    description.push_str(&format!(" [sandbox: {sandbox_name}]"));
+                }
                 if matches {
                     trace!(idx, %description, effect = %rule.effect, "rule matched");
                     matched_rules.push(RuleMatch {
@@ -315,8 +318,8 @@ mod tests {
     fn bash_git_push_denied() {
         let tree = compile(
             r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (deny  (exec "git" "push" *))
   (allow (exec "git" *)))
 "#,
@@ -334,8 +337,8 @@ mod tests {
     fn bash_git_status_allowed() {
         let tree = compile(
             r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (deny  (exec "git" "push" *))
   (allow (exec "git" *)))
 "#,
@@ -353,8 +356,8 @@ mod tests {
     fn read_under_cwd_allowed() {
         let tree = compile(
             r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (fs read (subpath (env CWD)))))
 "#,
         );
@@ -371,8 +374,8 @@ mod tests {
     fn read_outside_cwd_default_deny() {
         let tree = compile(
             r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (fs read (subpath (env CWD)))))
 "#,
         );
@@ -389,8 +392,8 @@ mod tests {
     fn webfetch_allowed_domain() {
         let tree = compile(
             r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (net (or "github.com" "crates.io")))
   (deny  (net /.*\.evil\.com/)))
 "#,
@@ -408,8 +411,8 @@ mod tests {
     fn webfetch_evil_domain_denied() {
         let tree = compile(
             r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (net (or "github.com" "crates.io")))
   (deny  (net /.*\.evil\.com/)))
 "#,
@@ -427,8 +430,8 @@ mod tests {
     fn unknown_tool_uses_default() {
         let tree = compile(
             r#"
-(default ask main)
-(policy main
+(default ask "main")
+(policy "main"
   (allow (exec "git" *)))
 "#,
         );
@@ -445,8 +448,8 @@ mod tests {
     fn decision_trace_contains_matched_rule() {
         let tree = compile(
             r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (deny  (exec "git" "push" *))
   (allow (exec "git" *)))
 "#,
@@ -465,8 +468,8 @@ mod tests {
     fn write_tool_maps_to_fs_write() {
         let tree = compile(
             r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (fs write (subpath (env CWD)))))
 "#,
         );
@@ -483,8 +486,8 @@ mod tests {
     fn edit_tool_maps_to_fs_write() {
         let tree = compile(
             r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (fs write (subpath (env CWD)))))
 "#,
         );
@@ -501,8 +504,8 @@ mod tests {
     fn relative_path_resolved_against_cwd() {
         let tree = compile(
             r#"
-(default deny main)
-(policy main
+(default deny "main")
+(policy "main"
   (allow (fs read (subpath (env CWD)))))
 "#,
         );
@@ -519,13 +522,13 @@ mod tests {
     fn full_pipeline_integration() {
         let tree = compile(
             r#"
-(default deny main)
+(default deny "main")
 
-(policy cwd-access
+(policy "cwd-access"
   (allow (fs read (subpath (env CWD)))))
 
-(policy main
-  (include cwd-access)
+(policy "main"
+  (include "cwd-access")
 
   (deny  (exec "git" "push" *))
   (deny  (exec "git" "reset" *))
@@ -615,6 +618,36 @@ mod tests {
             tree.evaluate("MagicTool", &json!({}), "/home/user/project")
                 .effect,
             Effect::Deny
+        );
+    }
+
+    #[test]
+    fn exec_with_sandbox_trace() {
+        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "cargo-env"
+  (allow (fs read (subpath (env CWD)))))
+(policy "main"
+  (allow (exec "cargo" *) :sandbox "cargo-env"))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "cargo build"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+        assert!(
+            decision.trace.matched_rules[0]
+                .description
+                .contains("[sandbox: cargo-env]"),
+            "trace should mention sandbox: {}",
+            decision.trace.matched_rules[0].description
         );
     }
 }
