@@ -142,3 +142,62 @@ impl CompiledPathFilter {
         }
     }
 }
+
+impl CompiledExec {
+    /// Test if this exec matcher matches a binary name and argument list.
+    pub fn matches(&self, bin: &str, args: &[&str]) -> bool {
+        if !self.bin.matches(bin) {
+            return false;
+        }
+        // Each pattern position must match the corresponding arg.
+        // If we have more patterns than args, unmatched patterns must be Any.
+        for (i, pat) in self.args.iter().enumerate() {
+            match args.get(i) {
+                Some(arg) => {
+                    if !pat.matches(arg) {
+                        return false;
+                    }
+                }
+                None => {
+                    // No arg at this position — only matches if pattern is Any.
+                    if !matches!(pat, CompiledPattern::Any) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+}
+
+impl CompiledFs {
+    /// Test if this fs matcher matches a filesystem operation and resolved path.
+    pub fn matches(&self, op: ast::FsOp, path: &str) -> bool {
+        // Check operation filter.
+        match &self.op {
+            ast::OpPattern::Any => {}
+            ast::OpPattern::Single(expected) => {
+                if *expected != op {
+                    return false;
+                }
+            }
+            ast::OpPattern::Or(ops) => {
+                if !ops.contains(&op) {
+                    return false;
+                }
+            }
+        }
+        // Check path filter.
+        match &self.path {
+            None => true,
+            Some(pf) => pf.matches(path),
+        }
+    }
+}
+
+impl CompiledNet {
+    /// Test if this net matcher matches a domain string.
+    pub fn matches(&self, domain: &str) -> bool {
+        self.domain.matches(domain)
+    }
+}

@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-When a policy has filesystem constraints (`fs: subpath(.)`), we need to enforce them. For read/write/edit tools, the tool itself accesses a single known file path — we can check the path against the constraint before allowing the tool call.
+When a policy has filesystem path filters (e.g. `(subpath (env CWD))`), we need to enforce them. For read/write/edit tools, the tool itself accesses a single known file path — we can check the path against the filter before allowing the tool call.
 
 For bash commands, the situation is different. A bash command like `git status` may access many files across the filesystem. We cannot reliably predict which files a command will access by parsing the command string. Even if we could, the command might spawn subprocesses that access additional files.
 
@@ -18,13 +18,13 @@ Options:
 
 ## Decision
 
-For bash commands, `fs` constraints generate kernel-level sandbox rules instead of acting as permission guards. The sandbox is applied before exec'ing the command and inherited by all child processes.
+For bash commands, `fs` path filters generate kernel-level sandbox rules instead of acting as permission guards. The sandbox is applied before exec'ing the command and inherited by all child processes.
 
-For non-bash verbs (read, write, edit), `fs` constraints act as permission guards — the file path is checked against the filter expression before the tool is allowed.
+For non-bash tools (Read, Write, Edit, Glob, Grep), the eval layer checks the resolved path against `fs` rules directly — the path filter acts as a permission guard.
 
-The dual behavior is implemented by:
-- `CompiledConstraintDef::eval()` skipping the `fs` check for `Verb::Execute`
-- `generate_sandbox_from_profiles()` / `generate_unified_sandbox()` collecting `fs` constraints from matched allow rules and converting them to `SandboxPolicy`
+In v2, this maps to:
+- `exec` capability → sandbox generation from `fs_rules` (future PR)
+- `fs` capability → eval checks path against `CompiledPathFilter` at decision time
 
 ## Consequences
 

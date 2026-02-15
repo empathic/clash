@@ -20,6 +20,14 @@
 * If you are corrected by a person when using a skill, or told you should have used the skill, then modify the plugin definition for clash to ensure this doesn't happen again.
 
 
+## Policy Model
+* Clash uses a capability-based policy language with s-expression syntax
+* Three capability domains: `exec` (commands), `fs` (filesystem), `net` (network)
+* Policy source: `clash/src/policy/v2/` — parse, compile, eval, IR
+* Rules are `(effect (capability ...))` forms, e.g. `(deny (exec "git" "push" *))`
+* The policy speaks in capabilities, not Claude Code tool names — the eval layer maps tools to capabilities
+* See `docs/policy-grammar.md` for the formal grammar
+
 ## Layout
 - *clash* Clash binary + library
 - *clash-plugin* Claude plugin refered to by the .claude-plugin definitions

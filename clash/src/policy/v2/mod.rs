@@ -19,6 +19,7 @@
 
 pub mod ast;
 pub mod compile;
+pub mod eval;
 pub mod ir;
 pub mod parse;
 pub mod print;
