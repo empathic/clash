@@ -1,0 +1,27 @@
+; Clash policy example — developer workstation
+;
+; Rules use s-expression syntax: (effect (capability ...))
+; Effects: allow, deny, ask
+; Capabilities: exec (commands), fs (filesystem), net (network)
+;
+; Evaluation: deny > ask > allow. More specific rules beat less specific.
+; If no rule matches, the default effect is used.
+
+(default ask "main")
+
+; Reusable policy blocks
+(policy "cwd-access"
+  (allow (fs read (subpath (env PWD))))
+  (allow (fs (or write create) (subpath (env PWD)))))
+
+(policy "safe-git"
+  (allow (exec "git" *))
+  (deny (exec "git" "push" *))
+  (deny (exec "git" "reset" "--hard" *)))
+
+(policy "main"
+  (include "cwd-access")
+  (include "safe-git")
+  (allow (exec "cargo" *))
+  (allow (net "github.com"))
+  (allow (net "crates.io")))

@@ -377,7 +377,7 @@ mod tests {
   (allow (exec "git" *))
   (deny  (exec "git" "push" *)))
 "#;
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.default, Effect::Deny);
         assert_eq!(tree.policy_name, "main");
@@ -392,12 +392,12 @@ mod tests {
         let source = r#"
 (default deny "main")
 (policy "cwd-access"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 (policy "main"
   (include "cwd-access")
   (allow (exec "git" *)))
 "#;
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 1);
         assert_eq!(tree.fs_rules.len(), 1);
@@ -540,12 +540,12 @@ mod tests {
         let source = r#"
 (default deny "main")
 (policy "cargo-env"
-  (allow (fs read (subpath (env CWD))))
+  (allow (fs read (subpath (env PWD))))
   (allow (net "crates.io")))
 (policy "main"
   (allow (exec "cargo" *) :sandbox "cargo-env"))
 "#;
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 1);
         assert_eq!(tree.exec_rules[0].sandbox, Some("cargo-env".into()));
@@ -576,7 +576,7 @@ mod tests {
 (default deny "main")
 
 (policy "cwd-access"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 
 (policy "main"
   (include "cwd-access")
@@ -586,13 +586,13 @@ mod tests {
   (ask   (exec "git" "commit" *))
   (allow (exec "git" *))
 
-  (allow (fs (or read write) (subpath (env CWD))))
+  (allow (fs (or read write) (subpath (env PWD))))
   (deny  (fs write ".env"))
 
   (allow (net (or "github.com" "crates.io")))
   (deny  (net /.*\.evil\.com/)))
 "#;
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(source, &env).unwrap();
 
         assert_eq!(tree.default, Effect::Deny);

@@ -154,7 +154,7 @@ mod tests {
         }));
         let b = Specificity::from_matcher(&CapMatcher::Fs(FsMatcher {
             op: OpPattern::Single(FsOp::Write),
-            path: Some(PathFilter::Subpath(PathExpr::Env("CWD".into()))),
+            path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
         }));
         assert!(a > b);
     }

@@ -14,7 +14,7 @@ Clash policies use an s-expression format with three capability domains: **exec*
 (policy "main"
   (allow (exec "git" *))
   (deny  (exec "git" "push" *))
-  (allow (fs read (subpath (env CWD))))
+  (allow (fs read (subpath (env PWD))))
   (allow (net "github.com")))
 ```
 
@@ -50,8 +50,8 @@ The first pattern matches the binary name, subsequent patterns match positional 
 ### Fs — File Operations
 
 ```
-(allow (fs read (subpath (env CWD))))                ; read files under CWD
-(allow (fs (or read write) (subpath (env CWD))))     ; read + write under CWD
+(allow (fs read (subpath (env PWD))))                ; read files under CWD
+(allow (fs (or read write) (subpath (env PWD))))     ; read + write under CWD
 (deny  (fs write ".env"))                            ; block writing .env
 (deny  (fs * (subpath "/etc")))                      ; block all fs ops on /etc
 ```
@@ -120,8 +120,8 @@ Break policies into reusable pieces with `(include ...)`:
 (default deny "main")
 
 (policy "cwd-access"
-  (allow (fs read (subpath (env CWD))))
-  (allow (fs write (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD))))
+  (allow (fs write (subpath (env PWD)))))
 
 (policy "safe-git"
   (deny  (exec "git" "push" *))
@@ -147,18 +147,18 @@ Exec rules can reference a **sandbox policy** using the `:sandbox` keyword. The 
 (default deny "main")
 
 (policy "cargo-env"
-  (allow (fs read (subpath (env CWD))))
+  (allow (fs read (subpath (env PWD))))
   (allow (fs write (subpath "./target")))
   (allow (net "crates.io")))
 
 (policy "git-env"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 
 (policy "main"
   (deny  (exec "git" "push" *))
   (allow (exec "cargo" *) :sandbox "cargo-env")
   (allow (exec "git" *)   :sandbox "git-env")
-  (allow (fs read (subpath (env CWD))))
+  (allow (fs read (subpath (env PWD))))
   (allow (net "github.com")))
 ```
 
@@ -217,7 +217,7 @@ Slash-delimited regex for flexible matching:
 Match a directory and everything beneath it:
 
 ```
-(subpath (env CWD))     ; current working directory tree
+(subpath (env PWD))     ; current working directory tree
 (subpath "/home/user")   ; fixed path
 ```
 
@@ -226,14 +226,14 @@ Match a directory and everything beneath it:
 `(env NAME)` is resolved at compile time:
 
 ```
-(subpath (env CWD))    ; → /home/user/project (or wherever you are)
+(subpath (env PWD))    ; → /home/user/project (or wherever you are)
 (subpath (env HOME))   ; → /home/user
 ```
 
 ### Path Combinators
 
 ```
-(or (subpath "/tmp") (subpath (env CWD)))   ; either location
+(or (subpath "/tmp") (subpath (env PWD)))   ; either location
 (not (subpath ".git"))                       ; exclude .git
 ```
 
@@ -264,7 +264,7 @@ Deny everything by default, explicitly allow only safe operations:
 (default deny "main")
 
 (policy "main"
-  (allow (fs read (subpath (env CWD))))
+  (allow (fs read (subpath (env PWD))))
   (ask   (exec *)))
 ```
 
@@ -276,7 +276,7 @@ Allow reads and common dev tools, ask for writes, deny destructive operations:
 (default ask "main")
 
 (policy "cwd-access"
-  (allow (fs (or read write) (subpath (env CWD)))))
+  (allow (fs (or read write) (subpath (env PWD)))))
 
 (policy "main"
   (include "cwd-access")
@@ -335,19 +335,19 @@ Allow build tools with constrained sandbox environments:
 (default deny "main")
 
 (policy "cargo-env"
-  (allow (fs read (subpath (env CWD))))
+  (allow (fs read (subpath (env PWD))))
   (allow (fs write (subpath "./target")))
   (allow (net "crates.io")))
 
 (policy "npm-env"
-  (allow (fs read (subpath (env CWD))))
+  (allow (fs read (subpath (env PWD))))
   (allow (fs write (subpath "./node_modules")))
   (allow (net "registry.npmjs.org")))
 
 (policy "main"
   (allow (exec "cargo" *) :sandbox "cargo-env")
   (allow (exec "npm" *)   :sandbox "npm-env")
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 ```
 
 ---

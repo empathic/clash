@@ -116,7 +116,7 @@ enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Show the full schema of policy.yaml settings
+    /// Show the full schema of policy settings
     #[command(hide = true)]
     Schema {
         #[arg(long)]
@@ -137,7 +137,7 @@ enum PolicyCmd {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Initialize a new clash policy.yaml with a safe default configuration
+    /// Initialize a new clash policy with a safe default configuration
     Init {
         /// Skip setting bypassPermissions in Claude Code settings
         #[arg(long)]
@@ -845,7 +845,7 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
                 effect,
                 matcher: CapMatcher::Fs(FsMatcher {
                     op: OpPattern::Or(vec![FsOp::Write, FsOp::Create]),
-                    path: Some(PathFilter::Subpath(PathExpr::Env("CWD".into()))),
+                    path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
                 }),
                 sandbox: None,
             }]),
@@ -853,7 +853,7 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
                 effect,
                 matcher: CapMatcher::Fs(FsMatcher {
                     op: OpPattern::Single(FsOp::Read),
-                    path: Some(PathFilter::Subpath(PathExpr::Env("CWD".into()))),
+                    path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
                 }),
                 sandbox: None,
             }]),

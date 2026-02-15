@@ -27,7 +27,7 @@ just install
 claude
 ```
 
-That's it. Clash is now intercepting every tool call and evaluating it against your policy. The default policy allows reads and writes within your project, prompts before git commits, and denies destructive operations like `git push`, `git reset --hard`, and `sudo`.
+That's it. Clash is now intercepting every tool call and evaluating it against your policy. The default policy denies everything except reading files within your project — use `clash allow` to unlock capabilities as you need them.
 
 ---
 
@@ -45,7 +45,6 @@ Once clash is running inside Claude Code, you have access to slash commands (ski
 | `/clash:allow` | Quickly add an allow rule |
 | `/clash:deny` | Quickly add a deny rule |
 | `/clash:test` | Test your policy against hypothetical tool uses |
-| `/clash:migrate` | Import existing Claude Code permissions |
 | `/clash:audit` | View recent permission decisions from the audit log |
 
 If you're new, start with `/clash:onboard` — it walks you through creating a policy tailored to your workflow.
@@ -54,58 +53,58 @@ If you're new, start with `/clash:onboard` — it walks you through creating a p
 
 ## Policy Rules
 
-Your policy lives at `~/.clash/policy.yaml`. Clash reads it on every tool invocation, so edits take effect immediately — no restart needed.
+Your policy lives at `~/.clash/policy.sexpr`. Clash reads it on every tool invocation, so edits take effect immediately — no restart needed.
 
-Each rule has three parts: **effect**, **verb**, and **noun**.
+Rules use s-expression syntax: `(effect (capability ...))`.
 
-```yaml
-# ~/.clash/policy.yaml
-default:
-  permission: ask          # what happens when no rule matches
-  profile: main
+```lisp
+; ~/.clash/policy.sexpr
+(default ask "main")
 
-profiles:
-  main:
-    rules:
-      allow read *:                  # let the agent read any file
-      allow bash cargo *:            # let it run cargo commands
-      ask bash git commit*:          # prompt before committing
-      deny bash git push*:           # never allow push
-      deny bash rm -rf *:            # never allow rm -rf
+(policy "main"
+  (include "cwd-access")
+  (allow (exec "cargo" *))          ; let it run cargo commands
+  (allow (exec "git" *))            ; let it run git commands
+  (deny (exec "git" "push" *))      ; never allow push
+  (deny (exec "git" "reset" "--hard" *))
+  (allow (net "github.com")))        ; allow github.com access
+
+(policy "cwd-access"
+  (allow (fs read (subpath (env PWD))))
+  (allow (fs (or write create) (subpath (env PWD)))))
 ```
 
 **Effects:** `allow` (auto-approve), `deny` (block), `ask` (prompt you)
 
-**Precedence:** `deny` always wins. Among non-deny rules, constrained rules (those with `fs:`, `url:`, etc.) beat unconstrained ones. Within the same tier, `ask` beats `allow`. See [Policy Semantics](docs/policy-semantics.md) for the full algorithm.
+**Capabilities:** `exec` (commands), `fs` (filesystem), `net` (network)
 
-### Profiles
+**Precedence:** `deny` always wins. More specific rules beat less specific. Within the same specificity, `ask` beats `allow`. See [Policy Semantics](docs/policy-semantics.md) for the full algorithm.
 
-Rules are organized into **profiles** that can include other profiles, letting you compose reusable policy layers:
+### Policy Blocks
 
-```yaml
-profiles:
-  cwd:
-    rules:
-      allow * *:
-        fs:
-          all: subpath(.)           # allow everything within the project
+Rules are organized into named **policy blocks** that can include other blocks, letting you compose reusable layers:
 
-  main:
-    include: [cwd, sensitive]       # compose from other profiles
-    rules:
-      deny bash git push*:
+```lisp
+(policy "readonly"
+  (allow (fs read (subpath (env PWD)))))
+
+(policy "main"
+  (include "readonly")              ; import rules from other blocks
+  (allow (exec "git" *)))
 ```
 
 ### Kernel Sandbox
 
-Rules can carry filesystem constraints that clash compiles into OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS):
+Allowed exec rules can carry sandbox constraints that clash compiles into OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS):
 
-```yaml
-      allow bash cargo *:
-        fs:
-          read + execute: subpath(.)        # read anywhere in project
-          write + create: subpath(./target)  # write only to target/
-        network: allow
+```lisp
+(allow (exec "cargo" *)
+  (sandbox "cargo-sandbox"))
+
+(sandbox "cargo-sandbox"
+  (fs read (subpath (env PWD)))
+  (fs write (subpath "./target"))
+  (net allow))
 ```
 
 Even if a command is allowed by policy, the sandbox ensures it can only access the paths you specify.
@@ -117,21 +116,15 @@ For the full rule syntax, see the [Policy Writing Guide](docs/policy-guide.md).
 ## Useful Commands
 
 ```bash
-clash policy show                            # see active profile and settings
-clash policy list-rules                      # list all rules in the active profile
-clash policy add-rule "allow bash npm *"     # add a rule
-clash policy remove-rule "deny bash git push*"  # remove a rule
+clash allow bash                             # allow command execution
+clash allow edit                             # allow file editing in project
+clash allow web                              # allow web access
+clash deny '(exec "rm" *)'                   # deny rm commands
+clash policy show                            # see active policy and decision tree
+clash policy list                            # list all rules
+clash policy remove '(exec "rm" *)'          # remove a rule
 clash policy schema                          # show all configurable fields and types
 clash explain bash "git push"                # see which rule matches a command
-```
-
-### Migrating from Claude Code Permissions
-
-If you already have permissions configured in Claude Code settings, import them:
-
-```bash
-clash migrate --dry-run   # preview what would be imported
-clash migrate              # import into ~/.clash/policy.yaml
 ```
 
 For the full command reference, see the [CLI Reference](docs/cli-reference.md).

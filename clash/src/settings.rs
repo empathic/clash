@@ -256,7 +256,7 @@ mod test {
     impl crate::policy::v2::compile::EnvResolver for TestEnv {
         fn resolve(&self, name: &str) -> anyhow::Result<String> {
             match name {
-                "CWD" => Ok("/tmp".into()),
+                "PWD" => Ok("/tmp".into()),
                 other => anyhow::bail!("unknown env var in test: {other}"),
             }
         }
@@ -356,7 +356,7 @@ mod test {
 
     #[test]
     fn load_valid_policy_succeeds() {
-        // Use a policy without (env CWD) to avoid needing env vars in tests.
+        // Use a policy without (env PWD) to avoid needing env vars in tests.
         let simple_policy = r#"
 (default deny "main")
 (policy "main"
@@ -394,7 +394,7 @@ mod test {
 
     #[test]
     fn set_v2_source_works() {
-        // Use a policy without (env CWD) to avoid needing env vars in tests.
+        // Use a policy without (env PWD) to avoid needing env vars in tests.
         let simple_policy = r#"
 (default deny "main")
 (policy "main"

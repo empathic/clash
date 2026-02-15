@@ -69,7 +69,7 @@ Matches filesystem operations. Optional operation filter and path filter.
 ```
 (fs)                                  ; match any fs operation
 (fs read)                             ; match reads only
-(fs write (subpath (env CWD)))        ; match writes under CWD
+(fs write (subpath (env PWD)))        ; match writes under CWD
 (fs (or read write) (subpath "/tmp")) ; match reads or writes under /tmp
 ```
 
@@ -154,7 +154,7 @@ path_expr       = QUOTED_STRING                ; static path
 `(env NAME)` is resolved at compile time to the value of the environment variable:
 
 ```
-(subpath (env CWD))    ; expands to the current working directory
+(subpath (env PWD))    ; expands to the current working directory
 (subpath (env HOME))   ; expands to the user's home directory
 ```
 
@@ -196,7 +196,7 @@ Policies can include other policies using `(include "name")`:
 
 ```
 (policy "cwd-access"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 
 (policy "main"
   (include "cwd-access")

@@ -371,12 +371,12 @@ mod tests {
 
     #[test]
     fn build_sandbox_policy_fs_and_net() {
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
             r#"
 (default deny "main")
 (policy "build-env"
-  (allow (fs (or read write) (subpath (env CWD))))
+  (allow (fs (or read write) (subpath (env PWD))))
   (deny  (fs write "/home/user/project/.git"))
   (allow (net "crates.io")))
 (policy "main"
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn build_sandbox_policy_missing_name_returns_none() {
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
             r#"
 (default deny "main")

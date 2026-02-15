@@ -148,7 +148,7 @@ pub struct SandboxRule {
     /// The capabilities this rule applies to.
     pub caps: Cap,
 
-    /// The path or pattern this rule applies to. Supports `$CWD`, `$HOME`, `$TMPDIR`.
+    /// The path or pattern this rule applies to. Supports `$PWD`, `$HOME`, `$TMPDIR`.
     pub path: String,
 
     /// How the path is matched against the filesystem.
@@ -190,9 +190,9 @@ pub enum NetworkPolicy {
 }
 
 impl SandboxPolicy {
-    /// Resolve a path, expanding environment variables ($CWD, $HOME, $TMPDIR).
+    /// Resolve a path, expanding environment variables ($PWD, $HOME, $TMPDIR).
     pub fn resolve_path(path: &str, cwd: &str) -> String {
-        path.replace("$CWD", cwd)
+        path.replace("$PWD", cwd)
             .replace(
                 "$HOME",
                 &dirs::home_dir()
@@ -235,7 +235,7 @@ impl SandboxPolicy {
     }
 }
 
-/// Parse a sandbox rule from a string like "allow read + write in $CWD".
+/// Parse a sandbox rule from a string like "allow read + write in $PWD".
 ///
 /// Format: `<effect> <caps> in <path>`
 pub fn parse_sandbox_rule(s: &str) -> Result<SandboxRule, String> {
@@ -357,19 +357,19 @@ mod tests {
 
     #[test]
     fn test_parse_sandbox_rule() {
-        let rule = parse_sandbox_rule("allow read + write in $CWD").unwrap();
+        let rule = parse_sandbox_rule("allow read + write in $PWD").unwrap();
         assert_eq!(rule.effect, RuleEffect::Allow);
         assert_eq!(rule.caps, Cap::READ | Cap::WRITE);
-        assert_eq!(rule.path, "$CWD");
+        assert_eq!(rule.path, "$PWD");
         assert_eq!(rule.path_match, PathMatch::Subpath);
     }
 
     #[test]
     fn test_parse_sandbox_rule_deny() {
-        let rule = parse_sandbox_rule("deny delete in $CWD/.git").unwrap();
+        let rule = parse_sandbox_rule("deny delete in $PWD/.git").unwrap();
         assert_eq!(rule.effect, RuleEffect::Deny);
         assert_eq!(rule.caps, Cap::DELETE);
-        assert_eq!(rule.path, "$CWD/.git");
+        assert_eq!(rule.path, "$PWD/.git");
     }
 
     #[test]
@@ -416,7 +416,7 @@ mod tests {
             rules: vec![SandboxRule {
                 effect: RuleEffect::Allow,
                 caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE,
-                path: "$CWD".into(),
+                path: "$PWD".into(),
                 path_match: PathMatch::Subpath,
             }],
             network: NetworkPolicy::Deny,

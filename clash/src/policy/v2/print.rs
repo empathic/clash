@@ -67,7 +67,7 @@ mod tests {
   (allow (exec "git" *))
   (allow (net "github.com")))
 "#;
-        let env = TestEnv(HashMap::from([("CWD".into(), "/tmp".into())]));
+        let env = TestEnv(HashMap::from([("PWD".into(), "/tmp".into())]));
         let tree = compile_policy_with_env(source, &env).unwrap();
         let output = print_tree(&tree);
         assert!(output.contains("Policy: main"));

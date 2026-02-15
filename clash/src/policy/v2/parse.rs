@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn parse_fs_rule() {
         let ast =
-            parse(r#"(policy "p" (allow (fs (or read write) (subpath (env CWD)))))"#).unwrap();
+            parse(r#"(policy "p" (allow (fs (or read write) (subpath (env PWD)))))"#).unwrap();
         let body = match &ast[0] {
             TopLevel::Policy { body, .. } => body,
             _ => panic!(),
@@ -379,9 +379,9 @@ mod tests {
                 assert_eq!(m.op, OpPattern::Or(vec![FsOp::Read, FsOp::Write]));
                 match &m.path {
                     Some(PathFilter::Subpath(PathExpr::Env(name))) => {
-                        assert_eq!(name, "CWD");
+                        assert_eq!(name, "PWD");
                     }
-                    other => panic!("expected Subpath(Env(CWD)), got {other:?}"),
+                    other => panic!("expected Subpath(Env(PWD)), got {other:?}"),
                 }
             }
             _ => panic!("expected Fs"),
@@ -504,7 +504,7 @@ mod tests {
 (default deny "main")
 
 (policy "cwd-access"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 
 (policy "main"
   (include "cwd-access")
@@ -515,7 +515,7 @@ mod tests {
   (allow (exec "git" *))
   (allow (exec (or "npm" "cargo" "pip") *))
 
-  (allow (fs (or read write) (subpath (env CWD))))
+  (allow (fs (or read write) (subpath (env PWD))))
   (deny  (fs write ".env"))
 
   (allow (net (or "github.com" "crates.io")))
@@ -531,14 +531,14 @@ mod tests {
 (default deny "main")
 
 (policy "cwd-access"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 
 (policy "main"
   (include "cwd-access")
   (deny  (exec "git" "push" *))
   (allow (exec "git" *))
   (allow (exec "cargo" *) :sandbox "cargo-env")
-  (allow (fs (or read write) (subpath (env CWD))))
+  (allow (fs (or read write) (subpath (env PWD))))
   (deny  (fs write ".env"))
   (allow (net (or "github.com" "crates.io")))
   (deny  (net /.*\.evil\.com/)))

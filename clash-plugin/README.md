@@ -36,7 +36,7 @@ The plugin registers four hook types via `hooks/hooks.json`:
 | **PermissionRequest** | Responds to permission prompts on behalf of the user |
 | **Notification** | Handles notification events (permission prompts, idle detection, etc.) |
 
-Policy rules are read from `~/.clash/policy.yaml`. See the [Policy Writing Guide](../docs/policy-guide.md) for syntax.
+Policy rules are read from `~/.clash/policy.sexpr`. See the [Policy Writing Guide](../docs/policy-guide.md) for syntax.
 
 ## Skills
 
@@ -52,7 +52,6 @@ Skills are slash commands available inside Claude Code when the plugin is loaded
 | `/clash:allow` | Add an allow rule |
 | `/clash:deny` | Add a deny rule |
 | `/clash:test` | Test policy against hypothetical tool uses |
-| `/clash:migrate` | Import Claude Code permissions into policy.yaml |
 | `/clash:audit` | View recent permission decisions |
 | `/clash:bug-report` | File a bug report |
 
@@ -73,7 +72,6 @@ clash-plugin/
 │   ├── deny/             # Quick deny rule
 │   ├── test/             # Policy testing
 │   ├── audit/            # Audit log viewer
-│   ├── migrate/          # Permission migration
 │   ├── describe/         # Policy description
 │   └── bug-report/       # Bug reporting
 └── bin/                  # Compiled clash binary (populated by build)

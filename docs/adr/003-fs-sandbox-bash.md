@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-When a policy has filesystem path filters (e.g. `(subpath (env CWD))`), we need to enforce them. For read/write/edit tools, the tool itself accesses a single known file path — we can check the path against the filter before allowing the tool call.
+When a policy has filesystem path filters (e.g. `(subpath (env PWD))`), we need to enforce them. For read/write/edit tools, the tool itself accesses a single known file path — we can check the path against the filter before allowing the tool call.
 
 For bash commands, the situation is different. A bash command like `git status` may access many files across the filesystem. We cannot reliably predict which files a command will access by parsing the command string. Even if we could, the command might spawn subprocesses that access additional files.
 

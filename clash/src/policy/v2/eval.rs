@@ -324,7 +324,7 @@ mod tests {
     }
 
     fn compile(source: &str) -> crate::policy::v2::ir::DecisionTree {
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         compile_policy_with_env(source, &env).unwrap()
     }
 
@@ -372,7 +372,7 @@ mod tests {
             r#"
 (default deny "main")
 (policy "main"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 "#,
         );
 
@@ -390,7 +390,7 @@ mod tests {
             r#"
 (default deny "main")
 (policy "main"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 "#,
         );
 
@@ -484,7 +484,7 @@ mod tests {
             r#"
 (default deny "main")
 (policy "main"
-  (allow (fs write (subpath (env CWD)))))
+  (allow (fs write (subpath (env PWD)))))
 "#,
         );
 
@@ -502,7 +502,7 @@ mod tests {
             r#"
 (default deny "main")
 (policy "main"
-  (allow (fs write (subpath (env CWD)))))
+  (allow (fs write (subpath (env PWD)))))
 "#,
         );
 
@@ -520,7 +520,7 @@ mod tests {
             r#"
 (default deny "main")
 (policy "main"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 "#,
         );
 
@@ -539,7 +539,7 @@ mod tests {
 (default deny "main")
 
 (policy "cwd-access"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 
 (policy "main"
   (include "cwd-access")
@@ -549,7 +549,7 @@ mod tests {
   (ask   (exec "git" "commit" *))
   (allow (exec "git" *))
 
-  (allow (fs (or read write) (subpath (env CWD))))
+  (allow (fs (or read write) (subpath (env PWD))))
   (deny  (fs write ".env"))
 
   (allow (net (or "github.com" "crates.io")))
@@ -587,7 +587,7 @@ mod tests {
             .effect,
             Effect::Ask
         );
-        // Read in CWD → allow
+        // Read in PWD → allow
         assert_eq!(
             tree.evaluate(
                 "Read",
@@ -597,7 +597,7 @@ mod tests {
             .effect,
             Effect::Allow
         );
-        // Read outside CWD → deny
+        // Read outside PWD → deny
         assert_eq!(
             tree.evaluate(
                 "Read",
@@ -637,12 +637,12 @@ mod tests {
 
     #[test]
     fn exec_with_sandbox_trace() {
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
             r#"
 (default deny "main")
 (policy "cargo-env"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 (policy "main"
   (allow (exec "cargo" *) :sandbox "cargo-env"))
 "#,
@@ -667,12 +667,12 @@ mod tests {
 
     #[test]
     fn exec_with_sandbox_produces_sandbox_policy() {
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
             r#"
 (default deny "main")
 (policy "cargo-env"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 (policy "main"
   (allow (exec "cargo" *) :sandbox "cargo-env"))
 "#,
@@ -705,12 +705,12 @@ mod tests {
 
     #[test]
     fn sandbox_network_defaults_to_deny() {
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
             r#"
 (default deny "main")
 (policy "restricted"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 (policy "main"
   (allow (exec "cargo" *) :sandbox "restricted"))
 "#,
@@ -732,12 +732,12 @@ mod tests {
 
     #[test]
     fn sandbox_with_allow_net_sets_network_allow() {
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
             r#"
 (default deny "main")
 (policy "with-net"
-  (allow (fs read (subpath (env CWD))))
+  (allow (fs read (subpath (env PWD))))
   (allow (net "crates.io")))
 (policy "main"
   (allow (exec "cargo" *) :sandbox "with-net"))
@@ -760,7 +760,7 @@ mod tests {
 
     #[test]
     fn sandbox_no_fs_rules_returns_none() {
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
             r#"
 (default deny "main")
@@ -786,12 +786,12 @@ mod tests {
 
     #[test]
     fn sandbox_denied_exec_has_no_sandbox() {
-        let env = TestEnv::new(&[("CWD", "/home/user/project")]);
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
             r#"
 (default deny "main")
 (policy "cargo-env"
-  (allow (fs read (subpath (env CWD)))))
+  (allow (fs read (subpath (env PWD)))))
 (policy "main"
   (deny  (exec "cargo" "publish" *))
   (allow (exec "cargo" *) :sandbox "cargo-env"))

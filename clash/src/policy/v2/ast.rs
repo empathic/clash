@@ -343,9 +343,9 @@ mod tests {
     fn display_fs_matcher() {
         let m = FsMatcher {
             op: OpPattern::Or(vec![FsOp::Read, FsOp::Write]),
-            path: Some(PathFilter::Subpath(PathExpr::Env("CWD".into()))),
+            path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
         };
-        assert_eq!(m.to_string(), "(fs (or read write) (subpath (env CWD)))");
+        assert_eq!(m.to_string(), "(fs (or read write) (subpath (env PWD)))");
     }
 
     #[test]

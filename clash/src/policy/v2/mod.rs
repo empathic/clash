@@ -13,7 +13,7 @@
 //! (policy "main"
 //!   (deny  (exec "git" "push" *))
 //!   (allow (exec "git" *))
-//!   (allow (fs read (subpath (env CWD))))
+//!   (allow (fs read (subpath (env PWD))))
 //!   (allow (net "github.com")))
 //! ```
 

@@ -131,7 +131,7 @@ Within a capability domain, the first matching rule wins. This is safe because:
 
 ### Path Resolution
 
-Relative paths in tool inputs are resolved against the current working directory before matching against path filters. This means `(subpath (env CWD))` correctly matches both absolute paths under CWD and relative paths.
+Relative paths in tool inputs are resolved against the current working directory before matching against path filters. This means `(subpath (env PWD))` correctly matches both absolute paths under CWD and relative paths.
 
 ---
 
@@ -171,8 +171,8 @@ The deny-overrides principle applies at two levels:
 A deny rule can never be overridden by an allow rule. To express "deny everything except X", use negation patterns:
 
 ```
-(deny  (fs write (not (subpath (env CWD)))))   ; deny writes outside CWD
-(allow (fs write (subpath (env CWD))))          ; allow writes inside CWD
+(deny  (fs write (not (subpath (env PWD)))))   ; deny writes outside CWD
+(allow (fs write (subpath (env PWD))))          ; allow writes inside CWD
 ```
 
 See [ADR-002](./adr/002-deny-overrides.md) for the full rationale.

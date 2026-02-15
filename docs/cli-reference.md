@@ -31,7 +31,7 @@ clash init [OPTIONS]
 
 **What it does:**
 
-1. Creates `~/.clash/policy` with a safe default policy (or reconfigures an existing one)
+1. Creates `~/.clash/policy.sexpr` with a safe default policy (or reconfigures an existing one)
 2. Sets `bypassPermissions: true` in Claude Code settings so clash is the sole permission handler
 3. Offers an interactive wizard to configure capabilities
 
@@ -62,7 +62,7 @@ clash launch [OPTIONS] [ARGS]...
 
 | Flag | Description |
 |------|-------------|
-| `--policy <POLICY>` | Path to policy file (default: `~/.clash/policy`) |
+| `--policy <POLICY>` | Path to policy file (default: `~/.clash/policy.sexpr`) |
 
 **Arguments:**
 
