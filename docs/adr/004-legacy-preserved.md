@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+**Superseded** (2026-02). Legacy formats have been removed. v2 s-expression format is the only policy format.
 
 ## Context
 
@@ -21,26 +21,18 @@ This was extended to a richer YAML format with (entity, verb, noun) triples, nam
 
 The question: should we break backward compatibility with the legacy formats?
 
-## Decision
+## Original Decision
 
-Preserve backward compatibility with all previous formats:
+Preserve backward compatibility with all previous formats. At compile time, all formats are unified into `CompiledProfileRule` — a single IR type evaluated by a single code path.
 
-1. **Legacy `permissions` format**: desugared into `Statement`s at parse time by `legacy.rs`
-2. **Old YAML format** (flat rules + named constraints): parsed and compiled directly
-3. **New profile-based format**: detected by `default:` being a YAML mapping
+## Superseded By
 
-At compile time, all formats are unified into `CompiledProfileRule` — a single IR type evaluated by a single code path. The format detection and conversion happens in the parsing/compilation pipeline, not at evaluation time.
+The v2 policy language replaces all previous formats with a single s-expression syntax. The legacy YAML formats, EVN triples, named constraints, profile expressions, and `CompiledProfileRule` IR have been removed.
 
-## Consequences
+Rationale:
+- Three input formats meant three parsers to maintain and test
+- Legacy formats could not express capability-level rules (exec/fs/net)
+- The unified IR required complex translation layers
+- v2's s-expression format is simpler, has compile-time conflict detection, and round-trips cleanly
 
-**Positive:**
-- Existing users don't need to rewrite their policies
-- Migration can happen incrementally — old and new formats are functionally equivalent
-- The unified IR means there's only one evaluation code path to test and maintain
-- Format auto-detection means users don't need to declare which format they're using
-
-**Negative:**
-- Three input formats means three parsers to maintain
-- Legacy format has limited expressiveness (no entity dimension, no constraints, no profiles)
-- The `Statement` AST type and `LegacyPermissions` type exist solely for backward compatibility
-- Testing must cover all three formats to prevent regressions
+Users migrating from v1 should rewrite their policies in v2 format. See the [Policy Writing Guide](../policy-guide.md) for examples.

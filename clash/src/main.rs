@@ -1,10 +1,8 @@
 use std::fs::OpenOptions;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use clash::policy::edit;
-use clash::policy::parse::{desugar_claude_permissions, flatten_profile, format_rule};
-use clash::policy::{ClaudePermissions, Effect, PolicyConfig, PolicyDocument};
+use clash::policy::Effect;
 use tracing::level_filters::LevelFilter;
 use tracing::{Level, debug_span, error, info, instrument, warn};
 use tracing_subscriber::Layer;
@@ -81,64 +79,37 @@ impl HooksCmd {
 
 #[derive(Subcommand, Debug)]
 enum PolicyCmd {
-    /// Add an allow rule (bare verb like "edit" or full rule like "bash git *")
+    /// Add an allow rule (bare verb like "edit" or s-expr like '(exec "git" *)')
     Allow {
-        /// Verb or rule: bare verb (e.g. "edit", "bash", "web") or full rule (e.g. "bash git *")
+        /// S-expr rule body or bare verb (edit, bash, read, web)
         rule: String,
-        /// Target profile (default: active profile from default.profile)
-        #[arg(long)]
-        profile: Option<String>,
-        /// Filesystem constraints: "caps:filter_expr" (e.g. "full:subpath(~/dir)", "read+write:subpath(.)")
-        #[arg(long)]
-        fs: Vec<String>,
-        /// URL constraints: require or forbid domains (e.g. "github.com", "!evil.com")
-        #[arg(long)]
-        url: Vec<String>,
-        /// Argument constraints: require or forbid args (e.g. "--dry-run", "!-delete")
-        #[arg(long)]
-        args: Vec<String>,
-        /// Allow piping (stdin/stdout redirection between commands)
-        #[arg(long)]
-        pipe: Option<bool>,
-        /// Allow shell redirects (>, >>, <)
-        #[arg(long)]
-        redirect: Option<bool>,
         /// Print modified policy to stdout without writing
         #[arg(long)]
         dry_run: bool,
     },
-    /// Add a deny rule (bare verb like "bash" or full rule like "bash git push*")
+    /// Add a deny rule (bare verb like "bash" or s-expr like '(exec "git" "push" *)')
     Deny {
-        /// Verb or rule: bare verb (e.g. "bash") or full rule (e.g. "bash git push*")
+        /// S-expr rule body or bare verb (bash, edit, read, web)
         rule: String,
         #[arg(long)]
-        profile: Option<String>,
-        #[arg(long)]
-        fs: Vec<String>,
-        #[arg(long)]
-        url: Vec<String>,
-        #[arg(long)]
-        args: Vec<String>,
-        #[arg(long)]
-        pipe: Option<bool>,
-        #[arg(long)]
-        redirect: Option<bool>,
+        dry_run: bool,
+    },
+    /// Add an ask rule (requires approval before executing)
+    Ask {
+        /// S-expr rule body or bare verb (bash, edit, read, web)
+        rule: String,
         #[arg(long)]
         dry_run: bool,
     },
     /// Remove a rule from the policy
     Remove {
-        /// Rule to remove (e.g. "allow bash *", "deny bash git push*")
+        /// Rule text to remove (Display form, e.g. '(deny (exec "git" "push" *))')
         rule: String,
-        #[arg(long)]
-        profile: Option<String>,
         #[arg(long)]
         dry_run: bool,
     },
-    /// List rules in the active profile
+    /// List rules in the active policy
     List {
-        #[arg(long)]
-        profile: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -146,13 +117,13 @@ enum PolicyCmd {
     Setup,
 
     // --- Hidden/power-user subcommands ---
-    /// Show active profile, default permission, and available profiles
+    /// Show policy summary: active policy, default effect, rule count
     #[command(hide = true)]
     Show {
         #[arg(long)]
         json: bool,
     },
-    /// Show the full schema of policy.yaml settings
+    /// Show the full schema of policy settings
     #[command(hide = true)]
     Schema {
         #[arg(long)]
@@ -169,21 +140,11 @@ enum PolicyCmd {
         /// The command, file path, or noun to check
         input: Option<String>,
     },
-    /// Migrate legacy Claude Code permissions into clash policy
-    #[command(hide = true)]
-    Migrate {
-        /// Preview the migration: show which rules would be added
-        #[arg(long)]
-        dry_run: bool,
-        /// Default effect when creating a new policy (ignored when merging)
-        #[arg(long, default_value = "ask")]
-        default: String,
-    },
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Initialize a new clash policy.yaml with a safe default configuration
+    /// Initialize a new clash policy with a safe default configuration
     Init {
         /// Skip setting bypassPermissions in Claude Code settings
         #[arg(long)]
@@ -195,6 +156,30 @@ enum Commands {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
         json: bool,
+    },
+
+    /// Allow a capability (bash, edit, read, web) or s-expr rule
+    Allow {
+        /// Verb or s-expr rule
+        rule: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Deny a capability (bash, edit, read, web) or s-expr rule
+    Deny {
+        /// Verb or s-expr rule
+        rule: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Require approval for a capability (bash, edit, read, web) or s-expr rule
+    Ask {
+        /// Verb or s-expr rule
+        rule: String,
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// View and edit policy rules
@@ -213,7 +198,7 @@ enum Commands {
     /// Launch Claude Code with clash managing hooks and sandbox enforcement
     #[command(hide = true)]
     Launch {
-        /// Path to policy file (default: ~/.clash/policy.yaml)
+        /// Path to policy file (default: ~/.clash/policy.sexpr)
         #[arg(long)]
         policy: Option<String>,
 
@@ -291,6 +276,9 @@ fn main() -> Result<()> {
         let resp = match cli.command {
             Commands::Init { no_bypass } => run_init(no_bypass),
             Commands::Status { json } => run_status(json),
+            Commands::Allow { rule, dry_run } => handle_allow_deny(Effect::Allow, &rule, dry_run),
+            Commands::Deny { rule, dry_run } => handle_allow_deny(Effect::Deny, &rule, dry_run),
+            Commands::Ask { rule, dry_run } => handle_allow_deny(Effect::Ask, &rule, dry_run),
             Commands::Policy(cmd) => run_policy(cmd),
             Commands::Sandbox(cmd) => run_sandbox(cmd),
             Commands::Hook(hook_cmd) => {
@@ -330,9 +318,8 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     if let Some(ref path) = policy_path {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read policy file: {}", path))?;
-        // Validate it parses
-        clash::policy::parse::parse_yaml(&contents)
-            .with_context(|| format!("failed to parse policy file: {}", path))?;
+        clash::policy::compile_policy(&contents)
+            .with_context(|| format!("failed to compile policy file: {}", path))?;
         info!(path, "Using policy file");
     }
 
@@ -395,180 +382,6 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     std::process::exit(status.code().unwrap_or(1));
 }
 
-/// Migrate legacy Claude Code permissions into clash policy.
-///
-/// If no policy.yaml exists, creates a fresh one. If one already exists
-/// (in the new profile-based format), merges only new rules into the active profile.
-#[instrument(level = Level::TRACE)]
-fn run_migrate(dry_run: bool, default_effect: &str) -> Result<()> {
-    let default = match default_effect {
-        "ask" => Effect::Ask,
-        "deny" => Effect::Deny,
-        "allow" => Effect::Allow,
-        other => anyhow::bail!(
-            "invalid default effect '{}': expected ask, deny, or allow",
-            other
-        ),
-    };
-
-    // Load existing Claude Code settings
-    let claude = claude_settings::ClaudeSettings::new();
-    let effective = claude
-        .effective()
-        .context("failed to load Claude Code settings")?;
-
-    // Convert PermissionSet to ClaudePermissions (allow/deny/ask string lists)
-    let perms = effective.permissions.to_permissions();
-    let claude_perms = ClaudePermissions {
-        allow: perms.allow,
-        deny: perms.deny,
-        ask: perms.ask,
-    };
-
-    let statements = desugar_claude_permissions(&claude_perms);
-
-    if statements.is_empty() {
-        println!("No legacy permissions found to migrate.");
-        return Ok(());
-    }
-
-    // Convert statements to rule strings for add_rule
-    let rules: Vec<String> = statements.iter().map(format_rule).collect();
-
-    let path = ClashSettings::policy_file()?;
-    if path.exists() {
-        merge_rules_into_policy(&path, &rules, dry_run)
-    } else {
-        create_fresh_policy(&path, &statements, default, dry_run)
-    }
-}
-
-/// Merge rule strings into an existing policy.yaml's active profile.
-fn merge_rules_into_policy(path: &std::path::Path, rules: &[String], dry_run: bool) -> Result<()> {
-    let yaml = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-
-    if !edit::is_new_format(&yaml) {
-        anyhow::bail!(
-            "Old policy format detected at {}. Run `clash init` to upgrade to the new profile-based format.",
-            path.display()
-        );
-    }
-
-    let profile = edit::resolve_profile(&yaml, None)?;
-
-    let mut current_yaml = yaml.clone();
-    let mut added: Vec<String> = Vec::new();
-    let mut skipped: usize = 0;
-
-    for rule in rules {
-        let modified = edit::add_rule(
-            &current_yaml,
-            &profile,
-            rule,
-            &edit::InlineConstraintArgs::default(),
-        )?;
-        if modified == current_yaml {
-            skipped += 1;
-        } else {
-            added.push(rule.clone());
-            current_yaml = modified;
-        }
-    }
-
-    if added.is_empty() {
-        println!(
-            "All {} Claude permission(s) already exist in profile '{}'. Nothing to do.",
-            rules.len(),
-            profile
-        );
-        return Ok(());
-    }
-
-    if dry_run {
-        println!(
-            "Would add {} new rule(s) to profile '{}':\n",
-            added.len(),
-            profile
-        );
-        for rule in &added {
-            println!("  + {}", rule);
-        }
-        if skipped > 0 {
-            println!("\n({} existing rule(s) already present, skipped.)", skipped);
-        }
-    } else {
-        std::fs::write(path, &current_yaml)?;
-        println!(
-            "Merged {} new rule(s) into profile '{}' at {}:",
-            added.len(),
-            profile,
-            path.display()
-        );
-        for rule in &added {
-            println!("  + {}", rule);
-        }
-        if skipped > 0 {
-            println!("({} rule(s) already existed, skipped.)", skipped);
-        }
-    }
-
-    Ok(())
-}
-
-/// Create a fresh policy.yaml from migrated statements.
-fn create_fresh_policy(
-    path: &std::path::Path,
-    statements: &[clash::policy::Statement],
-    default: Effect,
-    dry_run: bool,
-) -> Result<()> {
-    let doc = PolicyDocument {
-        policy: PolicyConfig { default },
-        permissions: None,
-        constraints: Default::default(),
-        profiles: Default::default(),
-        statements: statements.to_vec(),
-        default_config: None,
-        profile_defs: Default::default(),
-    };
-
-    // Build YAML output with header comment
-    let mut output = String::new();
-    output.push_str("# Policy generated by `clash migrate` from Claude Code settings.\n");
-    output.push_str("# Review and customize as needed.\n");
-    output.push_str("#\n");
-    output.push_str(
-        "# Evaluation: all matching statements are collected, then precedence applies:\n",
-    );
-    output.push_str("#   deny > ask > allow\n");
-    output.push_str("# If no statement matches, the default effect is used.\n");
-    output.push('\n');
-    output.push_str(&format!("default: {}\n", doc.policy.default));
-    output.push('\n');
-    output.push_str("rules:\n");
-    for stmt in &doc.statements {
-        output.push_str(&format!("  - {}\n", format_rule(stmt)));
-    }
-
-    if dry_run {
-        print!("{}", output);
-    } else {
-        std::fs::create_dir_all(
-            path.parent()
-                .ok_or_else(|| anyhow::anyhow!("policy path has no parent directory"))?,
-        )?;
-        std::fs::write(path, &output)?;
-        println!("Wrote policy to {}", path.display());
-        println!(
-            "Migrated {} rule(s) from legacy Claude Code permissions.",
-            doc.statements.len()
-        );
-    }
-
-    Ok(())
-}
-
 /// Lightweight input for the explain command — only requires tool_name and tool_input.
 #[derive(serde::Deserialize)]
 struct ExplainInput {
@@ -589,9 +402,6 @@ fn default_cwd() -> String {
 /// Accepts CLI args (`clash explain bash "git push"`) or JSON from stdin.
 #[instrument(level = Level::TRACE)]
 fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String>) -> Result<()> {
-    use clash::permissions::{extract_noun, resolve_verb};
-    use clash::policy::EvalContext;
-
     let input: ExplainInput = if let Some(tool_str) = tool {
         // Build from CLI arguments
         let (tool_name, input_field) = match tool_str.to_lowercase().as_str() {
@@ -609,7 +419,7 @@ fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String
                     "WebSearch" => "query",
                     _ => "command",
                 };
-                // Leak to get 'static — fine for a CLI tool that runs once
+                // Leak to get 'static -- fine for a CLI tool that runs once
                 let name: &'static str = Box::leak(tool_str.into_boxed_str());
                 (name, field)
             }
@@ -627,10 +437,9 @@ fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String
         )?
     };
 
-    // Load settings and compile policy
     let settings = ClashSettings::load_or_create()?;
-    let compiled = match settings.compiled_policy() {
-        Some(c) => c,
+    let tree = match settings.decision_tree() {
+        Some(t) => t,
         None => {
             if json_output {
                 println!(
@@ -639,25 +448,14 @@ fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String
                 );
             } else {
                 eprintln!("No compiled policy available.");
-                eprintln!("Create ~/.clash/policy.yaml or configure Claude Code permissions.");
+                eprintln!("Create ~/.clash/policy.sexpr or run `clash init`.");
             }
             return Ok(());
         }
     };
 
-    let (verb, verb_str_owned) = resolve_verb(&input.tool_name);
-    let noun = extract_noun(&input.tool_name, &input.tool_input);
-    let entity = "agent";
-    let ctx = EvalContext {
-        entity,
-        verb: &verb,
-        noun: &noun,
-        cwd: &input.cwd,
-        tool_input: &input.tool_input,
-        verb_str: &verb_str_owned,
-    };
-
-    let decision = compiled.evaluate_with_context(&ctx);
+    let decision = tree.evaluate(&input.tool_name, &input.tool_input, &input.cwd);
+    let noun = clash::permissions::extract_noun(&input.tool_name, &input.tool_input);
 
     if json_output {
         let output = serde_json::json!({
@@ -684,8 +482,6 @@ fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String
     } else {
         println!("Input:");
         println!("  tool:   {}", input.tool_name);
-        println!("  entity: {}", entity);
-        println!("  verb:   {}", verb_str_owned);
         println!("  noun:   {}", noun);
         println!();
 
@@ -732,14 +528,9 @@ fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String
     Ok(())
 }
 
-/// Initialize a new clash policy.yaml with deny-all defaults.
-///
-/// When a policy already exists and stdin is a TTY, offers the user a choice
-/// to reconfigure from scratch or update the existing configuration.
+/// Initialize a new clash policy with deny-all defaults.
 #[instrument(level = Level::TRACE)]
 fn run_init(no_bypass: bool) -> Result<()> {
-    use std::io::IsTerminal;
-
     let path = ClashSettings::policy_file()?;
 
     if path.exists() && path.is_dir() {
@@ -750,51 +541,15 @@ fn run_init(no_bypass: bool) -> Result<()> {
     }
 
     if path.exists() {
-        if !std::io::stdin().is_terminal() {
-            anyhow::bail!(
-                "Clash is already configured at {}.\n\
-                 Run `clash init` interactively to reconfigure, or use `clash policy setup` to update.",
-                path.display()
-            );
-        }
-
-        let theme = dialoguer::theme::ColorfulTheme::default();
-        let choice = dialoguer::Select::with_theme(&theme)
-            .with_prompt(format!(
-                "Clash is already configured at {}. What would you like to do?",
-                path.display()
-            ))
-            .items(&[
-                "Reconfigure from scratch (replaces current policy)",
-                "Update existing configuration",
-                "Cancel",
-            ])
-            .default(1)
-            .interact()?;
-
-        return match choice {
-            0 => {
-                // Reconfigure: overwrite with defaults, then run wizard
-                std::fs::write(&path, DEFAULT_POLICY)?;
-                println!("Reset to default policy.\n");
-                run_init_wizard(&path)
-            }
-            1 => {
-                // Update: run wizard against existing policy
-                run_init_wizard(&path)
-            }
-            _ => {
-                println!("Cancelled.");
-                Ok(())
-            }
-        };
+        anyhow::bail!(
+            "Clash is already configured at {}.\nEdit the policy file directly or delete it and run `clash init` again.",
+            path.display()
+        );
     }
 
-    // Fresh install
     std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
     std::fs::write(&path, DEFAULT_POLICY)?;
 
-    // Set bypass_permissions by default so clash is the sole permission handler.
     if !no_bypass && let Err(e) = set_bypass_permissions() {
         warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
         eprintln!(
@@ -803,43 +558,15 @@ fn run_init(no_bypass: bool) -> Result<()> {
         );
     }
 
-    println!("Clash initialized.\n");
+    println!("Clash initialized at {}", path.display());
+    println!();
     println!("What happens now:");
     println!("  - Claude can read files in this project");
     println!("  - Everything else (editing, commands, web access) is blocked");
-    println!("  - When Claude hits a block, you'll see how to allow it");
+    println!("  - When Claude hits a block, you will see how to allow it");
     println!();
+    println!("Run \"clash allow --help\" to see what you can unlock.");
 
-    // Offer to run the wizard
-    let run_wizard = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
-        .with_prompt("Configure what Claude can do now?")
-        .default(true)
-        .interact()
-        .unwrap_or(false);
-
-    if run_wizard {
-        run_init_wizard(&path)?;
-    } else {
-        println!("Everything is blocked except reading files.");
-        println!("Run \"clash policy setup\" when you're ready to configure.");
-    }
-
-    Ok(())
-}
-
-/// Run the interactive wizard against the policy at `path`.
-fn run_init_wizard(path: &std::path::Path) -> Result<()> {
-    let yaml = std::fs::read_to_string(path)?;
-    let profile = clash::policy::edit::resolve_profile(&yaml, None)?;
-    let cwd = std::env::current_dir()
-        .context("could not determine current directory")?
-        .to_string_lossy()
-        .into_owned();
-
-    let modified = clash::wizard::run(&yaml, &profile, &cwd)?;
-    if modified != yaml {
-        std::fs::write(path, &modified)?;
-    }
     Ok(())
 }
 
@@ -854,399 +581,69 @@ fn set_bypass_permissions() -> Result<()> {
     Ok(())
 }
 
-/// Verb shortcut: bare verb → (rule string, default fs constraints).
-/// Returns None if the input isn't a known bare verb (i.e. it's a full rule).
-fn verb_shortcut(verb: &str, cwd: &str) -> Option<Vec<(&'static str, Vec<String>)>> {
-    match verb {
-        "read" => Some(vec![(
-            "allow read *",
-            vec![format!("read:subpath({})", cwd)],
-        )]),
-        "edit" | "editing" => Some(vec![
-            ("allow edit *", vec![format!("write:subpath({})", cwd)]),
-            (
-                "allow write *",
-                vec![format!("write+create:subpath({})", cwd)],
-            ),
-        ]),
-        "bash" | "commands" => Some(vec![(
-            "allow bash *",
-            vec![format!("full:subpath({})", cwd)],
-        )]),
-        "web" => Some(vec![
-            ("allow webfetch *", vec![]),
-            ("allow websearch *", vec![]),
-        ]),
-        _ => None,
-    }
-}
-
-/// Like verb_shortcut but for deny effect.
-fn deny_verb_shortcut(verb: &str) -> Option<Vec<&'static str>> {
-    match verb {
-        "read" => Some(vec!["deny read *"]),
-        "edit" | "editing" => Some(vec!["deny edit *", "deny write *"]),
-        "bash" | "commands" => Some(vec!["deny bash *"]),
-        "web" => Some(vec!["deny webfetch *", "deny websearch *"]),
-        _ => None,
-    }
-}
-
-/// Handle `clash policy allow <rule>` and `clash policy deny <rule>`.
-///
-/// Supports two forms:
-/// - Bare verb: `clash policy allow edit` → expands with cwd-scoped defaults
-/// - Full rule: `clash policy allow "bash git *" --fs "..."` → passed through as-is
-#[instrument(level = Level::TRACE)]
-fn handle_allow_or_deny(
-    effect: Effect,
-    rule: &str,
-    profile: Option<&str>,
-    constraints: edit::InlineConstraintArgs,
-    dry_run: bool,
-) -> Result<()> {
-    let cwd = std::env::current_dir()
-        .context("could not determine current directory")?
-        .to_string_lossy()
-        .into_owned();
-
-    let has_explicit_constraints = !constraints.fs.is_empty()
-        || !constraints.url.is_empty()
-        || !constraints.args.is_empty()
-        || constraints.pipe.is_some()
-        || constraints.redirect.is_some()
-        || constraints.network.is_some();
-
-    // Check for bare verb shortcut (only when no explicit constraints given)
-    if effect == Effect::Allow
-        && !has_explicit_constraints
-        && let Some(expansions) = verb_shortcut(rule, &cwd)
-    {
-        let (path, yaml) = load_policy_yaml()?;
-        let target_profile = edit::resolve_profile(&yaml, profile)?;
-
-        let mut current_yaml = yaml.clone();
-        let mut any_added = false;
-
-        for (rule_str, default_fs) in &expansions {
-            let constraints = edit::InlineConstraintArgs {
-                fs: default_fs.clone(),
-                ..Default::default()
-            };
-            let modified = edit::add_rule(&current_yaml, &target_profile, rule_str, &constraints)?;
-            if modified != current_yaml {
-                any_added = true;
-                current_yaml = modified;
-            }
-        }
-
-        if any_added {
-            if dry_run {
-                print!("{}", current_yaml);
-            } else {
-                std::fs::write(&path, &current_yaml)?;
-                let scope = if expansions.iter().any(|(_, fs)| !fs.is_empty()) {
-                    format!(" (files in {})", cwd)
-                } else {
-                    String::new()
-                };
-                println!("Allowed: {}{}", rule, scope);
-            }
-        } else {
-            println!("Already allowed: {} is already in your policy.", rule);
-        }
-        return Ok(());
-    }
-
-    if effect == Effect::Deny
-        && !has_explicit_constraints
-        && let Some(deny_rules) = deny_verb_shortcut(rule)
-    {
-        let (path, yaml) = load_policy_yaml()?;
-        let target_profile = edit::resolve_profile(&yaml, profile)?;
-
-        let mut current_yaml = yaml.clone();
-        let mut any_added = false;
-
-        for rule_str in &deny_rules {
-            let constraints = edit::InlineConstraintArgs::default();
-            let modified = edit::add_rule(&current_yaml, &target_profile, rule_str, &constraints)?;
-            if modified != current_yaml {
-                any_added = true;
-                current_yaml = modified;
-            }
-        }
-
-        if any_added {
-            if dry_run {
-                print!("{}", current_yaml);
-            } else {
-                std::fs::write(&path, &current_yaml)?;
-                println!("Denied: {}", rule);
-            }
-        } else {
-            println!("Already denied: {} is already in your policy.", rule);
-        }
-        return Ok(());
-    }
-
-    // Full rule form: prepend effect and pass through
-    let full_rule = format!("{} {}", effect, rule);
-    constraints.validate()?;
-    handle_add_rule(&full_rule, profile, &constraints, dry_run)
-}
-
 /// Show what Claude can and cannot do (human-readable).
 #[instrument(level = Level::TRACE)]
 fn run_status(_json: bool) -> Result<()> {
-    // TODO: implement full status rendering (Task #4)
-    let (_path, yaml) = load_policy_yaml()?;
-    let doc = clash::policy::parse::parse_yaml(&yaml).context("failed to parse policy.yaml")?;
-
-    let default_perm = doc.policy.default;
-    let profile_name = doc
-        .default_config
-        .as_ref()
-        .map(|dc| dc.profile.as_str())
-        .unwrap_or("(none)");
-
-    let rules = flatten_profile(profile_name, &doc.profile_defs).unwrap_or_default();
-
-    let default_desc = match default_perm {
-        Effect::Deny => "blocked",
-        Effect::Allow => "allowed",
-        _ => "prompted",
+    let settings = ClashSettings::load_or_create()?;
+    let tree = match settings.decision_tree() {
+        Some(t) => t,
+        None => {
+            if let Some(err) = settings.policy_error() {
+                eprintln!("Policy error: {}", err);
+            } else {
+                eprintln!("No policy configured. Run `clash init` to get started.");
+            }
+            return Ok(());
+        }
     };
 
-    if rules.is_empty() && doc.statements.is_empty() {
-        println!("No rules configured.");
-        println!(
-            "Default: {} (unmatched actions are {})",
-            default_perm, default_desc
-        );
-        println!("\nRun \"clash policy setup\" to configure what Claude can do.");
-        return Ok(());
-    }
+    let rule_count = tree.exec_rules.len() + tree.fs_rules.len() + tree.net_rules.len();
+    println!(
+        "Policy: {} ({} rules, default={})",
+        tree.policy_name, rule_count, tree.default
+    );
 
-    // Collect allow and deny summaries
     let mut allowed = Vec::new();
-    let mut blocked = Vec::new();
+    let mut denied = Vec::new();
 
-    for r in &rules {
-        let noun_str = clash::policy::ast::format_pattern_str(&r.noun);
-        match r.effect {
-            Effect::Allow => allowed.push(format!("{} {}", r.verb, noun_str)),
-            Effect::Deny => blocked.push(format!("{} {}", r.verb, noun_str)),
+    for rule in &tree.exec_rules {
+        match rule.effect {
+            Effect::Allow => allowed.push(format!("  exec: {}", rule.source)),
+            Effect::Deny => denied.push(format!("  exec: {}", rule.source)),
+            _ => {}
+        }
+    }
+    for rule in &tree.fs_rules {
+        match rule.effect {
+            Effect::Allow => allowed.push(format!("  fs: {}", rule.source)),
+            Effect::Deny => denied.push(format!("  fs: {}", rule.source)),
+            _ => {}
+        }
+    }
+    for rule in &tree.net_rules {
+        match rule.effect {
+            Effect::Allow => allowed.push(format!("  net: {}", rule.source)),
+            Effect::Deny => denied.push(format!("  net: {}", rule.source)),
             _ => {}
         }
     }
 
     if !allowed.is_empty() {
-        println!("Claude can:");
+        println!("\nAllowed:");
         for a in &allowed {
-            println!("  {}", a);
+            println!("{}", a);
+        }
+    }
+    if !denied.is_empty() {
+        println!("\nDenied:");
+        for d in &denied {
+            println!("{}", d);
         }
     }
 
-    if !blocked.is_empty() {
-        println!("\nBlocked:");
-        for b in &blocked {
-            println!("  {}", b);
-        }
-    }
+    let policy_path = ClashSettings::policy_file()?;
+    println!("\nPolicy file: {}", policy_path.display());
 
-    println!(
-        "\nDefault: {} (unmatched actions are {})",
-        default_perm, default_desc
-    );
-
-    let path = ClashSettings::policy_file()?;
-    let rule_count = rules.len() + doc.statements.len();
-    println!(
-        "Policy: {} ({} rules, profile: {})",
-        path.display(),
-        rule_count,
-        profile_name
-    );
-    println!("\nRun \"clash policy setup\" to reconfigure.");
-
-    Ok(())
-}
-
-/// Interactive policy configuration wizard.
-fn run_setup_wizard() -> Result<()> {
-    let (path, yaml) = load_policy_yaml()?;
-    let profile = clash::policy::edit::resolve_profile(&yaml, None)?;
-    let cwd = std::env::current_dir()
-        .context("could not determine current directory")?
-        .to_string_lossy()
-        .into_owned();
-
-    let modified = clash::wizard::run(&yaml, &profile, &cwd)?;
-
-    if modified != yaml {
-        std::fs::write(&path, &modified)?;
-    }
-
-    Ok(())
-}
-
-/// Load the policy.yaml file, returning its path and contents.
-fn load_policy_yaml() -> Result<(std::path::PathBuf, String)> {
-    let path = ClashSettings::policy_file()?;
-    if path.is_dir() {
-        anyhow::bail!(
-            "{} is a directory, not a file. Remove it and run `clash init` to create a policy.",
-            path.display()
-        );
-    }
-    let yaml = std::fs::read_to_string(&path).with_context(|| {
-        if !path.exists() {
-            format!(
-                "No policy.yaml found at {}. Run `clash init` first.",
-                path.display()
-            )
-        } else {
-            format!("Failed to read {}", path.display())
-        }
-    })?;
-    Ok((path, yaml))
-}
-
-/// Handle `clash policy add-rule`.
-fn handle_add_rule(
-    rule: &str,
-    profile: Option<&str>,
-    constraints: &edit::InlineConstraintArgs,
-    dry_run: bool,
-) -> Result<()> {
-    let (path, yaml) = load_policy_yaml()?;
-    let target_profile = edit::resolve_profile(&yaml, profile)?;
-    let modified = edit::add_rule(&yaml, &target_profile, rule, constraints)?;
-
-    if modified == yaml {
-        println!(
-            "Rule already exists in profile '{}': {}",
-            target_profile, rule
-        );
-        return Ok(());
-    }
-
-    if dry_run {
-        print!("{}", modified);
-    } else {
-        std::fs::write(&path, &modified)?;
-        println!("Added rule to profile '{}': {}", target_profile, rule);
-    }
-    Ok(())
-}
-
-/// Handle `clash policy remove-rule`.
-fn handle_remove_rule(rule: &str, profile: Option<&str>, dry_run: bool) -> Result<()> {
-    let (path, yaml) = load_policy_yaml()?;
-    let target_profile = edit::resolve_profile(&yaml, profile)?;
-    let modified = edit::remove_rule(&yaml, &target_profile, rule)?;
-
-    if dry_run {
-        print!("{}", modified);
-    } else {
-        std::fs::write(&path, &modified)?;
-        println!("Removed rule from profile '{}': {}", target_profile, rule);
-    }
-    Ok(())
-}
-
-/// Handle `clash policy list-rules`.
-fn handle_list_rules(profile: Option<&str>, json: bool) -> Result<()> {
-    let (_path, yaml) = load_policy_yaml()?;
-    let doc = clash::policy::parse::parse_yaml(&yaml).context("failed to parse policy.yaml")?;
-
-    // Determine target profile
-    let target = match profile {
-        Some(p) => p.to_string(),
-        None => doc.default_config
-            .as_ref()
-            .map(|dc| dc.profile.clone())
-            .ok_or_else(|| anyhow::anyhow!(
-                "No active profile found. Use --profile or upgrade to the new policy format with `clash init`."
-            ))?,
-    };
-
-    let rules = flatten_profile(&target, &doc.profile_defs)
-        .with_context(|| format!("failed to resolve profile '{}'", target))?;
-
-    if json {
-        let json_rules: Vec<serde_json::Value> = rules
-            .iter()
-            .map(|r| {
-                let noun_str = clash::policy::ast::format_pattern_str(&r.noun);
-                let mut obj = serde_json::json!({
-                    "effect": r.effect.to_string(),
-                    "verb": r.verb,
-                    "noun": noun_str,
-                });
-                if r.constraints.is_some() {
-                    obj["has_constraints"] = serde_json::json!(true);
-                }
-                obj
-            })
-            .collect();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "profile": target,
-                "rules": json_rules,
-            }))?
-        );
-    } else {
-        println!("Profile: {}", target);
-        println!();
-        if rules.is_empty() {
-            println!("  (no rules)");
-        } else {
-            println!("  {:<8} {:<12} NOUN", "EFFECT", "VERB");
-            println!("  {:<8} {:<12} ----", "------", "----");
-            for r in &rules {
-                let noun_str = clash::policy::ast::format_pattern_str(&r.noun);
-                let constraint_note = if r.constraints.is_some() {
-                    " [+constraints]"
-                } else {
-                    ""
-                };
-                println!(
-                    "  {:<8} {:<12} {}{}",
-                    r.effect.to_string(),
-                    r.verb,
-                    noun_str,
-                    constraint_note
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Handle `clash policy show`.
-fn handle_show_policy(json: bool) -> Result<()> {
-    let (path, yaml) = load_policy_yaml()?;
-    let info = edit::policy_info(&yaml)?;
-
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "default_permission": info.default_permission,
-                "active_profile": info.active_profile,
-                "profiles": info.profiles,
-                "policy_file": path.display().to_string(),
-            }))?
-        );
-    } else {
-        println!("Policy file:        {}", path.display());
-        println!("Default permission: {}", info.default_permission);
-        println!("Active profile:     {}", info.active_profile);
-        println!("Profiles:           {}", info.profiles.join(", "));
-    }
     Ok(())
 }
 
@@ -1270,12 +667,13 @@ fn handle_schema(json: bool) -> Result<()> {
         println!("Rule Syntax:");
         println!("  Format: {}\n", schema.rule_syntax.format);
         println!("  Effects: {}", schema.rule_syntax.effects.join(", "));
-        println!("  Verbs:   {}", schema.rule_syntax.verbs.join(", "));
-        println!("  Caps:    {}", schema.rule_syntax.capabilities.join(", "));
-        println!("\n  Constraints:");
-        print_fields(&schema.rule_syntax.constraints, 4);
-        println!("\n  Filesystem filters:");
-        print_fields(&schema.rule_syntax.fs_filters, 4);
+        println!("  Fs ops:  {}", schema.rule_syntax.fs_operations.join(", "));
+        println!("\n  Capability domains:");
+        print_fields(&schema.rule_syntax.domains, 4);
+        println!("\n  Patterns:");
+        print_fields(&schema.rule_syntax.patterns, 4);
+        println!("\n  Path filters:");
+        print_fields(&schema.rule_syntax.path_filters, 4);
     }
     Ok(())
 }
@@ -1326,8 +724,8 @@ fn run_bug_report(
             std::fs::read_to_string(&p).with_context(|| format!("failed to read {}", p.display()))
         }) {
             Ok(contents) => attachments.push(linear::Attachment {
-                filename: "policy.yaml".into(),
-                content_type: "text/yaml".into(),
+                filename: "policy.sexpr".into(),
+                content_type: "text/plain".into(),
                 title: "Policy Config".into(),
                 body: contents.into_bytes(),
             }),
@@ -1380,68 +778,297 @@ fn read_recent_logs(n: usize) -> Result<String> {
 #[instrument(level = Level::TRACE)]
 fn run_policy(cmd: PolicyCmd) -> Result<()> {
     match cmd {
-        PolicyCmd::Allow {
-            rule,
-            profile,
-            fs,
-            url,
-            args,
-            pipe,
-            redirect,
-            dry_run,
-        } => {
-            let constraints = edit::InlineConstraintArgs {
-                fs,
-                url,
-                args,
-                pipe,
-                redirect,
-                network: None,
-            };
-            handle_allow_or_deny(
-                Effect::Allow,
-                &rule,
-                profile.as_deref(),
-                constraints,
-                dry_run,
-            )
-        }
-        PolicyCmd::Deny {
-            rule,
-            profile,
-            fs,
-            url,
-            args,
-            pipe,
-            redirect,
-            dry_run,
-        } => {
-            let constraints = edit::InlineConstraintArgs {
-                fs,
-                url,
-                args,
-                pipe,
-                redirect,
-                network: None,
-            };
-            handle_allow_or_deny(
-                Effect::Deny,
-                &rule,
-                profile.as_deref(),
-                constraints,
-                dry_run,
-            )
-        }
-        PolicyCmd::Remove {
-            rule,
-            profile,
-            dry_run,
-        } => handle_remove_rule(&rule, profile.as_deref(), dry_run),
-        PolicyCmd::List { profile, json } => handle_list_rules(profile.as_deref(), json),
-        PolicyCmd::Setup => run_setup_wizard(),
-        PolicyCmd::Show { json } => handle_show_policy(json),
         PolicyCmd::Schema { json } => handle_schema(json),
         PolicyCmd::Explain { json, tool, input } => run_explain(json, tool, input),
-        PolicyCmd::Migrate { dry_run, default } => run_migrate(dry_run, &default),
+        PolicyCmd::Allow { rule, dry_run } => handle_allow_deny(Effect::Allow, &rule, dry_run),
+        PolicyCmd::Deny { rule, dry_run } => handle_allow_deny(Effect::Deny, &rule, dry_run),
+        PolicyCmd::Ask { rule, dry_run } => handle_allow_deny(Effect::Ask, &rule, dry_run),
+        PolicyCmd::Remove { rule, dry_run } => handle_remove(&rule, dry_run),
+        PolicyCmd::List { json } => handle_list(json),
+        PolicyCmd::Show { json } => handle_show(json),
+        PolicyCmd::Setup => clash::wizard::run(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Policy file I/O
+// ---------------------------------------------------------------------------
+
+/// Read the policy source from disk.
+fn load_policy_source() -> Result<(std::path::PathBuf, String)> {
+    let path = ClashSettings::policy_file()?;
+    let source = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read policy file: {}", path.display()))?;
+    Ok((path, source))
+}
+
+/// Write policy source back to disk after validating it compiles.
+fn write_policy(path: &std::path::Path, source: &str) -> Result<()> {
+    // Validate before writing — never write a broken policy.
+    clash::policy::compile_policy(source)
+        .context("modified policy failed to compile — not writing")?;
+    std::fs::write(path, source)
+        .with_context(|| format!("failed to write policy file: {}", path.display()))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// CLI rule parsing: bare verbs and s-expr syntax
+// ---------------------------------------------------------------------------
+
+use clash::policy::ast::Rule as AstRule;
+use clash::policy::ast::{
+    CapMatcher, ExecMatcher, FsMatcher, FsOp, NetMatcher, OpPattern, PathExpr, PathFilter, Pattern,
+    ToolMatcher,
+};
+
+/// Parse a CLI rule string into one or more AST rules.
+///
+/// Bare verbs (edit, bash, read, web) expand to convenient defaults.
+/// Strings starting with `(` are parsed as s-expr matcher bodies.
+fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
+    if rule_str.starts_with('(') {
+        // Power-user s-expr: parse as a capability matcher body and wrap with effect.
+        let full = format!("(policy \"_\" ({effect} {rule_str}))");
+        let top_levels =
+            clash::policy::parse::parse(&full).context("failed to parse s-expr rule")?;
+        match top_levels.into_iter().next() {
+            Some(clash::policy::ast::TopLevel::Policy { mut body, .. }) => {
+                let rules: Vec<AstRule> = body
+                    .drain(..)
+                    .filter_map(|item| match item {
+                        clash::policy::ast::PolicyItem::Rule(r) => Some(r),
+                        _ => None,
+                    })
+                    .collect();
+                if rules.is_empty() {
+                    bail!("no rule parsed from: {rule_str}");
+                }
+                Ok(rules)
+            }
+            _ => bail!("unexpected parse result for: {rule_str}"),
+        }
+    } else {
+        // Bare verb shortcuts
+        match rule_str {
+            "bash" => Ok(vec![
+                AstRule {
+                    effect,
+                    matcher: CapMatcher::Exec(ExecMatcher {
+                        bin: Pattern::Any,
+                        args: vec![],
+                        has_args: vec![],
+                    }),
+                    sandbox: None,
+                },
+                AstRule {
+                    effect,
+                    matcher: CapMatcher::Fs(FsMatcher {
+                        op: OpPattern::Or(vec![
+                            FsOp::Read,
+                            FsOp::Write,
+                            FsOp::Create,
+                            FsOp::Delete,
+                        ]),
+                        path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+                    }),
+                    sandbox: None,
+                },
+            ]),
+            "edit" => Ok(vec![AstRule {
+                effect,
+                matcher: CapMatcher::Fs(FsMatcher {
+                    op: OpPattern::Or(vec![FsOp::Write, FsOp::Create]),
+                    path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+                }),
+                sandbox: None,
+            }]),
+            "read" => Ok(vec![AstRule {
+                effect,
+                matcher: CapMatcher::Fs(FsMatcher {
+                    op: OpPattern::Single(FsOp::Read),
+                    path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+                }),
+                sandbox: None,
+            }]),
+            "web" => Ok(vec![AstRule {
+                effect,
+                matcher: CapMatcher::Net(NetMatcher {
+                    domain: Pattern::Any,
+                }),
+                sandbox: None,
+            }]),
+            "tool" => Ok(vec![AstRule {
+                effect,
+                matcher: CapMatcher::Tool(ToolMatcher { name: Pattern::Any }),
+                sandbox: None,
+            }]),
+            other => bail!(
+                "unknown verb: {other}\n\nSupported verbs: bash, edit, read, web, tool\n\
+                 Or pass an s-expr: clash policy allow '(exec \"git\" *)'"
+            ),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Subcommand handlers
+// ---------------------------------------------------------------------------
+
+/// Handle `clash allow`, `clash deny`, `clash ask`, `clash policy allow`, etc.
+fn handle_allow_deny(effect: Effect, rule_str: &str, dry_run: bool) -> Result<()> {
+    let (path, source) = load_policy_source()?;
+    let policy_name = clash::policy::edit::active_policy(&source)?;
+    let rules = parse_cli_rule(effect, rule_str)?;
+
+    let mut modified = source.clone();
+
+    for rule in &rules {
+        modified = clash::policy::edit::add_rule(&modified, &policy_name, rule)?;
+    }
+
+    if dry_run {
+        print!("{modified}");
+    } else if modified == source {
+        println!("Rule already exists (no change).");
+    } else {
+        write_policy(&path, &modified)?;
+        // Print a friendly confirmation for bare verbs, raw s-expr for power users.
+        if let Some(msg) = friendly_confirmation(effect, rule_str) {
+            println!("{msg}");
+        } else {
+            for rule in &rules {
+                println!("Added: {rule}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Return a human-friendly confirmation message for bare verb shortcuts.
+fn friendly_confirmation(effect: Effect, verb: &str) -> Option<String> {
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| ".".into());
+
+    let action = match effect {
+        Effect::Allow => "can now",
+        Effect::Deny => "can no longer",
+        Effect::Ask => "will be asked before",
+    };
+
+    match verb {
+        "edit" => Some(format!(
+            "Claude {action} edit files in {cwd}.\n  \
+             Files outside this directory are still protected."
+        )),
+        "bash" => Some(format!(
+            "Claude {action} run commands.\n  \
+             Use 'clash deny' to block specific dangerous commands."
+        )),
+        "read" => Some(format!("Claude {action} read files in {cwd}.")),
+        "web" => Some(format!("Claude {action} search the web and fetch URLs.")),
+        "tool" => Some(format!(
+            "Claude {action} use agent tools (Skill, Task, etc.)."
+        )),
+        _ => None,
+    }
+}
+
+/// Handle `clash policy remove`.
+fn handle_remove(rule_str: &str, dry_run: bool) -> Result<()> {
+    let (path, source) = load_policy_source()?;
+    let policy_name = clash::policy::edit::active_policy(&source)?;
+    let modified = clash::policy::edit::remove_rule(&source, &policy_name, rule_str)?;
+
+    if dry_run {
+        print!("{modified}");
+    } else {
+        write_policy(&path, &modified)?;
+        println!("Removed: {rule_str}");
+    }
+    Ok(())
+}
+
+/// Handle `clash policy list`.
+fn handle_list(json: bool) -> Result<()> {
+    let settings = ClashSettings::load_or_create()?;
+    let tree = match settings.decision_tree() {
+        Some(t) => t,
+        None => {
+            if let Some(err) = settings.policy_error() {
+                anyhow::bail!("{}", err);
+            }
+            anyhow::bail!("no policy configured — run `clash init`");
+        }
+    };
+
+    let all_rules: Vec<&clash::policy::decision_tree::CompiledRule> = tree
+        .exec_rules
+        .iter()
+        .chain(&tree.fs_rules)
+        .chain(&tree.net_rules)
+        .collect();
+
+    if json {
+        let entries: Vec<serde_json::Value> = all_rules
+            .iter()
+            .map(|r| {
+                let origin = r.origin_policy.as_deref().unwrap_or(&tree.policy_name);
+                let builtin = origin.starts_with("__internal_");
+                serde_json::json!({
+                    "effect": format!("{}", r.effect),
+                    "rule": r.source.to_string(),
+                    "origin": origin,
+                    "builtin": builtin,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+    } else {
+        if all_rules.is_empty() {
+            println!("No rules in policy \"{}\".", tree.policy_name);
+            return Ok(());
+        }
+        println!(
+            "Policy \"{}\" (default: {}, {} rules):\n",
+            tree.policy_name,
+            tree.default,
+            all_rules.len()
+        );
+        for rule in &all_rules {
+            println!("  {}", rule.source);
+        }
+    }
+    Ok(())
+}
+
+/// Handle `clash policy show`.
+fn handle_show(json: bool) -> Result<()> {
+    let settings = ClashSettings::load_or_create()?;
+    let tree = match settings.decision_tree() {
+        Some(t) => t,
+        None => {
+            if let Some(err) = settings.policy_error() {
+                anyhow::bail!("{}", err);
+            }
+            anyhow::bail!("no policy configured — run `clash init`");
+        }
+    };
+
+    if json {
+        let rule_count = tree.exec_rules.len() + tree.fs_rules.len() + tree.net_rules.len();
+        let output = serde_json::json!({
+            "policy_name": tree.policy_name,
+            "default": format!("{}", tree.default),
+            "rule_count": rule_count,
+            "source": tree.to_source(),
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        print!("{}", clash::policy::print_tree(tree));
+        let policy_path = ClashSettings::policy_file()?;
+        println!("\nPolicy file: {}", policy_path.display());
+    }
+    Ok(())
 }

@@ -76,52 +76,20 @@ fn resolve_sandbox_policy(
     load_sandbox_for_profile(name, cwd)
 }
 
-/// Load policy.yaml, compile the named profile, and generate a sandbox policy.
-///
-/// If `profile_name` is empty, uses the active profile from policy.yaml's `default.profile`.
+/// Load the policy file, compile it, and generate a sandbox policy.
 fn load_sandbox_for_profile(profile_name: &str, cwd: &str) -> Result<SandboxPolicy> {
-    use crate::policy::parse::parse_yaml;
-    use crate::policy::{CompiledPolicy, DefaultConfig, Effect};
     use crate::settings::ClashSettings;
 
     let path = ClashSettings::policy_file()?;
-    let yaml = std::fs::read_to_string(&path)
+    let source = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
-    let mut doc =
-        parse_yaml(&yaml).with_context(|| format!("failed to parse {}", path.display()))?;
+    let tree = crate::policy::compile_policy(&source)
+        .with_context(|| format!("failed to compile {}", path.display()))?;
 
-    // Resolve the profile name: empty means use the configured default.
-    let resolved_name = if profile_name.is_empty() {
-        doc.default_config
-            .as_ref()
-            .map(|dc| dc.profile.clone())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "no default profile configured in {}; specify a profile name explicitly",
-                    path.display()
-                )
-            })?
-    } else {
-        profile_name.to_string()
-    };
-
-    // Override the active profile to the requested one.
-    let permission = doc
-        .default_config
-        .as_ref()
-        .map(|dc| dc.permission)
-        .unwrap_or(Effect::Ask);
-    doc.default_config = Some(DefaultConfig {
-        permission,
-        profile: resolved_name.clone(),
-    });
-
-    let compiled = CompiledPolicy::compile(&doc).context("failed to compile policy")?;
-
-    compiled.sandbox_for_active_profile(cwd).ok_or_else(|| {
+    tree.build_sandbox_policy(profile_name, cwd).ok_or_else(|| {
         anyhow::anyhow!(
-            "profile '{}' has no sandbox-relevant constraints (no fs rules found)",
-            resolved_name
+            "policy has no sandbox-relevant constraints (no fs rules found for profile '{}')",
+            profile_name
         )
     })
 }

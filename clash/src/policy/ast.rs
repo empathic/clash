@@ -1,583 +1,429 @@
 //! AST types for the policy language.
 //!
-//! Contains all data structures that represent a parsed (but not compiled)
-//! policy document.
+//! Every node implements `Display` so the AST round-trips to valid source text.
 
-use std::collections::HashMap;
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
-use tracing::{Level, instrument};
+use crate::policy::Effect;
 
-use regex::Regex;
-
-use super::{Effect, Verb};
-use crate::policy::sandbox_types::{Cap, NetworkPolicy};
-
-/// A complete policy document, as loaded from a YAML/TOML file.
-///
-/// Supports two formats:
-/// - **Legacy/old format**: uses `policy`, `constraints`, `profiles` (boolean exprs),
-///   `statements`, and optional `permissions`.
-/// - **New format**: uses `default_config` and `profile_defs` with inline rules.
-///
-/// Both formats are produced by `parse_yaml()` which auto-detects the format.
-/// `CompiledPolicy::compile()` dispatches based on which fields are populated.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolicyDocument {
-    /// Policy-level configuration (legacy format).
-    #[serde(default)]
-    pub policy: PolicyConfig,
-
-    /// Claude Code's native permissions (allow/deny/ask string lists).
-    #[serde(default)]
-    pub permissions: Option<ClaudePermissions>,
-
-    /// Named constraint primitives (typed maps with fs, pipe, redirect, etc.) — legacy format.
-    #[serde(default)]
-    pub constraints: HashMap<String, ConstraintDef>,
-
-    /// Named profiles (boolean expressions over constraint/profile names) — legacy format.
-    #[serde(default)]
-    pub profiles: HashMap<String, ProfileExpr>,
-
-    /// The list of policy statements — legacy format.
-    #[serde(default)]
-    pub statements: Vec<Statement>,
-
-    // --- New format fields ---
-    /// New-format default configuration (permission + active profile name).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_config: Option<DefaultConfig>,
-
-    /// New-format profile definitions (name → ProfileDef with inline rules).
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub profile_defs: HashMap<String, ProfileDef>,
+/// A top-level declaration in a policy file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TopLevel {
+    /// `(default deny "main")` — sets the default effect and active policy name.
+    Default { effect: Effect, policy: String },
+    /// `(policy name ...)` — a named policy containing rules and includes.
+    Policy { name: String, body: Vec<PolicyItem> },
 }
 
-/// Top-level policy configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolicyConfig {
-    /// Default effect when no statement matches a request.
-    /// - `"ask"` for interactive environments (human in the loop)
-    /// - `"deny"` for headless/CI environments
-    #[serde(default = "PolicyConfig::default_effect")]
-    pub default: Effect,
+/// An item inside a `(policy ...)` block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyItem {
+    /// `(include "other-policy")` — import rules from another policy by name.
+    Include(String),
+    /// A rule: `(effect (capability ...))`.
+    Rule(Rule),
 }
 
-impl PolicyConfig {
-    fn default_effect() -> Effect {
-        Effect::Ask
-    }
-}
-
-impl Default for PolicyConfig {
-    fn default() -> Self {
-        Self {
-            default: Self::default_effect(),
-        }
-    }
-}
-
-/// Claude Code's native permissions format:
-/// `{ "permissions": { "allow": [...], "deny": [...], "ask": [...] } }`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ClaudePermissions {
-    #[serde(default)]
-    pub allow: Vec<String>,
-    #[serde(default)]
-    pub ask: Vec<String>,
-    #[serde(default)]
-    pub deny: Vec<String>,
-}
-
-/// A single policy statement: `effect(entity, verb, noun)`.
-///
-/// Statements are the fundamental unit of policy. Each one matches
-/// a class of requests and declares what should happen.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Statement {
-    /// The effect this statement produces when matched.
+/// A single permission rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rule {
     pub effect: Effect,
-
-    /// Who is making the request. Supports `!` negation.
-    #[serde(default = "Pattern::default_any")]
-    pub entity: Pattern,
-
-    /// What action is being performed. Does not support negation.
-    #[serde(default = "VerbPattern::default_any")]
-    pub verb: VerbPattern,
-
-    /// What resource is being acted upon. Supports `!` negation.
-    #[serde(default = "Pattern::default_any")]
-    pub noun: Pattern,
-
-    /// Human-readable reason (included in deny/ask messages).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-
-    /// Optional constraint binding (profile expression).
-    /// When present, the rule only matches if the constraint is satisfied.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile: Option<ProfileExpr>,
+    pub matcher: CapMatcher,
+    /// Optional sandbox policy reference for exec rules: `:sandbox "name"`.
+    pub sandbox: Option<String>,
 }
 
-/// A pattern that may be negated with `!`.
+/// A capability matcher — one of the four capability domains.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapMatcher {
+    Exec(ExecMatcher),
+    Fs(FsMatcher),
+    Net(NetMatcher),
+    Tool(ToolMatcher),
+}
+
+/// Matches command execution: `(exec bin [args...] [:has patterns...])`.
 ///
-/// Used for entity and noun slots in a statement.
+/// Arguments before `:has` are matched positionally (left-to-right).
+/// Arguments after `:has` are matched orderlessly — each pattern must match
+/// at least one of the remaining arguments, regardless of position.
+///
+/// Examples:
+/// ```text
+/// (exec "git" "push" *)                 ; positional only
+/// (exec "git" :has "push" "--force")     ; orderless only
+/// (exec "git" "push" :has "--force")     ; positional "push", then --force anywhere
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecMatcher {
+    /// Binary pattern. `Pattern::Any` if omitted.
+    pub bin: Pattern,
+    /// Positional argument patterns. Each pattern matches the arg at the same
+    /// index. Empty = match any args.
+    pub args: Vec<Pattern>,
+    /// Orderless argument patterns (after `:has`). Each pattern must match at
+    /// least one of the remaining args (those not consumed by positional).
+    /// Empty = no orderless constraint.
+    pub has_args: Vec<Pattern>,
+}
+
+/// Matches filesystem operations: `(fs [op] [path])`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsMatcher {
+    /// Operation filter. `OpPattern::Any` if omitted.
+    pub op: OpPattern,
+    /// Path filter. `None` = match any path.
+    pub path: Option<PathFilter>,
+}
+
+/// Matches network access: `(net [domain])`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetMatcher {
+    /// Domain pattern. `Pattern::Any` if omitted.
+    pub domain: Pattern,
+}
+
+/// Matches Claude Code tools by name: `(tool [name])`.
+///
+/// This capability domain matches tools that don't map to exec/fs/net,
+/// such as `Skill`, `Task`, `AskUserQuestion`, `EnterPlanMode`, etc.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolMatcher {
+    /// Tool name pattern. `Pattern::Any` if omitted.
+    pub name: Pattern,
+}
+
+/// A filesystem operation pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpPattern {
+    /// Matches any operation.
+    Any,
+    /// A single operation.
+    Single(FsOp),
+    /// `(or read write ...)` — matches any of the listed operations.
+    Or(Vec<FsOp>),
+}
+
+/// Filesystem operation kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FsOp {
+    Read,
+    Write,
+    Create,
+    Delete,
+}
+
+/// A general-purpose pattern used for matching strings (binary names, args, domains).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pattern {
-    /// Matches when the inner expression matches.
-    Match(MatchExpr),
-    /// Matches when the inner expression does NOT match.
-    Not(MatchExpr),
-}
-
-impl Pattern {
-    pub(crate) fn default_any() -> Self {
-        Pattern::Match(MatchExpr::Any)
-    }
-
-    /// Returns true if this pattern matches the given value.
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn matches(&self, value: &str) -> bool {
-        match self {
-            Pattern::Match(expr) => expr.matches(value),
-            Pattern::Not(expr) => !expr.matches(value),
-        }
-    }
-
-    /// Returns true if this pattern matches the given entity,
-    /// considering entity type hierarchy (e.g., `agent` matches `agent:claude`).
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn matches_entity(&self, entity: &str) -> bool {
-        match self {
-            Pattern::Match(expr) => expr.matches_entity(entity),
-            Pattern::Not(expr) => !expr.matches_entity(entity),
-        }
-    }
-}
-
-/// The actual matching expression (without negation).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MatchExpr {
-    /// Wildcard — matches anything.
+    /// `*` — matches anything.
     Any,
-    /// Exact string match.
-    Exact(String),
-    /// Glob pattern (supports `*`, `**`, `?`).
-    Glob(String),
-    /// Typed entity with optional name (e.g., `agent:claude`).
-    Typed {
-        entity_type: String,
-        name: Option<String>,
-    },
-}
-
-impl MatchExpr {
-    /// Returns true if this expression matches the given string value.
-    /// For noun matching (file paths, command strings).
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn matches(&self, value: &str) -> bool {
-        match self {
-            MatchExpr::Any => true,
-            MatchExpr::Exact(s) => value == s,
-            MatchExpr::Glob(pattern) => policy_glob_matches(pattern, value),
-            MatchExpr::Typed { .. } => {
-                // Typed expressions are for entities, not nouns.
-                false
-            }
-        }
-    }
-
-    /// Returns true if this expression matches the given entity string,
-    /// respecting entity type hierarchy.
-    ///
-    /// Entity hierarchy:
-    /// - `*` matches everything
-    /// - `agent` matches `agent`, `agent:claude`, `agent:codex`, etc.
-    /// - `agent:claude` matches only `agent:claude`
-    /// - `user` matches only `user`
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn matches_entity(&self, entity: &str) -> bool {
-        match self {
-            MatchExpr::Any => true,
-            MatchExpr::Exact(s) => entity == s,
-            MatchExpr::Glob(pattern) => glob_matches(pattern, entity),
-            MatchExpr::Typed {
-                entity_type,
-                name: None,
-            } => {
-                // "agent" matches "agent" and "agent:*"
-                entity == entity_type.as_str() || entity.starts_with(&format!("{}:", entity_type))
-            }
-            MatchExpr::Typed {
-                entity_type,
-                name: Some(name),
-            } => {
-                // "agent:claude" matches only "agent:claude"
-                entity == format!("{}:{}", entity_type, name)
-            }
-        }
-    }
-}
-
-/// Verb pattern — not negatable, supports wildcard.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VerbPattern {
-    /// Matches any verb.
-    Any,
-    /// Matches a specific verb.
-    Exact(Verb),
-    /// Matches an arbitrary tool name (lowercased).
-    Named(String),
-}
-
-impl VerbPattern {
-    pub(crate) fn default_any() -> Self {
-        VerbPattern::Any
-    }
-
-    /// Returns true if this pattern matches the given verb.
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn matches(&self, verb: &Verb) -> bool {
-        match self {
-            VerbPattern::Any => true,
-            VerbPattern::Exact(v) => v == verb,
-            // Named variants are matched via verb_str at the compiled rule level,
-            // not through Verb enum comparison.
-            VerbPattern::Named(_) => false,
-        }
-    }
-}
-
-/// A named constraint primitive with typed properties.
-///
-/// Each field is optional; only specified fields are checked.
-/// Multiple fields are ANDed together (all must be satisfied).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ConstraintDef {
-    /// Filesystem filter expression (subpath, literal, regex with boolean ops).
-    /// For bash rules, `fs` generates sandbox rules instead of a permission guard.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fs: Option<FilterExpr>,
-    /// Filesystem capabilities for sandbox rules (default: all).
-    /// Only meaningful when `fs` is present on a bash rule.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caps: Option<Cap>,
-    /// Network policy for sandbox (deny or allow, default: allow).
-    /// Only meaningful on bash rules with `fs`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub network: Option<NetworkPolicy>,
-    /// Whether pipe operators are allowed in the command string.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pipe: Option<bool>,
-    /// Whether I/O redirects are allowed in the command string.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub redirect: Option<bool>,
-    /// Arguments that must not appear in the command.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        alias = "forbid-args"
-    )]
-    pub forbid_args: Option<Vec<String>>,
-    /// Arguments that must appear in the command (at least one).
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        alias = "require-args"
-    )]
-    pub require_args: Option<Vec<String>>,
-}
-
-/// A filesystem filter expression (SBPL-style).
-///
-/// Composes with boolean operators to express complex path constraints.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FilterExpr {
-    /// Resolved path must be under this directory.
-    Subpath(String),
-    /// Exactly this path.
+    /// `"literal"` or bare `atom` — exact string match.
     Literal(String),
-    /// Regex match on resolved path.
+    /// `/pattern/` — regex match.
     Regex(String),
-    /// Both filters must match.
-    And(Box<FilterExpr>, Box<FilterExpr>),
-    /// At least one filter must match.
-    Or(Box<FilterExpr>, Box<FilterExpr>),
-    /// Filter must NOT match.
-    Not(Box<FilterExpr>),
+    /// `(or p1 p2 ...)` — matches any of.
+    Or(Vec<Pattern>),
+    /// `(not p)` — negation.
+    Not(Box<Pattern>),
 }
 
-/// A profile expression — references to constraints/profiles composed with boolean ops.
-///
-/// Used in profile definitions and rule constraint bindings.
+/// A path filter used in `(fs ...)` position 2.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProfileExpr {
-    /// Reference to a named constraint or profile.
-    Ref(String),
-    /// Both expressions must be satisfied.
-    And(Box<ProfileExpr>, Box<ProfileExpr>),
-    /// At least one expression must be satisfied.
-    Or(Box<ProfileExpr>, Box<ProfileExpr>),
-    /// Expression must NOT be satisfied.
-    Not(Box<ProfileExpr>),
+pub enum PathFilter {
+    /// `(subpath expr)` — recursive subtree match.
+    Subpath(PathExpr),
+    /// `"path"` or bare atom — exact file match.
+    Literal(String),
+    /// `/pattern/` — regex on resolved path.
+    Regex(String),
+    /// `(or f1 f2 ...)`.
+    Or(Vec<PathFilter>),
+    /// `(not f)`.
+    Not(Box<PathFilter>),
 }
 
-impl fmt::Display for FilterExpr {
+/// A path expression that may reference environment variables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathExpr {
+    /// A static path string.
+    Static(String),
+    /// `(env NAME)` — resolved at compile time.
+    Env(String),
+    /// `(join expr1 expr2 ...)` — concatenate resolved parts.
+    Join(Vec<PathExpr>),
+}
+
+// ---------------------------------------------------------------------------
+// Display implementations for round-trip printing
+// ---------------------------------------------------------------------------
+
+impl fmt::Display for TopLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FilterExpr::Subpath(s) => write!(f, "subpath({})", s),
-            FilterExpr::Literal(s) => write!(f, "literal({})", s),
-            FilterExpr::Regex(s) => write!(f, "regex({})", s),
-            FilterExpr::Not(inner) => write!(f, "!{}", inner),
-            FilterExpr::And(a, b) => write!(f, "{} & {}", a, b),
-            FilterExpr::Or(a, b) => write!(f, "{} | {}", a, b),
+            TopLevel::Default { effect, policy } => {
+                write!(f, "(default {effect} \"{policy}\")")
+            }
+            TopLevel::Policy { name, body } => {
+                write!(f, "(policy \"{name}\"")?;
+                for item in body {
+                    write!(f, "\n  {item}")?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }
 
-impl Serialize for FilterExpr {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for FilterExpr {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        crate::policy::parse::parse_filter_expr(&s).map_err(serde::de::Error::custom)
-    }
-}
-
-impl fmt::Display for ProfileExpr {
+impl fmt::Display for PolicyItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ProfileExpr::Ref(name) => write!(f, "{}", name),
-            ProfileExpr::Not(inner) => write!(f, "!{}", inner),
-            ProfileExpr::And(a, b) => write!(f, "{} & {}", a, b),
-            ProfileExpr::Or(a, b) => write!(f, "{} | {}", a, b),
+            PolicyItem::Include(name) => write!(f, "(include \"{name}\")"),
+            PolicyItem::Rule(rule) => write!(f, "{rule}"),
         }
     }
 }
 
-impl Serialize for ProfileExpr {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
+impl fmt::Display for Rule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "({} {}", self.effect, self.matcher)?;
+        if let Some(name) = &self.sandbox {
+            write!(f, " :sandbox \"{name}\"")?;
+        }
+        write!(f, ")")
     }
 }
 
-impl<'de> Deserialize<'de> for ProfileExpr {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        crate::policy::parse::parse_profile_expr(&s).map_err(serde::de::Error::custom)
-    }
-}
-
-impl Statement {
-    /// Returns true if this statement matches the given request.
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn matches(&self, entity: &str, verb: &Verb, noun: &str) -> bool {
-        self.entity.matches_entity(entity) && self.verb.matches(verb) && self.noun.matches(noun)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// New-format types (profile-based policy syntax)
-// ---------------------------------------------------------------------------
-
-/// Top-level `default:` config in the new format.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DefaultConfig {
-    pub permission: Effect,
-    pub profile: String,
-}
-
-/// A named profile definition with optional single inheritance and inline rules.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProfileDef {
-    pub include: Option<Vec<String>>,
-    pub rules: Vec<ProfileRule>,
-}
-
-/// A single rule inside a profile: `effect verb noun` with optional inline constraints.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProfileRule {
-    pub effect: Effect,
-    /// Arbitrary tool name or `"*"`.
-    pub verb: String,
-    pub noun: Pattern,
-    pub constraints: Option<InlineConstraints>,
-}
-
-/// Inline constraints on a profile rule (cap-scoped fs, unified args, etc.).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct InlineConstraints {
-    /// Cap-scoped filesystem constraints: each entry maps caps → filter expression.
-    pub fs: Option<Vec<(Cap, FilterExpr)>>,
-    /// Unified args list: `"!x"` → Forbid(x), `"x"` → Require(x).
-    pub args: Option<Vec<ArgSpec>>,
-    /// URL constraints: domain patterns or full URL globs.
-    /// `"github.com"` → require, `"!evil.com"` → forbid.
-    pub url: Option<Vec<UrlSpec>>,
-    pub network: Option<NetworkPolicy>,
-    pub pipe: Option<bool>,
-    pub redirect: Option<bool>,
-}
-
-/// An argument specification in the unified `args:` list.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ArgSpec {
-    /// `"!-delete"` → Forbid("-delete")
-    Forbid(String),
-    /// `"--dry-run"` → Require("--dry-run")
-    Require(String),
-}
-
-/// A URL constraint specification in the `url:` list.
-///
-/// Plain domains match the URL's host; patterns with `://` match the full URL.
-/// `"github.com"` → Require("github.com")  — URL host must match
-/// `"!evil.com"` → Forbid("evil.com")      — URL host must NOT match
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum UrlSpec {
-    Forbid(String),
-    Require(String),
-}
-
-// ---------------------------------------------------------------------------
-// Private helper
-// ---------------------------------------------------------------------------
-
-/// Glob matching for policy patterns.
-///
-/// Unlike file-path globbing, `*` matches any character (including `/`)
-/// because policy patterns apply to both file paths and command strings.
-pub(crate) fn policy_glob_matches(pattern: &str, value: &str) -> bool {
-    use regex::Regex;
-    let regex_pattern = pattern
-        .replace('.', "\\.")
-        .replace("**", "<<<DOUBLESTAR>>>")
-        .replace('*', ".*")
-        .replace("<<<DOUBLESTAR>>>", ".*")
-        .replace('?', ".");
-
-    Regex::new(&format!("^{}$", regex_pattern))
-        .map(|re| re.is_match(value))
-        .unwrap_or(false)
-}
-
-// --- Custom serde implementations ---
-
-impl Serialize for Pattern {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&format_pattern_str(self))
-    }
-}
-
-impl<'de> Deserialize<'de> for Pattern {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Ok(crate::policy::parse::parse_pattern(&s))
-    }
-}
-
-impl Serialize for VerbPattern {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
+impl fmt::Display for CapMatcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            VerbPattern::Any => serializer.serialize_str("*"),
-            VerbPattern::Exact(verb) => serializer.serialize_str(&verb.to_string()),
-            VerbPattern::Named(s) => serializer.serialize_str(s),
+            CapMatcher::Exec(m) => write!(f, "{m}"),
+            CapMatcher::Fs(m) => write!(f, "{m}"),
+            CapMatcher::Net(m) => write!(f, "{m}"),
+            CapMatcher::Tool(m) => write!(f, "{m}"),
         }
     }
 }
 
-impl<'de> Deserialize<'de> for VerbPattern {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        crate::policy::parse::parse_verb_pattern(&s).map_err(serde::de::Error::custom)
+impl fmt::Display for ExecMatcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(exec")?;
+        let has_content = !self.args.is_empty() || !self.has_args.is_empty();
+        if self.bin != Pattern::Any || has_content {
+            write!(f, " {}", self.bin)?;
+        }
+        for arg in &self.args {
+            write!(f, " {arg}")?;
+        }
+        if !self.has_args.is_empty() {
+            write!(f, " :has")?;
+            for arg in &self.has_args {
+                write!(f, " {arg}")?;
+            }
+        }
+        write!(f, ")")
     }
 }
 
-impl Serialize for MatchExpr {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&format_match_expr(self))
+impl fmt::Display for FsMatcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(fs")?;
+        if self.op != OpPattern::Any || self.path.is_some() {
+            write!(f, " {}", self.op)?;
+        }
+        if let Some(path) = &self.path {
+            write!(f, " {path}")?;
+        }
+        write!(f, ")")
     }
 }
 
-impl<'de> Deserialize<'de> for MatchExpr {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Ok(crate::policy::parse::parse_match_expr(&s))
+impl fmt::Display for NetMatcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(net")?;
+        if self.domain != Pattern::Any {
+            write!(f, " {}", self.domain)?;
+        }
+        write!(f, ")")
     }
 }
 
-pub fn format_pattern_str(pattern: &Pattern) -> String {
-    match pattern {
-        Pattern::Match(expr) => format_match_expr(expr),
-        Pattern::Not(expr) => format!("!{}", format_match_expr(expr)),
+impl fmt::Display for ToolMatcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(tool")?;
+        if self.name != Pattern::Any {
+            write!(f, " {}", self.name)?;
+        }
+        write!(f, ")")
     }
 }
 
-pub(crate) fn format_match_expr(expr: &MatchExpr) -> String {
-    match expr {
-        MatchExpr::Any => "*".to_string(),
-        MatchExpr::Exact(s) => s.clone(),
-        MatchExpr::Glob(s) => s.clone(),
-        MatchExpr::Typed {
-            entity_type,
-            name: None,
-        } => entity_type.clone(),
-        MatchExpr::Typed {
-            entity_type,
-            name: Some(name),
-        } => format!("{}:{}", entity_type, name),
+impl fmt::Display for OpPattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OpPattern::Any => write!(f, "*"),
+            OpPattern::Single(op) => write!(f, "{op}"),
+            OpPattern::Or(ops) => {
+                write!(f, "(or")?;
+                for op in ops {
+                    write!(f, " {op}")?;
+                }
+                write!(f, ")")
+            }
+        }
     }
 }
 
-/// Simple glob matching for patterns.
-fn glob_matches(pattern: &str, path: &str) -> bool {
-    let regex_pattern = pattern
-        .replace('.', "\\.")
-        .replace("**", "<<<DOUBLESTAR>>>")
-        .replace('*', "[^/]*")
-        .replace("<<<DOUBLESTAR>>>", ".*")
-        .replace('?', ".");
+impl fmt::Display for FsOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FsOp::Read => write!(f, "read"),
+            FsOp::Write => write!(f, "write"),
+            FsOp::Create => write!(f, "create"),
+            FsOp::Delete => write!(f, "delete"),
+        }
+    }
+}
 
-    let regex_pattern = format!("^{}$", regex_pattern);
+impl fmt::Display for Pattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Pattern::Any => write!(f, "*"),
+            Pattern::Literal(s) => {
+                write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+            }
+            Pattern::Regex(r) => write!(f, "/{r}/"),
+            Pattern::Or(ps) => {
+                write!(f, "(or")?;
+                for p in ps {
+                    write!(f, " {p}")?;
+                }
+                write!(f, ")")
+            }
+            Pattern::Not(p) => write!(f, "(not {p})"),
+        }
+    }
+}
 
-    Regex::new(&regex_pattern)
-        .map(|re| re.is_match(path))
-        .unwrap_or(false)
+impl fmt::Display for PathFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PathFilter::Subpath(expr) => write!(f, "(subpath {expr})"),
+            PathFilter::Literal(s) => {
+                write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+            }
+            PathFilter::Regex(r) => write!(f, "/{r}/"),
+            PathFilter::Or(fs) => {
+                write!(f, "(or")?;
+                for pf in fs {
+                    write!(f, " {pf}")?;
+                }
+                write!(f, ")")
+            }
+            PathFilter::Not(pf) => write!(f, "(not {pf})"),
+        }
+    }
+}
+
+impl fmt::Display for PathExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PathExpr::Static(s) => {
+                write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+            }
+            PathExpr::Env(name) => write!(f, "(env {name})"),
+            PathExpr::Join(parts) => {
+                write!(f, "(join")?;
+                for part in parts {
+                    write!(f, " {part}")?;
+                }
+                write!(f, ")")
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_default() {
+        let d = TopLevel::Default {
+            effect: Effect::Deny,
+            policy: "main".into(),
+        };
+        assert_eq!(d.to_string(), r#"(default deny "main")"#);
+    }
+
+    #[test]
+    fn display_simple_policy() {
+        let p = TopLevel::Policy {
+            name: "main".into(),
+            body: vec![
+                PolicyItem::Include("cwd-access".into()),
+                PolicyItem::Rule(Rule {
+                    effect: Effect::Allow,
+                    matcher: CapMatcher::Exec(ExecMatcher {
+                        bin: Pattern::Literal("git".into()),
+                        args: vec![Pattern::Any],
+                        has_args: vec![],
+                    }),
+                    sandbox: None,
+                }),
+            ],
+        };
+        let s = p.to_string();
+        assert!(s.contains(r#"(include "cwd-access")"#));
+        assert!(s.contains("(allow (exec \"git\" *))"));
+    }
+
+    #[test]
+    fn display_rule_with_sandbox() {
+        let r = Rule {
+            effect: Effect::Allow,
+            matcher: CapMatcher::Exec(ExecMatcher {
+                bin: Pattern::Literal("cargo".into()),
+                args: vec![Pattern::Any],
+                has_args: vec![],
+            }),
+            sandbox: Some("cargo-env".into()),
+        };
+        assert_eq!(
+            r.to_string(),
+            r#"(allow (exec "cargo" *) :sandbox "cargo-env")"#
+        );
+    }
+
+    #[test]
+    fn display_fs_matcher() {
+        let m = FsMatcher {
+            op: OpPattern::Or(vec![FsOp::Read, FsOp::Write]),
+            path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+        };
+        assert_eq!(m.to_string(), "(fs (or read write) (subpath (env PWD)))");
+    }
+
+    #[test]
+    fn display_net_regex() {
+        let m = NetMatcher {
+            domain: Pattern::Regex(r".*\.evil\.com".into()),
+        };
+        assert_eq!(m.to_string(), r"(net /.*\.evil\.com/)");
+    }
+
+    #[test]
+    fn display_path_join() {
+        let expr = PathExpr::Join(vec![
+            PathExpr::Env("HOME".into()),
+            PathExpr::Static("/.clash".into()),
+        ]);
+        assert_eq!(expr.to_string(), r#"(join (env HOME) "/.clash")"#);
+    }
+
+    #[test]
+    fn display_pattern_not() {
+        let p = Pattern::Not(Box::new(Pattern::Literal("secret".into())));
+        assert_eq!(p.to_string(), "(not \"secret\")");
+    }
 }

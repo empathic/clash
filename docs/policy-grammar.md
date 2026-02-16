@@ -1,280 +1,321 @@
 # Policy Grammar Specification
 
-Formal grammar for clash policy documents. Two formats are supported: **legacy** (flat rules + named constraints) and **new** (profile-based with inline constraints). The parser auto-detects format based on whether `default:` is a scalar or mapping.
+Formal grammar for clash policy documents. Policies use an s-expression syntax with capability-based rules.
 
 ---
 
-## Format Detection
+## File Format
+
+Policy files use the `.policy` extension and contain s-expressions. Comments start with `;`.
 
 ```
-if default is YAML mapping → new format
-if default is YAML scalar or absent → legacy format
+; This is a comment
+(default deny "main")
+
+(policy "main"
+  (deny  (exec "git" "push" *))
+  (allow (exec "git" *)))
 ```
 
 ---
 
-## Legacy Format (YAML Document)
+## Top-Level Forms
 
 ```ebnf
-document        = default_decl?
-                  constraints_decl?
-                  profiles_decl?
-                  permissions_decl?
-                  rules_decl?
+document        = top_level*
+top_level       = default_decl | policy_decl
 
-default_decl    = "default:" effect_str
+default_decl    = "(" "default" effect QUOTED_STRING ")"
+policy_decl     = "(" "policy" QUOTED_STRING policy_item* ")"
 
-constraints_decl = "constraints:" NEWLINE
-                   (INDENT constraint_name ":" constraint_def)*
-
-profiles_decl   = "profiles:" NEWLINE
-                  (INDENT profile_name ":" profile_expr_str)*
-
-permissions_decl = "permissions:" NEWLINE
-                   ("allow:" string_list)?
-                   ("deny:" string_list)?
-                   ("ask:" string_list)?
-
-rules_decl      = "rules:" NEWLINE
-                  (rule_sequence | rule_mapping)
-
-rule_sequence   = ("- " rule_str)*
-rule_mapping    = (rule_str ":" (constraint_value | "[]" | null))*
+policy_item     = include | rule
+include         = "(" "include" QUOTED_STRING ")"
+rule            = "(" effect cap_matcher keyword_args* ")"
+keyword_args    = ":sandbox" QUOTED_STRING
 ```
 
-### Constraint Definition
+Policy names, include targets, and keyword argument values must be quoted strings. Bare atoms are reserved for language keywords.
+
+---
+
+## Capability Matchers
+
+Rules target one of four capability domains: exec, fs, net, or tool.
 
 ```ebnf
-constraint_def  = (fs_field | caps_field | network_field
-                  | pipe_field | redirect_field
-                  | forbid_args_field | require_args_field)*
+cap_matcher     = exec_matcher | fs_matcher | net_matcher | tool_matcher
 
-fs_field        = "fs:" filter_expr_str
-caps_field      = "caps:" cap_expr
-network_field   = "network:" ("allow" | "deny")
-pipe_field      = "pipe:" ("true" | "false")
-redirect_field  = "redirect:" ("true" | "false")
-forbid_args_field  = "forbid-args:" string_list
-require_args_field = "require-args:" string_list
+exec_matcher    = "(" "exec" pattern? args_spec ")"
+args_spec       = pattern*                         ; positional (default)
+                | ":has" pattern+                  ; orderless set-membership
+fs_matcher      = "(" "fs" op_pattern? path_filter? ")"
+net_matcher     = "(" "net" pattern? ")"
+tool_matcher    = "(" "tool" pattern? ")"
+```
+
+### Exec Matcher
+
+Matches command execution. The first pattern matches the binary name. Arguments can be matched positionally (default) or in any order using `:has`.
+
+#### Positional matching (default)
+
+Subsequent patterns match positional arguments left-to-right.
+
+```
+(exec)                        ; match any command
+(exec "git")                  ; match git with any args
+(exec "git" *)                ; same — * is explicit any
+(exec "git" "push" *)         ; match git push with any trailing args
+(exec "git" "push" "origin")  ; match git push origin exactly
+```
+
+#### Orderless matching (`:has`)
+
+The `:has` keyword switches to set-membership matching for the remaining patterns: each pattern must match at least one argument, regardless of position. Extra unmatched arguments are always allowed.
+
+`:has` can appear after positional arguments, enabling mixed matching: fixed subcommands followed by order-independent flags.
+
+```
+;; Pure orderless:
+(exec "git" :has "push")                ; args contain "push" somewhere
+(exec "git" :has "push" "--force")      ; args contain both "push" AND "--force"
+(exec "git" :has "push" /--force/)      ; "push" literal + regex match
+
+;; Mixed positional + orderless:
+(exec "git" "push" :has "--force")      ; arg[0]="push", remaining contain "--force"
+(exec "git" "push" :has "--force" "--no-verify")  ; subcommand + two required flags
+```
+
+For example, `(exec "git" "push" :has "--force")` matches:
+- `git push --force`
+- `git push --force origin`
+- `git push origin --force main`
+
+But does not match:
+- `git push origin` (missing `--force`)
+- `git --force push` (arg[0] is `--force`, not `push`)
+- `git pull --force` (arg[0] is `pull`, not `push`)
+
+### Fs Matcher
+
+Matches filesystem operations. Optional operation filter and path filter.
+
+```
+(fs)                                  ; match any fs operation
+(fs read)                             ; match reads only
+(fs write (subpath (env PWD)))        ; match writes under CWD
+(fs (or read write) (subpath "/tmp")) ; match reads or writes under /tmp
+```
+
+### Net Matcher
+
+Matches network access by domain.
+
+```
+(net)                          ; match any network access
+(net "github.com")             ; match github.com exactly
+(net /.*\.example\.com/)       ; match example.com subdomains
+```
+
+### Tool Matcher
+
+Matches agent tools by name. Applies to Claude Code tools that don't map to exec/fs/net (e.g. Skill, Task, AskUserQuestion, EnterPlanMode).
+
+```
+(tool)                         ; match any agent tool
+(tool "Skill")                 ; match the Skill tool exactly
+(tool (or "Skill" "Task"))     ; match Skill or Task
 ```
 
 ---
 
-## New Format (YAML Document)
+## Patterns
+
+General-purpose patterns used for matching strings (binary names, arguments, domains).
 
 ```ebnf
-document        = "default:" NEWLINE
-                    INDENT "permission:" effect_str NEWLINE
-                    INDENT "profile:" profile_name
-                  ("profiles:" NEWLINE
-                    (INDENT profile_name ":" profile_def)*)?
+pattern         = "*"                          ; wildcard — matches anything
+                | QUOTED_STRING                ; exact string match
+                | "/" REGEX "/"                ; regex match
+                | "(" "or" pattern+ ")"        ; match any of
+                | "(" "not" pattern ")"        ; negation
+```
 
-profile_def     = ("include:" (profile_name | profile_name_list))?
-                  ("rules:" NEWLINE
-                    (INDENT new_rule_key ":" inline_constraints?)*)?
+### Examples
 
-new_rule_key    = effect_str SPACE verb_str SPACE noun_pattern
-                  (* trailing ":" is stripped *)
-
-inline_constraints = (fs_cap_scoped | args_field
-                     | network_field | pipe_field | redirect_field)*
-
-fs_cap_scoped   = "fs:" NEWLINE
-                  (INDENT cap_expr ":" filter_expr_str)*
-
-args_field      = "args:" arg_spec_list
-arg_spec_list   = "[" (arg_spec ("," arg_spec)*)? "]"
-arg_spec        = "!" STRING        (* Forbid *)
-                | STRING            (* Require *)
+```
+*                              ; matches anything
+"git"                          ; matches "git" exactly
+/^cargo-.*/                    ; matches cargo-build, cargo-test, etc.
+(or "github.com" "crates.io") ; matches either domain
+(not "secret")                 ; matches anything except "secret"
 ```
 
 ---
 
-## Compact Rule String (PEG Grammar)
+## Operation Patterns
 
-Used in legacy format `rules:` lists. Defined in `rule.pest`:
-
-```peg
-rule            = SOI ~ effect ~ sep ~ entity ~ sep ~ tool ~ sep ~ pattern ~ EOI
-
-effect          = "allow" | "deny" | "ask" | "delegate"
-
-entity          = negation? ~ entity_value
-negation        = "!"
-entity_value    = wildcard | typed_entity | identifier
-typed_entity    = identifier ~ ":" ~ (wildcard | identifier)
-wildcard        = "*"
-identifier      = (ASCII_ALPHANUMERIC | "_" | "-" | ".")+
-
-tool            = wildcard | identifier
-
-pattern         = ANY+
-
-sep             = (" " | "\t")+
-```
-
-### Entity Insertion
-
-When the second token (after effect) is a known tool keyword (`bash`, `read`, `write`, `edit`), the entity `agent` is automatically inserted. This means:
-
-```
-allow bash git *       →  allow agent bash git *
-deny read .env         →  deny agent read .env
-```
-
-For custom tool names, entity insertion does not apply — you must specify the entity explicitly:
-
-```
-allow * task *         # Correct: explicit wildcard entity
-allow agent task *     # Correct: explicit entity
-```
-
-### Constraint Suffix
-
-A rule string may have a ` : ` suffix binding a profile expression:
-
-```
-allow agent bash git * : strict-git & safe-io
-```
-
-The `:` must be preceded by a space. The parser scans backwards from end to find the separator, distinguishing it from entity type colons (`agent:claude`).
-
----
-
-## Pattern Syntax
-
-Used for entity and noun slots.
+Used in `(fs ...)` to filter by filesystem operation kind.
 
 ```ebnf
-pattern         = "!" match_expr      (* negated *)
-                | match_expr           (* positive *)
+op_pattern      = "*"                          ; any operation
+                | fs_op                        ; single operation
+                | "(" "or" fs_op+ ")"          ; multiple operations
 
-match_expr      = "*"                  (* wildcard: matches anything *)
-                | type ":" name        (* typed entity: agent:claude *)
-                | type ":*"            (* typed wildcard: agent:* *)
-                | glob_pattern         (* contains *, **, or ? *)
-                | exact_string         (* everything else *)
+fs_op           = "read" | "write" | "create" | "delete"
 ```
-
-### Glob Matching
-
-Policy globs differ from filesystem globs: `*` matches any character **including `/`**. This is because patterns apply to both file paths and command strings.
-
-```
-git *           matches "git status", "git commit -m 'test'"
-**/*.rs         matches "src/main.rs", "a/b/c.rs"
-```
-
-Glob-to-regex conversion: `.` → `\.`, `**` → `.*`, `*` → `.*`, `?` → `.`
 
 ---
 
-## Filter Expression Grammar
+## Path Filters
 
-Used in `fs:` fields for filesystem constraints. Recursive descent parser with precedence.
+Used in `(fs ...)` to constrain which paths match.
 
 ```ebnf
-filter_expr     = or_expr
-or_expr         = and_expr ("|" and_expr)*
-and_expr        = unary ("&" unary)*
-unary           = "!" unary | atom
-atom            = "subpath(" path ")"
-                | "literal(" path ")"
-                | "regex(" pattern ")"
-                | "(" filter_expr ")"
+path_filter     = "(" "subpath" path_expr ")"  ; recursive subtree match
+                | QUOTED_STRING                ; exact path match
+                | "/" REGEX "/"                ; regex on resolved path
+                | "(" "or" path_filter+ ")"    ; match any of
+                | "(" "not" path_filter ")"    ; negation
+
+path_expr       = QUOTED_STRING                ; static path
+                | "(" "env" ENV_NAME ")"       ; environment variable (resolved at compile time)
+                | "(" "join" path_expr path_expr+ ")"  ; concatenate resolved parts
 ```
 
-**Precedence**: `!` > `&` > `|`
+### Subpath Matching
 
-### Filter Functions
+`(subpath path)` matches the path itself and any path beneath it:
 
-| Function | Semantics |
-|----------|-----------|
-| `subpath(path)` | Resolved path must be under `path` (prefix match on normalized absolute path) |
-| `literal(path)` | Resolved path must equal `path` exactly |
-| `regex(pattern)` | Resolved path must match the regex `pattern` |
+```
+(subpath "/home/user/project")
+  matches: /home/user/project
+  matches: /home/user/project/src/main.rs
+  rejects: /home/user/other
+```
 
-Path resolution: relative paths are resolved against the current working directory. `.` resolves to cwd. `..` components are handled lexically (no filesystem access).
+### Environment Variables
+
+`(env NAME)` is resolved at compile time to the value of the environment variable:
+
+```
+(subpath (env PWD))    ; expands to the current working directory
+(subpath (env HOME))   ; expands to the user's home directory
+```
+
+### Path Concatenation
+
+`(join expr1 expr2 ...)` concatenates two or more path expressions. Each part is resolved individually and the results are concatenated:
+
+```
+(subpath (join (env HOME) "/.clash"))   ; expands to e.g. /home/user/.clash
+(subpath (join (env HOME) "/.claude"))  ; expands to e.g. /home/user/.claude
+```
+
+`join` can be nested:
+
+```
+(subpath (join (join (env HOME) "/.config") "/clash"))
+```
 
 ---
 
-## Profile Expression Grammar
+## Internal Policies
 
-Used for constraint bindings on rules and named profiles.
+Clash embeds internal policies that are always active. These provide sensible defaults for Clash self-management and Claude workspace access. Internal policy names use the `__internal_*__` naming convention (e.g. `__internal_clash__`, `__internal_claude__`).
+
+Internal policies are automatically included in the active policy via `(include ...)`. They appear in `clash policy list` and `clash policy show` output with a `[builtin]` tag.
+
+### Overriding Internal Policies
+
+To override an internal policy, define a policy with the same name in your policy file:
+
+```
+; Override the built-in Claude workspace policy with custom rules
+(policy "__internal_claude__"
+  (allow (fs read (subpath (join (env HOME) "/.claude"))))
+  (deny  (fs write (subpath (join (env HOME) "/.claude")))))
+```
+
+When a user-defined policy shares the name of an internal policy, the user's version completely replaces the built-in one.
+
+---
+
+## Effects
 
 ```ebnf
-profile_expr    = or_expr
-or_expr         = and_expr ("|" and_expr)*
-and_expr        = unary ("&" unary)*
-unary           = "!" unary | atom
-atom            = identifier | "(" profile_expr ")"
+effect          = "allow" | "deny" | "ask"
 ```
 
-**Precedence**: `!` > `&` > `|`
-
-An identifier resolves first as a named profile (composite), then as a named constraint (primitive). Unknown references cause the constraint to fail closed.
+| Effect | Meaning |
+|--------|---------|
+| `allow` | Permit the action without prompting |
+| `deny` | Block the action |
+| `ask` | Prompt the user for confirmation |
 
 ---
 
-## Cap Expression
+## Keyword Arguments
 
-Used in new-format `fs:` keys for capability-scoped filesystem constraints.
+Keywords are atoms starting with `:`. They appear in two positions:
+
+- **Inside exec matchers:** `:has` (see [Exec Matcher](#exec-matcher) above)
+- **After capability matchers:** `:sandbox` (see below)
+
+### `:sandbox`
+
+The `:sandbox` keyword on exec rules references a named policy whose rules define the kernel-level sandbox for matching commands:
+
+```
+(allow (exec "cargo" *) :sandbox "cargo-env")
+```
+
+When the exec rule matches, the referenced policy's fs/net rules are used to build a sandbox for the spawned process. See the [sandbox section](./policy-guide.md#sandbox-policies) in the policy guide.
+
+---
+
+## Policy Composition
+
+Policies can include other policies using `(include "name")`:
+
+```
+(policy "cwd-access"
+  (allow (fs read (subpath (env PWD)))))
+
+(policy "main"
+  (include "cwd-access")
+  (allow (exec "git" *)))
+```
+
+Include is resolved at compile time by inlining the referenced policy's rules. Circular includes are detected and rejected.
+
+---
+
+## Default Declaration
+
+Every policy file should have a `(default effect "name")` form that specifies:
+- The default effect when no rule matches a request
+- The name of the active policy to evaluate
+
+```
+(default deny "main")    ; default deny, evaluate the "main" policy
+(default ask "main")     ; default ask, evaluate the "main" policy
+```
+
+If no default declaration is present, the compiler uses `deny` with the policy named `main`.
+
+---
+
+## Lexical Rules
 
 ```ebnf
-cap_expr        = cap_term (('+' | '-') cap_term)*
-cap_term        = "read" | "write" | "create" | "delete" | "execute"
-                | "all" | "full"
+QUOTED_STRING   = '"' (CHAR | ESCAPE)* '"'
+ESCAPE          = '\\' ('"' | '\\')
+REGEX           = '/' (CHAR_NO_SLASH)* '/'
+ENV_NAME        = [A-Z_][A-Z0-9_]*
+KEYWORD         = ':' ATOM                     ; e.g. :sandbox
+COMMENT         = ';' (any char)* NEWLINE
+WHITESPACE      = ' ' | '\t' | '\n' | '\r'
 ```
 
-The `+` operator adds capabilities, the `-` operator removes them. Removals take precedence over additions (consistent with deny-overrides-allow semantics). `all` and `full` are shorthand for all five capabilities.
-
-Examples:
-
-| Expression | Result |
-|-----------|--------|
-| `read + write` | READ \| WRITE |
-| `all` | READ \| WRITE \| CREATE \| DELETE \| EXECUTE |
-| `all - write` | READ \| CREATE \| DELETE \| EXECUTE |
-| `all - write - delete` | READ \| CREATE \| EXECUTE |
-
----
-
-## Effect Values
-
-```ebnf
-effect_str      = "allow" | "deny" | "ask" | "delegate"
-```
-
----
-
-## Verb / Tool Values
-
-Both legacy and new formats accept arbitrary tool names. Known tool keywords map to canonical verbs:
-
-| Tool keyword | Verb |
-|-------------|------|
-| `bash` | Execute |
-| `read` | Read |
-| `write` | Write |
-| `edit` | Edit |
-| `*` | Any |
-| any other name | Named (matched by string) |
-
-Arbitrary tool names (e.g., `task`, `glob`, `websearch`) are matched against the lowercased tool name from Claude Code. For example, `allow * task *` matches tool invocations with `tool_name: "Task"`.
-
----
-
-## Legacy Permission Patterns
-
-From Claude Code's `permissions` format:
-
-```ebnf
-legacy_pattern  = tool_name "(" arg ")"    (* tool with argument *)
-                | tool_name                  (* tool without argument *)
-
-arg             = prefix ":*"               (* prefix pattern: "git:*" → "git *" *)
-                | glob_pattern              (* glob: "**/*.rs" *)
-                | exact_string              (* exact: ".env" *)
-```
-
-Tool names: `Bash`, `Read`, `Write`, `Edit` (capitalized, mapped via `Verb::from_tool_name`).
+Whitespace and comments are ignored between tokens.

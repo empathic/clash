@@ -57,14 +57,6 @@ fn permission_summary(input: &ToolUseHookInput) -> String {
 }
 
 /// Try to resolve a permission ask via desktop notification and/or Zulip.
-///
-/// When both are configured they race concurrently — the first response wins.
-/// The desktop notification blocks the main thread (macOS requirement), while
-/// Zulip polls in a background thread. If the Zulip thread gets a response
-/// first it writes directly to stdout and exits the process.
-///
-/// When only one channel is configured, it runs alone. If neither resolves
-/// the request, we fall through to the terminal prompt.
 #[instrument(level = Level::TRACE, skip(input, settings))]
 pub fn resolve_via_desktop_or_zulip(
     input: &ToolUseHookInput,
@@ -73,17 +65,8 @@ pub fn resolve_via_desktop_or_zulip(
     let has_desktop = settings.notifications.desktop;
     let has_zulip = settings.notifications.zulip.is_some();
 
-    // If both are configured, race them concurrently.
-    // If only Zulip, run it on the main thread (no macOS constraint).
-    // If only desktop, run it on the main thread.
-    // If neither, fall through immediately.
-
     if has_zulip && has_desktop {
-        // Start Zulip polling in a background thread. If it wins the race,
-        // it writes the hook output to stdout and exits the process directly.
         start_zulip_background(input, settings);
-
-        // Desktop notification blocks the main thread.
         return resolve_via_desktop_then_continue(input, settings);
     }
 
@@ -98,8 +81,6 @@ pub fn resolve_via_desktop_or_zulip(
     HookOutput::continue_execution()
 }
 
-/// Show an interactive desktop notification and return the result.
-/// Falls through to `continue_execution` on timeout or unavailability.
 fn resolve_via_desktop_then_continue(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
@@ -128,11 +109,6 @@ fn resolve_via_desktop_then_continue(
     }
 }
 
-/// Spawn a background thread that polls Zulip for a permission response.
-///
-/// If the Zulip thread receives a response before the desktop notification,
-/// it writes the hook output directly to stdout and exits the process. This
-/// is safe because we run inside a short-lived hook subprocess.
 fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
     let Some(ref zulip_config) = settings.notifications.zulip else {
         return;
@@ -145,7 +121,6 @@ fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
         cwd: input.cwd.clone(),
     };
 
-    // Clone config so the thread owns its data.
     let config = zulip_config.clone();
 
     std::thread::spawn(move || {
@@ -167,7 +142,6 @@ fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
             }
             Ok(None) => {
                 info!("Zulip resolution timed out (background)");
-                // Don't exit — let the desktop notification or terminal handle it.
             }
             Err(e) => {
                 warn!(error = %e, "Zulip resolution failed (background)");
@@ -176,8 +150,6 @@ fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
     });
 }
 
-/// Attempt to resolve a permission ask via Zulip on the current thread.
-/// Falls back to `continue_execution`.
 #[instrument(level = Level::TRACE, skip(input, settings))]
 fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSettings) -> HookOutput {
     let Some(ref zulip_config) = settings.notifications.zulip else {
@@ -210,30 +182,23 @@ fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSetti
     }
 }
 
-/// Collect human-readable deny rule descriptions from both legacy statements and profile defs.
-fn collect_deny_descriptions(doc: &crate::policy::ast::PolicyDocument) -> Vec<String> {
+/// Collect human-readable deny rule descriptions from a DecisionTree.
+fn collect_deny_descriptions(tree: &crate::policy::DecisionTree) -> Vec<String> {
     let mut descriptions = Vec::new();
 
-    // Legacy statements
-    for stmt in &doc.statements {
-        if stmt.effect == crate::policy::Effect::Deny {
-            let noun_str = crate::policy::ast::format_pattern_str(&stmt.noun);
-            let verb_str = match &stmt.verb {
-                crate::policy::VerbPattern::Any => "*".to_string(),
-                crate::policy::VerbPattern::Exact(v) => v.to_string(),
-                crate::policy::VerbPattern::Named(s) => s.clone(),
-            };
-            descriptions.push(format!("deny {} {}", verb_str, noun_str));
+    for rule in &tree.exec_rules {
+        if rule.effect == crate::policy::Effect::Deny {
+            descriptions.push(format!("deny {}", rule.source));
         }
     }
-
-    // New-format profile rules
-    for profile_def in doc.profile_defs.values() {
-        for rule in &profile_def.rules {
-            if rule.effect == crate::policy::Effect::Deny {
-                let noun_str = crate::policy::ast::format_pattern_str(&rule.noun);
-                descriptions.push(format!("deny {} {}", rule.verb, noun_str));
-            }
+    for rule in &tree.fs_rules {
+        if rule.effect == crate::policy::Effect::Deny {
+            descriptions.push(format!("deny {}", rule.source));
+        }
+    }
+    for rule in &tree.net_rules {
+        if rule.effect == crate::policy::Effect::Deny {
+            descriptions.push(format!("deny {}", rule.source));
         }
     }
 
@@ -277,55 +242,31 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
     }
 
     // 1. Check policy file
-    let policy_contents = match ClashSettings::policy_file() {
-        Ok(policy_path) if policy_path.exists() => match std::fs::read_to_string(&policy_path) {
-            Ok(contents) => Some(contents),
-            Err(e) => {
-                lines.push(format!("ISSUE: policy.yaml read error: {}", e));
-                None
-            }
-        },
-        Ok(_) => {
-            lines.push("policy.yaml: not found (using legacy permissions)".into());
-            None
-        }
+    let policy_path = match ClashSettings::policy_file() {
+        Ok(p) => p,
         Err(e) => {
-            lines.push(format!("ISSUE: policy.yaml path error: {}", e));
-            None
+            lines.push(format!("ISSUE: policy file path error: {}", e));
+            // Skip to sandbox check
+            check_sandbox_and_session(&mut lines, input);
+            return finish_session_start(lines);
         }
     };
 
-    if let Some(ref contents) = policy_contents {
-        match crate::policy::parse::parse_yaml(contents) {
-            Ok(doc) => {
-                let rule_count = doc.statements.len()
-                    + doc
-                        .profile_defs
-                        .values()
-                        .map(|p| p.rules.len())
-                        .sum::<usize>();
-                let format = if doc.profile_defs.is_empty() {
-                    "legacy"
-                } else {
-                    "new"
-                };
-                match crate::policy::CompiledPolicy::compile(&doc) {
-                    Ok(_) => {
+    if policy_path.exists() {
+        match std::fs::read_to_string(&policy_path) {
+            Ok(contents) => {
+                match crate::policy::compile_policy(&contents) {
+                    Ok(tree) => {
+                        let rule_count =
+                            tree.exec_rules.len() + tree.fs_rules.len() + tree.net_rules.len();
                         lines.push(format!(
-                            "policy.yaml: OK ({} rules, format={}, default={})",
-                            rule_count, format, doc.policy.default,
+                            "policy: OK ({} rules, default={}, policy={})",
+                            rule_count, tree.default, tree.policy_name,
                         ));
 
-                        // Build a user-friendly summary with key denials and active profile.
-                        let mut deny_descriptions = collect_deny_descriptions(&doc);
+                        let mut deny_descriptions = collect_deny_descriptions(&tree);
                         deny_descriptions.sort();
                         deny_descriptions.dedup();
-
-                        let profile_name = doc
-                            .default_config
-                            .as_ref()
-                            .map(|dc| dc.profile.as_str())
-                            .unwrap_or("(none)");
 
                         let denials_summary = if deny_descriptions.is_empty() {
                             "no explicit denials".to_string()
@@ -341,43 +282,56 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
                         };
 
                         lines.push(format!(
-                            "Clash active: profile '{}', {} rules. Denied: {}. Use /clash:status or /clash:edit for details.",
-                            profile_name, rule_count, denials_summary,
+                            "Clash active: policy '{}', {} rules. Denied: {}. Use /clash:status or /clash:edit for details.",
+                            tree.policy_name, rule_count, denials_summary,
                         ));
                     }
                     Err(e) => {
                         lines.push(format!(
-                            "ISSUE: policy.yaml compile error: {}. All actions will default to 'ask'.",
+                            "ISSUE: policy compile error: {}. All actions will default to 'ask'.",
                             e
+                        ));
+                    }
+                }
+
+                // Also try to load notification config from companion yaml
+                let yaml_path = ClashSettings::settings_dir()
+                    .map(|d| d.join("policy.yaml"))
+                    .ok();
+                if let Some(ref yp) = yaml_path
+                    && let Ok(yaml_contents) = std::fs::read_to_string(yp)
+                {
+                    let (notif_config, notif_warning) =
+                        settings::parse_notification_config(&yaml_contents);
+                    if let Some(warning) = notif_warning {
+                        lines.push(format!("ISSUE: {}", warning));
+                    } else {
+                        let zulip_status = if notif_config.zulip.is_some() {
+                            "configured"
+                        } else {
+                            "not configured"
+                        };
+                        lines.push(format!(
+                            "notifications: OK (desktop={}, zulip={})",
+                            notif_config.desktop, zulip_status
                         ));
                     }
                 }
             }
             Err(e) => {
-                lines.push(format!(
-                    "ISSUE: policy.yaml parse error: {}. All actions will default to 'ask'.",
-                    e
-                ));
+                lines.push(format!("ISSUE: policy file read error: {}", e));
             }
         }
-
-        // 2. Validate notification config from the same policy file
-        let (notif_config, notif_warning) = settings::parse_notification_config(contents);
-        if let Some(warning) = notif_warning {
-            lines.push(format!("ISSUE: {}", warning));
-        } else {
-            let zulip_status = if notif_config.zulip.is_some() {
-                "configured"
-            } else {
-                "not configured"
-            };
-            lines.push(format!(
-                "notifications: OK (desktop={}, zulip={})",
-                notif_config.desktop, zulip_status
-            ));
-        }
+    } else {
+        lines.push("policy: not found (no policy file configured)".into());
     }
 
+    check_sandbox_and_session(&mut lines, input);
+    finish_session_start(lines)
+}
+
+/// Check sandbox support, init session, and symlink — shared by both paths.
+fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookInput) {
     // 3. Check sandbox support
     let support = crate::sandbox::check_support();
     match support {
@@ -435,19 +389,6 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
         }
     }
 
-    // 5b. Export CLASH_BIN and CLASH_SESSION_DIR via CLAUDE_ENV_FILE
-    //     Points to ~/.local/bin/clash (the symlink created above).
-    if let Ok(env_file) = std::env::var("CLAUDE_ENV_FILE") {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&env_file) {
-            let home = std::env::var("HOME").unwrap_or_default();
-            let bin_path = std::path::Path::new(&home).join(".local/bin/clash");
-            let _ = writeln!(f, "CLASH_BIN={}", bin_path.display());
-            let session_dir = crate::audit::session_dir(&input.session_id);
-            let _ = writeln!(f, "CLASH_SESSION_DIR={}", session_dir.display());
-        }
-    }
-
     // 6. Session metadata
     if let Some(ref source) = input.source {
         lines.push(format!("session source: {}", source));
@@ -455,7 +396,9 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
     if let Some(ref model) = input.model {
         lines.push(format!("model: {}", model));
     }
+}
 
+fn finish_session_start(lines: Vec<String>) -> anyhow::Result<HookOutput> {
     info!(context = %lines.join("; "), "SessionStart validation");
 
     let context = if lines.is_empty() {
@@ -516,7 +459,7 @@ mod tests {
 
     #[test]
     fn test_session_start_recommends_skip_permissions_in_default_mode() {
-        let input = default_session_start_input(); // permission_mode = "default"
+        let input = default_session_start_input();
         let output = handle_session_start(&input).unwrap();
         let context = match &output.hook_specific_output {
             Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
@@ -541,7 +484,7 @@ mod tests {
         let ctx = context.expect("should have context");
         assert!(
             !ctx.contains("NOTE: Clash is managing permissions"),
-            "should NOT recommend --dangerously-skip-permissions when already in skip mode, got: {ctx}"
+            "should NOT recommend when already in skip mode, got: {ctx}"
         );
     }
 
@@ -555,17 +498,7 @@ mod tests {
             _ => panic!("expected SessionStart output"),
         };
         let ctx = context.expect("should have context");
-        assert!(
-            ctx.contains("policy enforcement is DISABLED"),
-            "should warn about disabled policy enforcement, got: {ctx}"
-        );
-        assert!(
-            ctx.contains("Filesystem sandboxing"),
-            "should mention sandbox is still active, got: {ctx}"
-        );
-        assert!(
-            ctx.contains("restart Claude Code without"),
-            "should explain how to re-enable, got: {ctx}"
-        );
+        assert!(ctx.contains("policy enforcement is DISABLED"), "got: {ctx}");
+        assert!(ctx.contains("Filesystem sandboxing"), "got: {ctx}");
     }
 }

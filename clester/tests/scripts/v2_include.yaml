@@ -1,0 +1,37 @@
+meta:
+  name: v2 sexpr policy — include directive
+  description: Test that (include ...) imports rules from other policy blocks
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "base"
+      (allow (fs read)))
+    (policy "main"
+      (include "base")
+      (allow (exec "git" *)))
+
+steps:
+  - name: read allowed via included base policy
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/foo.txt
+    expect:
+      decision: allow
+
+  - name: git allowed via main policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: npm denied by default
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: deny

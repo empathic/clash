@@ -1,0 +1,61 @@
+meta:
+  name: v2 sexpr policy — basic rules
+  description: Test allow/deny rules using the v2 s-expression policy engine
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *))
+      (allow (fs read))
+      (deny (fs read "/etc/passwd")))
+
+steps:
+  - name: git status allowed by exec rule
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: git diff allowed by exec rule
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "git diff --cached"
+    expect:
+      decision: allow
+
+  - name: read any file allowed by fs read rule
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/somefile.txt
+    expect:
+      decision: allow
+
+  - name: read /etc/passwd denied by specific deny
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: "/etc/passwd"
+    expect:
+      decision: deny
+
+  - name: curl denied by default deny
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "curl https://example.com"
+    expect:
+      decision: deny
+
+  - name: write denied by default deny
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/output.txt
+      content: hello
+    expect:
+      decision: deny

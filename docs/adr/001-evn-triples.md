@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+**Superseded** by v2 capability-based policy language (2026-02).
 
 ## Context
 
@@ -30,15 +30,25 @@ Use **(entity, verb, noun)** triples as the fundamental unit of policy. Each sta
 
 This maps directly to tool invocations: *who* is calling *what tool* on *what resource*.
 
+## Superseded By
+
+The v2 policy language replaces EVN triples with **capability-based rules** using s-expression syntax. Instead of (entity, verb, noun) mapping to tools, v2 uses three capability domains:
+
+- **exec** — command execution (binary + arguments)
+- **fs** — filesystem operations (read/write/create/delete + path)
+- **net** — network access (domain)
+
+This decouples policy from tool names and provides compile-time conflict detection through specificity-based ordering. See [policy-semantics.md](../policy-semantics.md) for the v2 evaluation model.
+
 ## Consequences
 
-**Positive:**
+**Positive (original):**
 - Natural mapping to tool calls — every tool invocation has an actor, an action, and a target
 - Entity dimension enables per-agent policies (trust claude but not untrusted agents)
-- Negation on entity and noun slots enables "everyone except" and "everything except" patterns
 - Simple mental model: each rule is a sentence ("allow agent:claude to execute git commands")
 
-**Negative:**
-- Verbs are fixed to tool types — custom verbs require the new-format arbitrary verb strings
-- Noun semantics vary by verb (file path for read/write, command string for execute) — the same noun pattern means different things in different contexts
+**Negative (motivating v2):**
+- Verbs are tied to tool types — "block git push" requires knowing which tool runs it
+- Noun semantics vary by verb (file path for read/write, command string for execute)
+- No compile-time conflict detection — ambiguous rule orderings resolved at runtime
 - Entity hierarchy is shallow (type + optional name) — no nested groups or inheritance

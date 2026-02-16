@@ -1,0 +1,53 @@
+meta:
+  name: v2 sexpr policy — default deny blocks all
+  description: With default deny everything not explicitly allowed is blocked
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *)))
+
+steps:
+  - name: git allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: npm denied
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: deny
+
+  - name: read denied
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/somefile.txt
+    expect:
+      decision: deny
+
+  - name: write denied
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/out.txt
+      content: test
+    expect:
+      decision: deny
+
+  - name: edit denied
+    hook: pre-tool-use
+    tool_name: Edit
+    tool_input:
+      file_path: /tmp/out.txt
+      old_string: hello
+      new_string: world
+    expect:
+      decision: deny

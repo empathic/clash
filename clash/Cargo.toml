@@ -21,6 +21,7 @@ tracing-subscriber = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 bitflags = { workspace = true }
+lexpr = { workspace = true }
 
 libc = { workspace = true }
 clash_notify = { workspace = true }

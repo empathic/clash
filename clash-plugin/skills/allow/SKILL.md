@@ -11,15 +11,15 @@ Help the user add an **allow** rule to their clash policy.
    - Avoid: `allow bash git status` (too narrow, user will hit another prompt soon)
    - If unsure, ask the user what they want to allow.
    - **Bare verb shortcuts**: if the user wants a common capability, use a bare verb:
-     - `$CLASH_BIN policy allow edit` — allow editing files in the project
-     - `$CLASH_BIN policy allow bash` — allow running commands in the project
-     - `$CLASH_BIN policy allow web` — allow web search and fetch
-     - `$CLASH_BIN policy allow read` — allow reading files in the project
+     - `clash policy allow edit` — allow editing files in the project
+     - `clash policy allow bash` — allow running commands in the project
+     - `clash policy allow web` — allow web search and fetch
+     - `clash policy allow read` — allow reading files in the project
    - **Full rule** for specific patterns:
-     - `$CLASH_BIN policy allow "bash git *"` — allow all git commands
+     - `clash policy allow "bash git *"` — allow all git commands
    - If the request involves a **directory path** or filesystem access (e.g., "allow access to ~/Library/Caches"):
      - Use `"* *"` as the rule with a `--fs` constraint
-     - Example: `$CLASH_BIN policy allow "* *" --fs "full:subpath(~/Library/Caches)"`
+     - Example: `clash policy allow "* *" --fs "full:subpath(~/Library/Caches)"`
      - Capabilities: `read`, `write`, `create`, `delete`, `execute`, or `full` (all of the above)
      - Filters: `subpath(path)`, `literal(path)`, `regex(pattern)` — combinable with `|` (or) and `&` (and)
 
@@ -29,15 +29,15 @@ Help the user add an **allow** rule to their clash policy.
 
 3. **Dry-run first** to preview the change:
    ```bash
-   $CLASH_BIN policy allow "RULE" --dry-run
+   clash policy allow "RULE" --dry-run
    # Or with filesystem constraints:
-   $CLASH_BIN policy allow "* *" --fs "full:subpath(~/dir)" --dry-run
+   clash policy allow "* *" --fs "full:subpath(~/dir)" --dry-run
    ```
    Show the output to the user.
 
 4. **Get confirmation**, then apply:
    ```bash
-   $CLASH_BIN policy allow "RULE"
+   clash policy allow "RULE"
    ```
 
 5. **Report success** and explain that the rule is now active.

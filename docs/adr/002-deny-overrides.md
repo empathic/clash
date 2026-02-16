@@ -37,14 +37,15 @@ If any matching rule says `deny`, the result is `deny` — regardless of how man
 - Cannot have a targeted allow that overrides a broader deny — must restructure the deny rule to be more specific
 - Makes the `delegate` effect lowest priority, which means you can't delegate a decision that another rule denies
 
-## Amendment: Constraint Specificity (2026-02)
+## Amendment: Specificity-Based Ordering (v2, 2026-02)
 
-The strict deny-overrides model is preserved, but among non-deny rules we now apply **constraint specificity**: a rule with active inline constraints (url, args, pipe, redirect) beats a rule without constraints, regardless of effect level. This allows patterns like:
+The strict deny-overrides model is preserved across capability domains, but within a domain v2 uses **specificity-based first-match** instead of collecting all matches. Rules are sorted at compile time (most specific first) and the first matching rule wins. Conflicts (same specificity, different effects, overlapping matchers) are rejected at compile time.
 
-```yaml
-allow webfetch *:
-  url: ["github.com"]    # constrained allow — wins for github.com
-ask webfetch *:          # unconstrained ask — wins for everything else
+This means:
+
+```
+(deny  (exec "git" "push" *))    ; more specific — checked first
+(allow (exec "git" *))           ; less specific — checked second
 ```
 
-Deny is unaffected — it always wins regardless of constraint specificity. This amendment resolves the limitation that a targeted allow could never override a broader ask.
+`git push` hits the deny. `git status` skips the deny (no match) and hits the allow. Deny still always wins when both domains match (cross-domain resolution: deny > ask > allow).

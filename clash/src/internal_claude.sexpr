@@ -1,0 +1,6 @@
+; Internal: Claude agent workspace
+(policy "__internal_claude__"
+  (allow (fs (or read write) (subpath (join (env HOME) "/.claude"))))
+  ; Agent-internal tools (Skill, Task, AskUserQuestion, EnterPlanMode, etc.)
+  ; are always allowed — they have no external side effects.
+  (allow (tool)))

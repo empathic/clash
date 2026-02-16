@@ -31,11 +31,9 @@ clash init [OPTIONS]
 
 **What it does:**
 
-1. Creates `~/.clash/policy.yaml` with a safe default policy (or reconfigures an existing one)
+1. Creates `~/.clash/policy.sexpr` with a safe default policy (or reconfigures an existing one)
 2. Sets `bypassPermissions: true` in Claude Code settings so clash is the sole permission handler
 3. Offers an interactive wizard to configure capabilities
-
-If a policy already exists and stdin is a TTY, prompts you to choose between reconfiguring from scratch or updating the existing configuration.
 
 **Examples:**
 
@@ -64,7 +62,7 @@ clash launch [OPTIONS] [ARGS]...
 
 | Flag | Description |
 |------|-------------|
-| `--policy <POLICY>` | Path to policy file (default: `~/.clash/policy.yaml`) |
+| `--policy <POLICY>` | Path to policy file (default: `~/.clash/policy.sexpr`) |
 
 **Arguments:**
 
@@ -79,7 +77,7 @@ clash launch [OPTIONS] [ARGS]...
 clash launch
 
 # Launch with a custom policy
-clash launch --policy ./project-policy.yaml
+clash launch --policy ./project.policy
 
 # Pass arguments to Claude Code
 clash launch -- --model sonnet
@@ -128,48 +126,13 @@ echo '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | clash explain
 
 ---
 
-## clash migrate
-
-Migrate legacy Claude Code permissions into clash policy. Reads Claude Code's existing permission settings and converts them to clash rules.
-
-```
-clash migrate [OPTIONS]
-```
-
-**Options:**
-
-| Flag | Description |
-|------|-------------|
-| `--dry-run` | Preview the migration: show which rules would be added without writing |
-| `--default <DEFAULT>` | Default effect when creating a new policy (ignored when merging). Default: `ask` |
-
-**Behavior:**
-
-- If no `policy.yaml` exists, creates one with migrated rules
-- If one already exists, merges new rules into the active profile
-
-**Examples:**
-
-```bash
-# Preview what would be migrated
-clash migrate --dry-run
-
-# Migrate with deny as default
-clash migrate --default deny
-
-# Standard migration
-clash migrate
-```
-
----
-
 ## clash policy
 
-View and edit policy rules.
+View the compiled policy.
 
 ### clash policy show
 
-Show active profile, default permission, and available profiles.
+Show the compiled decision tree: default effect, policy name, and all rules grouped by capability domain.
 
 ```
 clash policy show [OPTIONS]
@@ -188,120 +151,6 @@ clash policy show
 clash policy show --json
 ```
 
-### clash policy list-rules
-
-List all rules in the active profile, with included profiles resolved.
-
-```
-clash policy list-rules [OPTIONS]
-```
-
-**Options:**
-
-| Flag | Description |
-|------|-------------|
-| `--profile <PROFILE>` | Show rules for a specific profile instead of the active one |
-| `--json` | Output as JSON |
-
-**Examples:**
-
-```bash
-# List rules in active profile
-clash policy list-rules
-
-# List rules in a specific profile
-clash policy list-rules --profile safe-git
-
-# Machine-readable output
-clash policy list-rules --json
-```
-
-### clash policy add-rule
-
-Add a rule to the policy file.
-
-```
-clash policy add-rule [OPTIONS] <RULE>
-```
-
-**Arguments:**
-
-| Arg | Description |
-|-----|-------------|
-| `<RULE>` | Rule in `"effect verb noun"` format |
-
-**Options:**
-
-| Flag | Description |
-|------|-------------|
-| `--profile <PROFILE>` | Target profile (default: active profile from `default.profile`) |
-| `--dry-run` | Print modified policy to stdout without writing |
-
-**Examples:**
-
-```bash
-# Deny rm -rf
-clash policy add-rule "deny bash rm -rf *"
-
-# Allow cargo in a specific profile
-clash policy add-rule "allow bash cargo *" --profile main
-
-# Preview the change
-clash policy add-rule "allow read *" --dry-run
-```
-
-### clash policy remove-rule
-
-Remove a rule from the policy file.
-
-```
-clash policy remove-rule [OPTIONS] <RULE>
-```
-
-**Arguments:**
-
-| Arg | Description |
-|-----|-------------|
-| `<RULE>` | Rule in `"effect verb noun"` format to remove |
-
-**Options:**
-
-| Flag | Description |
-|------|-------------|
-| `--profile <PROFILE>` | Target profile |
-| `--dry-run` | Preview the change without writing |
-
-**Examples:**
-
-```bash
-clash policy remove-rule "allow bash *"
-clash policy remove-rule "deny bash git push*" --profile safe-git
-```
-
-### clash policy schema
-
-Show the full schema of `policy.yaml` settings — sections, fields, types, and defaults.
-
-```
-clash policy schema [OPTIONS]
-```
-
-**Options:**
-
-| Flag | Description |
-|------|-------------|
-| `--json` | Output as JSON (useful for tooling and agent integration) |
-
-**Examples:**
-
-```bash
-# Human-readable schema
-clash policy schema
-
-# JSON for programmatic use
-clash policy schema --json
-```
-
 ---
 
 ## clash sandbox
@@ -313,12 +162,6 @@ Apply and test kernel-level sandbox restrictions. Clash uses Seatbelt on macOS a
 Check if sandboxing is supported on the current platform.
 
 ```
-clash sandbox check
-```
-
-**Examples:**
-
-```bash
 clash sandbox check
 ```
 
@@ -401,7 +244,7 @@ clash hook permission-request
 
 ### clash hook session-start
 
-Called when a Claude Code session begins. Initializes session state, exports environment variables (`CLASH_BIN`, `CLASH_SESSION_DIR`), and injects system prompt context. Reads hook input from stdin as JSON.
+Called when a Claude Code session begins. Initializes session state, symlinks the clash binary into `~/.local/bin/`, and injects system prompt context. Reads hook input from stdin as JSON.
 
 ```
 clash hook session-start
@@ -439,21 +282,12 @@ clash bug "Sandbox blocks cargo build in target directory"
 
 # Detailed report with diagnostics
 clash bug "Policy not matching git commands" \
-  -d "The rule 'allow bash git *' does not match 'git status'" \
+  -d "The rule (allow (exec git *)) does not match git status" \
   --include-config \
   --include-logs
 ```
 
 ---
-
-## Environment Variables
-
-Clash exports these environment variables during a session:
-
-| Variable | Description |
-|----------|-------------|
-| `CLASH_BIN` | Absolute path to the clash binary |
-| `CLASH_SESSION_DIR` | Path to the per-session temp directory (`/tmp/clash-<session_id>/`) |
 
 ---
 
