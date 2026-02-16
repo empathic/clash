@@ -143,6 +143,7 @@ enum PolicyCmd {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::enum_variant_names)]
 enum Commands {
     /// Initialize a new clash policy with a safe default configuration
     Init {
@@ -185,6 +186,17 @@ enum Commands {
     /// View and edit policy rules
     #[command(subcommand)]
     Policy(PolicyCmd),
+
+    /// Print the full command and subcommand hierarchy
+    #[command(name = "commands")]
+    ShowCommands {
+        /// Output as JSON (for programmatic use by skills/agents)
+        #[arg(long)]
+        json: bool,
+        /// Include hidden/internal commands
+        #[arg(long)]
+        all: bool,
+    },
 
     /// Apply sandbox restrictions and exec commands
     #[command(subcommand)]
@@ -279,6 +291,7 @@ fn main() -> Result<()> {
             Commands::Allow { rule, dry_run } => handle_allow_deny(Effect::Allow, &rule, dry_run),
             Commands::Deny { rule, dry_run } => handle_allow_deny(Effect::Deny, &rule, dry_run),
             Commands::Ask { rule, dry_run } => handle_allow_deny(Effect::Ask, &rule, dry_run),
+            Commands::ShowCommands { json, all } => run_commands(json, all),
             Commands::Policy(cmd) => run_policy(cmd),
             Commands::Sandbox(cmd) => run_sandbox(cmd),
             Commands::Hook(hook_cmd) => {
@@ -380,6 +393,102 @@ fn run_launch(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
 
     let status = cmd.status().context("failed to launch claude")?;
     std::process::exit(status.code().unwrap_or(1));
+}
+
+/// Print the full command + subcommand hierarchy.
+fn run_commands(json: bool, show_all: bool) -> Result<()> {
+    use clap::CommandFactory;
+    let cmd = Cli::command();
+
+    if json {
+        let tree = command_to_json(&cmd, show_all);
+        println!("{}", serde_json::to_string_pretty(&tree)?);
+    } else {
+        print_command_tree(&cmd, 0, show_all);
+    }
+    Ok(())
+}
+
+fn command_to_json(cmd: &clap::Command, show_all: bool) -> serde_json::Value {
+    let args: Vec<serde_json::Value> = cmd
+        .get_arguments()
+        .filter(|a| a.get_id() != "help" && a.get_id() != "version")
+        .map(|a| {
+            let mut obj = serde_json::json!({
+                "name": a.get_id().to_string(),
+                "required": a.is_required_set(),
+            });
+            if let Some(short) = a.get_short() {
+                obj["short"] = serde_json::json!(format!("-{short}"));
+            }
+            if let Some(long) = a.get_long() {
+                obj["long"] = serde_json::json!(format!("--{long}"));
+            }
+            if let Some(help) = a.get_help() {
+                obj["help"] = serde_json::json!(help.to_string());
+            }
+            obj
+        })
+        .collect();
+
+    let subcommands: Vec<serde_json::Value> = cmd
+        .get_subcommands()
+        .filter(|s| s.get_name() != "help" && (show_all || !s.is_hide_set()))
+        .map(|s| command_to_json(s, show_all))
+        .collect();
+
+    let mut obj = serde_json::json!({
+        "name": cmd.get_name(),
+        "args": args,
+        "subcommands": subcommands,
+    });
+    if let Some(about) = cmd.get_about() {
+        obj["about"] = serde_json::json!(about.to_string());
+    }
+    obj
+}
+
+fn print_command_tree(cmd: &clap::Command, depth: usize, show_all: bool) {
+    let indent = "  ".repeat(depth);
+
+    if depth == 0 {
+        let about = cmd
+            .get_about()
+            .map(|a| format!(" - {a}"))
+            .unwrap_or_default();
+        println!("{}{}{}", indent, cmd.get_name(), about);
+    }
+
+    // Print arguments for this command
+    for arg in cmd.get_arguments() {
+        if arg.get_id() == "help" || arg.get_id() == "version" {
+            continue;
+        }
+        let arg_indent = "  ".repeat(depth + 1);
+        let help = arg.get_help().map(|h| format!("  {h}")).unwrap_or_default();
+        if let Some(long) = arg.get_long() {
+            println!("{arg_indent}--{long}{help}");
+        } else if let Some(short) = arg.get_short() {
+            println!("{arg_indent}-{short}{help}");
+        } else {
+            let req = if arg.is_required_set() { "" } else { "?" };
+            println!("{arg_indent}<{}>{req}{help}", arg.get_id());
+        }
+    }
+
+    // Print subcommands
+    for sub in cmd.get_subcommands() {
+        if sub.get_name() == "help" || (!show_all && sub.is_hide_set()) {
+            continue;
+        }
+        let sub_indent = "  ".repeat(depth + 1);
+        let about = sub
+            .get_about()
+            .map(|a| format!("  {a}"))
+            .unwrap_or_default();
+        println!("{sub_indent}{}{}", sub.get_name(), about);
+        print_command_tree(sub, depth + 1, show_all);
+    }
 }
 
 /// Lightweight input for the explain command — only requires tool_name and tool_input.
