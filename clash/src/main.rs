@@ -528,27 +528,42 @@ fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String
     Ok(())
 }
 
-/// Initialize a new clash policy with deny-all defaults.
+/// Initialize or reconfigure a clash policy.
+///
+/// - If a sexp policy already exists, drop into the interactive wizard.
+/// - If only a legacy YAML policy exists, convert it via `claude -p` then
+///   drop into the wizard.
+/// - Otherwise, write the default policy and launch the wizard.
 #[instrument(level = Level::TRACE)]
 fn run_init(no_bypass: bool) -> Result<()> {
-    let path = ClashSettings::policy_file()?;
+    let sexpr_path = ClashSettings::policy_file()?;
 
-    if path.exists() && path.is_dir() {
+    if sexpr_path.exists() && sexpr_path.is_dir() {
         anyhow::bail!(
             "{} is a directory. Remove it first, then run `clash init`.",
-            path.display()
+            sexpr_path.display()
         );
     }
 
-    if path.exists() {
-        anyhow::bail!(
-            "Clash is already configured at {}.\nEdit the policy file directly or delete it and run `clash init` again.",
-            path.display()
+    if sexpr_path.exists() {
+        // Policy already exists — drop into the wizard for reconfiguration.
+        println!(
+            "Reconfiguring existing policy at {}\n",
+            sexpr_path.display()
         );
+        return clash::wizard::run();
     }
 
+    let yaml_path = ClashSettings::legacy_policy_file()?;
+    if yaml_path.exists() && yaml_path.is_file() {
+        // Legacy YAML policy found — attempt migration, then launch wizard.
+        migrate_yaml_policy(&yaml_path, &sexpr_path)?;
+        return clash::wizard::run();
+    }
+
+    // Fresh install — write default policy.
     std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
-    std::fs::write(&path, DEFAULT_POLICY)?;
+    std::fs::write(&sexpr_path, DEFAULT_POLICY)?;
 
     if !no_bypass && let Err(e) = set_bypass_permissions() {
         warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
@@ -558,14 +573,65 @@ fn run_init(no_bypass: bool) -> Result<()> {
         );
     }
 
-    println!("Clash initialized at {}", path.display());
-    println!();
-    println!("What happens now:");
-    println!("  - Claude can read files in this project");
-    println!("  - Everything else (editing, commands, web access) is blocked");
-    println!("  - When Claude hits a block, you will see how to allow it");
-    println!();
-    println!("Run \"clash allow --help\" to see what you can unlock.");
+    println!("Clash initialized at {}\n", sexpr_path.display());
+
+    // Launch the wizard so the user can customize immediately.
+    clash::wizard::run()
+}
+
+/// Migrate a legacy YAML policy to s-expression format using `claude -p`.
+fn migrate_yaml_policy(yaml_path: &std::path::Path, sexpr_path: &std::path::Path) -> Result<()> {
+    let yaml_content =
+        std::fs::read_to_string(yaml_path).context("failed to read legacy policy.yaml")?;
+
+    let grammar = include_str!("../../docs/policy-grammar.md");
+
+    let prompt = format!(
+        "Convert this YAML clash policy to the s-expression format described in the grammar below.\n\
+         Output ONLY the s-expression policy text. No markdown fences, no explanation.\n\n\
+         ## Grammar\n\n{grammar}\n\n\
+         ## YAML Policy\n\n```yaml\n{yaml_content}\n```"
+    );
+
+    println!("Migrating legacy policy.yaml to s-expression format...");
+
+    let output = std::process::Command::new("claude")
+        .arg("-p")
+        .arg(&prompt)
+        .output()
+        .context("failed to run `claude -p` for policy migration — is claude on PATH?")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        warn!(stderr = %stderr, "claude -p failed during YAML migration");
+        eprintln!("Migration failed — writing default policy instead.");
+        eprintln!(
+            "Your legacy policy.yaml is preserved at {}",
+            yaml_path.display()
+        );
+        std::fs::create_dir_all(sexpr_path.parent().unwrap())?;
+        std::fs::write(sexpr_path, DEFAULT_POLICY)?;
+        return Ok(());
+    }
+
+    let sexpr_content = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    // Validate the converted policy compiles.
+    match clash::policy::compile_policy(&sexpr_content) {
+        Ok(_) => {
+            std::fs::create_dir_all(sexpr_path.parent().unwrap())?;
+            std::fs::write(sexpr_path, &sexpr_content)?;
+            println!("Migrated policy written to {}", sexpr_path.display());
+            println!("Legacy policy.yaml preserved at {}\n", yaml_path.display());
+        }
+        Err(e) => {
+            warn!(error = %e, "migrated policy failed validation");
+            eprintln!("Converted policy failed validation: {e}");
+            eprintln!("Writing default policy instead. Your legacy policy.yaml is preserved.");
+            std::fs::create_dir_all(sexpr_path.parent().unwrap())?;
+            std::fs::write(sexpr_path, DEFAULT_POLICY)?;
+        }
+    }
 
     Ok(())
 }

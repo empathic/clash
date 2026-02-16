@@ -367,24 +367,32 @@ fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookIn
     // 5. Symlink clash binary into ~/.local/bin
     #[cfg(unix)]
     if let Ok(exe_path) = std::env::current_exe() {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let dir = std::path::Path::new(&home).join(".local/bin");
-        let _ = std::fs::create_dir_all(&dir);
-        let link_path = dir.join("clash");
-        if let Ok(target) = std::fs::read_link(&link_path) {
-            if target != exe_path {
-                let _ = std::fs::remove_file(&link_path);
+        // Skip test binaries (target/debug/deps/clash-<hash>) — they embed
+        // the cargo test harness and aren't the real CLI binary.
+        let is_test_binary = exe_path.components().any(|c| c.as_os_str() == "deps");
+
+        if is_test_binary {
+            debug!(path = %exe_path.display(), "skipping symlink — test binary in deps/");
+        } else {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let dir = std::path::Path::new(&home).join(".local/bin");
+            let _ = std::fs::create_dir_all(&dir);
+            let link_path = dir.join("clash");
+            if let Ok(target) = std::fs::read_link(&link_path) {
+                if target != exe_path {
+                    let _ = std::fs::remove_file(&link_path);
+                    match std::os::unix::fs::symlink(&exe_path, &link_path) {
+                        Ok(()) => info!(dir = %dir.display(), "symlinked clash into ~/.local/bin"),
+                        Err(e) => debug!(error = %e, "failed to symlink clash into ~/.local/bin"),
+                    }
+                }
+            } else if link_path.exists() {
+                debug!("~/.local/bin/clash exists as a regular file, not replacing");
+            } else {
                 match std::os::unix::fs::symlink(&exe_path, &link_path) {
                     Ok(()) => info!(dir = %dir.display(), "symlinked clash into ~/.local/bin"),
                     Err(e) => debug!(error = %e, "failed to symlink clash into ~/.local/bin"),
                 }
-            }
-        } else if link_path.exists() {
-            debug!("~/.local/bin/clash exists as a regular file, not replacing");
-        } else {
-            match std::os::unix::fs::symlink(&exe_path, &link_path) {
-                Ok(()) => info!(dir = %dir.display(), "symlinked clash into ~/.local/bin"),
-                Err(e) => debug!(error = %e, "failed to symlink clash into ~/.local/bin"),
             }
         }
     }
