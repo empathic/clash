@@ -50,6 +50,25 @@ clash init --no-bypass
 
 ---
 
+## clash edit
+
+Interactive policy editor. Walks through building a policy rule by rule using a decision-tree interface.
+
+```
+clash edit
+```
+
+Opens an interactive wizard that lets you add and remove rules from your policy. Each step presents only valid options. Press Escape to go back at any prompt.
+
+**Examples:**
+
+```bash
+# Open the interactive policy editor
+clash edit
+```
+
+---
+
 ## clash status
 
 Show policy status: profiles, rules, security posture, and potential issues.

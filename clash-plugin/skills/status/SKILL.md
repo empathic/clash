@@ -19,4 +19,4 @@ Report the results to the user in plain English, including:
 For more detail, suggest:
 - `/clash:describe` for a full policy breakdown
 - `/clash:edit` to make changes
-- `clash policy setup` in the terminal for interactive reconfiguration
+- `clash edit` in the terminal for interactive reconfiguration

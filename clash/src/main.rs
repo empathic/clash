@@ -113,9 +113,6 @@ enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Interactive policy configuration wizard
-    Setup,
-
     // --- Hidden/power-user subcommands ---
     /// Show policy summary: active policy, default effect, rule count
     #[command(hide = true)]
@@ -183,6 +180,9 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Interactive policy editor
+    Edit,
 
     /// View and edit policy rules
     #[command(subcommand)]
@@ -304,6 +304,7 @@ fn main() -> Result<()> {
             Commands::Allow { rule, dry_run } => handle_allow_deny(Effect::Allow, &rule, dry_run),
             Commands::Deny { rule, dry_run } => handle_allow_deny(Effect::Deny, &rule, dry_run),
             Commands::Ask { rule, dry_run } => handle_allow_deny(Effect::Ask, &rule, dry_run),
+            Commands::Edit => clash::wizard::run(),
             Commands::ShowCommands { json, all } => run_commands(json, all),
             Commands::Explain { json, tool, args } => {
                 let input = if args.is_empty() {
@@ -1169,7 +1170,6 @@ fn run_policy(cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::Remove { rule, dry_run } => handle_remove(&rule, dry_run),
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Show { json } => handle_show(json),
-        PolicyCmd::Setup => clash::wizard::run(),
     }
 }
 

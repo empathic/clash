@@ -2,7 +2,7 @@
 //!
 //! Walks users through building a policy rule by rule using a decision-tree
 //! interface. Each step presents only syntactically valid options.
-//! Called by `clash policy setup`.
+//! Called by `clash edit`.
 //!
 //! Every prompt supports Escape/q to go back to the previous step.
 
