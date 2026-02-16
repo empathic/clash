@@ -7,25 +7,28 @@ Help the user add a **deny** rule to their clash policy.
 ## Steps
 
 1. **Determine the rule** from the conversation context. Consider what the user wants to block:
-   - Example: `clash policy deny "bash git push*"` (block git push)
-   - Example: `clash policy deny "bash sudo *"` (block sudo commands)
-   - Example: `clash policy deny "* *" --fs "write+delete:subpath(~/important)"` (block writes to a directory)
+   - Exec: `clash policy deny '(exec "git" "push" *)'` (block git push)
+   - Exec broad: `clash policy deny '(exec "sudo" *)'` (block sudo commands)
+   - Fs: `clash policy deny '(fs write (subpath (env HOME)))'` (block writes under home)
+   - Fs scoped: `clash policy deny '(fs (or write delete) (subpath "/important"))'` (block writes and deletes under a directory)
+   - Net: `clash policy deny '(net "evil.com")'` (block network access to a domain)
+   - Bare verbs also work for broad rules: `clash policy deny bash`, `clash policy deny edit`
    - If unsure, ask the user what they want to deny.
 
 2. **Confirm with the user** before making any changes:
    - Show the exact command that will be run
    - Explain what the rule means in plain English
-   - Remind the user that **deny always wins** — this rule will block the action even if a constrained allow or ask rule also matches
+   - Remind the user that **deny always wins** — this rule will block the action even if an allow rule also matches
 
 3. **Dry-run first** to preview the change:
    ```bash
-   clash policy deny "RULE" --dry-run
+   clash policy deny '(exec "git" "push" *)' --dry-run
    ```
    Show the output to the user.
 
 4. **Get confirmation**, then apply:
    ```bash
-   clash policy deny "RULE"
+   clash policy deny '(exec "git" "push" *)'
    ```
 
 5. **Report success** and explain that the deny rule is now active.
@@ -33,6 +36,6 @@ Help the user add a **deny** rule to their clash policy.
 ## Safety guidelines
 
 - Always dry-run first and show the result before applying
-- Explain that deny rules always take precedence, regardless of constraint specificity
-- Warn if the deny rule is very broad (e.g., `deny "bash *"` or `deny "* *"`) as it may block legitimate operations
+- Explain that deny rules always take precedence, regardless of specificity
+- Warn if the deny rule is very broad (e.g., `deny '(exec)'` or `deny '(fs)'`) as it may block legitimate operations
 - Suggest using `ask` instead of `deny` if the user might want to approve the action on a case-by-case basis

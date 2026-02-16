@@ -1,0 +1,46 @@
+meta:
+  name: v2 interactive policy — explain and list commands
+  description: >
+    Test that `clash policy list` and `clash policy explain`
+    produce useful output for inspecting the active policy.
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *))
+      (deny (exec "git" "push" *)))
+
+steps:
+  # List the active policy
+  - name: list shows rules
+    command: policy list
+    expect:
+      exit_code: 0
+      stdout_contains: "git"
+
+  # Explain a command that should be allowed
+  - name: explain git status
+    command: policy explain bash "git status"
+    expect:
+      exit_code: 0
+      stdout_contains: allow
+
+  # Explain a command that should be denied
+  - name: explain git push
+    command: policy explain bash "git push origin"
+    expect:
+      exit_code: 0
+      stdout_contains: deny
+
+  # Add a new rule and verify explain reflects it
+  - name: allow npm
+    command: policy allow '(exec "npm" *)'
+    expect:
+      exit_code: 0
+
+  - name: explain npm install after allow
+    command: policy explain bash "npm install"
+    expect:
+      exit_code: 0
+      stdout_contains: allow

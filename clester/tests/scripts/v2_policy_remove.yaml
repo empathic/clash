@@ -1,0 +1,54 @@
+meta:
+  name: v2 interactive policy — remove command
+  description: >
+    Test that `clash policy remove` removes rules at runtime
+    and subsequent hook invocations reflect the removal.
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *))
+      (allow (fs read)))
+
+steps:
+  # Baseline: both rules active
+  - name: git status allowed (baseline)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: read file allowed (baseline)
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/somefile.txt
+    expect:
+      decision: allow
+
+  # Remove the exec git rule
+  - name: remove git allow rule
+    command: policy remove '(allow (exec "git" *))'
+    expect:
+      exit_code: 0
+
+  # Verify git is now denied (default deny applies)
+  - name: git status now denied
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: deny
+
+  # Verify fs read is still allowed (unaffected)
+  - name: read file still allowed
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/somefile.txt
+    expect:
+      decision: allow

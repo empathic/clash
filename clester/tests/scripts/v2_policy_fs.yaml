@@ -1,0 +1,55 @@
+meta:
+  name: v2 interactive policy — filesystem rules
+  description: >
+    Test interactive policy changes for filesystem access using
+    s-expression syntax with subpath filters.
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *)))
+
+steps:
+  # Baseline: reads are denied
+  - name: read is denied (baseline)
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/somefile.txt
+    expect:
+      decision: deny
+
+  # Allow fs reads under /tmp
+  - name: allow reads under /tmp
+    command: policy allow '(fs read (subpath "/tmp"))'
+    expect:
+      exit_code: 0
+
+  # Verify reads under /tmp are now allowed
+  - name: read under /tmp is allowed
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/somefile.txt
+    expect:
+      decision: allow
+
+  # Verify reads outside /tmp are still denied
+  - name: read outside /tmp is still denied
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /etc/passwd
+    expect:
+      decision: deny
+
+  # Writes should still be denied (we only allowed read)
+  - name: write under /tmp is still denied
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/output.txt
+      content: hello
+    expect:
+      decision: deny
