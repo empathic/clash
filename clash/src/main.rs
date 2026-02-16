@@ -151,7 +151,7 @@ enum Commands {
         no_bypass: bool,
     },
 
-    /// Show what Claude can and cannot do (human-readable policy summary)
+    /// Show policy status: profiles, rules, security posture, and potential issues
     Status {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
@@ -647,7 +647,7 @@ fn set_bypass_permissions() -> Result<()> {
     Ok(())
 }
 
-/// Show what Claude can and cannot do (human-readable).
+/// Show policy status: profiles, rules, security posture, and potential issues.
 #[instrument(level = Level::TRACE)]
 fn run_status(_json: bool) -> Result<()> {
     let settings = ClashSettings::load_or_create()?;
@@ -663,52 +663,232 @@ fn run_status(_json: bool) -> Result<()> {
         }
     };
 
-    let rule_count = tree.exec_rules.len() + tree.fs_rules.len() + tree.net_rules.len();
-    println!(
-        "Policy: {} ({} rules, default={})",
-        tree.policy_name, rule_count, tree.default
-    );
+    // Read raw source for profile/inheritance analysis.
+    let (policy_path, source) = load_policy_source()?;
+    let top_levels =
+        clash::policy::parse::parse(&source).context("failed to parse policy source")?;
+
+    // 1. Default behavior
+    println!("Default behavior");
+    println!("================");
+    println!("  Default effect: {}", tree.default);
+    println!("  Active policy:  {}", tree.policy_name);
+    println!("  Policy file:    {}", policy_path.display());
+    println!();
+
+    // 2. Profiles and inheritance
+    println!("Profiles");
+    println!("========");
+    for tl in &top_levels {
+        if let clash::policy::ast::TopLevel::Policy { name, body } = tl {
+            let mut includes = Vec::new();
+            let mut rule_count = 0;
+            for item in body {
+                match item {
+                    clash::policy::ast::PolicyItem::Include(target) => {
+                        includes.push(target.as_str());
+                    }
+                    clash::policy::ast::PolicyItem::Rule(_) => {
+                        rule_count += 1;
+                    }
+                }
+            }
+            let active = if *name == tree.policy_name {
+                " (active)"
+            } else {
+                ""
+            };
+            println!("  \"{}\"{} — {} rules", name, active, rule_count);
+            if !includes.is_empty() {
+                println!(
+                    "    includes: {}",
+                    includes
+                        .iter()
+                        .map(|i| format!("\"{}\"", i))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
+    }
+    println!();
+
+    // 3. Rules with plain English descriptions
+    println!("Rules");
+    println!("=====");
+
+    let print_rules = |label: &str, rules: &[clash::policy::decision_tree::CompiledRule]| {
+        if rules.is_empty() {
+            return;
+        }
+        println!("  {}:", label);
+        for rule in rules {
+            let builtin = rule
+                .origin_policy
+                .as_ref()
+                .is_some_and(|p| p.starts_with("__internal_"));
+            let tag = if builtin { " [builtin]" } else { "" };
+            println!(
+                "    [{}] {}{} — {}",
+                rule.effect,
+                rule.source,
+                tag,
+                clash::wizard::describe_rule(&rule.source),
+            );
+        }
+    };
+
+    print_rules("Exec", &tree.exec_rules);
+    print_rules("Filesystem", &tree.fs_rules);
+    print_rules("Network", &tree.net_rules);
+    print_rules("Tool", &tree.tool_rules);
+
+    let total =
+        tree.exec_rules.len() + tree.fs_rules.len() + tree.net_rules.len() + tree.tool_rules.len();
+    if total == 0 {
+        println!(
+            "  (no rules — default {} applies to everything)",
+            tree.default
+        );
+    }
+    println!();
+
+    // 4. Effective security posture
+    println!("Effective security posture");
+    println!("=========================");
 
     let mut allowed = Vec::new();
     let mut denied = Vec::new();
+    let mut asked = Vec::new();
 
-    for rule in &tree.exec_rules {
-        match rule.effect {
-            Effect::Allow => allowed.push(format!("  exec: {}", rule.source)),
-            Effect::Deny => denied.push(format!("  exec: {}", rule.source)),
-            _ => {}
+    for rule in tree
+        .exec_rules
+        .iter()
+        .chain(&tree.fs_rules)
+        .chain(&tree.net_rules)
+        .chain(&tree.tool_rules)
+    {
+        // Skip builtin rules for the summary.
+        if rule
+            .origin_policy
+            .as_ref()
+            .is_some_and(|p| p.starts_with("__internal_"))
+        {
+            continue;
         }
-    }
-    for rule in &tree.fs_rules {
+        let desc = clash::wizard::describe_rule(&rule.source);
         match rule.effect {
-            Effect::Allow => allowed.push(format!("  fs: {}", rule.source)),
-            Effect::Deny => denied.push(format!("  fs: {}", rule.source)),
-            _ => {}
-        }
-    }
-    for rule in &tree.net_rules {
-        match rule.effect {
-            Effect::Allow => allowed.push(format!("  net: {}", rule.source)),
-            Effect::Deny => denied.push(format!("  net: {}", rule.source)),
-            _ => {}
+            Effect::Allow => allowed.push(desc),
+            Effect::Deny => denied.push(desc),
+            Effect::Ask => asked.push(desc),
         }
     }
 
     if !allowed.is_empty() {
-        println!("\nAllowed:");
+        println!("  Allowed:");
         for a in &allowed {
-            println!("{}", a);
+            println!("    - {}", a);
         }
     }
     if !denied.is_empty() {
-        println!("\nDenied:");
+        println!("  Denied:");
         for d in &denied {
-            println!("{}", d);
+            println!("    - {}", d);
+        }
+    }
+    if !asked.is_empty() {
+        println!("  Requires approval:");
+        for a in &asked {
+            println!("    - {}", a);
         }
     }
 
-    let policy_path = ClashSettings::policy_file()?;
-    println!("\nPolicy file: {}", policy_path.display());
+    println!(
+        "  Everything else: {}",
+        match tree.default {
+            Effect::Allow => "allowed by default",
+            Effect::Deny => "denied by default",
+            Effect::Ask => "requires approval by default",
+        }
+    );
+    println!();
+
+    // 5. Potential issues
+    println!("Potential issues");
+    println!("================");
+    let mut issues = Vec::new();
+
+    // Check for overly permissive wildcard exec rules
+    for rule in &tree.exec_rules {
+        if rule.effect == Effect::Allow
+            && !rule
+                .origin_policy
+                .as_ref()
+                .is_some_and(|p| p.starts_with("__internal_"))
+            && let clash::policy::ast::CapMatcher::Exec(ref m) = rule.source.matcher
+            && matches!(m.bin, clash::policy::ast::Pattern::Any)
+        {
+            issues.push(
+                "Wildcard exec allow: all commands are allowed. Consider restricting to specific programs."
+                    .to_string(),
+            );
+        }
+    }
+
+    // Check for overly permissive fs rules
+    for rule in &tree.fs_rules {
+        if rule.effect == Effect::Allow
+            && !rule
+                .origin_policy
+                .as_ref()
+                .is_some_and(|p| p.starts_with("__internal_"))
+            && let clash::policy::ast::CapMatcher::Fs(ref m) = rule.source.matcher
+            && matches!(m.op, OpPattern::Any)
+            && m.path.is_none()
+        {
+            issues.push(
+                "Wildcard filesystem allow: all file operations on all paths are allowed."
+                    .to_string(),
+            );
+        }
+    }
+
+    // Check for overly permissive net rules
+    for rule in &tree.net_rules {
+        if rule.effect == Effect::Allow
+            && !rule
+                .origin_policy
+                .as_ref()
+                .is_some_and(|p| p.starts_with("__internal_"))
+            && let clash::policy::ast::CapMatcher::Net(ref m) = rule.source.matcher
+            && matches!(m.domain, clash::policy::ast::Pattern::Any)
+        {
+            issues.push(
+                "Wildcard network allow: all domains are accessible. Consider restricting to specific domains."
+                    .to_string(),
+            );
+        }
+    }
+
+    // Check default allow with no deny rules
+    if tree.default == Effect::Allow
+        && tree
+            .exec_rules
+            .iter()
+            .chain(&tree.fs_rules)
+            .chain(&tree.net_rules)
+            .all(|r| r.effect != Effect::Deny)
+    {
+        issues.push("Default is allow with no deny rules: everything is permitted.".to_string());
+    }
+
+    if issues.is_empty() {
+        println!("  No issues detected.");
+    } else {
+        for issue in &issues {
+            println!("  - {}", issue);
+        }
+    }
 
     Ok(())
 }
