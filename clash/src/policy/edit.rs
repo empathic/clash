@@ -47,6 +47,38 @@ pub fn remove_rule(source: &str, policy_name: &str, rule_text: &str) -> Result<S
     Ok(serialize_top_levels(&top_levels))
 }
 
+/// Ensure a `(policy "name" ...)` block exists. If not, insert it (parsed from
+/// `body_source`) before the active policy so it's defined before any reference.
+/// Returns the (possibly modified) source. Idempotent.
+pub fn ensure_policy_block(source: &str, name: &str, body_source: &str) -> Result<String> {
+    let mut top_levels = parse::parse(source)?;
+
+    // Already exists? No-op.
+    if top_levels
+        .iter()
+        .any(|tl| matches!(tl, TopLevel::Policy { name: n, .. } if n == name))
+    {
+        return Ok(source.to_string());
+    }
+
+    // Parse the new block.
+    let new_block = parse::parse(body_source)?;
+    let block = new_block
+        .into_iter()
+        .find(|tl| matches!(tl, TopLevel::Policy { .. }))
+        .ok_or_else(|| anyhow::anyhow!("body_source must contain a (policy ...) block"))?;
+
+    // Insert before the active policy block so the sandbox is defined first.
+    let active = active_policy(source).unwrap_or_else(|_| "main".into());
+    let pos = top_levels
+        .iter()
+        .position(|tl| matches!(tl, TopLevel::Policy { name: n, .. } if *n == active))
+        .unwrap_or(top_levels.len());
+    top_levels.insert(pos, block);
+
+    Ok(serialize_top_levels(&top_levels))
+}
+
 /// Return the active policy name from the `(default ...)` declaration.
 pub fn active_policy(source: &str) -> Result<String> {
     let top_levels = parse::parse(source)?;

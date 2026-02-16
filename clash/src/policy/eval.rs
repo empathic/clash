@@ -272,10 +272,15 @@ impl DecisionTree {
             format!("resolved {} from [{}]", effect, effects.join(", "))
         };
 
-        // Build sandbox policy if the winning exec rule references one and
-        // the final effect is Allow.
+        // Build sandbox policy if the final effect is Allow.
+        // 1. If the matching exec rule references an explicit `:sandbox`, use it.
+        // 2. Otherwise, build an implicit sandbox from the policy's own fs/net
+        //    rules — ensuring bash commands respect the same filesystem
+        //    restrictions as tool-level operations.
         let sandbox = if effect == crate::policy::Effect::Allow {
-            sandbox_name.and_then(|name| self.build_sandbox_policy(&name, cwd))
+            sandbox_name
+                .and_then(|name| self.build_sandbox_policy(&name, cwd))
+                .or_else(|| self.build_implicit_sandbox())
         } else {
             None
         };

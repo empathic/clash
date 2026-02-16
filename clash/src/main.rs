@@ -94,6 +94,13 @@ enum PolicyCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Add an ask rule (requires approval before executing)
+    Ask {
+        /// S-expr rule body or bare verb (bash, edit, read, web)
+        rule: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Remove a rule from the policy
     Remove {
         /// Rule text to remove (Display form, e.g. '(deny (exec "git" "push" *))')
@@ -161,6 +168,14 @@ enum Commands {
 
     /// Deny a capability (bash, edit, read, web) or s-expr rule
     Deny {
+        /// Verb or s-expr rule
+        rule: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Require approval for a capability (bash, edit, read, web) or s-expr rule
+    Ask {
         /// Verb or s-expr rule
         rule: String,
         #[arg(long)]
@@ -263,6 +278,7 @@ fn main() -> Result<()> {
             Commands::Status { json } => run_status(json),
             Commands::Allow { rule, dry_run } => handle_allow_deny(Effect::Allow, &rule, dry_run),
             Commands::Deny { rule, dry_run } => handle_allow_deny(Effect::Deny, &rule, dry_run),
+            Commands::Ask { rule, dry_run } => handle_allow_deny(Effect::Ask, &rule, dry_run),
             Commands::Policy(cmd) => run_policy(cmd),
             Commands::Sandbox(cmd) => run_sandbox(cmd),
             Commands::Hook(hook_cmd) => {
@@ -766,6 +782,7 @@ fn run_policy(cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::Explain { json, tool, input } => run_explain(json, tool, input),
         PolicyCmd::Allow { rule, dry_run } => handle_allow_deny(Effect::Allow, &rule, dry_run),
         PolicyCmd::Deny { rule, dry_run } => handle_allow_deny(Effect::Deny, &rule, dry_run),
+        PolicyCmd::Ask { rule, dry_run } => handle_allow_deny(Effect::Ask, &rule, dry_run),
         PolicyCmd::Remove { rule, dry_run } => handle_remove(&rule, dry_run),
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Show { json } => handle_show(json),
@@ -834,15 +851,30 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
     } else {
         // Bare verb shortcuts
         match rule_str {
-            "bash" => Ok(vec![AstRule {
-                effect,
-                matcher: CapMatcher::Exec(ExecMatcher {
-                    bin: Pattern::Any,
-                    args: vec![],
-                    has_args: vec![],
-                }),
-                sandbox: None,
-            }]),
+            "bash" => Ok(vec![
+                AstRule {
+                    effect,
+                    matcher: CapMatcher::Exec(ExecMatcher {
+                        bin: Pattern::Any,
+                        args: vec![],
+                        has_args: vec![],
+                    }),
+                    sandbox: None,
+                },
+                AstRule {
+                    effect,
+                    matcher: CapMatcher::Fs(FsMatcher {
+                        op: OpPattern::Or(vec![
+                            FsOp::Read,
+                            FsOp::Write,
+                            FsOp::Create,
+                            FsOp::Delete,
+                        ]),
+                        path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+                    }),
+                    sandbox: None,
+                },
+            ]),
             "edit" => Ok(vec![AstRule {
                 effect,
                 matcher: CapMatcher::Fs(FsMatcher {
@@ -883,13 +915,14 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
 // Subcommand handlers
 // ---------------------------------------------------------------------------
 
-/// Handle `clash allow`, `clash deny`, `clash policy allow`, and `clash policy deny`.
+/// Handle `clash allow`, `clash deny`, `clash ask`, `clash policy allow`, etc.
 fn handle_allow_deny(effect: Effect, rule_str: &str, dry_run: bool) -> Result<()> {
     let (path, source) = load_policy_source()?;
     let policy_name = clash::policy::edit::active_policy(&source)?;
     let rules = parse_cli_rule(effect, rule_str)?;
 
     let mut modified = source.clone();
+
     for rule in &rules {
         modified = clash::policy::edit::add_rule(&modified, &policy_name, rule)?;
     }

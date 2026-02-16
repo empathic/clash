@@ -118,7 +118,25 @@ impl DecisionTree {
     /// no fs rules are found (no filesystem restrictions = no sandbox needed).
     pub fn build_sandbox_policy(&self, name: &str, _cwd: &str) -> Option<SandboxPolicy> {
         let rules = self.sandbox_policies.get(name)?;
+        Self::sandbox_from_rules(rules.iter())
+    }
 
+    /// Build an implicit `SandboxPolicy` from this policy's own fs/net rules.
+    ///
+    /// When an exec rule has no explicit `:sandbox` reference, the policy's
+    /// own fs and net rules define what the spawned process can do. This
+    /// ensures that `(allow (exec))` alongside `(allow (fs write (subpath
+    /// (env PWD))))` actually restricts bash writes to PWD — consistent with
+    /// how the fs rules constrain tool-level file operations.
+    pub fn build_implicit_sandbox(&self) -> Option<SandboxPolicy> {
+        Self::sandbox_from_rules(self.fs_rules.iter().chain(self.net_rules.iter()))
+    }
+
+    /// Shared implementation: convert a set of compiled rules into a
+    /// `SandboxPolicy` by extracting fs and net constraints.
+    fn sandbox_from_rules<'a>(
+        rules: impl Iterator<Item = &'a CompiledRule>,
+    ) -> Option<SandboxPolicy> {
         let mut sandbox_rules: Vec<SandboxRule> = Vec::new();
         let mut network = NetworkPolicy::Deny;
 
@@ -671,5 +689,85 @@ mod tests {
             tree.build_sandbox_policy("nonexistent", "/home/user/project")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn implicit_sandbox_from_fs_rules() {
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec))
+  (allow (fs (or write create) (subpath (env PWD))))
+  (allow (net)))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        // Exec rule has no explicit sandbox, but implicit sandbox should
+        // be built from the policy's own fs/net rules.
+        assert!(tree.exec_rules[0].sandbox.is_none());
+        let sandbox = tree
+            .build_implicit_sandbox()
+            .expect("should produce implicit sandbox");
+
+        // fs rule: allow write+create under PWD
+        assert_eq!(sandbox.rules.len(), 1);
+        assert_eq!(sandbox.rules[0].effect, RuleEffect::Allow);
+        assert_eq!(sandbox.rules[0].caps, Cap::WRITE | Cap::CREATE);
+        assert_eq!(sandbox.rules[0].path, "/home/user/project");
+        assert_eq!(sandbox.rules[0].path_match, PathMatch::Subpath);
+
+        // net rule: allow (because policy has allow net)
+        assert_eq!(sandbox.network, NetworkPolicy::Allow);
+    }
+
+    #[test]
+    fn implicit_sandbox_none_without_fs_rules() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec))
+  (allow (net)))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        // No fs rules → no implicit sandbox
+        assert!(tree.build_implicit_sandbox().is_none());
+    }
+
+    #[test]
+    fn explicit_sandbox_overrides_implicit() {
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "custom-sandbox"
+  (allow (fs read (subpath "/custom"))))
+(policy "main"
+  (allow (exec "cargo" *) :sandbox "custom-sandbox")
+  (allow (fs (or write create) (subpath (env PWD)))))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        // The explicit sandbox should use the custom policy, not the implicit one.
+        let explicit = tree
+            .build_sandbox_policy("custom-sandbox", "/home/user/project")
+            .expect("explicit sandbox");
+        assert_eq!(explicit.rules.len(), 1);
+        assert_eq!(explicit.rules[0].path, "/custom");
+
+        // The implicit sandbox uses the policy's own fs rules.
+        let implicit = tree.build_implicit_sandbox().expect("implicit sandbox");
+        assert_eq!(implicit.rules.len(), 1);
+        assert_eq!(implicit.rules[0].path, "/home/user/project");
     }
 }
