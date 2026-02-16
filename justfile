@@ -100,7 +100,7 @@ work issue plugin="":
     # Launch Claude in a new tmux window
     tmux new-window -n "$branch" -c "$dir" \
         "claude $plugin_args --dangerously-skip-permissions \
-        'Look up Linear issue $id using the linear MCP server. Read the issue description, understand the requirements, and start working on it.'"
+        'Look up Linear issue $id using the linear MCP server. Read the issue description, understand the requirements. /improve-as-expert execute on $id.'"
 
 # Remove all worktrees under clash-wt/ and prune
 wt-clean:
