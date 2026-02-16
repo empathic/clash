@@ -120,15 +120,15 @@ clash launch -- --model sonnet
 Explain which policy rule would match a given tool invocation. Useful for debugging why an action is allowed, denied, or prompts for confirmation.
 
 ```
-clash explain [OPTIONS] [TOOL] [INPUT]
+clash explain [OPTIONS] <TOOL> [ARGS]...
 ```
 
 **Arguments:**
 
 | Arg | Description |
 |-----|-------------|
-| `[TOOL]` | Tool type: `bash`, `read`, `write`, `edit` (or full name like `Bash`, `Read`) |
-| `[INPUT]` | The command, file path, or noun to check |
+| `<TOOL>` | Tool type: `bash`, `read`, `write`, `edit` (or full name like `Bash`, `Read`) |
+| `[ARGS]...` | The command, file path, or noun to check (remaining args joined) |
 
 **Options:**
 
@@ -136,22 +136,25 @@ clash explain [OPTIONS] [TOOL] [INPUT]
 |------|-------------|
 | `--json` | Output as JSON instead of human-readable text |
 
-Accepts either CLI arguments or JSON from stdin.
+Accepts either CLI arguments or JSON from stdin. Trailing arguments are joined with spaces, so quoting is not required.
 
 **Examples:**
 
 ```bash
-# Check a bash command
-clash explain bash "git push origin main"
+# Check a bash command (no quoting needed)
+clash explain bash git push origin main
 
 # Check a file read
-clash explain read ".env"
+clash explain read .env
 
 # JSON output for scripting
-clash explain --json bash "rm -rf /"
+clash explain --json bash rm -rf /
 
-# Pipe JSON input
-echo '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | clash explain
+# Quoting still works
+clash explain bash "git push origin main"
+
+# Pipe JSON input (via policy explain)
+echo '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | clash policy explain
 ```
 
 ---
