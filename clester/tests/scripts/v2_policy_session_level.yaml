@@ -1,0 +1,82 @@
+meta:
+  name: v2 session-level policy — session overrides user
+  description: >
+    Test that session-level policies override user-level policies.
+    Session policy lives at /tmp/clash-<session_id>/policy.sexpr and
+    has the highest precedence (Session > Project > User).
+
+clash:
+  # User-level: allow all git commands, deny npm
+  policy_sexpr: |
+    (default deny "user")
+    (policy "user"
+      (allow (exec "git" *))
+      (deny (exec "npm" *)))
+
+steps:
+  # 0. Clean up any leftover session dir and active_session marker from previous runs
+  - name: clean up stale session dir
+    shell: rm -rf "${TMPDIR:-/tmp}/clash-clester-test-session" && rm -f "$HOME/.clash/active_session"
+    expect:
+      exit_code: 0
+
+  # 1. Baseline: git push is allowed by user policy (before session policy)
+  - name: git push allowed by user policy before session override
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git push origin main
+    expect:
+      decision: allow
+
+  # 2. Send session-start hook to create the session directory
+  - name: session-start creates session dir
+    hook: session-start
+    expect:
+      exit_code: 0
+
+  # 3. Write session-level policy that denies git push
+  #    session_dir = $TMPDIR/clash-<session_id> (std::env::temp_dir() on the host)
+  - name: write session policy denying git push
+    shell: |
+      SESSION_DIR="${TMPDIR:-/tmp}/clash-clester-test-session"
+      cat > "$SESSION_DIR/policy.sexpr" <<'POLICY'
+      (default deny "session")
+      (policy "session"
+        (deny (exec "git" "push" *)))
+      POLICY
+    expect:
+      exit_code: 0
+
+  # 4. git push is now denied (session overrides user)
+  - name: git push denied by session policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git push origin main
+    expect:
+      decision: deny
+
+  # 5. git status is still allowed (no session rule for it, falls through to user allow)
+  - name: git status still allowed via user policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  # 6. npm install is still denied (user deny still applies, session has no npm rule)
+  - name: npm install still denied by user policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: deny
+
+  # 7. Clean up: remove session dir and active_session marker to avoid polluting other tests
+  - name: clean up session artifacts
+    shell: rm -rf "${TMPDIR:-/tmp}/clash-clester-test-session" && rm -f "$HOME/.clash/active_session"
+    expect:
+      exit_code: 0

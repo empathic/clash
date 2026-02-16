@@ -50,6 +50,8 @@ pub struct CompiledRule {
     pub sandbox: Option<String>,
     /// The policy this rule originated from (e.g. "main", "__internal_clash__").
     pub origin_policy: Option<String>,
+    /// The policy level this rule originated from (User, Project, etc.).
+    pub origin_level: Option<crate::settings::PolicyLevel>,
 }
 
 /// A pre-compiled capability matcher.

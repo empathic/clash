@@ -1,0 +1,124 @@
+meta:
+  name: v2 multi-level policy — project overrides user
+  description: >
+    Test that project-level policies override user-level policies,
+    that --scope targeting works, and that list/status reflect
+    multiple policy levels.
+
+clash:
+  # User-level: allow all git commands and npm
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *))
+      (allow (exec "npm" *)))
+
+  # Project-level: deny git push specifically
+  project_policy_sexpr: |
+    (default deny "proj")
+    (policy "proj"
+      (deny (exec "git" "push" *)))
+
+steps:
+  # 1. Project-level deny overrides user-level allow for git push
+  - name: git push denied by project policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git push origin main
+    expect:
+      decision: deny
+
+  # 2. User-level allow still works for non-overridden commands
+  - name: git status allowed by user policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  # 3. npm allowed by user policy (not overridden by project)
+  - name: npm install allowed by user policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: allow
+
+  # 4. Unrelated command still denied by default deny
+  - name: curl denied by default
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: curl https://example.com
+    expect:
+      decision: deny
+
+  # 5. policy list shows rules (includes both levels)
+  - name: policy list shows git rules
+    command: policy list
+    expect:
+      exit_code: 0
+      stdout_contains: "git"
+
+  # 6. status shows multiple policy files
+  - name: status shows policy files
+    command: status
+    expect:
+      exit_code: 0
+      stdout_contains: "Policy files"
+
+  # 7. explain shows the deny from project level
+  - name: explain git push shows deny
+    command: policy explain bash "git push origin"
+    expect:
+      exit_code: 0
+      stdout_contains: deny
+
+  # 8. explain git status shows allow
+  - name: explain git status shows allow
+    command: policy explain bash "git status"
+    expect:
+      exit_code: 0
+      stdout_contains: allow
+
+  # 9. Add an allow rule at project scope
+  - name: allow cargo at project scope
+    command: policy allow '(exec "cargo" *)' --scope project
+    expect:
+      exit_code: 0
+
+  # 10. Verify cargo is now allowed
+  - name: cargo build is now allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: cargo build
+    expect:
+      decision: allow
+
+  # 11. Add a deny rule at project scope
+  - name: deny npm at project scope
+    command: policy deny '(exec "npm" "publish" *)' --scope project
+    expect:
+      exit_code: 0
+
+  # 12. Verify npm publish is now denied (project deny overrides user allow)
+  - name: npm publish denied by project scope deny
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm publish
+    expect:
+      decision: deny
+
+  # 13. npm install still allowed (only publish was denied)
+  - name: npm install still allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: allow

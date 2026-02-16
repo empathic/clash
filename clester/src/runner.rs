@@ -147,6 +147,37 @@ pub fn run_command(clash_bin: &Path, env: &TestEnvironment, command: &str) -> Re
     })
 }
 
+/// Execute an arbitrary shell command step.
+///
+/// Runs the command via `sh -c` with the test environment's HOME and project dir.
+/// Useful for filesystem setup between hook steps (e.g., writing session policy files).
+pub fn run_shell(env: &TestEnvironment, shell_cmd: &str) -> Result<HookResult> {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(shell_cmd)
+        .env("HOME", &env.home_dir)
+        .current_dir(&env.project_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn shell command: {}", shell_cmd))?
+        .wait_with_output()
+        .with_context(|| format!("failed to wait for shell command: {}", shell_cmd))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit_code = output.status.code().unwrap_or(-1);
+    let parsed_output = serde_json::from_str::<serde_json::Value>(&stdout).ok();
+
+    Ok(HookResult {
+        exit_code,
+        output: parsed_output,
+        stdout,
+        stderr,
+    })
+}
+
 /// Build the JSON that gets piped to clash's stdin for a given step.
 fn build_stdin_json(env: &TestEnvironment, step: &Step) -> Result<String> {
     let hook = step
@@ -156,6 +187,7 @@ fn build_stdin_json(env: &TestEnvironment, step: &Step) -> Result<String> {
     match hook.as_str() {
         "pre-tool-use" | "post-tool-use" | "permission-request" => build_tool_use_json(env, step),
         "notification" => build_notification_json(env, step),
+        "session-start" => build_session_start_json(env, step),
         other => bail!("unknown hook type: {}", other),
     }
 }
@@ -184,6 +216,18 @@ fn build_tool_use_json(env: &TestEnvironment, step: &Step) -> Result<String> {
         "tool_name": tool_name,
         "tool_input": tool_input,
         "tool_use_id": "clester_tool_001"
+    });
+
+    Ok(serde_json::to_string(&json)?)
+}
+
+fn build_session_start_json(env: &TestEnvironment, _step: &Step) -> Result<String> {
+    let json = serde_json::json!({
+        "session_id": "clester-test-session",
+        "transcript_path": env.project_dir.join("transcript.jsonl").to_string_lossy(),
+        "cwd": env.project_dir.to_string_lossy(),
+        "permission_mode": "default",
+        "hook_event_name": "SessionStart"
     });
 
     Ok(serde_json::to_string(&json)?)
@@ -220,6 +264,7 @@ mod tests {
             name: "test".into(),
             hook: Some("pre-tool-use".into()),
             command: None,
+            shell: None,
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({"command": "git status"})),
             message: None,
@@ -251,6 +296,7 @@ mod tests {
             name: "notif".into(),
             hook: Some("notification".into()),
             command: None,
+            shell: None,
             tool_name: None,
             tool_input: None,
             message: Some("test message".into()),

@@ -1,0 +1,75 @@
+meta:
+  name: v2 multi-level policy — init --project
+  description: >
+    Test that `clash init --project` creates a project-level policy
+    and that it can be used alongside a user-level policy.
+
+clash:
+  # Only user-level policy — no project policy initially
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *)))
+
+steps:
+  # Baseline: git allowed, npm denied (user policy only)
+  - name: git status allowed (user policy only)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: npm denied (user policy only)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: deny
+
+  # Initialize project-level policy
+  - name: init project policy
+    command: init --project
+    expect:
+      exit_code: 0
+      stdout_contains: "Project policy initialized"
+
+  # Running init --project again is idempotent
+  - name: init project policy again (idempotent)
+    command: init --project
+    expect:
+      exit_code: 0
+      stdout_contains: "already exists"
+
+  # After init --project, status should show multiple policy files
+  - name: status shows two policy files
+    command: status
+    expect:
+      exit_code: 0
+      stdout_contains: "Policy files"
+
+  # Add a rule at project scope
+  - name: allow npm at project scope
+    command: policy allow '(exec "npm" *)' --scope project
+    expect:
+      exit_code: 0
+
+  # npm should now be allowed
+  - name: npm install now allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: allow
+
+  # git still allowed from user level
+  - name: git status still allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
