@@ -32,7 +32,7 @@ mod script;
 
 use assertions::check;
 use environment::TestEnvironment;
-use runner::{find_clash_binary, run_step};
+use runner::{find_clash_binary, run_command, run_step};
 use script::TestScript;
 
 #[derive(Parser, Debug)]
@@ -132,7 +132,12 @@ fn cmd_run(path: &Path, verbose: bool, clash_bin: Option<&Path>) -> Result<bool>
             total_steps += 1;
             let step_label = format!("  [{}] {}", i + 1, step.name);
 
-            match run_step(&clash_bin, &env, step) {
+            let result = if let Some(ref cmd) = step.command {
+                run_command(&clash_bin, &env, cmd)
+            } else {
+                run_step(&clash_bin, &env, step)
+            };
+            match result {
                 Ok(result) => {
                     let assertion = check(&step.expect, &result);
 
@@ -209,32 +214,25 @@ fn cmd_validate(path: &Path) -> Result<bool> {
                     script_path.display()
                 );
 
-                // Validate step hooks
-                for (i, step) in script.steps.iter().enumerate() {
-                    let valid_hooks = [
-                        "pre-tool-use",
-                        "post-tool-use",
-                        "permission-request",
-                        "notification",
-                    ];
-                    if !valid_hooks.contains(&step.hook.as_str()) {
-                        eprintln!(
-                            "  WARNING: step {} has unknown hook type: {}",
-                            i + 1,
-                            step.hook
-                        );
-                    }
+                // Validate steps
+                let errors = script.validate();
+                for e in &errors {
+                    eprintln!("  WARNING: {}", e);
+                }
 
+                for (i, step) in script.steps.iter().enumerate() {
                     // Tool-related hooks should have tool_name
-                    if matches!(
-                        step.hook.as_str(),
-                        "pre-tool-use" | "post-tool-use" | "permission-request"
-                    ) && step.tool_name.is_none()
+                    if let Some(ref hook) = step.hook
+                        && matches!(
+                            hook.as_str(),
+                            "pre-tool-use" | "post-tool-use" | "permission-request"
+                        )
+                        && step.tool_name.is_none()
                     {
                         eprintln!(
                             "  WARNING: step {} ({}) is a tool hook but has no tool_name",
                             i + 1,
-                            step.hook
+                            hook
                         );
                     }
                 }

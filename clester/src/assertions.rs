@@ -100,6 +100,38 @@ pub fn check(expect: &Expectation, result: &HookResult) -> AssertionResult {
         }
     }
 
+    // Check stdout_contains
+    if let Some(ref expected_substr) = expect.stdout_contains
+        && !result.stdout.contains(expected_substr.as_str())
+    {
+        failures.push(format!(
+            "stdout_contains: expected stdout to contain \"{}\", got:\n{}",
+            expected_substr,
+            result
+                .stdout
+                .lines()
+                .take(20)
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+
+    // Check stderr_contains
+    if let Some(ref expected_substr) = expect.stderr_contains
+        && !result.stderr.contains(expected_substr.as_str())
+    {
+        failures.push(format!(
+            "stderr_contains: expected stderr to contain \"{}\", got:\n{}",
+            expected_substr,
+            result
+                .stderr
+                .lines()
+                .take(20)
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+
     AssertionResult {
         passed: failures.is_empty(),
         failures,
@@ -181,6 +213,8 @@ mod tests {
             exit_code: Some(0),
             no_decision: None,
             reason_contains: None,
+            stdout_contains: None,
+            stderr_contains: None,
         };
         let result = HookResult {
             exit_code: 0,
@@ -200,6 +234,8 @@ mod tests {
             exit_code: None,
             no_decision: None,
             reason_contains: None,
+            stdout_contains: None,
+            stderr_contains: None,
         };
         let result = HookResult {
             exit_code: 0,
@@ -220,6 +256,8 @@ mod tests {
             exit_code: None,
             no_decision: Some(true),
             reason_contains: None,
+            stdout_contains: None,
+            stderr_contains: None,
         };
         let result = HookResult {
             exit_code: 0,
@@ -239,6 +277,8 @@ mod tests {
             exit_code: None,
             no_decision: None,
             reason_contains: Some("explicitly".into()),
+            stdout_contains: None,
+            stderr_contains: None,
         };
         let result = HookResult {
             exit_code: 0,
@@ -258,6 +298,8 @@ mod tests {
             exit_code: Some(0),
             no_decision: None,
             reason_contains: None,
+            stdout_contains: None,
+            stderr_contains: None,
         };
         let result = HookResult {
             exit_code: 2,
@@ -269,5 +311,69 @@ mod tests {
         let assertion = check(&expect, &result);
         assert!(!assertion.passed);
         assert!(assertion.failures[0].contains("exit code"));
+    }
+
+    #[test]
+    fn test_check_stdout_contains_pass() {
+        let expect = Expectation {
+            decision: None,
+            exit_code: None,
+            no_decision: None,
+            reason_contains: None,
+            stdout_contains: Some("(allow".into()),
+            stderr_contains: None,
+        };
+        let result = HookResult {
+            exit_code: 0,
+            output: None,
+            stdout: "(allow (exec \"git\" *))".into(),
+            stderr: String::new(),
+        };
+
+        let assertion = check(&expect, &result);
+        assert!(assertion.passed, "failures: {:?}", assertion.failures);
+    }
+
+    #[test]
+    fn test_check_stdout_contains_fail() {
+        let expect = Expectation {
+            decision: None,
+            exit_code: None,
+            no_decision: None,
+            reason_contains: None,
+            stdout_contains: Some("(allow".into()),
+            stderr_contains: None,
+        };
+        let result = HookResult {
+            exit_code: 0,
+            output: None,
+            stdout: "(deny (exec \"git\" *))".into(),
+            stderr: String::new(),
+        };
+
+        let assertion = check(&expect, &result);
+        assert!(!assertion.passed);
+        assert!(assertion.failures[0].contains("stdout_contains"));
+    }
+
+    #[test]
+    fn test_check_stderr_contains() {
+        let expect = Expectation {
+            decision: None,
+            exit_code: None,
+            no_decision: None,
+            reason_contains: None,
+            stdout_contains: None,
+            stderr_contains: Some("warning".into()),
+        };
+        let result = HookResult {
+            exit_code: 0,
+            output: None,
+            stdout: String::new(),
+            stderr: "warning: policy modified".into(),
+        };
+
+        let assertion = check(&expect, &result);
+        assert!(assertion.passed, "failures: {:?}", assertion.failures);
     }
 }

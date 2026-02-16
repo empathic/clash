@@ -1,0 +1,78 @@
+meta:
+  name: v2 interactive policy — allow command
+  description: >
+    Test that `clash policy allow` modifies the policy at runtime
+    and subsequent hook invocations respect the new rules.
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *)))
+
+steps:
+  # Baseline: git is allowed, npm is denied
+  - name: git status is allowed (baseline)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: npm install is denied (baseline)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: deny
+
+  # Dry-run: preview adding npm allow
+  - name: dry-run allow npm
+    command: policy allow '(exec "npm" *)' --dry-run
+    expect:
+      exit_code: 0
+      stdout_contains: "(allow (exec \"npm\" *))"
+
+  # npm should still be denied (dry-run doesn't persist)
+  - name: npm install still denied after dry-run
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: deny
+
+  # Actually add the allow rule
+  - name: allow npm commands
+    command: policy allow '(exec "npm" *)'
+    expect:
+      exit_code: 0
+
+  # Verify npm is now allowed
+  - name: npm install is now allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: allow
+
+  # Verify git is still allowed
+  - name: git status still allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  # Verify unrelated commands are still denied
+  - name: curl still denied
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: curl https://example.com
+    expect:
+      decision: deny

@@ -171,7 +171,13 @@ pub struct Step {
     pub name: String,
 
     /// Which hook to invoke: "pre-tool-use", "post-tool-use", "permission-request", "notification".
-    pub hook: String,
+    #[serde(default)]
+    pub hook: Option<String>,
+
+    /// Clash CLI command to run (e.g., "policy allow '(exec \"git\" *)'").
+    /// Mutually exclusive with `hook`. The value is the arguments to `clash`, not including `clash` itself.
+    #[serde(default)]
+    pub command: Option<String>,
 
     /// Tool name (for tool-related hooks): "Bash", "Read", "Write", "Edit".
     #[serde(default)]
@@ -211,6 +217,56 @@ pub struct Expectation {
     /// Expected substring in the decision reason.
     #[serde(default)]
     pub reason_contains: Option<String>,
+
+    /// Expected substring in stdout.
+    #[serde(default)]
+    pub stdout_contains: Option<String>,
+
+    /// Expected substring in stderr.
+    #[serde(default)]
+    pub stderr_contains: Option<String>,
+}
+
+impl Step {
+    pub fn validate(&self, index: usize) -> Result<(), String> {
+        match (&self.hook, &self.command) {
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "step {} ({}): cannot have both 'hook' and 'command'",
+                    index + 1,
+                    self.name
+                ));
+            }
+            (None, None) => {
+                return Err(format!(
+                    "step {} ({}): must have either 'hook' or 'command'",
+                    index + 1,
+                    self.name
+                ));
+            }
+            _ => {}
+        }
+
+        if let Some(ref hook) = self.hook {
+            let valid_hooks = [
+                "pre-tool-use",
+                "post-tool-use",
+                "permission-request",
+                "notification",
+            ];
+            if !valid_hooks.contains(&hook.as_str()) {
+                return Err(format!(
+                    "step {} ({}): unknown hook type '{}' (expected one of: {})",
+                    index + 1,
+                    self.name,
+                    hook,
+                    valid_hooks.join(", ")
+                ));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl TestScript {
@@ -223,6 +279,16 @@ impl TestScript {
     /// Parse a test script from a YAML string.
     pub fn from_str(content: &str) -> anyhow::Result<Self> {
         Ok(serde_yaml::from_str(content)?)
+    }
+
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        for (i, step) in self.steps.iter().enumerate() {
+            if let Err(e) = step.validate(i) {
+                errors.push(e);
+            }
+        }
+        errors
     }
 }
 
@@ -287,7 +353,7 @@ steps:
 "#;
 
         let script = TestScript::from_str(yaml).unwrap();
-        assert_eq!(script.steps[0].hook, "notification");
+        assert_eq!(script.steps[0].hook.as_deref(), Some("notification"));
         assert_eq!(script.steps[0].expect.no_decision, Some(true));
     }
 
@@ -376,5 +442,78 @@ steps:
         assert!(script.settings.user.is_some());
         assert!(script.settings.project.is_some());
         assert!(script.settings.project_local.is_some());
+    }
+
+    #[test]
+    fn test_parse_command_step() {
+        let yaml = r#"
+meta:
+  name: command step test
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *)))
+
+steps:
+  - name: add allow rule
+    command: policy allow '(exec "npm" *)' --dry-run
+    expect:
+      exit_code: 0
+      stdout_contains: "(allow (exec"
+"#;
+
+        let script = TestScript::from_str(yaml).unwrap();
+        assert_eq!(
+            script.steps[0].command.as_deref(),
+            Some("policy allow '(exec \"npm\" *)' --dry-run")
+        );
+        assert!(script.steps[0].hook.is_none());
+        assert!(script.steps[0].expect.stdout_contains.is_some());
+    }
+
+    #[test]
+    fn test_validate_step_both_hook_and_command() {
+        let yaml = r#"
+meta:
+  name: invalid step
+
+steps:
+  - name: bad step
+    hook: pre-tool-use
+    command: policy list
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+"#;
+
+        let script = TestScript::from_str(yaml).unwrap();
+        let errors = script.validate();
+        assert!(!errors.is_empty());
+        assert!(errors[0].contains("cannot have both"));
+    }
+
+    #[test]
+    fn test_validate_step_neither_hook_nor_command() {
+        let yaml = r#"
+meta:
+  name: invalid step
+
+steps:
+  - name: bad step
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+"#;
+
+        let script = TestScript::from_str(yaml).unwrap();
+        let errors = script.validate();
+        assert!(!errors.is_empty());
+        assert!(errors[0].contains("must have either"));
     }
 }

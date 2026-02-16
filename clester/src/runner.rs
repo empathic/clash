@@ -63,7 +63,10 @@ pub fn find_clash_binary() -> Result<PathBuf> {
 /// Execute a single test step by invoking the clash binary.
 pub fn run_step(clash_bin: &Path, env: &TestEnvironment, step: &Step) -> Result<HookResult> {
     let stdin_json = build_stdin_json(env, step)?;
-    let hook_subcommand = &step.hook;
+    let hook_subcommand = step
+        .hook
+        .as_ref()
+        .context("run_step called on a step without a hook")?;
 
     let mut child = Command::new(clash_bin)
         .arg("hook")
@@ -72,6 +75,7 @@ pub fn run_step(clash_bin: &Path, env: &TestEnvironment, step: &Step) -> Result<
         .current_dir(&env.project_dir)
         // Prevent any system-level clash config from leaking in
         .env_remove("CLASH_CONFIG")
+        .env_remove("CLASH_POLICY_FILE")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -104,9 +108,52 @@ pub fn run_step(clash_bin: &Path, env: &TestEnvironment, step: &Step) -> Result<
     })
 }
 
+/// Execute a command step by running `clash <args>` directly.
+///
+/// Unlike hook steps which pipe JSON to `clash hook <type>`, command steps
+/// invoke clash CLI subcommands (e.g., `clash policy allow '(exec "git" *)'`).
+pub fn run_command(clash_bin: &Path, env: &TestEnvironment, command: &str) -> Result<HookResult> {
+    let args = shlex::split(command)
+        .ok_or_else(|| anyhow::anyhow!("failed to parse command: {}", command))?;
+
+    if args.is_empty() {
+        bail!("empty command");
+    }
+
+    let output = Command::new(clash_bin)
+        .args(&args)
+        .env("HOME", &env.home_dir)
+        .current_dir(&env.project_dir)
+        .env_remove("CLASH_CONFIG")
+        .env_remove("CLASH_POLICY_FILE")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn clash command: clash {}", command))?
+        .wait_with_output()
+        .with_context(|| format!("failed to wait for clash command: clash {}", command))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit_code = output.status.code().unwrap_or(-1);
+    let parsed_output = serde_json::from_str::<serde_json::Value>(&stdout).ok();
+
+    Ok(HookResult {
+        exit_code,
+        output: parsed_output,
+        stdout,
+        stderr,
+    })
+}
+
 /// Build the JSON that gets piped to clash's stdin for a given step.
 fn build_stdin_json(env: &TestEnvironment, step: &Step) -> Result<String> {
-    match step.hook.as_str() {
+    let hook = step
+        .hook
+        .as_ref()
+        .context("build_stdin_json called on a step without a hook")?;
+    match hook.as_str() {
         "pre-tool-use" | "post-tool-use" | "permission-request" => build_tool_use_json(env, step),
         "notification" => build_notification_json(env, step),
         other => bail!("unknown hook type: {}", other),
@@ -120,7 +167,8 @@ fn build_tool_use_json(env: &TestEnvironment, step: &Step) -> Result<String> {
         .clone()
         .unwrap_or_else(|| serde_json::json!({}));
 
-    let hook_event_name = match step.hook.as_str() {
+    let hook = step.hook.as_deref().unwrap_or("pre-tool-use");
+    let hook_event_name = match hook {
         "pre-tool-use" => "PreToolUse",
         "post-tool-use" => "PostToolUse",
         "permission-request" => "PermissionRequest",
@@ -170,7 +218,8 @@ mod tests {
 
         let step = Step {
             name: "test".into(),
-            hook: "pre-tool-use".into(),
+            hook: Some("pre-tool-use".into()),
+            command: None,
             tool_name: Some("Bash".into()),
             tool_input: Some(serde_json::json!({"command": "git status"})),
             message: None,
@@ -180,6 +229,8 @@ mod tests {
                 exit_code: None,
                 no_decision: None,
                 reason_contains: None,
+                stdout_contains: None,
+                stderr_contains: None,
             },
         };
 
@@ -198,7 +249,8 @@ mod tests {
 
         let step = Step {
             name: "notif".into(),
-            hook: "notification".into(),
+            hook: Some("notification".into()),
+            command: None,
             tool_name: None,
             tool_input: None,
             message: Some("test message".into()),
@@ -208,6 +260,8 @@ mod tests {
                 exit_code: Some(0),
                 no_decision: Some(true),
                 reason_contains: None,
+                stdout_contains: None,
+                stderr_contains: None,
             },
         };
 

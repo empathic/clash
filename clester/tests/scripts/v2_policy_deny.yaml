@@ -1,0 +1,54 @@
+meta:
+  name: v2 interactive policy — deny command
+  description: >
+    Test that `clash policy deny` adds deny rules at runtime
+    and that deny rules override allow rules.
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *)))
+
+steps:
+  # Baseline: git push is allowed
+  - name: git push allowed (baseline)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git push origin main
+    expect:
+      decision: allow
+
+  # Deny git push specifically
+  - name: deny git push
+    command: policy deny '(exec "git" "push" *)'
+    expect:
+      exit_code: 0
+
+  # Verify git push is now denied
+  - name: git push is now denied
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git push origin main
+    expect:
+      decision: deny
+
+  # Verify git status is still allowed (deny is specific to push)
+  - name: git status still allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  # Verify git diff is still allowed
+  - name: git diff still allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git diff
+    expect:
+      decision: allow
