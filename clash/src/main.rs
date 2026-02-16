@@ -137,8 +137,9 @@ enum PolicyCmd {
         json: bool,
         /// Tool type: bash, read, write, edit (or full tool name like Bash, Read, etc.)
         tool: Option<String>,
-        /// The command, file path, or noun to check
-        input: Option<String>,
+        /// The command, file path, or noun to check (remaining args joined)
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
     },
 }
 
@@ -219,6 +220,18 @@ enum Commands {
         args: Vec<String>,
     },
 
+    /// Explain which policy rule would match a given tool invocation
+    Explain {
+        /// Output as JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+        /// Tool type: bash, read, write, edit (or full tool name like Bash, Read, etc.)
+        tool: String,
+        /// The command, file path, or noun to check (remaining args joined)
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
+
     /// File a bug report to the clash issue tracker
     #[command(alias = "rage", hide = true)]
     Bug {
@@ -292,6 +305,14 @@ fn main() -> Result<()> {
             Commands::Deny { rule, dry_run } => handle_allow_deny(Effect::Deny, &rule, dry_run),
             Commands::Ask { rule, dry_run } => handle_allow_deny(Effect::Ask, &rule, dry_run),
             Commands::ShowCommands { json, all } => run_commands(json, all),
+            Commands::Explain { json, tool, args } => {
+                let input = if args.is_empty() {
+                    None
+                } else {
+                    Some(args.join(" "))
+                };
+                run_explain(json, Some(tool), input)
+            }
             Commands::Policy(cmd) => run_policy(cmd),
             Commands::Sandbox(cmd) => run_sandbox(cmd),
             Commands::Hook(hook_cmd) => {
@@ -1134,7 +1155,14 @@ fn read_recent_logs(n: usize) -> Result<String> {
 fn run_policy(cmd: PolicyCmd) -> Result<()> {
     match cmd {
         PolicyCmd::Schema { json } => handle_schema(json),
-        PolicyCmd::Explain { json, tool, input } => run_explain(json, tool, input),
+        PolicyCmd::Explain { json, tool, args } => {
+            let input = if args.is_empty() {
+                None
+            } else {
+                Some(args.join(" "))
+            };
+            run_explain(json, tool, input)
+        }
         PolicyCmd::Allow { rule, dry_run } => handle_allow_deny(Effect::Allow, &rule, dry_run),
         PolicyCmd::Deny { rule, dry_run } => handle_allow_deny(Effect::Deny, &rule, dry_run),
         PolicyCmd::Ask { rule, dry_run } => handle_allow_deny(Effect::Ask, &rule, dry_run),
