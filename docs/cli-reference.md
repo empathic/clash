@@ -50,6 +50,36 @@ clash init --no-bypass
 
 ---
 
+## clash status
+
+Show policy status: profiles, rules, security posture, and potential issues.
+
+```
+clash status [OPTIONS]
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output as JSON instead of human-readable text |
+
+Outputs a comprehensive breakdown covering:
+
+- **Default behavior** — active policy name and default effect
+- **Profiles** — all defined profiles, rule counts, and inheritance via `include:`
+- **Rules** — every rule with its s-expression and a plain-English description
+- **Effective security posture** — what is allowed, denied, and requires approval
+- **Potential issues** — detectable misconfigurations (overly broad wildcards, missing deny rules, etc.)
+
+**Example:**
+
+```bash
+clash status
+```
+
+---
+
 ## clash launch
 
 Launch Claude Code with clash managing hooks and sandbox enforcement.

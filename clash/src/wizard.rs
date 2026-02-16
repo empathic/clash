@@ -19,7 +19,7 @@ use crate::settings::ClashSettings;
 // ---------------------------------------------------------------------------
 
 /// Describe a rule in plain English.
-fn describe_rule(rule: &Rule) -> String {
+pub fn describe_rule(rule: &Rule) -> String {
     let effect = describe_effect(rule.effect);
     let cap = describe_matcher(&rule.matcher);
     format!("{effect} {cap}")
