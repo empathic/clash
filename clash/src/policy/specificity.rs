@@ -15,7 +15,7 @@ use super::ast::*;
 /// compared lexicographically: the first non-equal dimension decides ordering.
 ///
 /// Only implements `PartialOrd` because some rules are incomparable (partial order).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Specificity {
     /// Primary: pattern specificity of the main discriminator (bin/op+path/domain).
     pub primary: u8,

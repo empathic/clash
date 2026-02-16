@@ -40,6 +40,166 @@ pub fn compile_policy_with_env(source: &str, env: &dyn EnvResolver) -> Result<De
     compile_ast(&ast, env)
 }
 
+/// Compile policies from multiple levels and merge into a single decision tree.
+///
+/// Each level is compiled independently (so conflict detection is per-level),
+/// then rules are merged with level-aware precedence. Higher-precedence levels'
+/// rules are placed before lower-precedence rules at the same specificity,
+/// ensuring they match first.
+///
+/// Internal policies are injected once into the merged tree (not per-level).
+///
+/// `levels` should contain `(PolicyLevel, source_text)` pairs.
+pub fn compile_multi_level(
+    levels: &[(crate::settings::PolicyLevel, &str)],
+) -> Result<DecisionTree> {
+    compile_multi_level_with_internals(levels, &StdEnvResolver, crate::settings::INTERNAL_POLICIES)
+}
+
+/// Multi-level compilation with configurable env resolver and internals.
+pub fn compile_multi_level_with_internals(
+    levels: &[(crate::settings::PolicyLevel, &str)],
+    env: &dyn EnvResolver,
+    internals: &[(&str, &str)],
+) -> Result<DecisionTree> {
+    use crate::settings::PolicyLevel;
+
+    if levels.is_empty() {
+        bail!("no policy levels to compile");
+    }
+
+    // Compile each level independently (no internal policies yet).
+    let mut level_trees: Vec<(PolicyLevel, DecisionTree)> = Vec::new();
+    for (level, source) in levels {
+        let tree = compile_policy_with_env(source, env)
+            .map_err(|e| anyhow::anyhow!("{} policy: {}", level.name(), e))?;
+        level_trees.push((*level, tree));
+    }
+
+    // Determine which level's (default ...) wins: highest precedence.
+    // Sort in precedence order (highest first).
+    level_trees.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let default_effect = level_trees[0].1.default;
+    let policy_name = level_trees[0].1.policy_name.clone();
+
+    // Merge rules from all levels, tagging with origin_level.
+    let mut exec_rules = Vec::new();
+    let mut fs_rules = Vec::new();
+    let mut net_rules = Vec::new();
+    let mut tool_rules = Vec::new();
+    let mut sandbox_policies = HashMap::new();
+
+    // Insert rules in precedence order (highest first) so that for same
+    // specificity, higher-precedence rules come first.
+    for (level, tree) in &level_trees {
+        for rule in &tree.exec_rules {
+            exec_rules.push(clone_compiled_rule(rule, Some(*level)));
+        }
+        for rule in &tree.fs_rules {
+            fs_rules.push(clone_compiled_rule(rule, Some(*level)));
+        }
+        for rule in &tree.net_rules {
+            net_rules.push(clone_compiled_rule(rule, Some(*level)));
+        }
+        for rule in &tree.tool_rules {
+            tool_rules.push(clone_compiled_rule(rule, Some(*level)));
+        }
+        for (name, rules) in &tree.sandbox_policies {
+            sandbox_policies.entry(name.clone()).or_insert_with(|| {
+                rules
+                    .iter()
+                    .map(|r| clone_compiled_rule(r, Some(*level)))
+                    .collect()
+            });
+        }
+    }
+
+    // Stable sort by specificity (most specific first). Since we inserted
+    // higher-precedence levels first, stable sort preserves level ordering
+    // within the same specificity.
+    let sort_fn = |a: &CompiledRule, b: &CompiledRule| {
+        b.specificity
+            .partial_cmp(&a.specificity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    };
+    exec_rules.sort_by(sort_fn);
+    fs_rules.sort_by(sort_fn);
+    net_rules.sort_by(sort_fn);
+    tool_rules.sort_by(sort_fn);
+
+    let mut merged = DecisionTree {
+        default: default_effect,
+        policy_name,
+        exec_rules,
+        fs_rules,
+        net_rules,
+        tool_rules,
+        sandbox_policies,
+    };
+
+    // Inject internal policies into the merged tree.
+    inject_internals(&mut merged, env, internals)?;
+
+    Ok(merged)
+}
+
+/// Clone a CompiledRule, setting origin_level. CompiledRule can't derive Clone
+/// because it contains Regex, so we reconstruct it.
+fn clone_compiled_rule(
+    rule: &CompiledRule,
+    level: Option<crate::settings::PolicyLevel>,
+) -> CompiledRule {
+    let compiled_matcher = compile_matcher(&rule.source.matcher, &StdEnvResolver)
+        .expect("rule was already compiled once");
+    CompiledRule {
+        effect: rule.effect,
+        matcher: compiled_matcher,
+        source: rule.source.clone(),
+        specificity: rule.specificity,
+        sandbox: rule.sandbox.clone(),
+        origin_policy: rule.origin_policy.clone(),
+        origin_level: level,
+    }
+}
+
+/// Inject internal policies into a merged DecisionTree.
+fn inject_internals(
+    tree: &mut DecisionTree,
+    env: &dyn EnvResolver,
+    internals: &[(&str, &str)],
+) -> Result<()> {
+    for (name, source) in internals {
+        let int_ast = super::parse::parse(source)?;
+        for tl in &int_ast {
+            if let TopLevel::Policy { body, .. } = tl {
+                for item in body {
+                    if let PolicyItem::Rule(rule) = item {
+                        let specificity = Specificity::from_matcher(&rule.matcher);
+                        let compiled_matcher = compile_matcher(&rule.matcher, env)?;
+                        let compiled = CompiledRule {
+                            effect: rule.effect,
+                            matcher: compiled_matcher,
+                            source: rule.clone(),
+                            specificity,
+                            sandbox: rule.sandbox.clone(),
+                            origin_policy: Some(name.to_string()),
+                            origin_level: None,
+                        };
+                        match &rule.matcher {
+                            CapMatcher::Exec(_) => tree.exec_rules.push(compiled),
+                            CapMatcher::Fs(_) => tree.fs_rules.push(compiled),
+                            CapMatcher::Net(_) => tree.net_rules.push(compiled),
+                            CapMatcher::Tool(_) => tree.tool_rules.push(compiled),
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Compile with internal policies injected.
 ///
 /// 1. Parses user source
@@ -160,6 +320,7 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
             specificity,
             sandbox: rule.sandbox.clone(),
             origin_policy: Some(origin.clone()),
+            origin_level: None,
         };
         match &rule.matcher {
             CapMatcher::Exec(_) => exec_rules.push(compiled),
@@ -210,6 +371,7 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
                         specificity,
                         sandbox: None,
                         origin_policy: None,
+                        origin_level: None,
                     });
                 }
             }
@@ -446,6 +608,7 @@ fn resolve_path_expr(expr: &PathExpr, env: &dyn EnvResolver) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::PolicyLevel;
 
     /// Test env resolver that returns fixed values.
     struct TestEnv(HashMap<String, String>);
@@ -800,5 +963,360 @@ mod tests {
         assert_eq!(tree.fs_rules.len(), 3);
         assert_eq!(tree.net_rules.len(), 2);
         assert_eq!(tree.exec_rules.last().unwrap().effect, Effect::Allow);
+    }
+
+    // -----------------------------------------------------------------------
+    // Multi-level policy tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_multi_level_user_only() {
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_multi_level_with_internals(
+            &[(PolicyLevel::User, user_source)],
+            &env,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(tree.default, Effect::Deny);
+        assert_eq!(tree.policy_name, "main");
+        assert_eq!(tree.exec_rules.len(), 1);
+        assert_eq!(tree.exec_rules[0].effect, Effect::Allow);
+    }
+
+    #[test]
+    fn test_multi_level_project_only() {
+        let project_source = r#"
+(default allow "main")
+(policy "main"
+  (deny (exec "rm" *))
+  (deny (net "evil.com")))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_multi_level_with_internals(
+            &[(PolicyLevel::Project, project_source)],
+            &env,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(tree.default, Effect::Allow);
+        assert_eq!(tree.policy_name, "main");
+        assert_eq!(tree.exec_rules.len(), 1);
+        assert_eq!(tree.exec_rules[0].effect, Effect::Deny);
+        assert_eq!(tree.net_rules.len(), 1);
+    }
+
+    #[test]
+    fn test_multi_level_project_overrides_user() {
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))
+"#;
+        let project_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "git" "push" *)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_multi_level_with_internals(
+            &[(PolicyLevel::User, user_source), (PolicyLevel::Project, project_source)],
+            &env,
+            &[],
+        )
+        .unwrap();
+        // Both rules should be present.
+        assert_eq!(tree.exec_rules.len(), 2);
+        // "git push *" is more specific, so it comes first and denies.
+        assert_eq!(tree.exec_rules[0].effect, Effect::Deny);
+        assert_eq!(tree.exec_rules[0].origin_level, Some(PolicyLevel::Project));
+        // "git *" is less specific, comes second and allows.
+        assert_eq!(tree.exec_rules[1].effect, Effect::Allow);
+        assert_eq!(tree.exec_rules[1].origin_level, Some(PolicyLevel::User));
+    }
+
+    #[test]
+    fn test_multi_level_default_from_highest_level() {
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))
+"#;
+        let project_source = r#"
+(default allow "proj")
+(policy "proj"
+  (deny (exec "rm" *)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_multi_level_with_internals(
+            &[(PolicyLevel::User, user_source), (PolicyLevel::Project, project_source)],
+            &env,
+            &[],
+        )
+        .unwrap();
+        // Project has higher precedence, so its default wins.
+        assert_eq!(tree.default, Effect::Allow);
+        assert_eq!(tree.policy_name, "proj");
+    }
+
+    #[test]
+    fn test_multi_level_origin_level_set() {
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *))
+  (allow (fs read (subpath "/home"))))
+"#;
+        let project_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "rm" *))
+  (deny (net "evil.com")))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_multi_level_with_internals(
+            &[(PolicyLevel::User, user_source), (PolicyLevel::Project, project_source)],
+            &env,
+            &[],
+        )
+        .unwrap();
+        // All user rules should have User origin_level.
+        for rule in &tree.exec_rules {
+            if rule.effect == Effect::Allow {
+                assert_eq!(rule.origin_level, Some(PolicyLevel::User));
+            }
+        }
+        // All project rules should have Project origin_level.
+        for rule in &tree.exec_rules {
+            if rule.effect == Effect::Deny {
+                assert_eq!(rule.origin_level, Some(PolicyLevel::Project));
+            }
+        }
+        assert_eq!(tree.fs_rules[0].origin_level, Some(PolicyLevel::User));
+        assert_eq!(tree.net_rules[0].origin_level, Some(PolicyLevel::Project));
+    }
+
+    #[test]
+    fn test_multi_level_both_rules_present() {
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *))
+  (allow (net "github.com")))
+"#;
+        let project_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "rm" *))
+  (allow (fs read (subpath "/project"))))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_multi_level_with_internals(
+            &[(PolicyLevel::User, user_source), (PolicyLevel::Project, project_source)],
+            &env,
+            &[],
+        )
+        .unwrap();
+        // Rules from both levels should be present in the merged tree.
+        assert_eq!(tree.exec_rules.len(), 2); // git * from user + rm * from project
+        assert_eq!(tree.net_rules.len(), 1);   // github.com from user
+        assert_eq!(tree.fs_rules.len(), 1);    // /project from project
+    }
+
+    #[test]
+    fn test_multi_level_user_specificity_wins() {
+        // A more-specific user rule should beat a less-specific project rule
+        // because specificity sorting puts it first.
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" "commit" *)))
+"#;
+        let project_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "git" *)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_multi_level_with_internals(
+            &[(PolicyLevel::User, user_source), (PolicyLevel::Project, project_source)],
+            &env,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(tree.exec_rules.len(), 2);
+        // "git commit *" is more specific and should come first (allow from user).
+        assert_eq!(tree.exec_rules[0].effect, Effect::Allow);
+        assert_eq!(tree.exec_rules[0].origin_level, Some(PolicyLevel::User));
+        // "git *" is less specific and comes second (deny from project).
+        assert_eq!(tree.exec_rules[1].effect, Effect::Deny);
+        assert_eq!(tree.exec_rules[1].origin_level, Some(PolicyLevel::Project));
+    }
+
+    #[test]
+    fn test_multi_level_with_internals() {
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))
+"#;
+        let project_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "rm" *)))
+"#;
+        let internal = r#"
+(policy "__internal_test__"
+  (allow (fs read (subpath "/internal"))))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_multi_level_with_internals(
+            &[(PolicyLevel::User, user_source), (PolicyLevel::Project, project_source)],
+            &env,
+            &[("__internal_test__", internal)],
+        )
+        .unwrap();
+        // exec rules from both levels.
+        assert_eq!(tree.exec_rules.len(), 2);
+        // Internal fs rule injected once.
+        assert_eq!(tree.fs_rules.len(), 1);
+        assert_eq!(
+            tree.fs_rules[0].origin_policy.as_deref(),
+            Some("__internal_test__")
+        );
+        // Internal rules have no origin_level.
+        assert_eq!(tree.fs_rules[0].origin_level, None);
+    }
+
+    #[test]
+    fn test_multi_level_session_overrides_all() {
+        // Session (level=2) should override both Project (level=1) and User (level=0)
+        // when rules have the same specificity.
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))
+"#;
+        let project_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))
+"#;
+        let session_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "git" *)))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree = compile_multi_level_with_internals(
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+                (PolicyLevel::Session, session_source),
+            ],
+            &env,
+            &[],
+        )
+        .unwrap();
+        // All three levels contribute a rule for "git *" at the same specificity.
+        assert_eq!(tree.exec_rules.len(), 3);
+        // Session rule should come first (highest precedence, stable sort).
+        assert_eq!(tree.exec_rules[0].effect, Effect::Deny);
+        assert_eq!(tree.exec_rules[0].origin_level, Some(PolicyLevel::Session));
+    }
+
+    #[test]
+    fn test_multi_level_three_levels() {
+        // All three levels present; session wins when it has a matching rule,
+        // and rules from all levels are merged.
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *))
+  (allow (net "github.com")))
+"#;
+        let project_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "rm" *))
+  (allow (fs read (subpath "/project"))))
+"#;
+        let session_source = r#"
+(default allow "session")
+(policy "session"
+  (deny (exec "git" "push" *))
+  (deny (net "evil.com")))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree = compile_multi_level_with_internals(
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+                (PolicyLevel::Session, session_source),
+            ],
+            &env,
+            &[],
+        )
+        .unwrap();
+        // Session is highest precedence, so its default wins.
+        assert_eq!(tree.default, Effect::Allow);
+        assert_eq!(tree.policy_name, "session");
+        // exec rules: "git push *" (session), "git *" (user), "rm *" (project) = 3.
+        assert_eq!(tree.exec_rules.len(), 3);
+        // "git push *" is most specific and from session, should be first.
+        assert_eq!(tree.exec_rules[0].effect, Effect::Deny);
+        assert_eq!(tree.exec_rules[0].origin_level, Some(PolicyLevel::Session));
+        // net rules: "evil.com" (session) + "github.com" (user) = 2.
+        assert_eq!(tree.net_rules.len(), 2);
+        // fs rules: "/project" from project = 1.
+        assert_eq!(tree.fs_rules.len(), 1);
+        assert_eq!(tree.fs_rules[0].origin_level, Some(PolicyLevel::Project));
+    }
+
+    #[test]
+    fn test_multi_level_session_falls_through() {
+        // Session has no matching rule for exec, so project/user rules apply.
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))
+"#;
+        let project_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "git" "push" *)))
+"#;
+        let session_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (net "evil.com")))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree = compile_multi_level_with_internals(
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+                (PolicyLevel::Session, session_source),
+            ],
+            &env,
+            &[],
+        )
+        .unwrap();
+        // Session contributes no exec rules, so user and project exec rules apply.
+        assert_eq!(tree.exec_rules.len(), 2);
+        // "git push *" (project) is more specific, comes first.
+        assert_eq!(tree.exec_rules[0].effect, Effect::Deny);
+        assert_eq!(tree.exec_rules[0].origin_level, Some(PolicyLevel::Project));
+        // "git *" (user) is less specific, comes second.
+        assert_eq!(tree.exec_rules[1].effect, Effect::Allow);
+        assert_eq!(tree.exec_rules[1].origin_level, Some(PolicyLevel::User));
+        // Session's net rule should still be present.
+        assert_eq!(tree.net_rules.len(), 1);
+        assert_eq!(tree.net_rules[0].origin_level, Some(PolicyLevel::Session));
     }
 }

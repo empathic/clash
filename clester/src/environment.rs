@@ -62,10 +62,19 @@ impl TestEnvironment {
             write_policy_file(&home_dir, policy)?;
         }
 
-        // Write ~/.clash/policy.sexpr — v2 s-expression policy.
+        // Write ~/.clash/policy.sexpr — v2 s-expression policy (user level).
         if let Some(sexpr) = clash.and_then(|c| c.policy_sexpr.as_ref()) {
             let path = home_dir.join(".clash/policy.sexpr");
-            std::fs::write(&path, sexpr).context("failed to write policy.sexpr")?;
+            std::fs::write(&path, sexpr).context("failed to write user policy.sexpr")?;
+        }
+
+        // Write <project>/.clash/policy.sexpr — v2 s-expression policy (project level).
+        if let Some(sexpr) = clash.and_then(|c| c.project_policy_sexpr.as_ref()) {
+            let clash_dir = project_dir.join(".clash");
+            std::fs::create_dir_all(&clash_dir)
+                .context("failed to create project .clash directory")?;
+            let path = clash_dir.join("policy.sexpr");
+            std::fs::write(&path, sexpr).context("failed to write project policy.sexpr")?;
         }
 
         Ok(Self {
@@ -237,6 +246,7 @@ mod tests {
             }),
             policy_raw: None,
             policy_sexpr: None,
+            project_policy_sexpr: None,
         };
 
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
@@ -254,11 +264,38 @@ mod tests {
             policy: None,
             policy_raw: None,
             policy_sexpr: None,
+            project_policy_sexpr: None,
         };
 
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
         assert!(!env.home_dir.join(".clash/policy.yaml").exists());
         assert!(!env.home_dir.join(".clash/policy.sexpr").exists());
+    }
+
+    #[test]
+    fn test_project_policy_sexpr_file_written() {
+        let config = SettingsConfig::default();
+        let user_sexpr = r#"(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))"#;
+        let project_sexpr = r#"(default deny "proj")
+(policy "proj"
+  (deny (exec "git" "push" *)))"#;
+        let clash = ClashConfig {
+            policy: None,
+            policy_raw: None,
+            policy_sexpr: Some(user_sexpr.to_string()),
+            project_policy_sexpr: Some(project_sexpr.to_string()),
+        };
+
+        let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
+        let user_content =
+            std::fs::read_to_string(env.home_dir.join(".clash/policy.sexpr")).unwrap();
+        assert!(user_content.contains("(allow (exec"));
+
+        let project_content =
+            std::fs::read_to_string(env.project_dir.join(".clash/policy.sexpr")).unwrap();
+        assert!(project_content.contains("(deny (exec"));
     }
 
     #[test]
@@ -271,6 +308,7 @@ mod tests {
             policy: None,
             policy_raw: None,
             policy_sexpr: Some(sexpr.to_string()),
+            project_policy_sexpr: None,
         };
 
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();

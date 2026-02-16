@@ -42,6 +42,11 @@ pub struct ClashConfig {
     /// When present, this is the v2 policy engine input.
     #[serde(default)]
     pub policy_sexpr: Option<String>,
+
+    /// Raw s-expression string written to <project>/.clash/policy.sexpr (project-level).
+    /// When present alongside `policy_sexpr`, enables multi-level policy testing.
+    #[serde(default)]
+    pub project_policy_sexpr: Option<String>,
 }
 
 /// Policy document specification for ~/.clash/policy.yaml.
@@ -179,6 +184,11 @@ pub struct Step {
     #[serde(default)]
     pub command: Option<String>,
 
+    /// Arbitrary shell command to run (e.g., "mkdir -p /tmp/foo && echo hello > /tmp/foo/bar").
+    /// Mutually exclusive with `hook` and `command`. Useful for filesystem setup between hook steps.
+    #[serde(default)]
+    pub shell: Option<String>,
+
     /// Tool name (for tool-related hooks): "Bash", "Read", "Write", "Edit".
     #[serde(default)]
     pub tool_name: Option<String>,
@@ -229,22 +239,24 @@ pub struct Expectation {
 
 impl Step {
     pub fn validate(&self, index: usize) -> Result<(), String> {
-        match (&self.hook, &self.command) {
-            (Some(_), Some(_)) => {
-                return Err(format!(
-                    "step {} ({}): cannot have both 'hook' and 'command'",
-                    index + 1,
-                    self.name
-                ));
-            }
-            (None, None) => {
-                return Err(format!(
-                    "step {} ({}): must have either 'hook' or 'command'",
-                    index + 1,
-                    self.name
-                ));
-            }
-            _ => {}
+        let set_count = [self.hook.is_some(), self.command.is_some(), self.shell.is_some()]
+            .iter()
+            .filter(|&&b| b)
+            .count();
+
+        if set_count > 1 {
+            return Err(format!(
+                "step {} ({}): must have exactly one of 'hook', 'command', or 'shell'",
+                index + 1,
+                self.name
+            ));
+        }
+        if set_count == 0 {
+            return Err(format!(
+                "step {} ({}): must have either 'hook', 'command', or 'shell'",
+                index + 1,
+                self.name
+            ));
         }
 
         if let Some(ref hook) = self.hook {
@@ -253,6 +265,7 @@ impl Step {
                 "post-tool-use",
                 "permission-request",
                 "notification",
+                "session-start",
             ];
             if !valid_hooks.contains(&hook.as_str()) {
                 return Err(format!(
@@ -493,7 +506,7 @@ steps:
         let script = TestScript::from_str(yaml).unwrap();
         let errors = script.validate();
         assert!(!errors.is_empty());
-        assert!(errors[0].contains("cannot have both"));
+        assert!(errors[0].contains("must have exactly one of"));
     }
 
     #[test]

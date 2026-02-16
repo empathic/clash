@@ -19,7 +19,7 @@ pub mod sandbox_types;
 pub mod sexpr;
 pub mod specificity;
 
-pub use compile::{compile_policy, compile_policy_with_internals};
+pub use compile::{compile_multi_level, compile_policy, compile_policy_with_internals};
 pub use decision_tree::DecisionTree;
 pub use error::{CompileError, PolicyError, PolicyParseError};
 pub use ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};

@@ -3,11 +3,63 @@ use std::path::PathBuf;
 use crate::policy::DecisionTree;
 use anyhow::Result;
 use dirs::home_dir;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{Level, info, instrument, warn};
 
 use crate::audit::AuditConfig;
 use crate::notifications::NotificationConfig;
+
+/// Policy level — where a policy file lives in the precedence hierarchy.
+///
+/// Higher-precedence levels override lower ones: Session > Project > User.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum PolicyLevel {
+    /// User-level policy: `~/.clash/policy.sexpr`
+    User = 0,
+    /// Project-level policy: `<project_root>/.clash/policy.sexpr`
+    Project = 1,
+    /// Session-level policy: `/tmp/clash-<session_id>/policy.sexpr`
+    /// Temporary rules that last only for the current Claude Code session.
+    Session = 2,
+}
+
+impl PolicyLevel {
+    /// All persistent levels in precedence order (highest first).
+    /// Session is excluded because it requires a session_id to resolve.
+    pub fn all_by_precedence() -> &'static [PolicyLevel] {
+        &[PolicyLevel::Project, PolicyLevel::User]
+    }
+
+    /// Display name for this level.
+    pub fn name(&self) -> &'static str {
+        match self {
+            PolicyLevel::User => "user",
+            PolicyLevel::Project => "project",
+            PolicyLevel::Session => "session",
+        }
+    }
+}
+
+impl std::fmt::Display for PolicyLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+impl std::str::FromStr for PolicyLevel {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "user" => Ok(PolicyLevel::User),
+            "project" => Ok(PolicyLevel::Project),
+            "session" => Ok(PolicyLevel::Session),
+            _ => anyhow::bail!(
+                "unknown policy level: {s} (expected 'user', 'project', or 'session')"
+            ),
+        }
+    }
+}
 
 /// Default policy source embedded at compile time.
 pub const DEFAULT_POLICY: &str = include_str!("default_policy.sexpr");
@@ -19,10 +71,24 @@ pub const INTERNAL_POLICIES: &[(&str, &str)] = &[
     ("__internal_claude__", include_str!("internal_claude.sexpr")),
 ];
 
+/// A policy source loaded from a specific level.
+#[derive(Debug, Clone)]
+pub struct LoadedPolicy {
+    /// Which level this policy came from.
+    pub level: PolicyLevel,
+    /// The file path it was loaded from.
+    pub path: PathBuf,
+    /// The raw source text.
+    pub source: String,
+}
+
 #[derive(Debug, Default)]
 pub struct ClashSettings {
     /// Pre-compiled decision tree for fast evaluation.
     compiled: Option<DecisionTree>,
+
+    /// Policy sources loaded from each level (ordered by precedence, highest first).
+    loaded_policies: Vec<LoadedPolicy>,
 
     /// Notification and external service configuration, loaded from policy.yaml.
     pub notifications: NotificationConfig,
@@ -44,11 +110,123 @@ impl ClashSettings {
             .ok_or_else(|| anyhow::anyhow!("$HOME is not set; cannot determine settings directory"))
     }
 
+    /// Returns the user-level policy file path.
+    ///
+    /// Respects `CLASH_POLICY_FILE` env var for backward compatibility.
     pub fn policy_file() -> Result<PathBuf> {
         if let Ok(p) = std::env::var("CLASH_POLICY_FILE") {
             return Ok(PathBuf::from(p));
         }
         Self::settings_dir().map(|d| d.join("policy.sexpr"))
+    }
+
+    /// Returns the policy file path for a specific level.
+    ///
+    /// For `Session`, reads the active session ID from `~/.clash/active_session`.
+    pub fn policy_file_for_level(level: PolicyLevel) -> Result<PathBuf> {
+        match level {
+            PolicyLevel::User => Self::policy_file(),
+            PolicyLevel::Project => {
+                let root = Self::project_root()?;
+                Ok(root.join(".clash").join("policy.sexpr"))
+            }
+            PolicyLevel::Session => {
+                let session_id = Self::active_session_id()?;
+                Ok(Self::session_policy_path(&session_id))
+            }
+        }
+    }
+
+    /// Returns the policy file path for a session, given its ID.
+    pub fn session_policy_path(session_id: &str) -> PathBuf {
+        crate::audit::session_dir(session_id).join("policy.sexpr")
+    }
+
+    /// Path to the active-session marker file.
+    fn active_session_file() -> Result<PathBuf> {
+        Self::settings_dir().map(|d| d.join("active_session"))
+    }
+
+    /// Read the active session ID from `~/.clash/active_session`.
+    pub fn active_session_id() -> Result<String> {
+        let path = Self::active_session_file()?;
+        let id = std::fs::read_to_string(&path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    anyhow::anyhow!(
+                        "no active session — start a session with `clash launch` first"
+                    )
+                } else {
+                    anyhow::anyhow!("failed to read active session: {e}")
+                }
+            })?
+            .trim()
+            .to_string();
+        if id.is_empty() {
+            anyhow::bail!("active session file is empty");
+        }
+        Ok(id)
+    }
+
+    /// Write the active session ID to `~/.clash/active_session`.
+    pub fn set_active_session(session_id: &str) -> Result<()> {
+        let path = Self::active_session_file()?;
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        std::fs::write(&path, session_id)?;
+        Ok(())
+    }
+
+    /// Find the project root by walking up from cwd looking for `.clash/` or `.git/`.
+    ///
+    /// Returns an error if no project root is found (e.g. in a temp directory).
+    pub fn project_root() -> Result<PathBuf> {
+        let cwd = std::env::current_dir()
+            .map_err(|e| anyhow::anyhow!("cannot determine current directory: {e}"))?;
+
+        // First, look for .clash directory
+        if let Some(root) = find_ancestor_with(&cwd, ".clash") {
+            return Ok(root);
+        }
+
+        // Fallback to .git
+        if let Some(root) = find_ancestor_with(&cwd, ".git") {
+            return Ok(root);
+        }
+
+        anyhow::bail!(
+            "no project root found (looked for .clash/ or .git/ in ancestors of {})",
+            cwd.display()
+        )
+    }
+
+    /// Returns all policy levels that have an existing policy file.
+    ///
+    /// Levels are returned in precedence order (highest first: project, then user).
+    pub fn available_policy_levels() -> Vec<(PolicyLevel, PathBuf)> {
+        let mut levels = Vec::new();
+        for &level in PolicyLevel::all_by_precedence() {
+            if let Ok(path) = Self::policy_file_for_level(level)
+                && path.exists()
+                && path.is_file()
+            {
+                levels.push((level, path));
+            }
+        }
+        levels
+    }
+
+    /// Determine the default scope for modification commands.
+    ///
+    /// If a project-level policy exists, returns `Project`; else `User`.
+    /// Session scope is never the default — it must be explicitly requested.
+    pub fn default_scope() -> PolicyLevel {
+        if let Ok(path) = Self::policy_file_for_level(PolicyLevel::Project)
+            && path.exists()
+            && path.is_file()
+        {
+            return PolicyLevel::Project;
+        }
+        PolicyLevel::User
     }
 
     /// Path to a legacy YAML policy file (pre-sexp migration).
@@ -86,6 +264,7 @@ impl ClashSettings {
     }
 
     /// Try to load and compile the policy from the policy file.
+    #[cfg(test)]
     #[instrument(level = Level::TRACE, skip(self))]
     fn load_policy_file(&mut self) -> bool {
         let path = match Self::policy_file() {
@@ -101,6 +280,7 @@ impl ClashSettings {
     /// Load and validate a policy file from an explicit path, then compile it.
     ///
     /// Returns true if a policy was successfully loaded and compiled.
+    #[cfg(test)]
     fn load_policy_from_path(&mut self, path: &std::path::Path) -> bool {
         let metadata = match std::fs::metadata(path) {
             Ok(m) => m,
@@ -223,12 +403,171 @@ impl ClashSettings {
         }
     }
 
-    /// Load settings by resolving the policy from disk and compiling it.
-    #[instrument(level = Level::TRACE)]
+    /// Load settings without session context (for CLI commands).
+    ///
+    /// Loads user, project, and (if available) active session policies.
+    ///
+    /// Automatically reads `~/.clash/active_session` to discover the session ID.
+    /// If no active session exists, loads only user and project levels.
     pub fn load_or_create() -> Result<Self> {
+        let session_id = Self::active_session_id().ok();
+        Self::load_or_create_with_session(session_id.as_deref())
+    }
+
+    /// Return the loaded policy sources (ordered by precedence, highest first).
+    pub fn loaded_policies(&self) -> &[LoadedPolicy] {
+        &self.loaded_policies
+    }
+
+    /// Load settings by resolving policies from disk and compiling them.
+    ///
+    /// Loads from all available levels (user, project, session) and merges them
+    /// with session > project > user precedence.
+    ///
+    /// Pass `session_id` when processing a hook event (it's in the hook input JSON).
+    /// For CLI commands, pass `None` — session policy won't be loaded.
+    #[instrument(level = Level::TRACE, skip(session_id))]
+    pub fn load_or_create_with_session(session_id: Option<&str>) -> Result<Self> {
         let mut this = Self::default();
-        this.load_policy_file();
+
+        // Collect policy sources from all available levels.
+        let mut level_sources: Vec<(PolicyLevel, String)> = Vec::new();
+
+        // Load persistent levels (user, project) in reverse precedence order.
+        for &level in PolicyLevel::all_by_precedence().iter().rev() {
+            if let Ok(path) = Self::policy_file_for_level(level)
+                && let Some((source, loaded)) = this.try_load_policy_from_path(level, &path)
+            {
+                level_sources.push((level, source));
+                this.loaded_policies.push(loaded);
+            }
+        }
+
+        // Load session-level policy if session_id is provided.
+        if let Some(sid) = session_id {
+            let session_path = Self::session_policy_path(sid);
+            if let Some((source, loaded)) =
+                this.try_load_policy_from_path(PolicyLevel::Session, &session_path)
+            {
+                level_sources.push((PolicyLevel::Session, source));
+                this.loaded_policies.push(loaded);
+            }
+        }
+
+        // Re-sort loaded_policies by precedence (highest first).
+        this.loaded_policies.sort_by(|a, b| b.level.cmp(&a.level));
+
+        if level_sources.is_empty() {
+            // No policy files found — keep default (no compiled tree).
+            return Ok(this);
+        }
+
+        // If only one level, compile directly (backward-compatible path).
+        if level_sources.len() == 1 {
+            let (_, source) = &level_sources[0];
+            this.set_policy_source(source);
+            return Ok(this);
+        }
+
+        // Multiple levels: compile and merge.
+        let level_refs: Vec<(PolicyLevel, &str)> = level_sources
+            .iter()
+            .map(|(l, s)| (*l, s.as_str()))
+            .collect();
+
+        match crate::policy::compile_multi_level(&level_refs) {
+            Ok(tree) => {
+                this.compiled = Some(tree);
+                this.policy_error = None;
+            }
+            Err(e) => {
+                let msg = format!("Failed to compile merged policy: {}", e);
+                warn!(error = %e, "Failed to compile merged policy");
+                this.policy_error = Some(msg);
+            }
+        }
+
         Ok(this)
+    }
+
+    /// Try to load and validate a policy file from a path, returning the source
+    /// text and a LoadedPolicy if successful.
+    fn try_load_policy_from_path(
+        &mut self,
+        level: PolicyLevel,
+        path: &std::path::Path,
+    ) -> Option<(String, LoadedPolicy)> {
+        let metadata = match std::fs::metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => {
+                warn!(
+                    path = %path.display(),
+                    level = %level,
+                    error = %e,
+                    "Failed to stat policy file"
+                );
+                return None;
+            }
+        };
+
+        if metadata.is_dir() || metadata.len() > Self::MAX_POLICY_SIZE {
+            return None;
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = metadata.permissions().mode();
+            if mode & 0o044 != 0 {
+                warn!(
+                    path = %path.display(),
+                    level = %level,
+                    mode = format!("{:o}", mode),
+                    "policy file is readable by other users; consider `chmod 600`"
+                );
+            }
+        }
+
+        match std::fs::read_to_string(path) {
+            Ok(mut contents) => {
+                if contents.trim().is_empty() {
+                    return None;
+                }
+
+                // Auto-migrate: (env CWD) was renamed to (env PWD).
+                if contents.contains("(env CWD)") {
+                    contents = contents.replace("(env CWD)", "(env PWD)");
+                    if let Err(e) = std::fs::write(path, &contents) {
+                        warn!(path = %path.display(), error = %e, "Failed to auto-migrate CWD→PWD");
+                    } else {
+                        info!(path = %path.display(), "Auto-migrated (env CWD) → (env PWD)");
+                    }
+                }
+
+                // Load notification config only from user-level policy.yaml
+                if level == PolicyLevel::User {
+                    self.load_notification_audit_config();
+                }
+
+                let loaded = LoadedPolicy {
+                    level,
+                    path: path.to_path_buf(),
+                    source: contents.clone(),
+                };
+
+                Some((contents, loaded))
+            }
+            Err(e) => {
+                warn!(
+                    path = %path.display(),
+                    level = %level,
+                    error = %e,
+                    "Failed to read policy file"
+                );
+                None
+            }
+        }
     }
 }
 
@@ -266,6 +605,19 @@ fn parse_audit_config(yaml_str: &str) -> AuditConfig {
     match serde_yaml::from_str::<RawYaml>(yaml_str) {
         Ok(raw) => raw.audit.unwrap_or_default(),
         Err(_) => AuditConfig::default(),
+    }
+}
+
+/// Find the nearest ancestor directory containing the given name.
+fn find_ancestor_with(start: &std::path::Path, name: &str) -> Option<PathBuf> {
+    let mut current = start.to_path_buf();
+    loop {
+        if current.join(name).exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
     }
 }
 

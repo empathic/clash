@@ -364,6 +364,11 @@ fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookIn
         }
     }
 
+    // 4b. Write active session marker so CLI commands can find this session.
+    if let Err(e) = ClashSettings::set_active_session(&input.session_id) {
+        warn!(error = %e, "Failed to write active session marker");
+    }
+
     // 5. Symlink clash binary into ~/.local/bin
     #[cfg(unix)]
     if let Ok(exe_path) = std::env::current_exe() {

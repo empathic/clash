@@ -32,7 +32,7 @@ mod script;
 
 use assertions::check;
 use environment::TestEnvironment;
-use runner::{find_clash_binary, run_command, run_step};
+use runner::{find_clash_binary, run_command, run_shell, run_step};
 use script::TestScript;
 
 #[derive(Parser, Debug)]
@@ -134,6 +134,8 @@ fn cmd_run(path: &Path, verbose: bool, clash_bin: Option<&Path>) -> Result<bool>
 
             let result = if let Some(ref cmd) = step.command {
                 run_command(&clash_bin, &env, cmd)
+            } else if let Some(ref shell_cmd) = step.shell {
+                run_shell(&env, shell_cmd)
             } else {
                 run_step(&clash_bin, &env, step)
             };
