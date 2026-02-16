@@ -18,7 +18,7 @@ use sandbox_cmd::{SandboxCmd, run_sandbox};
 
 #[derive(Parser, Debug)]
 #[command(name = "clash")]
-#[command(about = "Claude shell")]
+#[command(about = "Command line agent safety harness")]
 struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
