@@ -166,7 +166,7 @@ enum Commands {
         project: Option<bool>,
     },
 
-    /// Show policy status: profiles, rules, security posture, and potential issues
+    /// Show policy status: layers, rules with shadowing, and potential issues
     Status {
         /// Output as JSON instead of human-readable text
         #[arg(long)]

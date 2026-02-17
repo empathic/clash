@@ -53,12 +53,24 @@ If you're new, start with `/clash:onboard` — it walks you through creating a p
 
 ## Policy Rules
 
-Your policy lives at `~/.clash/policy.sexpr`. Clash reads it on every tool invocation, so edits take effect immediately — no restart needed.
+Policies use s-expression syntax: `(effect (capability ...))`. Clash reads them on every tool invocation, so edits take effect immediately — no restart needed.
 
-Rules use s-expression syntax: `(effect (capability ...))`.
+### Policy Layers
+
+Clash supports three policy levels, each automatically included and evaluated in order of precedence:
+
+| Level | Location | Purpose |
+|-------|----------|---------|
+| **User** | `~/.clash/policy.sexpr` | Your personal defaults across all projects |
+| **Project** | `<project>/.clash/policy.sexpr` | Shared rules for a specific repository |
+| **Session** | Created via `clash edit --session` | Temporary overrides for the current session |
+
+**Layer precedence:** Session > Project > User. Higher layers can shadow rules from lower layers — for example, a project-level deny overrides a user-level allow for the same capability. Use `clash status` to see all active layers and which rules are shadowed.
+
+### Example
 
 ```lisp
-; ~/.clash/policy.sexpr
+; ~/.clash/policy.sexpr (user level)
 (default ask "main")
 
 (policy "main"
@@ -78,7 +90,7 @@ Rules use s-expression syntax: `(effect (capability ...))`.
 
 **Capabilities:** `exec` (commands), `fs` (filesystem), `net` (network)
 
-**Precedence:** `deny` always wins. More specific rules beat less specific. Within the same specificity, `ask` beats `allow`. See [Policy Semantics](docs/policy-semantics.md) for the full algorithm.
+**Precedence:** `deny` always wins. More specific rules beat less specific. Within the same specificity, `ask` beats `allow`. Higher layers shadow lower layers at the same specificity. See [Policy Semantics](docs/policy-semantics.md) for the full algorithm.
 
 ### Policy Blocks
 
@@ -120,8 +132,9 @@ clash allow bash                             # allow command execution
 clash allow edit                             # allow file editing in project
 clash allow web                              # allow web access
 clash deny '(exec "rm" *)'                   # deny rm commands
+clash status                                 # see all layers, rules, and shadowing
 clash policy show                            # see active policy and decision tree
-clash policy list                            # list all rules
+clash policy list                            # list all rules with level tags
 clash policy remove '(exec "rm" *)'          # remove a rule
 clash policy schema                          # show all configurable fields and types
 clash explain bash "git push"                # see which rule matches a command
