@@ -81,10 +81,10 @@ fn describe_exec(m: &ExecMatcher) -> String {
 fn describe_fs(m: &FsMatcher) -> String {
     let op = match &m.op {
         OpPattern::Any => "any operation on".to_string(),
-        OpPattern::Single(op) => format!("{}ing", describe_fs_op(*op)),
+        OpPattern::Single(op) => describe_fs_op_gerund(*op).to_string(),
         OpPattern::Or(ops) => {
-            let names: Vec<&str> = ops.iter().map(|o| describe_fs_op(*o)).collect();
-            format!("{}ing", names.join("/"))
+            let names: Vec<&str> = ops.iter().map(|o| describe_fs_op_gerund(*o)).collect();
+            names.join("/")
         }
     };
     match &m.path {
@@ -93,12 +93,12 @@ fn describe_fs(m: &FsMatcher) -> String {
     }
 }
 
-fn describe_fs_op(op: FsOp) -> &'static str {
+fn describe_fs_op_gerund(op: FsOp) -> &'static str {
     match op {
-        FsOp::Read => "read",
-        FsOp::Write => "writ",
-        FsOp::Create => "creat",
-        FsOp::Delete => "delet",
+        FsOp::Read => "reading",
+        FsOp::Write => "writing",
+        FsOp::Create => "creating",
+        FsOp::Delete => "deleting",
     }
 }
 
@@ -542,21 +542,20 @@ fn prompt_rule() -> Result<Option<Rule>> {
 fn show_rules(source: &str) -> Result<()> {
     let top_levels = crate::policy::parse::parse(source)?;
     let mut rules: Vec<Rule> = Vec::new();
-    let mut policy_name = String::from("main");
+    let mut _policy_name = String::from("main");
 
     for tl in &top_levels {
         match tl {
             TopLevel::Default { policy, .. } => {
-                policy_name = policy.clone();
+                _policy_name = policy.clone();
             }
-            TopLevel::Policy { name, body } if *name == policy_name => {
+            TopLevel::Policy { name: _, body } => {
                 for item in body {
                     if let PolicyItem::Rule(r) = item {
                         rules.push(r.clone());
                     }
                 }
             }
-            _ => {}
         }
     }
 
@@ -564,7 +563,7 @@ fn show_rules(source: &str) -> Result<()> {
         println!("  (no rules — default effect applies to everything)");
     } else {
         for (i, rule) in rules.iter().enumerate() {
-            println!("  {}. {} — {}", i + 1, rule, describe_rule(rule));
+            eprintln!("  {}. {} — {}", i + 1, rule, describe_rule(rule));
         }
     }
 
@@ -600,7 +599,7 @@ fn collect_rules(source: &str) -> Result<Vec<Rule>> {
 pub fn run() -> Result<()> {
     println!("Clash Policy Setup");
     println!("==================");
-    println!("Press Escape to go back at any prompt.\n");
+    println!("Press Escape to go back at any point.\n");
 
     // Load or create the policy.
     let path = ClashSettings::policy_file()?;
@@ -611,7 +610,7 @@ pub fn run() -> Result<()> {
         crate::settings::DEFAULT_POLICY.to_string()
     };
 
-    println!("Current rules:");
+    println!("Current rules:\n{}", &source);
     show_rules(&source)?;
     println!();
 
@@ -764,7 +763,10 @@ mod tests {
             }),
             sandbox: None,
         };
-        assert_eq!(describe_rule(&rule), "Allow writ/creating files under $PWD");
+        assert_eq!(
+            describe_rule(&rule),
+            "Allow writing/creating files under $PWD"
+        );
     }
 
     #[test]

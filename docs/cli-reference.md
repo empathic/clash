@@ -58,7 +58,7 @@ Interactive policy editor. Walks through building a policy rule by rule using a 
 clash edit
 ```
 
-Opens an interactive wizard that lets you add and remove rules from your policy. Each step presents only valid options. Press Escape to go back at any prompt.
+Opens an interactive wizard that lets you add and remove rules from your policy. Each step presents only valid options. Press Escape to go back at any point.
 
 **Examples:**
 
@@ -71,7 +71,7 @@ clash edit
 
 ## clash status
 
-Show policy status: profiles, rules, security posture, and potential issues.
+Show policy status: layers, rules with shadowing, and potential issues.
 
 ```
 clash status [OPTIONS]
@@ -85,11 +85,9 @@ clash status [OPTIONS]
 
 Outputs a comprehensive breakdown covering:
 
-- **Default behavior** — active policy name and default effect
-- **Profiles** — all defined profiles, rule counts, and inheritance via `include:`
-- **Rules** — every rule with its s-expression and a plain-English description
-- **Effective security posture** — what is allowed, denied, and requires approval
-- **Potential issues** — detectable misconfigurations (overly broad wildcards, missing deny rules, etc.)
+- **Policy layers** — which levels are active (user, project, session) with file paths, and the automatic precedence chain (session > project > user)
+- **Effective policy** — all rules in evaluation order grouped by domain (exec, filesystem, network, tool), with level tags showing where each rule originates and shadow indicators when a higher-precedence layer overrides a lower one
+- **Potential issues** — detectable misconfigurations (overly broad wildcards, missing deny rules, shadowed rules, etc.)
 
 **Example:**
 

@@ -137,7 +137,7 @@ impl ClashSettings {
         }
     }
 
-    /// Returns the policy file path for a session, given its ID.
+    // Returns the policy file path for a session, given its ID.
     pub fn session_policy_path(session_id: &str) -> PathBuf {
         crate::audit::session_dir(session_id).join("policy.sexpr")
     }
@@ -153,9 +153,7 @@ impl ClashSettings {
         let id = std::fs::read_to_string(&path)
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    anyhow::anyhow!(
-                        "no active session — start a session with `clash launch` first"
-                    )
+                    anyhow::anyhow!("no active session — start a session with `clash launch` first")
                 } else {
                     anyhow::anyhow!("failed to read active session: {e}")
                 }
@@ -178,18 +176,20 @@ impl ClashSettings {
 
     /// Find the project root by walking up from cwd looking for `.clash/` or `.git/`.
     ///
+    /// Stops searching at `$HOME` — `~/.clash/` is the user config dir, not a project.
     /// Returns an error if no project root is found (e.g. in a temp directory).
     pub fn project_root() -> Result<PathBuf> {
         let cwd = std::env::current_dir()
             .map_err(|e| anyhow::anyhow!("cannot determine current directory: {e}"))?;
+        let stop_at = home_dir();
 
         // First, look for .clash directory
-        if let Some(root) = find_ancestor_with(&cwd, ".clash") {
+        if let Some(root) = find_ancestor_with(&cwd, ".clash", stop_at.as_deref()) {
             return Ok(root);
         }
 
         // Fallback to .git
-        if let Some(root) = find_ancestor_with(&cwd, ".git") {
+        if let Some(root) = find_ancestor_with(&cwd, ".git", stop_at.as_deref()) {
             return Ok(root);
         }
 
@@ -261,20 +261,6 @@ impl ClashSettings {
     /// Return the pre-compiled decision tree, if one was successfully compiled.
     pub fn decision_tree(&self) -> Option<&DecisionTree> {
         self.compiled.as_ref()
-    }
-
-    /// Try to load and compile the policy from the policy file.
-    #[cfg(test)]
-    #[instrument(level = Level::TRACE, skip(self))]
-    fn load_policy_file(&mut self) -> bool {
-        let path = match Self::policy_file() {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(error = %e, "Cannot determine policy file path");
-                return false;
-            }
-        };
-        self.load_policy_from_path(&path)
     }
 
     /// Load and validate a policy file from an explicit path, then compile it.
@@ -609,9 +595,21 @@ fn parse_audit_config(yaml_str: &str) -> AuditConfig {
 }
 
 /// Find the nearest ancestor directory containing the given name.
-fn find_ancestor_with(start: &std::path::Path, name: &str) -> Option<PathBuf> {
+///
+/// If `stop_at` is provided, stops searching before checking that directory.
+/// This prevents `~/.clash/` from being mistaken for a project root.
+fn find_ancestor_with(
+    start: &std::path::Path,
+    name: &str,
+    stop_at: Option<&std::path::Path>,
+) -> Option<PathBuf> {
     let mut current = start.to_path_buf();
     loop {
+        if let Some(boundary) = stop_at
+            && current == boundary
+        {
+            return None;
+        }
         if current.join(name).exists() {
             return Some(current);
         }
