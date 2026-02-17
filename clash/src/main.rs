@@ -921,7 +921,7 @@ fn set_bypass_permissions() -> Result<()> {
     Ok(())
 }
 
-/// Show policy status: profiles, rules, security posture, and potential issues.
+/// Show policy status: layers, rules with shadowing, and potential issues.
 #[instrument(level = Level::TRACE)]
 fn run_status(_json: bool) -> Result<()> {
     let settings = ClashSettings::load_or_create()?;
@@ -937,105 +937,83 @@ fn run_status(_json: bool) -> Result<()> {
         }
     };
 
-    // Read raw source for profile/inheritance analysis.
-    let (policy_path, source) = load_policy_source(None)?;
-    let top_levels =
-        clash::policy::parse::parse(&source).context("failed to parse policy source")?;
-
-    // 1. Default behavior
     let loaded = settings.loaded_policies();
     let multi_level = loaded.len() > 1;
 
-    println!("Default behavior");
-    println!("================");
-    println!("  Default effect: {}", tree.default);
-    println!("  Active policy:  {}", tree.policy_name);
-    if multi_level {
-        println!("  Policy files:");
-        for lp in loaded {
-            println!("    [{}] {}", lp.level, lp.path.display());
-        }
-    } else {
-        println!("  Policy file:    {}", policy_path.display());
-    }
-    println!();
-
-    // 2. Profiles and inheritance
-    println!("Profiles");
-    println!("========");
-    for tl in &top_levels {
-        if let clash::policy::ast::TopLevel::Policy { name, body } = tl {
-            let mut includes = Vec::new();
-            let mut rule_count = 0;
-            for item in body {
-                match item {
-                    clash::policy::ast::PolicyItem::Include(target) => {
-                        includes.push(target.as_str());
-                    }
-                    clash::policy::ast::PolicyItem::Rule(_) => {
-                        rule_count += 1;
-                    }
-                }
-            }
-            let active = if *name == tree.policy_name {
-                " (active)"
-            } else {
-                ""
-            };
-            println!("  \"{}\"{} — {} rules", name, active, rule_count);
-            if !includes.is_empty() {
-                println!(
-                    "    includes: {}",
-                    includes
-                        .iter()
-                        .map(|i| format!("\"{}\"", i))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
-        }
-    }
-    println!();
-
-    // 3. Rules with plain English descriptions
-    println!("Rules");
-    println!("=====");
-
-    let print_rules = |label: &str, rules: &[clash::policy::decision_tree::CompiledRule]| {
-        if rules.is_empty() {
-            return;
-        }
-        println!("  {}:", label);
-        for rule in rules {
-            let builtin = rule
-                .origin_policy
-                .as_ref()
-                .is_some_and(|p| p.starts_with("__internal_"));
-            let tag = if builtin {
-                " [builtin]".to_string()
-            } else if multi_level {
-                if let Some(ref level) = rule.origin_level {
-                    format!(" [{}]", level)
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            };
-            println!(
-                "    [{}] {}{} — {}",
-                rule.effect,
-                rule.source,
-                tag,
-                clash::wizard::describe_rule(&rule.source),
-            );
-        }
+    // Build a lookup for level paths.
+    let level_path = |level: PolicyLevel| -> Option<String> {
+        loaded
+            .iter()
+            .find(|lp| lp.level == level)
+            .map(|lp| lp.path.display().to_string())
     };
 
-    print_rules("Exec", &tree.exec_rules);
-    print_rules("Filesystem", &tree.fs_rules);
-    print_rules("Network", &tree.net_rules);
-    print_rules("Tool", &tree.tool_rules);
+    // 1. Policy layers
+    println!("Policy layers");
+    println!("=============");
+    for &level in &[
+        PolicyLevel::User,
+        PolicyLevel::Project,
+        PolicyLevel::Session,
+    ] {
+        match level_path(level) {
+            Some(path) => println!("  {:<10} {}", format!("{}:", level), path),
+            None => println!("  {:<10} (none)", format!("{}:", level)),
+        }
+    }
+    if multi_level {
+        println!();
+        println!("  Precedence: session > project > user (automatic)");
+    }
+    println!();
+
+    // 2. Effective policy — rules in evaluation order with shadow detection
+    println!("Effective policy (default: {})", tree.default);
+    println!("=================================");
+
+    let shadows = clash::policy::detect_all_shadows(tree);
+
+    let print_rules =
+        |label: &str,
+         rules: &[clash::policy::decision_tree::CompiledRule],
+         shadow_map: &std::collections::HashMap<usize, clash::policy::ShadowInfo>| {
+            if rules.is_empty() {
+                return;
+            }
+            println!("  {}:", label);
+            for (i, rule) in rules.iter().enumerate() {
+                let builtin = rule
+                    .origin_policy
+                    .as_ref()
+                    .is_some_and(|p| p.starts_with("__internal_"));
+
+                // Source tag: [builtin], [user], [project], [session]
+                let tag = if builtin {
+                    "[builtin]".to_string()
+                } else if let Some(ref level) = rule.origin_level {
+                    format!("[{}]", level)
+                } else {
+                    String::new()
+                };
+
+                // Shadow indicator
+                let shadow_note = if let Some(info) = shadow_map.get(&i) {
+                    format!("  <- shadowed by {}", info.shadowed_by_level)
+                } else {
+                    String::new()
+                };
+
+                println!(
+                    "    [{:<5}] {:<45} {}{}",
+                    rule.effect, rule.source.matcher, tag, shadow_note,
+                );
+            }
+        };
+
+    print_rules("Exec", &tree.exec_rules, &shadows.exec);
+    print_rules("Filesystem", &tree.fs_rules, &shadows.fs);
+    print_rules("Network", &tree.net_rules, &shadows.net);
+    print_rules("Tool", &tree.tool_rules, &shadows.tool);
 
     let total =
         tree.exec_rules.len() + tree.fs_rules.len() + tree.net_rules.len() + tree.tool_rules.len();
@@ -1045,69 +1023,18 @@ fn run_status(_json: bool) -> Result<()> {
             tree.default
         );
     }
-    println!();
-
-    // 4. Effective security posture
-    println!("Effective security posture");
-    println!("=========================");
-
-    let mut allowed = Vec::new();
-    let mut denied = Vec::new();
-    let mut asked = Vec::new();
-
-    for rule in tree
-        .exec_rules
-        .iter()
-        .chain(&tree.fs_rules)
-        .chain(&tree.net_rules)
-        .chain(&tree.tool_rules)
-    {
-        // Skip builtin rules for the summary.
-        if rule
-            .origin_policy
-            .as_ref()
-            .is_some_and(|p| p.starts_with("__internal_"))
-        {
-            continue;
-        }
-        let desc = clash::wizard::describe_rule(&rule.source);
-        match rule.effect {
-            Effect::Allow => allowed.push(desc),
-            Effect::Deny => denied.push(desc),
-            Effect::Ask => asked.push(desc),
-        }
-    }
-
-    if !allowed.is_empty() {
-        println!("  Allowed:");
-        for a in &allowed {
-            println!("    - {}", a);
-        }
-    }
-    if !denied.is_empty() {
-        println!("  Denied:");
-        for d in &denied {
-            println!("    - {}", d);
-        }
-    }
-    if !asked.is_empty() {
-        println!("  Requires approval:");
-        for a in &asked {
-            println!("    - {}", a);
-        }
-    }
 
     println!(
-        "  Everything else: {}",
+        "\n  Everything else: {}",
         match tree.default {
-            Effect::Allow => "allowed by default",
-            Effect::Deny => "denied by default",
-            Effect::Ask => "requires approval by default",
+            Effect::Allow => "allowed",
+            Effect::Deny => "denied",
+            Effect::Ask => "requires approval",
         }
     );
     println!();
 
-    // 5. Potential issues
+    // 3. Potential issues
     println!("Potential issues");
     println!("================");
     let mut issues = Vec::new();
@@ -1174,6 +1101,16 @@ fn run_status(_json: bool) -> Result<()> {
             .all(|r| r.effect != Effect::Deny)
     {
         issues.push("Default is allow with no deny rules: everything is permitted.".to_string());
+    }
+
+    // Check for shadowed rules
+    let shadow_count =
+        shadows.exec.len() + shadows.fs.len() + shadows.net.len() + shadows.tool.len();
+    if shadow_count > 0 {
+        issues.push(format!(
+            "{} rule(s) shadowed by higher-precedence layers (marked with <- above).",
+            shadow_count
+        ));
     }
 
     if issues.is_empty() {
@@ -1611,13 +1548,12 @@ fn handle_list(json: bool) -> Result<()> {
         }
     };
 
-    let multi_level = settings.loaded_policies().len() > 1;
-
     let all_rules: Vec<&clash::policy::decision_tree::CompiledRule> = tree
         .exec_rules
         .iter()
         .chain(&tree.fs_rules)
         .chain(&tree.net_rules)
+        .chain(&tree.tool_rules)
         .collect();
 
     if json {
@@ -1632,7 +1568,7 @@ fn handle_list(json: bool) -> Result<()> {
                     "origin": origin,
                     "builtin": builtin,
                 });
-                if multi_level && let Some(ref level) = r.origin_level {
+                if let Some(ref level) = r.origin_level {
                     entry["level"] = serde_json::json!(level.to_string());
                 }
                 entry
@@ -1651,15 +1587,18 @@ fn handle_list(json: bool) -> Result<()> {
             all_rules.len()
         );
         for rule in &all_rules {
-            if multi_level {
-                if let Some(ref level) = rule.origin_level {
-                    println!("  [{}] {}", level, rule.source);
-                } else {
-                    println!("  {}", rule.source);
-                }
+            let tag = if let Some(ref level) = rule.origin_level {
+                format!("[{}] ", level)
+            } else if rule
+                .origin_policy
+                .as_ref()
+                .is_some_and(|p| p.starts_with("__internal_"))
+            {
+                "[builtin] ".to_string()
             } else {
-                println!("  {}", rule.source);
-            }
+                String::new()
+            };
+            println!("  {}{}", tag, rule.source);
         }
     }
     Ok(())
@@ -1679,32 +1618,30 @@ fn handle_show(json: bool) -> Result<()> {
     };
 
     let loaded = settings.loaded_policies();
-    let multi_level = loaded.len() > 1;
 
     if json {
-        let rule_count = tree.exec_rules.len() + tree.fs_rules.len() + tree.net_rules.len();
-        let mut output = serde_json::json!({
+        let rule_count = tree.exec_rules.len()
+            + tree.fs_rules.len()
+            + tree.net_rules.len()
+            + tree.tool_rules.len();
+        let output = serde_json::json!({
             "policy_name": tree.policy_name,
             "default": format!("{}", tree.default),
             "rule_count": rule_count,
             "source": tree.to_source(),
-        });
-        if multi_level {
-            output["levels"] = serde_json::json!(
-                loaded
-                    .iter()
-                    .map(|lp| {
-                        serde_json::json!({
-                            "level": lp.level.to_string(),
-                            "path": lp.path.display().to_string(),
-                            "source": &lp.source,
-                        })
+            "levels": loaded
+                .iter()
+                .map(|lp| {
+                    serde_json::json!({
+                        "level": lp.level.to_string(),
+                        "path": lp.path.display().to_string(),
+                        "source": &lp.source,
                     })
-                    .collect::<Vec<_>>()
-            );
-        }
+                })
+                .collect::<Vec<serde_json::Value>>(),
+        });
         println!("{}", serde_json::to_string_pretty(&output)?);
-    } else if multi_level {
+    } else {
         for lp in loaded {
             println!("[{}] {}", lp.level, lp.path.display());
             println!("{}", "-".repeat(40));
@@ -1714,10 +1651,9 @@ fn handle_show(json: bool) -> Result<()> {
             }
             println!();
         }
-    } else {
-        print!("{}", clash::policy::print_tree(tree));
-        let policy_path = ClashSettings::policy_file()?;
-        println!("\nPolicy file: {}", policy_path.display());
+        if loaded.is_empty() {
+            print!("{}", clash::policy::print_tree(tree));
+        }
     }
     Ok(())
 }

@@ -209,8 +209,33 @@ fn collect_deny_descriptions(tree: &crate::policy::DecisionTree) -> Vec<String> 
 /// Handle a session start event — validate policy/settings and report status to Claude.
 #[instrument(level = Level::TRACE, skip(input))]
 pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOutput> {
-    let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id))?;
-    Ok(HookOutput::session_start(Some(format!("{:?}", settings))))
+    let _settings = ClashSettings::load_or_create_with_session(Some(&input.session_id))?;
+
+    let mut lines = Vec::new();
+
+    // Check if user is running without skip-permissions (default mode).
+    let is_skip_permissions = input
+        .permission_mode
+        .as_deref()
+        .is_some_and(|m| m == "dangerously-skip-permissions");
+
+    if is_skip_permissions {
+        lines.push(
+            "NOTE: policy enforcement is DISABLED (--dangerously-skip-permissions). \
+             Filesystem sandboxing is still active for exec rules."
+                .into(),
+        );
+    } else {
+        lines.push(
+            "NOTE: Clash is managing permissions. For full enforcement, run with \
+             --dangerously-skip-permissions so Clash is the sole decision-maker."
+                .into(),
+        );
+    }
+
+    check_sandbox_and_session(&mut lines, input);
+
+    finish_session_start(lines)
 }
 
 /// Check sandbox support, init session, and symlink — shared by both paths.

@@ -239,10 +239,14 @@ pub struct Expectation {
 
 impl Step {
     pub fn validate(&self, index: usize) -> Result<(), String> {
-        let set_count = [self.hook.is_some(), self.command.is_some(), self.shell.is_some()]
-            .iter()
-            .filter(|&&b| b)
-            .count();
+        let set_count = [
+            self.hook.is_some(),
+            self.command.is_some(),
+            self.shell.is_some(),
+        ]
+        .iter()
+        .filter(|&&b| b)
+        .count();
 
         if set_count > 1 {
             return Err(format!(

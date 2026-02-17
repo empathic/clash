@@ -605,6 +605,96 @@ fn resolve_path_expr(expr: &PathExpr, env: &dyn EnvResolver) -> Result<String> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Shadow detection
+// ---------------------------------------------------------------------------
+
+/// Information about a shadowed rule.
+#[derive(Debug, Clone)]
+pub struct ShadowInfo {
+    /// The index of the rule that shadows this one (in the same rule list).
+    pub shadowed_by_index: usize,
+    /// The level of the rule that does the shadowing.
+    pub shadowed_by_level: crate::settings::PolicyLevel,
+}
+
+/// Shadow information across all rule categories in a decision tree.
+#[derive(Debug, Default)]
+pub struct AllShadows {
+    pub exec: HashMap<usize, ShadowInfo>,
+    pub fs: HashMap<usize, ShadowInfo>,
+    pub net: HashMap<usize, ShadowInfo>,
+    pub tool: HashMap<usize, ShadowInfo>,
+}
+
+/// Detect shadowed rules in a list of compiled rules.
+///
+/// A rule at index `i` is "shadowed" when an earlier rule at index `j` (higher
+/// precedence because the list is sorted most-specific-first, with stable
+/// ordering by level within equal specificity):
+///
+/// 1. Comes from a **different** and **higher** `origin_level`.
+/// 2. Has the **same or higher** specificity (i.e. `>=`).
+/// 3. Has matchers that **may overlap** with rule `i`.
+///
+/// Rules with `origin_level == None` (internal/builtin) are skipped entirely.
+/// Two rules at the same origin level don't shadow each other — that is normal
+/// specificity ordering within one policy file.
+///
+/// Returns a map from rule index to shadow info.
+pub fn detect_shadows(rules: &[CompiledRule]) -> HashMap<usize, ShadowInfo> {
+    let mut shadows = HashMap::new();
+
+    for i in 0..rules.len() {
+        let Some(level_i) = rules[i].origin_level else {
+            continue;
+        };
+
+        for j in 0..i {
+            let Some(level_j) = rules[j].origin_level else {
+                continue;
+            };
+
+            // Only cross-level shadowing: different levels, j is higher.
+            if level_j <= level_i {
+                continue;
+            }
+
+            // The shadowing rule must have the same or higher specificity.
+            if rules[j].specificity < rules[i].specificity {
+                continue;
+            }
+
+            // Matchers must potentially overlap.
+            if !matchers_may_overlap(&rules[j].source.matcher, &rules[i].source.matcher) {
+                continue;
+            }
+
+            shadows.insert(
+                i,
+                ShadowInfo {
+                    shadowed_by_index: j,
+                    shadowed_by_level: level_j,
+                },
+            );
+            // Only record the first (highest-precedence) shadow.
+            break;
+        }
+    }
+
+    shadows
+}
+
+/// Detect all shadows across all rule categories in a decision tree.
+pub fn detect_all_shadows(tree: &DecisionTree) -> AllShadows {
+    AllShadows {
+        exec: detect_shadows(&tree.exec_rules),
+        fs: detect_shadows(&tree.fs_rules),
+        net: detect_shadows(&tree.net_rules),
+        tool: detect_shadows(&tree.tool_rules),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -977,12 +1067,9 @@ mod tests {
   (allow (exec "git" *)))
 "#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
-        let tree = compile_multi_level_with_internals(
-            &[(PolicyLevel::User, user_source)],
-            &env,
-            &[],
-        )
-        .unwrap();
+        let tree =
+            compile_multi_level_with_internals(&[(PolicyLevel::User, user_source)], &env, &[])
+                .unwrap();
         assert_eq!(tree.default, Effect::Deny);
         assert_eq!(tree.policy_name, "main");
         assert_eq!(tree.exec_rules.len(), 1);
@@ -1025,7 +1112,10 @@ mod tests {
 "#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
-            &[(PolicyLevel::User, user_source), (PolicyLevel::Project, project_source)],
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+            ],
             &env,
             &[],
         )
@@ -1054,7 +1144,10 @@ mod tests {
 "#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
-            &[(PolicyLevel::User, user_source), (PolicyLevel::Project, project_source)],
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+            ],
             &env,
             &[],
         )
@@ -1080,7 +1173,10 @@ mod tests {
 "#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
-            &[(PolicyLevel::User, user_source), (PolicyLevel::Project, project_source)],
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+            ],
             &env,
             &[],
         )
@@ -1117,15 +1213,18 @@ mod tests {
 "#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
-            &[(PolicyLevel::User, user_source), (PolicyLevel::Project, project_source)],
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+            ],
             &env,
             &[],
         )
         .unwrap();
         // Rules from both levels should be present in the merged tree.
         assert_eq!(tree.exec_rules.len(), 2); // git * from user + rm * from project
-        assert_eq!(tree.net_rules.len(), 1);   // github.com from user
-        assert_eq!(tree.fs_rules.len(), 1);    // /project from project
+        assert_eq!(tree.net_rules.len(), 1); // github.com from user
+        assert_eq!(tree.fs_rules.len(), 1); // /project from project
     }
 
     #[test]
@@ -1144,7 +1243,10 @@ mod tests {
 "#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
-            &[(PolicyLevel::User, user_source), (PolicyLevel::Project, project_source)],
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+            ],
             &env,
             &[],
         )
@@ -1176,7 +1278,10 @@ mod tests {
 "#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
-            &[(PolicyLevel::User, user_source), (PolicyLevel::Project, project_source)],
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+            ],
             &env,
             &[("__internal_test__", internal)],
         )
@@ -1318,5 +1423,136 @@ mod tests {
         // Session's net rule should still be present.
         assert_eq!(tree.net_rules.len(), 1);
         assert_eq!(tree.net_rules[0].origin_level, Some(PolicyLevel::Session));
+    }
+
+    // -----------------------------------------------------------------------
+    // Shadow detection tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn shadow_none_when_single_level() {
+        // Rules from a single level should never shadow each other.
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *))
+  (deny  (exec "git" "push" *)))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree =
+            compile_multi_level_with_internals(&[(PolicyLevel::User, user_source)], &env, &[])
+                .unwrap();
+        let shadows = detect_shadows(&tree.exec_rules);
+        assert!(
+            shadows.is_empty(),
+            "single-level rules should not shadow each other"
+        );
+    }
+
+    #[test]
+    fn shadow_higher_level_shadows_lower_same_specificity() {
+        // Project-level "git *" should shadow user-level "git *" because
+        // Project has higher precedence and same specificity.
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))
+"#;
+        let project_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "git" *)))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree = compile_multi_level_with_internals(
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+            ],
+            &env,
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(tree.exec_rules.len(), 2);
+        // Project rule comes first (higher precedence at same specificity).
+        assert_eq!(tree.exec_rules[0].origin_level, Some(PolicyLevel::Project));
+        assert_eq!(tree.exec_rules[1].origin_level, Some(PolicyLevel::User));
+
+        let shadows = detect_shadows(&tree.exec_rules);
+        assert_eq!(shadows.len(), 1, "user rule should be shadowed");
+        let info = shadows.get(&1).expect("rule at index 1 should be shadowed");
+        assert_eq!(info.shadowed_by_index, 0);
+        assert_eq!(info.shadowed_by_level, PolicyLevel::Project);
+    }
+
+    #[test]
+    fn shadow_no_shadow_when_lower_is_more_specific() {
+        // User-level "git commit *" is more specific than project-level "git *".
+        // More specific rules always win regardless of level, so no shadow.
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" "commit" *)))
+"#;
+        let project_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "git" *)))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree = compile_multi_level_with_internals(
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+            ],
+            &env,
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(tree.exec_rules.len(), 2);
+        // "git commit *" is more specific, comes first (user).
+        assert_eq!(tree.exec_rules[0].origin_level, Some(PolicyLevel::User));
+        // "git *" is less specific, comes second (project).
+        assert_eq!(tree.exec_rules[1].origin_level, Some(PolicyLevel::Project));
+
+        let shadows = detect_shadows(&tree.exec_rules);
+        assert!(
+            shadows.is_empty(),
+            "more-specific lower-level rule should not be shadowed"
+        );
+    }
+
+    #[test]
+    fn shadow_no_shadow_when_matchers_dont_overlap() {
+        // Project denies "rm *", user allows "git *" — completely different
+        // binaries, so no overlap and no shadow.
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))
+"#;
+        let project_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "rm" *)))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree = compile_multi_level_with_internals(
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+            ],
+            &env,
+            &[],
+        )
+        .unwrap();
+
+        let shadows = detect_shadows(&tree.exec_rules);
+        assert!(
+            shadows.is_empty(),
+            "non-overlapping matchers should not shadow"
+        );
     }
 }

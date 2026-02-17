@@ -81,10 +81,10 @@ fn describe_exec(m: &ExecMatcher) -> String {
 fn describe_fs(m: &FsMatcher) -> String {
     let op = match &m.op {
         OpPattern::Any => "any operation on".to_string(),
-        OpPattern::Single(op) => format!("{}ing", describe_fs_op(*op)),
+        OpPattern::Single(op) => describe_fs_op_gerund(*op).to_string(),
         OpPattern::Or(ops) => {
-            let names: Vec<&str> = ops.iter().map(|o| describe_fs_op(*o)).collect();
-            format!("{}ing", names.join("/"))
+            let names: Vec<&str> = ops.iter().map(|o| describe_fs_op_gerund(*o)).collect();
+            names.join("/")
         }
     };
     match &m.path {
@@ -93,12 +93,12 @@ fn describe_fs(m: &FsMatcher) -> String {
     }
 }
 
-fn describe_fs_op(op: FsOp) -> &'static str {
+fn describe_fs_op_gerund(op: FsOp) -> &'static str {
     match op {
-        FsOp::Read => "read",
-        FsOp::Write => "write",
-        FsOp::Create => "create",
-        FsOp::Delete => "delete",
+        FsOp::Read => "reading",
+        FsOp::Write => "writing",
+        FsOp::Create => "creating",
+        FsOp::Delete => "deleting",
     }
 }
 
@@ -763,7 +763,7 @@ mod tests {
             }),
             sandbox: None,
         };
-        assert_eq!(describe_rule(&rule), "Allow writ/creating files under $PWD");
+        assert_eq!(describe_rule(&rule), "Allow writing/creating files under $PWD");
     }
 
     #[test]
