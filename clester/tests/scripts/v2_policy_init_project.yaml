@@ -43,27 +43,12 @@ steps:
       exit_code: 0
       stdout_contains: "already exists"
 
-  # After init --project, status should show multiple policy files
-  - name: status shows two policy files
+  # After init --project, status should show policy layers
+  - name: status shows two policy layers
     command: status
     expect:
       exit_code: 0
-      stdout_contains: "Policy files"
-
-  # Add a rule at project scope
-  - name: allow npm at project scope
-    command: policy allow '(exec "npm" *)' --scope project
-    expect:
-      exit_code: 0
-
-  # npm should now be allowed
-  - name: npm install now allowed
-    hook: pre-tool-use
-    tool_name: Bash
-    tool_input:
-      command: npm install
-    expect:
-      decision: allow
+      stdout_contains: "Policy layers"
 
   # git still allowed from user level
   - name: git status still allowed

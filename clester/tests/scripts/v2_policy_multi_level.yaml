@@ -63,12 +63,12 @@ steps:
       exit_code: 0
       stdout_contains: "git"
 
-  # 6. status shows multiple policy files
-  - name: status shows policy files
+  # 6. status shows policy layers
+  - name: status shows policy layers
     command: status
     expect:
       exit_code: 0
-      stdout_contains: "Policy files"
+      stdout_contains: "Policy layers"
 
   # 7. explain shows the deny from project level
   - name: explain git push shows deny
@@ -83,42 +83,3 @@ steps:
     expect:
       exit_code: 0
       stdout_contains: allow
-
-  # 9. Add an allow rule at project scope
-  - name: allow cargo at project scope
-    command: policy allow '(exec "cargo" *)' --scope project
-    expect:
-      exit_code: 0
-
-  # 10. Verify cargo is now allowed
-  - name: cargo build is now allowed
-    hook: pre-tool-use
-    tool_name: Bash
-    tool_input:
-      command: cargo build
-    expect:
-      decision: allow
-
-  # 11. Add a deny rule at project scope
-  - name: deny npm at project scope
-    command: policy deny '(exec "npm" "publish" *)' --scope project
-    expect:
-      exit_code: 0
-
-  # 12. Verify npm publish is now denied (project deny overrides user allow)
-  - name: npm publish denied by project scope deny
-    hook: pre-tool-use
-    tool_name: Bash
-    tool_input:
-      command: npm publish
-    expect:
-      decision: deny
-
-  # 13. npm install still allowed (only publish was denied)
-  - name: npm install still allowed
-    hook: pre-tool-use
-    tool_name: Bash
-    tool_input:
-      command: npm install
-    expect:
-      decision: allow

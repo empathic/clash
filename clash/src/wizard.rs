@@ -542,14 +542,14 @@ fn prompt_rule() -> Result<Option<Rule>> {
 fn show_rules(source: &str) -> Result<()> {
     let top_levels = crate::policy::parse::parse(source)?;
     let mut rules: Vec<Rule> = Vec::new();
-    let mut policy_name = String::from("main");
+    let mut _policy_name = String::from("main");
 
     for tl in &top_levels {
         match tl {
             TopLevel::Default { policy, .. } => {
-                policy_name = policy.clone();
+                _policy_name = policy.clone();
             }
-            TopLevel::Policy { name, body } => {
+            TopLevel::Policy { name: _, body } => {
                 for item in body {
                     if let PolicyItem::Rule(r) = item {
                         rules.push(r.clone());
@@ -763,7 +763,10 @@ mod tests {
             }),
             sandbox: None,
         };
-        assert_eq!(describe_rule(&rule), "Allow writing/creating files under $PWD");
+        assert_eq!(
+            describe_rule(&rule),
+            "Allow writing/creating files under $PWD"
+        );
     }
 
     #[test]

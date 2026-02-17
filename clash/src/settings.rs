@@ -137,8 +137,8 @@ impl ClashSettings {
         }
     }
 
+    // Returns the policy file path for a session, given its ID.
     pub fn session_policy_path(session_id: &str) -> PathBuf {
-        /// Returns the policy file path for a session, given its ID.
         crate::audit::session_dir(session_id).join("policy.sexpr")
     }
 
@@ -261,20 +261,6 @@ impl ClashSettings {
     /// Return the pre-compiled decision tree, if one was successfully compiled.
     pub fn decision_tree(&self) -> Option<&DecisionTree> {
         self.compiled.as_ref()
-    }
-
-    /// Try to load and compile the policy from the policy file.
-    #[cfg(test)]
-    #[instrument(level = Level::TRACE, skip(self))]
-    fn load_policy_file(&mut self) -> bool {
-        let path = match Self::policy_file() {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(error = %e, "Cannot determine policy file path");
-                return false;
-            }
-        };
-        self.load_policy_from_path(&path)
     }
 
     /// Load and validate a policy file from an explicit path, then compile it.
@@ -619,10 +605,10 @@ fn find_ancestor_with(
 ) -> Option<PathBuf> {
     let mut current = start.to_path_buf();
     loop {
-        if let Some(boundary) = stop_at {
-            if current == boundary {
-                return None;
-            }
+        if let Some(boundary) = stop_at
+            && current == boundary
+        {
+            return None;
         }
         if current.join(name).exists() {
             return Some(current);
