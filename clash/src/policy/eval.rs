@@ -105,7 +105,7 @@ pub fn tool_to_queries(
 }
 
 /// Resolve a possibly-relative path against cwd.
-fn resolve_path(path: &str, cwd: &str) -> String {
+pub(crate) fn resolve_path(path: &str, cwd: &str) -> String {
     if path.is_empty() {
         return cwd.to_string();
     }
@@ -122,7 +122,7 @@ fn resolve_path(path: &str, cwd: &str) -> String {
 /// Extract the domain from a URL string.
 ///
 /// Simple extraction: strip scheme, take host portion before first `/` or `:`.
-fn extract_domain(url: &str) -> String {
+pub(crate) fn extract_domain(url: &str) -> String {
     let without_scheme = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))

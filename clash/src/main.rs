@@ -10,10 +10,13 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::prelude::*;
 
 use clash::handlers;
-use clash::hooks::{HookOutput, ToolUseHookInput, exit_code};
+use clash::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput, exit_code};
 use clash::permissions::check_permission;
 use clash::sandbox_cmd;
+use clash::session_policy;
 use clash::settings::{ClashSettings, DEFAULT_POLICY, PolicyLevel};
+
+use claude_settings::PermissionRule;
 
 use sandbox_cmd::{SandboxCmd, run_sandbox};
 
@@ -54,11 +57,47 @@ impl HooksCmd {
             Self::PreToolUse => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
                 let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id))?;
-                check_permission(&input, &settings)?
+                let output = check_permission(&input, &settings)?;
+
+                // If the decision is Ask, record it so PostToolUse can detect
+                // user approval and learn a session policy rule.
+                if is_ask_decision(&output) {
+                    if let Some(ref tool_use_id) = input.tool_use_id {
+                        session_policy::record_pending_ask(
+                            &input.session_id,
+                            tool_use_id,
+                            &input.tool_name,
+                            &input.tool_input,
+                            &input.cwd,
+                        );
+                    }
+                }
+
+                output
             }
             Self::PostToolUse => {
-                let _input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
-                // PostToolUse is informational - just continue
+                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
+
+                // Check if this tool use was previously "ask"ed and the user
+                // accepted. If so, infer and write a session policy rule.
+                if let Some(ref tool_use_id) = input.tool_use_id {
+                    match session_policy::process_post_tool_use(
+                        &input.session_id,
+                        tool_use_id,
+                        &input.tool_name,
+                        &input.tool_input,
+                        &input.cwd,
+                    ) {
+                        Ok(Some(rule)) => {
+                            info!(rule = %rule, "Learned session policy rule from user approval");
+                        }
+                        Ok(None) => {} // No pending ask — normal case.
+                        Err(e) => {
+                            warn!(error = %e, "Failed to process approval for session policy");
+                        }
+                    }
+                }
+
                 HookOutput::continue_execution()
             }
             Self::PermissionRequest => {
@@ -76,6 +115,15 @@ impl HooksCmd {
         output.write_stdout()?;
         Ok(())
     }
+}
+
+/// Check if a hook output is an Ask decision (the user will see a permission prompt).
+fn is_ask_decision(output: &HookOutput) -> bool {
+    matches!(
+        &output.hook_specific_output,
+        Some(HookSpecificOutput::PreToolUse(pre))
+        if pre.permission_decision == Some(PermissionRule::Ask)
+    )
 }
 
 #[derive(Subcommand, Debug)]
