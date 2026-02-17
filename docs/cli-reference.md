@@ -58,7 +58,7 @@ Interactive policy editor. Walks through building a policy rule by rule using a 
 clash edit
 ```
 
-Opens an interactive wizard that lets you add and remove rules from your policy. Each step presents only valid options. Press Escape to go back at any prompt.
+Opens an interactive wizard that lets you add and remove rules from your policy. Each step presents only valid options. Press Escape to go back at any point.
 
 **Examples:**
 

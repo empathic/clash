@@ -27,6 +27,7 @@ install: uninstall
     just build-plugin
     claude plugin marketplace add ./
     claude plugin install clash
+    cargo install
 
 uninstall:
     -claude plugin uninstall clash

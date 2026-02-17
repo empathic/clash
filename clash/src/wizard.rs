@@ -96,9 +96,9 @@ fn describe_fs(m: &FsMatcher) -> String {
 fn describe_fs_op(op: FsOp) -> &'static str {
     match op {
         FsOp::Read => "read",
-        FsOp::Write => "writ",
-        FsOp::Create => "creat",
-        FsOp::Delete => "delet",
+        FsOp::Write => "write",
+        FsOp::Create => "create",
+        FsOp::Delete => "delete",
     }
 }
 
@@ -549,14 +549,13 @@ fn show_rules(source: &str) -> Result<()> {
             TopLevel::Default { policy, .. } => {
                 policy_name = policy.clone();
             }
-            TopLevel::Policy { name, body } if *name == policy_name => {
+            TopLevel::Policy { name, body } => {
                 for item in body {
                     if let PolicyItem::Rule(r) = item {
                         rules.push(r.clone());
                     }
                 }
             }
-            _ => {}
         }
     }
 
@@ -564,7 +563,7 @@ fn show_rules(source: &str) -> Result<()> {
         println!("  (no rules — default effect applies to everything)");
     } else {
         for (i, rule) in rules.iter().enumerate() {
-            println!("  {}. {} — {}", i + 1, rule, describe_rule(rule));
+            eprintln!("  {}. {} — {}", i + 1, rule, describe_rule(rule));
         }
     }
 
@@ -600,7 +599,7 @@ fn collect_rules(source: &str) -> Result<Vec<Rule>> {
 pub fn run() -> Result<()> {
     println!("Clash Policy Setup");
     println!("==================");
-    println!("Press Escape to go back at any prompt.\n");
+    println!("Press Escape to go back at any point.\n");
 
     // Load or create the policy.
     let path = ClashSettings::policy_file()?;
@@ -611,7 +610,7 @@ pub fn run() -> Result<()> {
         crate::settings::DEFAULT_POLICY.to_string()
     };
 
-    println!("Current rules:");
+    println!("Current rules:\n{}", &source);
     show_rules(&source)?;
     println!();
 

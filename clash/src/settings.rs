@@ -137,8 +137,8 @@ impl ClashSettings {
         }
     }
 
-    /// Returns the policy file path for a session, given its ID.
     pub fn session_policy_path(session_id: &str) -> PathBuf {
+        /// Returns the policy file path for a session, given its ID.
         crate::audit::session_dir(session_id).join("policy.sexpr")
     }
 
@@ -153,9 +153,7 @@ impl ClashSettings {
         let id = std::fs::read_to_string(&path)
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    anyhow::anyhow!(
-                        "no active session — start a session with `clash launch` first"
-                    )
+                    anyhow::anyhow!("no active session — start a session with `clash launch` first")
                 } else {
                     anyhow::anyhow!("failed to read active session: {e}")
                 }

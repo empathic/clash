@@ -9,9 +9,10 @@ use tracing::{Level, debug, info, instrument, warn};
 use crate::hooks::{HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput};
 use crate::notifications;
 use crate::permissions::check_permission;
+use crate::policy::compile::compile_multi_level;
 use crate::settings::{self, ClashSettings};
 
-use claude_settings::PermissionRule;
+use claude_settings::{PermissionRule, Settings};
 
 /// Handle a permission request — decide whether to approve or deny on behalf of user.
 ///
@@ -208,126 +209,8 @@ fn collect_deny_descriptions(tree: &crate::policy::DecisionTree) -> Vec<String> 
 /// Handle a session start event — validate policy/settings and report status to Claude.
 #[instrument(level = Level::TRACE, skip(input))]
 pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOutput> {
-    let mut lines: Vec<String> = Vec::new();
-
-    // 0. Check permission mode and recommend --dangerously-skip-permissions
-    let skip_permissions = input
-        .permission_mode
-        .as_deref()
-        .is_some_and(|m| m.contains("dangerously-skip-permissions"));
-
-    if skip_permissions {
-        eprintln!(
-            "\x1b[1;33mwarning\x1b[0m: clash: running with --dangerously-skip-permissions \
-             — policy enforcement disabled"
-        );
-
-        lines.push(
-            "IMPORTANT: This session is running with --dangerously-skip-permissions. \
-             Clash's policy enforcement is DISABLED — all tool calls are auto-approved \
-             without policy evaluation. Filesystem sandboxing (Landlock/Seatbelt) is \
-             still active if configured, but no permission rules are being checked. \
-             Exercise extra caution with destructive operations (deleting files, force-pushing, \
-             modifying system files). To re-enable policy enforcement, restart Claude Code \
-             without the --dangerously-skip-permissions flag."
-                .into(),
-        );
-    } else {
-        lines.push(
-            "NOTE: Clash is managing permissions for this session. \
-             For the best experience, run Claude Code with --dangerously-skip-permissions \
-             to let Clash be the sole permission handler and avoid double prompting."
-                .into(),
-        );
-    }
-
-    // 1. Check policy file
-    let policy_path = match ClashSettings::policy_file() {
-        Ok(p) => p,
-        Err(e) => {
-            lines.push(format!("ISSUE: policy file path error: {}", e));
-            // Skip to sandbox check
-            check_sandbox_and_session(&mut lines, input);
-            return finish_session_start(lines);
-        }
-    };
-
-    if policy_path.exists() {
-        match std::fs::read_to_string(&policy_path) {
-            Ok(contents) => {
-                match crate::policy::compile_policy(&contents) {
-                    Ok(tree) => {
-                        let rule_count =
-                            tree.exec_rules.len() + tree.fs_rules.len() + tree.net_rules.len();
-                        lines.push(format!(
-                            "policy: OK ({} rules, default={}, policy={})",
-                            rule_count, tree.default, tree.policy_name,
-                        ));
-
-                        let mut deny_descriptions = collect_deny_descriptions(&tree);
-                        deny_descriptions.sort();
-                        deny_descriptions.dedup();
-
-                        let denials_summary = if deny_descriptions.is_empty() {
-                            "no explicit denials".to_string()
-                        } else if deny_descriptions.len() <= 4 {
-                            deny_descriptions.join(", ")
-                        } else {
-                            let first_four = &deny_descriptions[..4];
-                            format!(
-                                "{}, +{} more",
-                                first_four.join(", "),
-                                deny_descriptions.len() - 4
-                            )
-                        };
-
-                        lines.push(format!(
-                            "Clash active: policy '{}', {} rules. Denied: {}. Use /clash:status or /clash:edit for details.",
-                            tree.policy_name, rule_count, denials_summary,
-                        ));
-                    }
-                    Err(e) => {
-                        lines.push(format!(
-                            "ISSUE: policy compile error: {}. All actions will default to 'ask'.",
-                            e
-                        ));
-                    }
-                }
-
-                // Also try to load notification config from companion yaml
-                let yaml_path = ClashSettings::settings_dir()
-                    .map(|d| d.join("policy.yaml"))
-                    .ok();
-                if let Some(ref yp) = yaml_path
-                    && let Ok(yaml_contents) = std::fs::read_to_string(yp)
-                {
-                    let (notif_config, notif_warning) =
-                        settings::parse_notification_config(&yaml_contents);
-                    if let Some(warning) = notif_warning {
-                        lines.push(format!("ISSUE: {}", warning));
-                    } else {
-                        let zulip_status = if notif_config.zulip.is_some() {
-                            "configured"
-                        } else {
-                            "not configured"
-                        };
-                        lines.push(format!(
-                            "notifications: OK (desktop={}, zulip={})",
-                            notif_config.desktop, zulip_status
-                        ));
-                    }
-                }
-            }
-            Err(e) => {
-                lines.push(format!("ISSUE: policy file read error: {}", e));
-            }
-        }
-    } else {
-        lines.push("policy: not found (no policy file configured)".into());
-    }
-
-    check_sandbox_and_session(&mut lines, input);
-    finish_session_start(lines)
+    let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id))?;
+    Ok(HookOutput::session_start(Some(format!("{:?}", settings))))
 }
 
 /// Check sandbox support, init session, and symlink — shared by both paths.
@@ -369,40 +252,7 @@ fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookIn
         warn!(error = %e, "Failed to write active session marker");
     }
 
-    // 5. Symlink clash binary into ~/.local/bin
-    #[cfg(unix)]
-    if let Ok(exe_path) = std::env::current_exe() {
-        // Skip test binaries (target/debug/deps/clash-<hash>) — they embed
-        // the cargo test harness and aren't the real CLI binary.
-        let is_test_binary = exe_path.components().any(|c| c.as_os_str() == "deps");
-
-        if is_test_binary {
-            debug!(path = %exe_path.display(), "skipping symlink — test binary in deps/");
-        } else {
-            let home = std::env::var("HOME").unwrap_or_default();
-            let dir = std::path::Path::new(&home).join(".local/bin");
-            let _ = std::fs::create_dir_all(&dir);
-            let link_path = dir.join("clash");
-            if let Ok(target) = std::fs::read_link(&link_path) {
-                if target != exe_path {
-                    let _ = std::fs::remove_file(&link_path);
-                    match std::os::unix::fs::symlink(&exe_path, &link_path) {
-                        Ok(()) => info!(dir = %dir.display(), "symlinked clash into ~/.local/bin"),
-                        Err(e) => debug!(error = %e, "failed to symlink clash into ~/.local/bin"),
-                    }
-                }
-            } else if link_path.exists() {
-                debug!("~/.local/bin/clash exists as a regular file, not replacing");
-            } else {
-                match std::os::unix::fs::symlink(&exe_path, &link_path) {
-                    Ok(()) => info!(dir = %dir.display(), "symlinked clash into ~/.local/bin"),
-                    Err(e) => debug!(error = %e, "failed to symlink clash into ~/.local/bin"),
-                }
-            }
-        }
-    }
-
-    // 6. Session metadata
+    // 5. Session metadata
     if let Some(ref source) = input.source {
         lines.push(format!("session source: {}", source));
     }

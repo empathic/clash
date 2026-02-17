@@ -17,7 +17,7 @@ Clash gives you granular control. Write policy rules that decide what to **allow
 
 ---
 
-## Quick Start
+## Local Development
 
 ```bash
 # 1. Install (requires Rust toolchain)
