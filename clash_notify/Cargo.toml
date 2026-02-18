@@ -2,6 +2,11 @@
 name = "clash_notify"
 version = "0.1.0"
 edition = "2024"
+description = "Desktop notification support for clash"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 tracing = { workspace = true }

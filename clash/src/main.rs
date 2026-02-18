@@ -61,17 +61,17 @@ impl HooksCmd {
                 let output = check_permission(&input, &settings)?;
 
                 // If the decision is Ask, record it so PostToolUse can detect
-                // user approval and learn a session policy rule.
-                if is_ask_decision(&output) {
-                    if let Some(ref tool_use_id) = input.tool_use_id {
-                        session_policy::record_pending_ask(
-                            &input.session_id,
-                            tool_use_id,
-                            &input.tool_name,
-                            &input.tool_input,
-                            &input.cwd,
-                        );
-                    }
+                // user approval and suggest a session policy rule.
+                if is_ask_decision(&output)
+                    && let Some(ref tool_use_id) = input.tool_use_id
+                {
+                    session_policy::record_pending_ask(
+                        &input.session_id,
+                        tool_use_id,
+                        &input.tool_name,
+                        &input.tool_input,
+                        &input.cwd,
+                    );
                 }
 
                 output
@@ -80,26 +80,24 @@ impl HooksCmd {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
 
                 // Check if this tool use was previously "ask"ed and the user
-                // accepted. If so, infer and write a session policy rule.
-                if let Some(ref tool_use_id) = input.tool_use_id {
-                    match session_policy::process_post_tool_use(
-                        &input.session_id,
+                // accepted. If so, return advisory context suggesting a session
+                // rule for Claude to offer the user.
+                let context = input.tool_use_id.as_deref().and_then(|tool_use_id| {
+                    let advice = session_policy::process_post_tool_use(
                         tool_use_id,
+                        &input.session_id,
                         &input.tool_name,
                         &input.tool_input,
                         &input.cwd,
-                    ) {
-                        Ok(Some(rule)) => {
-                            info!(rule = %rule, "Learned session policy rule from user approval");
-                        }
-                        Ok(None) => {} // No pending ask — normal case.
-                        Err(e) => {
-                            warn!(error = %e, "Failed to process approval for session policy");
-                        }
-                    }
-                }
+                    )?;
+                    info!(
+                        rule = %advice.suggested_rule,
+                        "Suggesting session rule for user approval"
+                    );
+                    Some(advice.as_context())
+                });
 
-                HookOutput::continue_execution()
+                HookOutput::post_tool_use(context)
             }
             Self::PermissionRequest => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
@@ -961,7 +959,7 @@ fn migrate_yaml_policy(yaml_path: &std::path::Path, sexpr_path: &std::path::Path
     let yaml_content =
         std::fs::read_to_string(yaml_path).context("failed to read legacy policy.yaml")?;
 
-    let grammar = include_str!("../../docs/policy-grammar.md");
+    let grammar = include_str!("../docs/policy-grammar.md");
 
     let prompt = format!(
         "Convert this YAML clash policy to the s-expression format described in the grammar below.\n\

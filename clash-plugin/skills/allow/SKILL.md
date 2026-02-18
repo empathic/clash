@@ -48,6 +48,29 @@ Help the user add an **allow** rule to their clash policy.
 
 5. **Report success** and explain that the rule is now active.
 
+## Session-scoped rules
+
+When a user approves a permission prompt and wants that approval to last for the rest of the session (but NOT permanently), use `--scope session`:
+
+1. **Determine if session scope is appropriate**:
+   - The user just approved a one-off action and wants to avoid re-prompting for similar actions
+   - The user explicitly asks for "just this session" or "for now"
+   - You received advisory context from PostToolUse suggesting a session rule
+
+2. **Use `--scope session`** to add a temporary rule:
+   ```bash
+   clash policy allow '(exec "git" *)' --scope session --dry-run
+   clash policy allow '(exec "git" *)' --scope session
+   ```
+
+3. **Craft precise rules** — avoid overly broad permissions:
+   - Good: `(exec "git" *)` — allows all git commands for the session
+   - Good: `(exec "cargo" "test" *)` — allows cargo test for the session
+   - Avoid: `(exec *)` — too broad, allows any command
+   - When PostToolUse suggests a rule, use it as a starting point but consider whether a narrower scope makes sense
+
+Session rules live only for the current Claude Code session and are automatically cleaned up when the session ends.
+
 ## Safety guidelines
 
 - Always dry-run first and show the result before applying

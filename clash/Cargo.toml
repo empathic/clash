@@ -2,11 +2,15 @@
 name = "clash"
 version = "0.1.0"
 edition = "2024"
+description = "Command Line Agent Safety Harness — permission policies for Claude Code"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 clap = { workspace = true }
 anyhow = { workspace = true }
-claude_settings = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 dirs = { workspace = true }
@@ -24,12 +28,15 @@ bitflags = { workspace = true }
 lexpr = { workspace = true }
 
 libc = { workspace = true }
-clash_notify = { workspace = true }
 uuid = { workspace = true }
 ureq = { workspace = true }
 base64 = { workspace = true }
 console = { workspace = true }
 dialoguer = { workspace = true }
+
+# from the workspace
+clash_notify = { workspace = true }
+claude_settings = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
