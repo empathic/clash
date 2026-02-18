@@ -14,7 +14,7 @@
       "author": {
         "name": "Empathic"
       },
-      "source": "./target/clash-dev/clash-plugin",
+      "source": "./clash-plugin",
       "category": "security"
     }
   ]
