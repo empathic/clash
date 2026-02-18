@@ -20,7 +20,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Install just
-      run: cargo install just
+      uses: taiki-e/install-action@just
     - name: Run Tests
       run: just ci
