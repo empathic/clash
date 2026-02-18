@@ -11,7 +11,7 @@ use crate::notifications;
 use crate::permissions::check_permission;
 use crate::settings::ClashSettings;
 
-use claude_settings::PermissionRule;
+use claude_settings::{PermissionRule, Settings};
 
 /// Handle a permission request — decide whether to approve or deny on behalf of user.
 ///
