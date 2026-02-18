@@ -1,0 +1,12 @@
+mutation FileUpload($contentType: String!, $filename: String!, $size: Int!, $makePublic: Boolean) {
+    fileUpload(contentType: $contentType, filename: $filename, size: $size, makePublic: $makePublic) {
+        uploadFile {
+            uploadUrl
+            assetUrl
+            headers {
+                key
+                value
+            }
+        }
+    }
+}

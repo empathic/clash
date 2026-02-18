@@ -42,16 +42,7 @@ pub fn create_issue(report: &BugReport) -> Result<CreatedIssue> {
     let description = format_description(report);
     let title = format!("Bug Report: {}", uuid::Uuid::new_v4());
 
-    let query = r#"mutation IssueCreate($input: IssueCreateInput!) {
-        issueCreate(input: $input) {
-            success
-            issue {
-                id
-                identifier
-                url
-            }
-        }
-    }"#;
+    let query = include_str!("issue_create.graphql");
 
     let body = serde_json::json!({
         "query": query,
@@ -158,18 +149,7 @@ fn graphql_request(api_key: &str, body: &serde_json::Value) -> Result<serde_json
 /// Upload a file to Linear and attach it to an issue.
 fn upload_attachment(api_key: &str, issue_id: &str, attachment: &Attachment) -> Result<()> {
     // Step 1: Request an upload URL.
-    let upload_query = r#"mutation FileUpload($contentType: String!, $filename: String!, $size: Int!, $makePublic: Boolean) {
-        fileUpload(contentType: $contentType, filename: $filename, size: $size, makePublic: $makePublic) {
-            uploadFile {
-                uploadUrl
-                assetUrl
-                headers {
-                    key
-                    value
-                }
-            }
-        }
-    }"#;
+    let upload_query = include_str!("file_upload.graphql");
 
     let upload_body = serde_json::json!({
         "query": upload_query,
@@ -214,11 +194,7 @@ fn upload_attachment(api_key: &str, issue_id: &str, attachment: &Attachment) -> 
     debug!(asset_url, filename = %attachment.filename, "Uploaded file to Linear");
 
     // Step 3: Create an attachment linking the file to the issue.
-    let attach_query = r#"mutation AttachmentCreate($input: AttachmentCreateInput!) {
-        attachmentCreate(input: $input) {
-            success
-        }
-    }"#;
+    let attach_query = include_str!("attachment_create.graphql");
 
     let attach_body = serde_json::json!({
         "query": attach_query,
@@ -327,16 +303,7 @@ mod tests {
         };
         let description = format_description(&report);
 
-        let query = r#"mutation IssueCreate($input: IssueCreateInput!) {
-        issueCreate(input: $input) {
-            success
-            issue {
-                id
-                identifier
-                url
-            }
-        }
-    }"#;
+        let query = include_str!("issue_create.graphql");
 
         let body = serde_json::json!({
             "query": query,
