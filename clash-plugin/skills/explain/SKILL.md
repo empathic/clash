@@ -10,16 +10,16 @@ Ask the user what tool invocation they want to understand. Examples:
 Run the explain command with the tool type and the command/path:
 
 ```bash
-clash policy explain bash "git push"
-clash policy explain read "/etc/passwd"
-clash policy explain write "/tmp/output.txt"
-clash policy explain edit "src/main.rs"
+clash-cli policy explain bash "git push"
+clash-cli policy explain read "/etc/passwd"
+clash-cli policy explain write "/tmp/output.txt"
+clash-cli policy explain edit "src/main.rs"
 ```
 
 For machine-readable output (useful when chaining with other tools):
 
 ```bash
-clash policy explain bash "git push" --json
+clash-cli policy explain bash "git push" --json
 ```
 
 Parse and present the results clearly:

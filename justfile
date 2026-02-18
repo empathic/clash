@@ -14,7 +14,7 @@ build-plugin-in target_dir:
     plugin="$base/clash-plugin"
     mkdir -p "$plugin/bin"
     cp -r clash-plugin/. "$plugin"
-    cp target/debug/clash "$plugin/bin/clash"
+    cp target/debug/clash-cli "$plugin/bin/clash-cli"
     echo $plugin
 
 build-plugin: (build-plugin-in plugin_target)
@@ -32,7 +32,7 @@ install: uninstall
 uninstall:
     -claude plugin uninstall clash
     -claude plugin marketplace remove clash
-    -rm ~/.local/bin/clash
+    -rm ~/.local/bin/clash-cli
 
 check:
     cargo fmt

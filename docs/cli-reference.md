@@ -1,6 +1,6 @@
 # CLI Reference
 
-Complete reference for the `clash` command-line interface.
+Complete reference for the `clash-cli` command-line interface.
 
 ---
 
@@ -15,12 +15,12 @@ All commands accept:
 
 ---
 
-## clash init
+## clash-cli init
 
 Initialize a new clash policy with a safe default configuration.
 
 ```
-clash init [OPTIONS]
+clash-cli init [OPTIONS]
 ```
 
 **Options:**
@@ -39,23 +39,23 @@ clash init [OPTIONS]
 
 ```bash
 # First-time setup
-clash init
+clash-cli init
 
 # Re-run to reconfigure (interactive prompt)
-clash init
+clash-cli init
 
 # Initialize without touching Claude Code settings
-clash init --no-bypass
+clash-cli init --no-bypass
 ```
 
 ---
 
-## clash edit
+## clash-cli edit
 
 Interactive policy editor. Walks through building a policy rule by rule using a decision-tree interface.
 
 ```
-clash edit
+clash-cli edit
 ```
 
 Opens an interactive wizard that lets you add and remove rules from your policy. Each step presents only valid options. Press Escape to go back at any point.
@@ -64,17 +64,17 @@ Opens an interactive wizard that lets you add and remove rules from your policy.
 
 ```bash
 # Open the interactive policy editor
-clash edit
+clash-cli edit
 ```
 
 ---
 
-## clash status
+## clash-cli status
 
 Show policy status: layers, rules with shadowing, and potential issues.
 
 ```
-clash status [OPTIONS]
+clash-cli status [OPTIONS]
 ```
 
 **Options:**
@@ -92,17 +92,17 @@ Outputs a comprehensive breakdown covering:
 **Example:**
 
 ```bash
-clash status
+clash-cli status
 ```
 
 ---
 
-## clash launch
+## clash-cli launch
 
 Launch Claude Code with clash managing hooks and sandbox enforcement.
 
 ```
-clash launch [OPTIONS] [ARGS]...
+clash-cli launch [OPTIONS] [ARGS]...
 ```
 
 **Options:**
@@ -121,23 +121,23 @@ clash launch [OPTIONS] [ARGS]...
 
 ```bash
 # Launch with default policy
-clash launch
+clash-cli launch
 
 # Launch with a custom policy
-clash launch --policy ./project.policy
+clash-cli launch --policy ./project.policy
 
 # Pass arguments to Claude Code
-clash launch -- --model sonnet
+clash-cli launch -- --model sonnet
 ```
 
 ---
 
-## clash explain
+## clash-cli explain
 
 Explain which policy rule would match a given tool invocation. Useful for debugging why an action is allowed, denied, or prompts for confirmation.
 
 ```
-clash explain [OPTIONS] <TOOL> [ARGS]...
+clash-cli explain [OPTIONS] <TOOL> [ARGS]...
 ```
 
 **Arguments:**
@@ -159,33 +159,33 @@ Accepts either CLI arguments or JSON from stdin. Trailing arguments are joined w
 
 ```bash
 # Check a bash command (no quoting needed)
-clash explain bash git push origin main
+clash-cli explain bash git push origin main
 
 # Check a file read
-clash explain read .env
+clash-cli explain read .env
 
 # JSON output for scripting
-clash explain --json bash rm -rf /
+clash-cli explain --json bash rm -rf /
 
 # Quoting still works
-clash explain bash "git push origin main"
+clash-cli explain bash "git push origin main"
 
 # Pipe JSON input (via policy explain)
-echo '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | clash policy explain
+echo '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | clash-cli policy explain
 ```
 
 ---
 
-## clash policy
+## clash-cli policy
 
 View the compiled policy.
 
-### clash policy show
+### clash-cli policy show
 
 Show the compiled decision tree: default effect, policy name, and all rules grouped by capability domain.
 
 ```
-clash policy show [OPTIONS]
+clash-cli policy show [OPTIONS]
 ```
 
 **Options:**
@@ -197,30 +197,30 @@ clash policy show [OPTIONS]
 **Examples:**
 
 ```bash
-clash policy show
-clash policy show --json
+clash-cli policy show
+clash-cli policy show --json
 ```
 
 ---
 
-## clash sandbox
+## clash-cli sandbox
 
 Apply and test kernel-level sandbox restrictions. Clash uses Seatbelt on macOS and Landlock on Linux to enforce filesystem and network restrictions at the OS level.
 
-### clash sandbox check
+### clash-cli sandbox check
 
 Check if sandboxing is supported on the current platform.
 
 ```
-clash sandbox check
+clash-cli sandbox check
 ```
 
-### clash sandbox exec
+### clash-cli sandbox exec
 
 Apply sandbox restrictions and execute a command.
 
 ```
-clash sandbox exec [OPTIONS] --policy <POLICY> --cwd <CWD> [COMMAND]...
+clash-cli sandbox exec [OPTIONS] --policy <POLICY> --cwd <CWD> [COMMAND]...
 ```
 
 **Options:**
@@ -240,74 +240,74 @@ clash sandbox exec [OPTIONS] --policy <POLICY> --cwd <CWD> [COMMAND]...
 
 ```bash
 # Run ls under a read-only sandbox
-clash sandbox exec \
+clash-cli sandbox exec \
   --policy '{"read":["/Users/me/project"],"write":[]}' \
   --cwd /Users/me/project \
   ls -la
 
 # Run cargo with write access to target/
-clash sandbox exec \
+clash-cli sandbox exec \
   --policy '{"read":["."],"write":["./target"]}' \
   --cwd /Users/me/project \
   cargo build
 ```
 
-### clash sandbox test
+### clash-cli sandbox test
 
 Test sandbox enforcement interactively. Same interface as `exec` but designed for verifying that restrictions work as expected.
 
 ```
-clash sandbox test [OPTIONS] --policy <POLICY> --cwd <CWD> [COMMAND]...
+clash-cli sandbox test [OPTIONS] --policy <POLICY> --cwd <CWD> [COMMAND]...
 ```
 
 **Options and arguments are the same as `sandbox exec`.**
 
 ---
 
-## clash hook
+## clash-cli hook
 
 Internal commands called by Claude Code's hook system. These are not typically invoked directly — they are registered in `hooks.json` and called automatically by Claude Code.
 
-### clash hook pre-tool-use
+### clash-cli hook pre-tool-use
 
 Called before a tool is executed. Evaluates the policy and returns an allow/deny/ask decision. Reads hook input from stdin as JSON.
 
 ```
-clash hook pre-tool-use
+clash-cli hook pre-tool-use
 ```
 
-### clash hook post-tool-use
+### clash-cli hook post-tool-use
 
 Called after a tool is executed. Used for audit logging and notifications. Reads hook input from stdin as JSON.
 
 ```
-clash hook post-tool-use
+clash-cli hook post-tool-use
 ```
 
-### clash hook permission-request
+### clash-cli hook permission-request
 
 Called when Claude Code prompts for permission. Responds to permission prompts on behalf of the user based on policy rules. Reads hook input from stdin as JSON.
 
 ```
-clash hook permission-request
+clash-cli hook permission-request
 ```
 
-### clash hook session-start
+### clash-cli hook session-start
 
-Called when a Claude Code session begins. Initializes session state, symlinks the clash binary into `~/.local/bin/`, and injects system prompt context. Reads hook input from stdin as JSON.
+Called when a Claude Code session begins. Initializes session state, symlinks the clash-cli binary into `~/.local/bin/`, and injects system prompt context. Reads hook input from stdin as JSON.
 
 ```
-clash hook session-start
+clash-cli hook session-start
 ```
 
 ---
 
-## clash bug
+## clash-cli bug
 
 File a bug report to the clash issue tracker.
 
 ```
-clash bug [OPTIONS] <TITLE>
+clash-cli bug [OPTIONS] <TITLE>
 ```
 
 **Arguments:**
@@ -328,10 +328,10 @@ clash bug [OPTIONS] <TITLE>
 
 ```bash
 # Simple bug report
-clash bug "Sandbox blocks cargo build in target directory"
+clash-cli bug "Sandbox blocks cargo build in target directory"
 
 # Detailed report with diagnostics
-clash bug "Policy not matching git commands" \
+clash-cli bug "Policy not matching git commands" \
   -d "The rule (allow (exec git *)) does not match git status" \
   --include-config \
   --include-logs

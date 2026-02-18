@@ -21,7 +21,7 @@ use claude_settings::PermissionRule;
 use sandbox_cmd::{SandboxCmd, run_sandbox};
 
 #[derive(Parser, Debug)]
-#[command(name = "clash")]
+#[command(name = "clash-cli")]
 #[command(about = "Command line agent safety harness")]
 struct Cli {
     #[arg(short, long, global = true)]
@@ -615,7 +615,7 @@ fn default_cwd() -> String {
 
 /// Explain which policy rule would match a given tool invocation.
 ///
-/// Accepts CLI args (`clash explain bash "git push"`) or JSON from stdin.
+/// Accepts CLI args (`clash-cli explain bash "git push"`) or JSON from stdin.
 #[instrument(level = Level::TRACE)]
 fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String>) -> Result<()> {
     let input: ExplainInput = if let Some(tool_str) = tool {
@@ -664,7 +664,7 @@ fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String
                 );
             } else {
                 eprintln!("No compiled policy available.");
-                eprintln!("Create ~/.clash/policy.sexpr or run `clash init`.");
+                eprintln!("Create ~/.clash/policy.sexpr or run `clash-cli init`.");
             }
             return Ok(());
         }
@@ -827,7 +827,7 @@ fn run_init(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
             std::fs::remove_dir_all(&sexpr_path)?;
         } else {
             anyhow::bail!(
-                "{} is a directory. Remove it first, then run `clash init`.",
+                "{} is a directory. Remove it first, then run `clash-cli init`.",
                 sexpr_path.display()
             );
         }
@@ -1473,7 +1473,7 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
             }]),
             other => bail!(
                 "unknown verb: {other}\n\nSupported verbs: bash, edit, read, web, tool\n\
-                 Or pass an s-expr: clash policy allow '(exec \"git\" *)'"
+                 Or pass an s-expr: clash-cli policy allow '(exec \"git\" *)'"
             ),
         }
     }
@@ -1554,7 +1554,7 @@ fn friendly_confirmation(effect: Effect, verb: &str) -> Option<String> {
         )),
         "bash" => Some(format!(
             "Claude {action} run commands.\n  \
-             Use 'clash deny' to block specific dangerous commands."
+             Use 'clash-cli deny' to block specific dangerous commands."
         )),
         "read" => Some(format!("Claude {action} read files in {cwd}.")),
         "web" => Some(format!("Claude {action} search the web and fetch URLs.")),
@@ -1591,7 +1591,7 @@ fn handle_list(json: bool) -> Result<()> {
             if let Some(err) = settings.policy_error() {
                 anyhow::bail!("{}", err);
             }
-            anyhow::bail!("no policy configured — run `clash init`");
+            anyhow::bail!("no policy configured — run `clash-cli init`");
         }
     };
 
@@ -1660,7 +1660,7 @@ fn handle_show(json: bool) -> Result<()> {
             if let Some(err) = settings.policy_error() {
                 anyhow::bail!("{}", err);
             }
-            anyhow::bail!("no policy configured — run `clash init`");
+            anyhow::bail!("no policy configured — run `clash-cli init`");
         }
     };
 

@@ -27,7 +27,7 @@ just install
 claude
 ```
 
-That's it. Clash is now intercepting every tool call and evaluating it against your policy. The default policy denies everything except reading files within your project — use `clash allow` to unlock capabilities as you need them.
+That's it. Clash is now intercepting every tool call and evaluating it against your policy. The default policy denies everything except reading files within your project — use `clash-cli allow` to unlock capabilities as you need them.
 
 ---
 
@@ -65,7 +65,7 @@ Clash supports three policy levels, each automatically included and evaluated in
 | **Project** | `<project>/.clash/policy.sexpr` | Shared rules for a specific repository |
 | **Session** | Created via `clash edit --session` | Temporary overrides for the current session |
 
-**Layer precedence:** Session > Project > User. Higher layers can shadow rules from lower layers — for example, a project-level deny overrides a user-level allow for the same capability. Use `clash status` to see all active layers and which rules are shadowed.
+**Layer precedence:** Session > Project > User. Higher layers can shadow rules from lower layers — for example, a project-level deny overrides a user-level allow for the same capability. Use `clash-cli status` to see all active layers and which rules are shadowed.
 
 ### Example
 
@@ -128,16 +128,16 @@ For the full rule syntax, see the [Policy Writing Guide](docs/policy-guide.md).
 ## Useful Commands
 
 ```bash
-clash allow bash                             # allow command execution
-clash allow edit                             # allow file editing in project
-clash allow web                              # allow web access
-clash deny '(exec "rm" *)'                   # deny rm commands
-clash status                                 # see all layers, rules, and shadowing
-clash policy show                            # see active policy and decision tree
-clash policy list                            # list all rules with level tags
-clash policy remove '(exec "rm" *)'          # remove a rule
-clash policy schema                          # show all configurable fields and types
-clash explain bash "git push"                # see which rule matches a command
+clash-cli allow bash                             # allow command execution
+clash-cli allow edit                             # allow file editing in project
+clash-cli allow web                              # allow web access
+clash-cli deny '(exec "rm" *)'                   # deny rm commands
+clash-cli status                                 # see all layers, rules, and shadowing
+clash-cli policy show                            # see active policy and decision tree
+clash-cli policy list                            # list all rules with level tags
+clash-cli policy remove '(exec "rm" *)'          # remove a rule
+clash-cli policy schema                          # show all configurable fields and types
+clash-cli explain bash "git push"                # see which rule matches a command
 ```
 
 For the full command reference, see the [CLI Reference](docs/cli-reference.md).
@@ -155,7 +155,7 @@ For the full command reference, see the [CLI Reference](docs/cli-reference.md).
 
 ## Troubleshooting
 
-### "command not found: clash"
+### "command not found: clash-cli"
 
 Make sure `~/.cargo/bin` is on your `PATH`:
 
@@ -168,17 +168,17 @@ export PATH="$HOME/.cargo/bin:$PATH"
 This means Claude Code's built-in permissions are still active. Re-run init with `--bypass-permissions`:
 
 ```bash
-clash init --bypass-permissions
+clash-cli init --bypass-permissions
 ```
 
 This sets `bypassPermissions: true` in your Claude Code user settings so clash is the sole permission handler.
 
 ### Policy not working as expected
 
-Use `clash explain` to see exactly which rule matches:
+Use `clash-cli explain` to see exactly which rule matches:
 
 ```bash
-clash explain bash "git push origin main"
+clash-cli explain bash "git push origin main"
 ```
 
 Or use the `/clash:explain` skill inside Claude Code for an interactive walkthrough.
@@ -186,7 +186,7 @@ Or use the `/clash:explain` skill inside Claude Code for an interactive walkthro
 ### Filing a bug
 
 ```bash
-clash bug "Short description of the issue" --include-config --include-logs
+clash-cli bug "Short description of the issue" --include-config --include-logs
 ```
 
 ---

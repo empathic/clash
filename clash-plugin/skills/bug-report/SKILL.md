@@ -5,7 +5,7 @@ description: File a bug report to the clash issue tracker
 
 ## Goal
 
-Help the user file a bug report for clash. Gather a clear description of the problem, then submit it to the issue tracker using `clash bug`.
+Help the user file a bug report for clash. Gather a clear description of the problem, then submit it to the issue tracker using `clash-cli bug`.
 
 ## Steps
 
@@ -15,12 +15,12 @@ Help the user file a bug report for clash. Gather a clear description of the pro
    - Their clash policy config (`--include-config`)
    - Recent debug logs (`--include-logs`)
 
-   Recommend including both unless the user has a reason not to (e.g., sensitive data in the config). If the user is concerned about sensitive data, suggest they review the config first with `clash policy show`.
+   Recommend including both unless the user has a reason not to (e.g., sensitive data in the config). If the user is concerned about sensitive data, suggest they review the config first with `clash-cli policy show`.
 
 3. **Preview the command.** Show the user the exact command that will be run before executing it:
 
    ```bash
-   clash bug "title here" --description "description here" --include-config --include-logs
+   clash-cli bug "title here" --description "description here" --include-config --include-logs
    ```
 
    Get confirmation before proceeding.

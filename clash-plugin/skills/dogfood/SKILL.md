@@ -14,13 +14,13 @@ Tell the user you're going to set up clash with safe defaults, and that you'll n
 Run the init command:
 
 ```bash
-clash init
+clash-cli init
 ```
 
 If clash is already configured, `init` will interactively ask whether to reconfigure from scratch or update the existing configuration.
 
 ## Explain what was created
 
-After initialization, run `clash status` and summarize briefly what Claude can and cannot do.
+After initialization, run `clash-cli status` and summarize briefly what Claude can and cannot do.
 
-Suggest they run `clash edit` in their terminal for interactive configuration, or use `/clash:edit` to customize individual rules.
+Suggest they run `clash-cli edit` in their terminal for interactive configuration, or use `/clash:edit` to customize individual rules.

@@ -238,7 +238,7 @@ Use these slash commands to manage clash policies during a session:
 - `/clash:deny` — Add a deny rule to block a specific action
 - `/clash:explain` — Explain which policy rule matches a specific tool invocation
 - `/clash:test` — Test hypothetical tool uses against the policy
-- `/clash:onboard` — Create a policy from scratch (directs to `clash edit` wizard)
+- `/clash:onboard` — Create a policy from scratch (directs to `clash-cli edit` wizard)
 - `/clash:audit` — View recent permission decisions from the audit log
 - `/clash:bug-report` — File a bug report to the clash issue tracker
 - `/clash:dogfood` — Initialize clash with safe defaults
@@ -269,7 +269,7 @@ Policies use s-expression syntax with three effects and four capability domains:
 **Policy layers** (higher shadows lower): Session > Project > User
 - User: `~/.clash/policy.sexpr`
 - Project: `<project>/.clash/policy.sexpr`
-- Session: created via `clash edit --session`
+- Session: created via `clash-cli edit --session`
 
 ### Rule Syntax Quick Reference
 
@@ -298,24 +298,24 @@ Policies use s-expression syntax with three effects and four capability domains:
 
 ### CLI Commands for Policy Management
 
-Always run clash as an installed binary (`clash`), never via `cargo run`.
+Always run clash as an installed binary (`clash-cli`), never via `cargo run`.
 
 **Viewing:**
-- `clash status` — overview of layers, rules, and issues
-- `clash policy list` — list all rules with level tags
-- `clash policy explain bash "git push"` — check which rule matches
+- `clash-cli status` — overview of layers, rules, and issues
+- `clash-cli policy list` — list all rules with level tags
+- `clash-cli policy explain bash "git push"` — check which rule matches
 
 **Modifying (always dry-run first):**
-- `clash policy allow '(exec "git" *)'` — add an allow rule
-- `clash policy deny '(exec "rm" "-rf" *)'` — add a deny rule
-- `clash policy remove '(allow (exec "git" *))'` — remove a rule
+- `clash-cli policy allow '(exec "git" *)'` — add an allow rule
+- `clash-cli policy deny '(exec "rm" "-rf" *)'` — add a deny rule
+- `clash-cli policy remove '(allow (exec "git" *))'` — remove a rule
 - Add `--dry-run` to any modification command to preview without applying
 
 **Bare verb shortcuts:**
-- `clash policy allow edit` — allow editing files in the project
-- `clash policy allow bash` — allow running commands in the project
-- `clash policy allow web` — allow web search and fetch
-- `clash policy allow read` — allow reading files in the project
+- `clash-cli policy allow edit` — allow editing files in the project
+- `clash-cli policy allow bash` — allow running commands in the project
+- `clash-cli policy allow web` — allow web search and fetch
+- `clash-cli policy allow read` — allow reading files in the project
 
 ### Tool-to-Capability Mapping
 

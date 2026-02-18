@@ -5,7 +5,7 @@ description: Describe the active clash policy in human-readable terms
 Run the status command to get a detailed breakdown of the active policy:
 
 ```bash
-clash status
+clash-cli status
 ```
 
 Review the output and add any additional analysis or recommendations beyond what the command provides. In particular, elaborate on:

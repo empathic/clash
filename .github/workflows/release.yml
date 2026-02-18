@@ -51,18 +51,18 @@ jobs:
         shell: bash
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../clash-${{ matrix.target }}.tar.gz clash
+          tar czf ../../../clash-cli-${{ matrix.target }}.tar.gz clash-cli
           cd ../../..
-          sha256sum clash-${{ matrix.target }}.tar.gz > clash-${{ matrix.target }}.tar.gz.sha256 2>/dev/null || \
-            shasum -a 256 clash-${{ matrix.target }}.tar.gz > clash-${{ matrix.target }}.tar.gz.sha256
+          sha256sum clash-cli-${{ matrix.target }}.tar.gz > clash-cli-${{ matrix.target }}.tar.gz.sha256 2>/dev/null || \
+            shasum -a 256 clash-cli-${{ matrix.target }}.tar.gz > clash-cli-${{ matrix.target }}.tar.gz.sha256
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: clash-${{ matrix.target }}
+          name: clash-cli-${{ matrix.target }}
           path: |
-            clash-${{ matrix.target }}.tar.gz
-            clash-${{ matrix.target }}.tar.gz.sha256
+            clash-cli-${{ matrix.target }}.tar.gz
+            clash-cli-${{ matrix.target }}.tar.gz.sha256
 
   release:
     name: Create Release

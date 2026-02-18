@@ -8,7 +8,7 @@ Show the current clash configuration status.
 Run:
 
 ```bash
-clash status
+clash-cli status
 ```
 
 Report the results to the user in plain English, including:
@@ -19,4 +19,4 @@ Report the results to the user in plain English, including:
 For more detail, suggest:
 - `/clash:describe` for a full policy breakdown
 - `/clash:edit` to make changes
-- `clash edit` in the terminal for interactive reconfiguration
+- `clash-cli edit` in the terminal for interactive reconfiguration

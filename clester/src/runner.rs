@@ -34,21 +34,21 @@ pub fn find_clash_binary() -> Result<PathBuf> {
     let self_path = std::env::current_exe().ok();
 
     if let Some(ref self_path) = self_path {
-        // ../clash relative to clester binary (both in target/debug/)
-        let sibling = self_path.parent().unwrap().join("clash");
+        // ../clash-cli relative to clester binary (both in target/debug/)
+        let sibling = self_path.parent().unwrap().join("clash-cli");
         if sibling.exists() {
             return Ok(sibling);
         }
     }
 
     // Try the workspace target directory
-    let workspace_debug = Path::new("target/debug/clash");
+    let workspace_debug = Path::new("target/debug/clash-cli");
     if workspace_debug.exists() {
         return Ok(workspace_debug.to_path_buf());
     }
 
     // Try $PATH
-    if let Ok(output) = Command::new("which").arg("clash").output()
+    if let Ok(output) = Command::new("which").arg("clash-cli").output()
         && output.status.success()
     {
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -57,7 +57,7 @@ pub fn find_clash_binary() -> Result<PathBuf> {
         }
     }
 
-    bail!("clash binary not found. Run `cargo build --bins` first.")
+    bail!("clash-cli binary not found. Run `cargo build --bins` first.")
 }
 
 /// Execute a single test step by invoking the clash binary.

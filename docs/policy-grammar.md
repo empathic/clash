@@ -224,7 +224,7 @@ path_expr       = QUOTED_STRING                ; static path
 
 Clash embeds internal policies that are always active. These provide sensible defaults for Clash self-management and Claude workspace access. Internal policy names use the `__internal_*__` naming convention (e.g. `__internal_clash__`, `__internal_claude__`).
 
-Internal policies are automatically included in the active policy via `(include ...)`. They appear in `clash policy list` and `clash policy show` output with a `[builtin]` tag.
+Internal policies are automatically included in the active policy via `(include ...)`. They appear in `clash-cli policy list` and `clash-cli policy show` output with a `[builtin]` tag.
 
 ### Overriding Internal Policies
 

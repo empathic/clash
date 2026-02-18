@@ -143,7 +143,7 @@ Every evaluation produces a `DecisionTrace` recording:
 - **skipped_rules**: rules that were considered but didn't match, with reason
 - **final_resolution**: human-readable summary of how the final effect was determined
 
-This enables the `clash explain` command and structured audit logging.
+This enables the `clash-cli explain` command and structured audit logging.
 
 ---
 

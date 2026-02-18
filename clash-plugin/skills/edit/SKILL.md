@@ -5,13 +5,13 @@ description: Guided editing of the clash policy file
 First, get an overview of the current policy:
 
 ```bash
-clash status
+clash-cli status
 ```
 
 Then list the active rules:
 
 ```bash
-clash policy list
+clash-cli policy list
 ```
 
 If the user has already stated what they want to change, proceed. Otherwise, ask what change they would like to make. Common requests include:
@@ -24,22 +24,22 @@ If the user has already stated what they want to change, proceed. Otherwise, ask
 
 Translate the user's intent into a rule. The effect (allow/deny) is part of the subcommand:
 
-- **Bare verb shortcuts**: `clash policy allow edit` (expands to allow editing with cwd-scoped filesystem access)
-- **Exec rules**: `clash policy allow '(exec "git" *)'` — allow all git commands
-- **Fs rules**: `clash policy allow '(fs read (subpath (env PWD)))'` — allow reads under cwd
-- **Net rules**: `clash policy allow '(net "github.com")'` — allow network access to github.com
-- **Deny**: `clash policy deny '(exec "git" "push" *)'` — block git push
+- **Bare verb shortcuts**: `clash-cli policy allow edit` (expands to allow editing with cwd-scoped filesystem access)
+- **Exec rules**: `clash-cli policy allow '(exec "git" *)'` — allow all git commands
+- **Fs rules**: `clash-cli policy allow '(fs read (subpath (env PWD)))'` — allow reads under cwd
+- **Net rules**: `clash-cli policy allow '(net "github.com")'` — allow network access to github.com
+- **Deny**: `clash-cli policy deny '(exec "git" "push" *)'` — block git push
 
 Preview the change with `--dry-run`:
 
 ```bash
-clash policy allow '(exec "git" *)' --dry-run
+clash-cli policy allow '(exec "git" *)' --dry-run
 ```
 
 Show the preview to the user. After confirmation, apply:
 
 ```bash
-clash policy allow '(exec "git" *)'
+clash-cli policy allow '(exec "git" *)'
 ```
 
 To target a specific profile, add `--profile NAME`.
@@ -49,13 +49,13 @@ To target a specific profile, add `--profile NAME`.
 Preview the removal:
 
 ```bash
-clash policy remove '(allow (exec "git" *))' --dry-run
+clash-cli policy remove '(allow (exec "git" *))' --dry-run
 ```
 
 After confirmation:
 
 ```bash
-clash policy remove '(allow (exec "git" *))'
+clash-cli policy remove '(allow (exec "git" *))'
 ```
 
 ## Validating changes
@@ -63,7 +63,7 @@ clash policy remove '(allow (exec "git" *))'
 After applying a change, validate it by running explain with a simulated request:
 
 ```bash
-clash policy explain bash "git push"
+clash-cli policy explain bash "git push"
 ```
 
 Suggest follow-up skills:

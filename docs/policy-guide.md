@@ -356,10 +356,10 @@ Allow build tools with constrained sandbox environments:
 
 ### Explain a Decision
 
-Use `clash explain` to see which rule matches a given action:
+Use `clash-cli explain` to see which rule matches a given action:
 
 ```bash
-clash explain bash "git push origin main"
+clash-cli explain bash "git push origin main"
 ```
 
 This shows which rules matched, which were skipped, and the final decision.
@@ -367,7 +367,7 @@ This shows which rules matched, which were skipped, and the final decision.
 ### View Active Policy
 
 ```bash
-clash policy show
+clash-cli policy show
 ```
 
 ---

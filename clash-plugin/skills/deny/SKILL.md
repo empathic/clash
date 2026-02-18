@@ -7,12 +7,12 @@ Help the user add a **deny** rule to their clash policy.
 ## Steps
 
 1. **Determine the rule** from the conversation context. Consider what the user wants to block:
-   - Exec: `clash policy deny '(exec "git" "push" *)'` (block git push)
-   - Exec broad: `clash policy deny '(exec "sudo" *)'` (block sudo commands)
-   - Fs: `clash policy deny '(fs write (subpath (env HOME)))'` (block writes under home)
-   - Fs scoped: `clash policy deny '(fs (or write delete) (subpath "/important"))'` (block writes and deletes under a directory)
-   - Net: `clash policy deny '(net "evil.com")'` (block network access to a domain)
-   - Bare verbs also work for broad rules: `clash policy deny bash`, `clash policy deny edit`
+   - Exec: `clash-cli policy deny '(exec "git" "push" *)'` (block git push)
+   - Exec broad: `clash-cli policy deny '(exec "sudo" *)'` (block sudo commands)
+   - Fs: `clash-cli policy deny '(fs write (subpath (env HOME)))'` (block writes under home)
+   - Fs scoped: `clash-cli policy deny '(fs (or write delete) (subpath "/important"))'` (block writes and deletes under a directory)
+   - Net: `clash-cli policy deny '(net "evil.com")'` (block network access to a domain)
+   - Bare verbs also work for broad rules: `clash-cli policy deny bash`, `clash-cli policy deny edit`
    - If unsure, ask the user what they want to deny.
 
 2. **Confirm with the user** before making any changes:
@@ -22,13 +22,13 @@ Help the user add a **deny** rule to their clash policy.
 
 3. **Dry-run first** to preview the change:
    ```bash
-   clash policy deny '(exec "git" "push" *)' --dry-run
+   clash-cli policy deny '(exec "git" "push" *)' --dry-run
    ```
    Show the output to the user.
 
 4. **Get confirmation**, then apply:
    ```bash
-   clash policy deny '(exec "git" "push" *)'
+   clash-cli policy deny '(exec "git" "push" *)'
    ```
 
 5. **Report success** and explain that the deny rule is now active.
