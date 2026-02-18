@@ -124,6 +124,32 @@ You should offer this to the user — but ALWAYS confirm before adding:
 - For filesystem access, scope to the relevant directory
 - For network access, scope to the specific domain
 
+### Sandbox Network Errors
+
+Commands that run inside a sandbox have network access **blocked by default**. If a Bash command
+needs network access (e.g., `curl`, `pip install`, `cargo build` fetching dependencies, `npm install`),
+the sandbox will block it and you'll see errors like:
+
+- "Could not resolve host"
+- "Network is unreachable"
+- "curl: (6) Could not resolve host"
+- "getaddrinfo ENOTFOUND"
+- "failed to resolve address"
+
+**When you see these errors:** Tell the user that the clash sandbox is likely blocking network access.
+Suggest one of these fixes:
+
+1. Add `(net allow)` to the sandbox block in their policy:
+   ```
+   (sandbox "my-sandbox"
+     (fs read (subpath (env PWD)))
+     (net allow))
+   ```
+2. Run `clash allow web` for broader network access
+3. Use `/clash:edit` to interactively update the policy
+
+**Do NOT retry the command** — it will fail again until the sandbox policy is updated.
+
 ### Important Behaviors
 
 - Deny rules ALWAYS take precedence over allow rules, regardless of specificity

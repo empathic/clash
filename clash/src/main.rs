@@ -82,7 +82,7 @@ impl HooksCmd {
                 // Check if this tool use was previously "ask"ed and the user
                 // accepted. If so, return advisory context suggesting a session
                 // rule for Claude to offer the user.
-                let context = input.tool_use_id.as_deref().and_then(|tool_use_id| {
+                let session_context = input.tool_use_id.as_deref().and_then(|tool_use_id| {
                     let advice = session_policy::process_post_tool_use(
                         tool_use_id,
                         &input.session_id,
@@ -96,6 +96,24 @@ impl HooksCmd {
                     );
                     Some(advice.as_context())
                 });
+
+                // Check if a sandboxed Bash command failed with network errors
+                // and provide a hint about sandbox network restrictions.
+                let network_context = {
+                    let settings =
+                        ClashSettings::load_or_create_with_session(Some(&input.session_id)).ok();
+                    settings.and_then(|s| {
+                        clash::network_hints::check_for_sandbox_network_hint(&input, &s)
+                    })
+                };
+
+                // Combine contexts (session policy advice + network hints).
+                let context = match (session_context, network_context) {
+                    (Some(s), Some(n)) => Some(format!("{s}\n\n{n}")),
+                    (Some(s), None) => Some(s),
+                    (None, Some(n)) => Some(n),
+                    (None, None) => None,
+                };
 
                 HookOutput::post_tool_use(context)
             }
