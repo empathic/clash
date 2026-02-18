@@ -225,11 +225,21 @@ pub struct SessionStartOutput {
     pub additional_context: Option<String>,
 }
 
+/// Output for PostToolUse hooks — provides advisory context back to Claude.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PostToolUseOutput {
+    pub hook_event_name: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+}
+
 /// Hook-specific output variants
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum HookSpecificOutput {
     PreToolUse(PreToolUseOutput),
+    PostToolUse(PostToolUseOutput),
     PermissionRequest(PermissionRequestOutput),
     SessionStart(SessionStartOutput),
 }
@@ -338,6 +348,21 @@ impl HookOutput {
                 hook_event_name: "SessionStart",
                 additional_context,
             })),
+        }
+    }
+
+    /// Create a PostToolUse response with optional advisory context.
+    #[instrument(level = Level::TRACE)]
+    pub fn post_tool_use(additional_context: Option<String>) -> Self {
+        match additional_context {
+            Some(ctx) => Self {
+                should_continue: true,
+                hook_specific_output: Some(HookSpecificOutput::PostToolUse(PostToolUseOutput {
+                    hook_event_name: "PostToolUse",
+                    additional_context: Some(ctx),
+                })),
+            },
+            None => Self::continue_execution(),
         }
     }
 
