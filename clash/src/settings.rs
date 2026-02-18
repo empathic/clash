@@ -391,13 +391,14 @@ impl ClashSettings {
 
     /// Load settings without session context (for CLI commands).
     ///
-    /// Loads user, project, and (if available) active session policies.
+    /// Loads user and project policies only. Session-level policies are excluded
+    /// because CLI commands run outside of an active Claude Code session — the
+    /// `~/.clash/active_session` marker may be stale from a previous session.
     ///
-    /// Automatically reads `~/.clash/active_session` to discover the session ID.
-    /// If no active session exists, loads only user and project levels.
+    /// Use `load_or_create_with_session()` with an explicit session ID (from hook
+    /// input) to include session-level policies.
     pub fn load_or_create() -> Result<Self> {
-        let session_id = Self::active_session_id().ok();
-        Self::load_or_create_with_session(session_id.as_deref())
+        Self::load_or_create_with_session(None)
     }
 
     /// Return the loaded policy sources (ordered by precedence, highest first).
