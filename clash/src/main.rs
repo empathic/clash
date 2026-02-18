@@ -207,10 +207,10 @@ enum Commands {
     /// Initialize a new clash policy with a safe default configuration
     Init {
         /// Skip setting bypassPermissions in Claude Code settings
-        #[arg(long)]
+        #[arg(long, default_missing_value = "true", num_args = 0..=1)]
         no_bypass: Option<bool>,
         /// Initialize a project-level policy instead of user-level
-        #[arg(long)]
+        #[arg(long, default_missing_value = "true", num_args = 0..=1)]
         project: Option<bool>,
     },
 
@@ -817,7 +817,7 @@ fn run_init(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
 
     if sexpr_path.exists() && sexpr_path.is_dir() {
         if dialoguer::Confirm::new()
-            .with_prompt(&format!(
+            .with_prompt(format!(
                 "{} is a directory. Remove it and continue onboarding?",
                 sexpr_path.to_string_lossy(),
             ))
@@ -833,20 +833,19 @@ fn run_init(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
         }
     }
 
-    if sexpr_path.exists() {
-        if !dialoguer::Confirm::new()
-            .with_prompt(&format!(
+    if sexpr_path.exists()
+        && !dialoguer::Confirm::new()
+            .with_prompt(format!(
                 "A policy already exists at {}. Reconfigure existing policy?",
                 sexpr_path.to_string_lossy()
             ))
             .interact()
             .unwrap_or_default()
-        {
-            anyhow::bail!(
-                "Cowardly refusing to configure clash due to existin policy at {}\n",
-                sexpr_path.display()
-            );
-        }
+    {
+        anyhow::bail!(
+            "Cowardly refusing to configure clash due to existin policy at {}\n",
+            sexpr_path.display()
+        );
     }
 
     let yaml_path = ClashSettings::legacy_policy_file()?;
@@ -861,15 +860,15 @@ fn run_init(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
     std::fs::write(&sexpr_path, DEFAULT_POLICY)?;
 
     // TODO: detect whether the clash plugin is installed so this prompt can be more helpful
-    if !no_bypass.unwrap_or_else(||dialoguer::Confirm::new().with_prompt("Use clash as your default permissions provider in claude? (This will set bypassPermissions in your claude settings, which is only safe if you have the clash plugin installed)").interact().unwrap_or(true)) {
-    if let Err(e) = set_bypass_permissions() {
+    if !no_bypass.unwrap_or_else(||dialoguer::Confirm::new().with_prompt("Use clash as your default permissions provider in claude? (This will set bypassPermissions in your claude settings, which is only safe if you have the clash plugin installed)").interact().unwrap_or(true))
+        && let Err(e) = set_bypass_permissions()
+    {
         warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
         eprintln!(
             "warning: could not configure Claude Code to use clash as sole permission handler.\n\
              You may see double prompts. Run with --dangerously-skip-permissions to avoid this."
         );
     }
-}
 
     println!("Clash initialized at {}\n", sexpr_path.display());
 

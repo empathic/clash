@@ -4,13 +4,12 @@
 //! session validation into ready-to-use functions that process Claude Code
 //! hook events.
 
-use tracing::{Level, debug, info, instrument, warn};
+use tracing::{Level, info, instrument, warn};
 
 use crate::hooks::{HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput};
 use crate::notifications;
 use crate::permissions::check_permission;
-use crate::policy::compile::compile_multi_level;
-use crate::settings::{self, ClashSettings};
+use crate::settings::ClashSettings;
 
 use claude_settings::{PermissionRule, Settings};
 
@@ -181,29 +180,6 @@ fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSetti
             HookOutput::continue_execution()
         }
     }
-}
-
-/// Collect human-readable deny rule descriptions from a DecisionTree.
-fn collect_deny_descriptions(tree: &crate::policy::DecisionTree) -> Vec<String> {
-    let mut descriptions = Vec::new();
-
-    for rule in &tree.exec_rules {
-        if rule.effect == crate::policy::Effect::Deny {
-            descriptions.push(format!("deny {}", rule.source));
-        }
-    }
-    for rule in &tree.fs_rules {
-        if rule.effect == crate::policy::Effect::Deny {
-            descriptions.push(format!("deny {}", rule.source));
-        }
-    }
-    for rule in &tree.net_rules {
-        if rule.effect == crate::policy::Effect::Deny {
-            descriptions.push(format!("deny {}", rule.source));
-        }
-    }
-
-    descriptions
 }
 
 /// Handle a session start event — validate policy/settings and report status to Claude.
