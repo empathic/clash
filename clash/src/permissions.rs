@@ -57,7 +57,12 @@ pub fn check_permission(
         let verb_str = tool_to_verb_str(&input.tool_name);
         let noun_summary = truncate_noun(&noun, 60);
 
-        eprintln!("clash: blocked {} on {}", verb_str, noun_summary);
+        eprintln!(
+            "{} blocked {} on {}",
+            crate::style::err_red_bold("clash:"),
+            verb_str,
+            noun_summary
+        );
 
         let is_explicit_deny = decision
             .reason
@@ -65,13 +70,23 @@ pub fn check_permission(
             .is_some_and(|r| r.contains("denied") || r.contains("deny"));
 
         if is_explicit_deny {
-            eprintln!("  This action is explicitly denied by your policy.");
+            eprintln!(
+                "  {}",
+                crate::style::err_dim("This action is explicitly denied by your policy.")
+            );
         } else {
-            eprintln!("  {}", denial_explanation(&verb_str));
+            eprintln!("  {}", crate::style::err_dim(denial_explanation(&verb_str)));
         }
 
-        eprintln!("  To allow this: {}", suggest_allow_command(&verb_str));
-        eprintln!("  (run \"clash allow --help\" for more options)");
+        eprintln!(
+            "  {} {}",
+            crate::style::err_dim("To allow this:"),
+            crate::style::err_yellow(&suggest_allow_command(&verb_str))
+        );
+        eprintln!(
+            "  {}",
+            crate::style::err_dim("(run \"clash allow --help\" for more options)")
+        );
     }
 
     let verb_str = tool_to_verb_str(&input.tool_name);
