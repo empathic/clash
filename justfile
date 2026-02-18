@@ -8,10 +8,8 @@ default:
 
 # Build clash and launch Claude Code with the plugin for local development.
 # The symlink lets hooks.json find the binary at ${CLAUDE_PLUGIN_ROOT}/bin/clash.
-dev *ARGS:
-    cargo build -p clash
-    mkdir -p clash-plugin/bin
-    ln -sf ../../target/debug/clash clash-plugin/bin/clash
+dev *ARGS: uninstall
+    cargo install --path clash
     claude --plugin-dir ./clash-plugin --debug-file /tmp/clash-debug --allow-dangerously-skip-permissions {{ARGS}}
 
 clean-configs:
