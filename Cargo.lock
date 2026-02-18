@@ -377,6 +377,7 @@ dependencies = [
  "clap",
  "clash_notify",
  "claude_settings",
+ "console",
  "dialoguer",
  "dirs",
  "figment",

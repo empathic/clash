@@ -21,13 +21,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
+use crate::policy::Effect;
 use crate::policy::ast::{
     CapMatcher, ExecMatcher, FsMatcher, FsOp, NetMatcher, OpPattern, PathExpr, PathFilter, Pattern,
     Rule, ToolMatcher,
 };
 use crate::policy::edit;
 use crate::policy::eval::{extract_domain, resolve_path};
-use crate::policy::Effect;
 
 /// Directory within the session dir where pending ask markers are stored.
 const PENDING_DIR: &str = "pending_asks";
@@ -161,9 +161,7 @@ fn infer_exec_rule(tool_input: &serde_json::Value) -> Option<Rule> {
     }
 
     // Strip path prefix to get just the binary name.
-    let bin_name = Path::new(bin)
-        .file_name()?
-        .to_str()?;
+    let bin_name = Path::new(bin).file_name()?.to_str()?;
 
     Some(Rule {
         effect: Effect::Allow,
@@ -263,8 +261,7 @@ fn write_session_rule(session_id: &str, rule: &Rule) -> Result<()> {
         MINIMAL_SESSION_POLICY.to_string()
     };
 
-    let policy_name = edit::active_policy(&source)
-        .unwrap_or_else(|_| "main".to_string());
+    let policy_name = edit::active_policy(&source).unwrap_or_else(|_| "main".to_string());
 
     let modified = edit::add_rule(&source, &policy_name, rule)
         .context("failed to add rule to session policy")?;
@@ -376,10 +373,7 @@ mod tests {
         .unwrap();
         let s = rule.to_string();
         assert!(s.contains("net"), "expected net rule, got: {s}");
-        assert!(
-            s.contains("\"github.com\""),
-            "expected domain, got: {s}"
-        );
+        assert!(s.contains("\"github.com\""), "expected domain, got: {s}");
     }
 
     #[test]
@@ -388,10 +382,7 @@ mod tests {
         let s = rule.to_string();
         assert!(s.contains("net"), "expected net rule, got: {s}");
         // WebSearch allows any domain
-        assert!(
-            !s.contains('"'),
-            "websearch should use wildcard, got: {s}"
-        );
+        assert!(!s.contains('"'), "websearch should use wildcard, got: {s}");
     }
 
     #[test]
@@ -438,13 +429,13 @@ mod tests {
         )
         .unwrap();
         assert!(result.is_some(), "should have generated a rule");
-        assert!(
-            result.unwrap().contains("git"),
-            "rule should mention git"
-        );
+        assert!(result.unwrap().contains("git"), "rule should mention git");
 
         // Marker should be cleaned up.
-        assert!(!marker.exists(), "marker should be removed after processing");
+        assert!(
+            !marker.exists(),
+            "marker should be removed after processing"
+        );
 
         // Session policy file should exist.
         let policy_path = session_dir.join("policy.sexpr");
@@ -494,7 +485,10 @@ mod tests {
         write_session_rule(&session_id, &rule).unwrap();
         let second = std::fs::read_to_string(session_dir.join("policy.sexpr")).unwrap();
 
-        assert_eq!(first, second, "writing same rule twice should be idempotent");
+        assert_eq!(
+            first, second,
+            "writing same rule twice should be idempotent"
+        );
 
         let _ = std::fs::remove_dir_all(&session_dir);
     }
