@@ -121,6 +121,7 @@ pub struct Meta {
 
     /// Optional description.
     #[serde(default)]
+    #[allow(dead_code)]
     pub description: Option<String>,
 }
 

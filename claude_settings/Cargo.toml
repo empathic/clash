@@ -3,7 +3,10 @@ name = "claude_settings"
 version = "0.1.0"
 edition = "2024"
 description = "A library for reading and writing Claude Code settings on Unix-like systems"
-license = "MIT"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 authors = ["Empathic Team"]
 
 [dependencies]
