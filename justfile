@@ -19,7 +19,7 @@ clean-configs:
     -rm -rf .clash
 
 # Install clash system-wide: binary to ~/.cargo/bin, plugin via Claude marketplace.
-install: uninstall build-plugin
+install: uninstall
     cargo install --path clash
     claude plugin marketplace add ./
     claude plugin install clash
@@ -28,6 +28,7 @@ uninstall:
     -claude plugin uninstall clash
     -claude plugin marketplace remove clash
     -rm ~/.local/bin/clash
+    -rm ~/.cargo/bin/clash
 
 check:
     cargo fmt
