@@ -185,9 +185,21 @@ fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSetti
 /// Handle a session start event — validate policy/settings and report status to Claude.
 #[instrument(level = Level::TRACE, skip(input))]
 pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOutput> {
+    // Ensure the user has a policy file — create one with safe defaults if not.
+    let created_policy = ClashSettings::ensure_user_policy_exists()?;
+
     let _settings = ClashSettings::load_or_create_with_session(Some(&input.session_id))?;
 
     let mut lines = Vec::new();
+
+    if let Some(path) = created_policy {
+        lines.push(format!(
+            "Welcome to Clash! A default policy has been created at {}. \
+             It starts with deny-all and allows reading files in your project. \
+             Use /clash:status to see what's allowed, or /clash:edit to customize.",
+            path.display()
+        ));
+    }
 
     // Inject clash usage context so Claude understands how to use skills and policies.
     lines.push(clash_session_context().into());
