@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::policy::DecisionTree;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use tracing::{Level, info, instrument, warn};
@@ -227,6 +227,47 @@ impl ClashSettings {
             return PolicyLevel::Project;
         }
         PolicyLevel::User
+    }
+
+    /// Ensure a user-level policy file exists, creating one with safe defaults if not.
+    ///
+    /// Returns `Ok(Some(path))` if a new file was created, `Ok(None)` if one already existed.
+    /// The created file uses the embedded `DEFAULT_POLICY` (deny-all with read access to CWD).
+    pub fn ensure_user_policy_exists() -> Result<Option<PathBuf>> {
+        let path = Self::policy_file().context("failed to determine user policy file path")?;
+        Self::ensure_policy_at(path)
+    }
+
+    /// Write the default policy to `path` if it doesn't already exist.
+    fn ensure_policy_at(path: PathBuf) -> Result<Option<PathBuf>> {
+        if path.exists() {
+            return Ok(None);
+        }
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create directory {}", parent.display()))?;
+
+            // Restrict directory permissions on unix (owner-only).
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+
+        std::fs::write(&path, DEFAULT_POLICY)
+            .with_context(|| format!("failed to write default policy to {}", path.display()))?;
+
+        // Restrict file permissions on unix (owner-only read/write).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+
+        info!(path = %path.display(), "Created default user policy");
+        Ok(Some(path))
     }
 
     /// Path to a legacy YAML policy file (pre-sexp migration).
@@ -777,5 +818,57 @@ mod test {
         settings.set_policy_source(simple_policy);
         assert!(settings.decision_tree().is_some());
         assert!(settings.policy_error.is_none());
+    }
+
+    #[test]
+    fn ensure_policy_creates_file_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy_path = dir.path().join(".clash").join("policy.sexpr");
+
+        let result = ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
+        assert!(result.is_some(), "should have created the file");
+        assert_eq!(result.unwrap(), policy_path);
+        assert!(policy_path.exists(), "policy file should exist on disk");
+
+        let contents = std::fs::read_to_string(&policy_path).unwrap();
+        assert_eq!(contents, DEFAULT_POLICY, "should contain default policy");
+    }
+
+    #[test]
+    fn ensure_policy_noop_when_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy_path = dir.path().join("policy.sexpr");
+        std::fs::write(&policy_path, "(default deny \"main\")\n(policy \"main\")").unwrap();
+
+        let result = ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
+        assert!(result.is_none(), "should not recreate existing file");
+
+        // Verify original content is preserved.
+        let contents = std::fs::read_to_string(&policy_path).unwrap();
+        assert!(
+            contents.contains("default deny"),
+            "original content preserved"
+        );
+        assert!(
+            !contents.contains("cwd-access"),
+            "should not overwrite with default"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ensure_policy_sets_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let policy_path = dir.path().join(".clash").join("policy.sexpr");
+
+        ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
+        let mode = std::fs::metadata(&policy_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "policy file should be owner-only read/write");
     }
 }
