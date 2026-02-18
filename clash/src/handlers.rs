@@ -328,6 +328,26 @@ Always run clash as an installed binary (`clash`), never via `cargo run`.
 | WebSearch | net (wildcard domain) |
 | Skill, Task, etc. | tool |
 
+### Session-Scoped Rules
+
+When a user approves a permission prompt, Clash will suggest a session rule via PostToolUse context.
+You should offer this to the user — but ALWAYS confirm before adding:
+
+1. After a permission is approved, you may receive advisory context suggesting a `clash policy allow --scope session` command
+2. Ask the user: "Would you like me to allow this for the rest of the session?"
+3. If yes, dry-run first, then apply:
+   ```
+   clash policy allow '(exec "git" *)' --scope session --dry-run
+   clash policy allow '(exec "git" *)' --scope session
+   ```
+4. Session rules are temporary — they only last for the current session
+
+**Crafting precise rules:**
+- Use the suggested rule from the advisory context as a starting point
+- Prefer specific rules: `(exec "git" *)` over `(exec *)`
+- For filesystem access, scope to the relevant directory
+- For network access, scope to the specific domain
+
 ### Important Behaviors
 
 - Deny rules ALWAYS take precedence over allow rules, regardless of specificity

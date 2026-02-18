@@ -1,39 +1,38 @@
-//! Detect permission acceptances and learn session-level policy rules.
+//! Detect permission acceptances and suggest session-level policy rules.
 //!
 //! When Clash returns "ask" for a tool use, the user sees a permission prompt
-//! in Claude Code's UI. If they accept, PostToolUse fires and we can infer
-//! an allow rule to add to the session policy — so the same kind of action
-//! won't require re-approval for the rest of the session.
+//! in Claude Code's UI. If they accept, PostToolUse fires and we can suggest
+//! a session-scoped allow rule for Claude to offer the user — so similar actions
+//! can be pre-approved for the rest of the session.
 //!
 //! ## How it works
 //!
 //! 1. **PreToolUse returns Ask** → `record_pending_ask()` writes a marker file
 //!    in the session directory keyed by `tool_use_id`.
 //! 2. **PostToolUse fires** → `process_post_tool_use()` checks for a pending
-//!    ask marker. If found, the user accepted the permission, so we infer a
-//!    session-scoped allow rule and write it to the session policy file.
+//!    ask marker. If found, the user accepted the permission, so we suggest a
+//!    session-scoped allow rule via advisory context — Claude can then offer the
+//!    user the option to persist it for the session.
 //!
-//! Rules are intentionally somewhat broad (e.g., allow the binary with any args)
-//! so users don't get re-prompted for similar actions within the same session.
+//! Rules are NOT automatically written. Instead, Claude is given context about
+//! the approval and a suggested `clash policy allow --scope session` command.
+//! This lets the user decide whether to persist the permission with full control
+//! over the rule's scope.
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
+use crate::permissions::extract_noun;
 use crate::policy::Effect;
 use crate::policy::ast::{
     CapMatcher, ExecMatcher, FsMatcher, FsOp, NetMatcher, OpPattern, PathExpr, PathFilter, Pattern,
     Rule, ToolMatcher,
 };
-use crate::policy::edit;
 use crate::policy::eval::{extract_domain, resolve_path};
 
 /// Directory within the session dir where pending ask markers are stored.
 const PENDING_DIR: &str = "pending_asks";
-
-/// Minimal policy source for a new session policy file.
-const MINIMAL_SESSION_POLICY: &str = "(default deny \"main\")\n(policy \"main\")\n";
 
 // ---------------------------------------------------------------------------
 // Pending ask tracking
@@ -68,23 +67,53 @@ pub fn record_pending_ask(
     }
 }
 
-/// Check if a PostToolUse event corresponds to a previously-asked permission
-/// that the user accepted. If so, infer and write a session policy rule.
+/// Advisory context returned when a user approves a previously-asked permission.
 ///
-/// Returns `Ok(Some(rule_description))` if a rule was added, `Ok(None)` if
+/// Contains the suggested rule and a CLI command for Claude to offer the user.
+#[derive(Debug, Clone)]
+pub struct ApprovalAdvice {
+    /// Human-readable description of what was approved (e.g., "git status").
+    pub noun: String,
+    /// The tool name that was approved.
+    pub tool_name: String,
+    /// The suggested allow rule as an s-expression string.
+    pub suggested_rule: String,
+    /// The full CLI command to add this as a session rule.
+    pub cli_command: String,
+}
+
+impl ApprovalAdvice {
+    /// Format as context text for injection into PostToolUse output.
+    pub fn as_context(&self) -> String {
+        format!(
+            "The user just approved {} for \"{}\". \
+             If they want to allow similar actions for the rest of this session, \
+             you can suggest running:\n  {}\n\
+             Always confirm with the user before adding session rules. \
+             Use --dry-run first to preview the change.",
+            self.tool_name, self.noun, self.cli_command,
+        )
+    }
+}
+
+/// Check if a PostToolUse event corresponds to a previously-asked permission
+/// that the user accepted. If so, return advisory context suggesting a session
+/// rule for Claude to offer the user.
+///
+/// Returns `Ok(Some(advice))` if the user approved a pending ask, `Ok(None)` if
 /// there was no pending ask for this tool_use_id.
 pub fn process_post_tool_use(
-    session_id: &str,
     tool_use_id: &str,
+    session_id: &str,
     tool_name: &str,
     tool_input: &serde_json::Value,
     cwd: &str,
-) -> Result<Option<String>> {
+) -> Option<ApprovalAdvice> {
     let marker_path = pending_dir(session_id).join(sanitize_id(tool_use_id));
 
     // No pending ask for this tool use — nothing to do.
     if !marker_path.exists() {
-        return Ok(None);
+        return None;
     }
 
     // Clean up the marker regardless of whether rule generation succeeds.
@@ -92,43 +121,51 @@ pub fn process_post_tool_use(
 
     info!(
         tool_use_id,
-        tool_name, "User accepted permission — inferring session rule"
+        tool_name, "User accepted permission — generating advisory context"
     );
 
-    let rule = match infer_allow_rule(tool_name, tool_input, cwd) {
+    let rule = match suggest_allow_rule(tool_name, tool_input, cwd) {
         Some(r) => r,
         None => {
-            debug!(tool_name, "Could not infer allow rule for tool");
-            return Ok(None);
+            debug!(tool_name, "Could not suggest allow rule for tool");
+            return None;
         }
     };
 
     let rule_str = rule.to_string();
-    write_session_rule(session_id, &rule)?;
+    let noun = extract_noun(tool_name, tool_input);
+    let cli_command = format!("clash policy allow '{}' --scope session", rule_str);
 
-    info!(rule = %rule_str, "Added session policy rule from user approval");
-    Ok(Some(rule_str))
+    info!(rule = %rule_str, "Suggesting session rule for user approval");
+
+    Some(ApprovalAdvice {
+        noun,
+        tool_name: tool_name.to_string(),
+        suggested_rule: rule_str,
+        cli_command,
+    })
 }
 
 // ---------------------------------------------------------------------------
-// Rule inference
+// Rule suggestion
 // ---------------------------------------------------------------------------
 
-/// Infer a session-scoped allow rule from a tool invocation.
+/// Suggest a session-scoped allow rule from a tool invocation.
 ///
-/// The rules are intentionally somewhat broad — the goal is to avoid
-/// re-prompting for similar actions within the same session. For example,
-/// approving `git status` allows all `git` commands.
-pub fn infer_allow_rule(
+/// The rules aim for a reasonable balance between specificity and convenience.
+/// For exec rules, we allow the binary with wildcard args (e.g., `git *`).
+/// For fs rules, we scope to the parent directory.
+/// For net rules, we scope to the specific domain.
+pub fn suggest_allow_rule(
     tool_name: &str,
     tool_input: &serde_json::Value,
     cwd: &str,
 ) -> Option<Rule> {
     match tool_name {
-        "Bash" => infer_exec_rule(tool_input),
-        "Read" | "Glob" | "Grep" => infer_fs_read_rule(tool_input, cwd),
-        "Write" | "Edit" | "NotebookEdit" => infer_fs_write_rule(tool_input, cwd),
-        "WebFetch" => infer_net_rule(tool_input),
+        "Bash" => suggest_exec_rule(tool_input),
+        "Read" | "Glob" | "Grep" => suggest_fs_read_rule(tool_input, cwd),
+        "Write" | "Edit" | "NotebookEdit" => suggest_fs_write_rule(tool_input, cwd),
+        "WebFetch" => suggest_net_rule(tool_input),
         "WebSearch" => Some(Rule {
             effect: Effect::Allow,
             matcher: CapMatcher::Net(NetMatcher {
@@ -146,16 +183,16 @@ pub fn infer_allow_rule(
     }
 }
 
-/// Infer an exec allow rule from a Bash tool input.
+/// Suggest an exec allow rule from a Bash tool input.
 ///
-/// Extracts the binary name and allows it with wildcard args:
+/// Extracts the binary name and suggests it with wildcard args:
 /// `(allow (exec "<bin>" *))`.
-fn infer_exec_rule(tool_input: &serde_json::Value) -> Option<Rule> {
+fn suggest_exec_rule(tool_input: &serde_json::Value) -> Option<Rule> {
     let command = tool_input.get("command")?.as_str()?;
     let parts: Vec<&str> = command.split_whitespace().collect();
     let bin = *parts.first()?;
 
-    // Don't create overly broad rules for shell builtins or pipes.
+    // Don't create rules for shell builtins or relative paths.
     if bin.is_empty() || bin.contains('/') && !bin.starts_with('/') {
         return None;
     }
@@ -174,11 +211,11 @@ fn infer_exec_rule(tool_input: &serde_json::Value) -> Option<Rule> {
     })
 }
 
-/// Infer a filesystem read rule from a Read/Glob/Grep tool input.
+/// Suggest a filesystem read rule from a Read/Glob/Grep tool input.
 ///
-/// Allows reading under the parent directory of the accessed path:
+/// Suggests reading under the parent directory of the accessed path:
 /// `(allow (fs read (subpath "<parent_dir>")))`.
-fn infer_fs_read_rule(tool_input: &serde_json::Value, cwd: &str) -> Option<Rule> {
+fn suggest_fs_read_rule(tool_input: &serde_json::Value, cwd: &str) -> Option<Rule> {
     let path = tool_input
         .get("file_path")
         .or_else(|| tool_input.get("path"))
@@ -200,11 +237,11 @@ fn infer_fs_read_rule(tool_input: &serde_json::Value, cwd: &str) -> Option<Rule>
     })
 }
 
-/// Infer a filesystem write rule from a Write/Edit tool input.
+/// Suggest a filesystem write rule from a Write/Edit tool input.
 ///
-/// Allows read+write+create under the parent directory:
+/// Suggests read+write+create under the parent directory:
 /// `(allow (fs (or read write create) (subpath "<parent_dir>")))`.
-fn infer_fs_write_rule(tool_input: &serde_json::Value, cwd: &str) -> Option<Rule> {
+fn suggest_fs_write_rule(tool_input: &serde_json::Value, cwd: &str) -> Option<Rule> {
     let path = tool_input.get("file_path")?.as_str()?;
     let resolved = resolve_path(path, cwd);
     let parent = PathBuf::from(&resolved)
@@ -222,10 +259,10 @@ fn infer_fs_write_rule(tool_input: &serde_json::Value, cwd: &str) -> Option<Rule
     })
 }
 
-/// Infer a network allow rule from a WebFetch tool input.
+/// Suggest a network allow rule from a WebFetch tool input.
 ///
-/// Allows access to the specific domain: `(allow (net "<domain>"))`.
-fn infer_net_rule(tool_input: &serde_json::Value) -> Option<Rule> {
+/// Suggests access to the specific domain: `(allow (net "<domain>"))`.
+fn suggest_net_rule(tool_input: &serde_json::Value) -> Option<Rule> {
     let url = tool_input.get("url")?.as_str()?;
     let domain = extract_domain(url);
     if domain.is_empty() {
@@ -239,50 +276,6 @@ fn infer_net_rule(tool_input: &serde_json::Value) -> Option<Rule> {
         }),
         sandbox: None,
     })
-}
-
-// ---------------------------------------------------------------------------
-// Session policy file management
-// ---------------------------------------------------------------------------
-
-/// Write an inferred allow rule to the session-level policy file.
-///
-/// Creates the session policy file with a minimal skeleton if it doesn't exist.
-/// Uses `edit::add_rule` which is idempotent — duplicate rules are silently skipped.
-fn write_session_rule(session_id: &str, rule: &Rule) -> Result<()> {
-    let session_dir = crate::audit::session_dir(session_id);
-    let policy_path = session_dir.join("policy.sexpr");
-
-    // Read existing session policy or start with a minimal skeleton.
-    let source = if policy_path.exists() {
-        std::fs::read_to_string(&policy_path)
-            .with_context(|| format!("failed to read session policy: {}", policy_path.display()))?
-    } else {
-        MINIMAL_SESSION_POLICY.to_string()
-    };
-
-    let policy_name = edit::active_policy(&source).unwrap_or_else(|_| "main".to_string());
-
-    let modified = edit::add_rule(&source, &policy_name, rule)
-        .context("failed to add rule to session policy")?;
-
-    // Don't write if nothing changed (idempotent).
-    if modified == source {
-        debug!("Rule already exists in session policy, skipping write");
-        return Ok(());
-    }
-
-    // Validate the modified policy compiles before writing.
-    crate::policy::compile_policy(&modified)
-        .context("inferred session policy failed to compile — not writing")?;
-
-    std::fs::create_dir_all(&session_dir)
-        .with_context(|| format!("failed to create session dir: {}", session_dir.display()))?;
-    std::fs::write(&policy_path, &modified)
-        .with_context(|| format!("failed to write session policy: {}", policy_path.display()))?;
-
-    debug!(path = %policy_path.display(), "Updated session policy file");
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -308,8 +301,8 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn test_infer_exec_rule_git() {
-        let rule = infer_allow_rule("Bash", &json!({"command": "git status"}), "/tmp").unwrap();
+    fn test_suggest_exec_rule_git() {
+        let rule = suggest_allow_rule("Bash", &json!({"command": "git status"}), "/tmp").unwrap();
         let s = rule.to_string();
         assert!(s.contains("exec"), "expected exec rule, got: {s}");
         assert!(s.contains("\"git\""), "expected git binary, got: {s}");
@@ -317,24 +310,24 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_exec_rule_npm() {
+    fn test_suggest_exec_rule_npm() {
         let rule =
-            infer_allow_rule("Bash", &json!({"command": "npm install express"}), "/tmp").unwrap();
+            suggest_allow_rule("Bash", &json!({"command": "npm install express"}), "/tmp").unwrap();
         let s = rule.to_string();
         assert!(s.contains("\"npm\""), "expected npm binary, got: {s}");
     }
 
     #[test]
-    fn test_infer_exec_rule_absolute_path() {
+    fn test_suggest_exec_rule_absolute_path() {
         let rule =
-            infer_allow_rule("Bash", &json!({"command": "/usr/bin/git status"}), "/tmp").unwrap();
+            suggest_allow_rule("Bash", &json!({"command": "/usr/bin/git status"}), "/tmp").unwrap();
         let s = rule.to_string();
         assert!(s.contains("\"git\""), "should strip path prefix, got: {s}");
     }
 
     #[test]
-    fn test_infer_fs_read_rule() {
-        let rule = infer_allow_rule(
+    fn test_suggest_fs_read_rule() {
+        let rule = suggest_allow_rule(
             "Read",
             &json!({"file_path": "/etc/hosts"}),
             "/home/user/project",
@@ -347,8 +340,8 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_fs_write_rule() {
-        let rule = infer_allow_rule(
+    fn test_suggest_fs_write_rule() {
+        let rule = suggest_allow_rule(
             "Write",
             &json!({"file_path": "/home/user/project/src/main.rs"}),
             "/home/user/project",
@@ -364,8 +357,8 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_net_rule() {
-        let rule = infer_allow_rule(
+    fn test_suggest_net_rule() {
+        let rule = suggest_allow_rule(
             "WebFetch",
             &json!({"url": "https://github.com/foo/bar"}),
             "/tmp",
@@ -377,8 +370,9 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_websearch_rule() {
-        let rule = infer_allow_rule("WebSearch", &json!({"query": "rust async"}), "/tmp").unwrap();
+    fn test_suggest_websearch_rule() {
+        let rule =
+            suggest_allow_rule("WebSearch", &json!({"query": "rust async"}), "/tmp").unwrap();
         let s = rule.to_string();
         assert!(s.contains("net"), "expected net rule, got: {s}");
         // WebSearch allows any domain
@@ -386,16 +380,16 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_tool_rule() {
-        let rule = infer_allow_rule("Task", &json!({"prompt": "do something"}), "/tmp").unwrap();
+    fn test_suggest_tool_rule() {
+        let rule = suggest_allow_rule("Task", &json!({"prompt": "do something"}), "/tmp").unwrap();
         let s = rule.to_string();
         assert!(s.contains("tool"), "expected tool rule, got: {s}");
         assert!(s.contains("\"Task\""), "expected Task name, got: {s}");
     }
 
     #[test]
-    fn test_infer_empty_command_returns_none() {
-        let rule = infer_allow_rule("Bash", &json!({"command": ""}), "/tmp");
+    fn test_suggest_empty_command_returns_none() {
+        let rule = suggest_allow_rule("Bash", &json!({"command": ""}), "/tmp");
         assert!(rule.is_none(), "empty command should return None");
     }
 
@@ -419,17 +413,28 @@ mod tests {
         let marker = pending_dir(&session_id).join("toolu_01ABC");
         assert!(marker.exists(), "pending ask marker should exist");
 
-        // Process the approval — should return the rule.
+        // Process the approval — should return advisory context.
         let result = process_post_tool_use(
-            &session_id,
             "toolu_01ABC",
+            &session_id,
             "Bash",
             &json!({"command": "git status"}),
             "/tmp",
-        )
-        .unwrap();
-        assert!(result.is_some(), "should have generated a rule");
-        assert!(result.unwrap().contains("git"), "rule should mention git");
+        );
+        assert!(result.is_some(), "should have generated advice");
+        let advice = result.unwrap();
+        assert!(
+            advice.suggested_rule.contains("git"),
+            "rule should mention git"
+        );
+        assert!(
+            advice.cli_command.contains("--scope session"),
+            "command should include --scope session"
+        );
+        assert!(
+            advice.cli_command.contains("clash policy allow"),
+            "command should use clash policy allow"
+        );
 
         // Marker should be cleaned up.
         assert!(
@@ -437,13 +442,11 @@ mod tests {
             "marker should be removed after processing"
         );
 
-        // Session policy file should exist.
+        // Session policy file should NOT exist (we no longer write automatically).
         let policy_path = session_dir.join("policy.sexpr");
-        assert!(policy_path.exists(), "session policy should be created");
-        let policy = std::fs::read_to_string(&policy_path).unwrap();
         assert!(
-            policy.contains("git"),
-            "session policy should contain git rule: {policy}"
+            !policy_path.exists(),
+            "session policy should NOT be created automatically"
         );
 
         // Clean up.
@@ -458,39 +461,34 @@ mod tests {
         std::fs::create_dir_all(&session_dir).unwrap();
 
         let result = process_post_tool_use(
-            &session_id,
             "toolu_nonexistent",
+            &session_id,
             "Bash",
             &json!({"command": "ls"}),
             "/tmp",
-        )
-        .unwrap();
+        );
         assert!(result.is_none(), "should return None when no pending ask");
 
         let _ = std::fs::remove_dir_all(&session_dir);
     }
 
     #[test]
-    fn test_write_session_rule_idempotent() {
-        let session_id = format!("test-idempotent-{}", std::process::id());
-        let session_dir = crate::audit::session_dir(&session_id);
-        let _ = std::fs::remove_dir_all(&session_dir);
-        std::fs::create_dir_all(&session_dir).unwrap();
-
-        let rule = infer_allow_rule("Bash", &json!({"command": "git status"}), "/tmp").unwrap();
-
-        // Write twice.
-        write_session_rule(&session_id, &rule).unwrap();
-        let first = std::fs::read_to_string(session_dir.join("policy.sexpr")).unwrap();
-        write_session_rule(&session_id, &rule).unwrap();
-        let second = std::fs::read_to_string(session_dir.join("policy.sexpr")).unwrap();
-
-        assert_eq!(
-            first, second,
-            "writing same rule twice should be idempotent"
+    fn test_approval_advice_context_format() {
+        let advice = ApprovalAdvice {
+            noun: "git status".to_string(),
+            tool_name: "Bash".to_string(),
+            suggested_rule: "(exec \"git\" *)".to_string(),
+            cli_command: "clash policy allow '(exec \"git\" *)' --scope session".to_string(),
+        };
+        let ctx = advice.as_context();
+        assert!(ctx.contains("Bash"), "should mention tool name");
+        assert!(ctx.contains("git status"), "should mention noun");
+        assert!(
+            ctx.contains("--scope session"),
+            "should mention session scope"
         );
-
-        let _ = std::fs::remove_dir_all(&session_dir);
+        assert!(ctx.contains("--dry-run"), "should mention dry-run");
+        assert!(ctx.contains("confirm"), "should mention confirmation");
     }
 
     #[test]

@@ -1,0 +1,68 @@
+meta:
+  name: v2 session rule advisory — PostToolUse suggests session rules
+  description: >
+    Test that when PreToolUse returns "ask" and the user accepts (PostToolUse fires),
+    the PostToolUse response includes advisory context suggesting a session-scoped
+    allow rule. This replaces the old automatic session rule learning with
+    agent-guided rule suggestions.
+
+clash:
+  # Default ask policy — everything gets prompted
+  policy_sexpr: |
+    (default ask "main")
+    (policy "main")
+
+steps:
+  # 0. Clean up any leftover session dir from previous runs
+  - name: clean up stale session dir
+    shell: rm -rf "${TMPDIR:-/tmp}/clash-clester-test-session" && rm -f "$HOME/.clash/active_session"
+    expect:
+      exit_code: 0
+
+  # 1. Send session-start hook to create session directory
+  - name: session-start creates session dir
+    hook: session-start
+    expect:
+      exit_code: 0
+
+  # 2. PreToolUse returns "ask" for git status
+  - name: pre-tool-use returns ask for git status
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: ask
+
+  # 3. PostToolUse fires (simulating user acceptance) — should return advisory context
+  - name: post-tool-use returns advisory context with session rule suggestion
+    hook: post-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      exit_code: 0
+      stdout_contains: "--scope session"
+
+  # 4. Verify no session policy was auto-created (advisory only, no auto-write)
+  - name: verify no automatic session policy created
+    shell: "test ! -f \"${TMPDIR:-/tmp}/clash-clester-test-session/policy.sexpr\" && echo 'no-auto-policy'"
+    expect:
+      exit_code: 0
+      stdout_contains: "no-auto-policy"
+
+  # 5. PostToolUse for a tool use that was NOT previously "ask"ed — should return no context
+  - name: post-tool-use without pending ask returns no context
+    hook: post-tool-use
+    tool_name: Bash
+    tool_input:
+      command: ls -la
+    expect:
+      exit_code: 0
+      no_decision: true
+
+  # 6. Clean up
+  - name: clean up session artifacts
+    shell: rm -rf "${TMPDIR:-/tmp}/clash-clester-test-session" && rm -f "$HOME/.clash/active_session"
+    expect:
+      exit_code: 0
