@@ -884,10 +884,7 @@ fn run_init(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
             .interact()
             .unwrap_or_default()
     {
-        anyhow::bail!(
-            "Cowardly refusing to configure clash due to existin policy at {}\n",
-            sexpr_path.display()
-        );
+        return Ok(());
     }
 
     let yaml_path = ClashSettings::legacy_policy_file()?;
