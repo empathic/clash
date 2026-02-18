@@ -30,6 +30,8 @@
 //! ```
 
 pub mod audit;
+pub mod cli;
+pub mod cmd;
 pub mod errors;
 pub mod handlers;
 pub mod hooks;
@@ -44,4 +46,5 @@ pub mod schema;
 pub mod session_policy;
 pub mod settings;
 pub mod style;
+pub mod tracing_init;
 pub mod wizard;
