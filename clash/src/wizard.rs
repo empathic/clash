@@ -13,6 +13,7 @@ use crate::policy::Effect;
 use crate::policy::ast::*;
 use crate::policy::edit;
 use crate::settings::ClashSettings;
+use crate::style;
 
 // ---------------------------------------------------------------------------
 // Human-readable descriptions
@@ -151,11 +152,36 @@ fn describe_path_filter(pf: &PathFilter) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Colored display helpers
+// ---------------------------------------------------------------------------
+
+/// Format a rule's s-expression with the effect keyword colorized.
+fn colored_rule(rule: &Rule) -> String {
+    let effect_str = rule.effect.to_string();
+    let colored_effect = style::effect(&effect_str);
+    match &rule.sandbox {
+        Some(name) => format!("({colored_effect} {} :sandbox \"{name}\")", rule.matcher),
+        None => format!("({colored_effect} {})", rule.matcher),
+    }
+}
+
+/// Describe a rule in plain English with the effect keyword colorized.
+fn colored_describe_rule(rule: &Rule) -> String {
+    let effect = match rule.effect {
+        Effect::Allow => style::green("Allow"),
+        Effect::Deny => style::red("Deny"),
+        Effect::Ask => style::yellow("Ask before"),
+    };
+    let cap = describe_matcher(&rule.matcher);
+    format!("{effect} {cap}")
+}
+
+// ---------------------------------------------------------------------------
 // Prompt helpers (all return None on Escape = "go back")
 // ---------------------------------------------------------------------------
 
 /// Show a Select prompt. Returns `None` if the user presses Escape.
-fn select(prompt: &str, items: &[&str]) -> Result<Option<usize>> {
+fn select<S: ToString>(prompt: &str, items: &[S]) -> Result<Option<usize>> {
     Select::new()
         .with_prompt(prompt)
         .items(items)
@@ -165,7 +191,7 @@ fn select(prompt: &str, items: &[&str]) -> Result<Option<usize>> {
 }
 
 /// Show a MultiSelect prompt. Returns `None` if the user presses Escape.
-fn multi_select(prompt: &str, items: &[&str]) -> Result<Option<Vec<usize>>> {
+fn multi_select<S: ToString>(prompt: &str, items: &[S]) -> Result<Option<Vec<usize>>> {
     MultiSelect::new()
         .with_prompt(prompt)
         .items(items)
@@ -198,7 +224,11 @@ fn confirm(prompt: &str, default: bool) -> Result<Option<bool>> {
 
 /// Prompt the user to build a Pattern. Returns `None` to go back.
 fn prompt_pattern(noun: &str) -> Result<Option<Pattern>> {
-    let items = &["Any", "Specific (exact match)", "Regex pattern"];
+    let items = &[
+        format!("{} {}", style::bold("*"), style::dim("(any)")),
+        format!("{} {}", style::bold("\"...\""), style::dim("(exact match)"),),
+        format!("{} {}", style::bold("/.../"), style::dim("(regex pattern)"),),
+    ];
 
     let sel = match select(&format!("Match which {noun}?"), items)? {
         Some(s) => s,
@@ -252,10 +282,30 @@ fn prompt_exec() -> Result<Option<ExecMatcher>> {
     }
 
     let items = &[
-        "With any arguments    (recommended)  e.g. git *",
-        "Subcommand + any args (positional)   e.g. git push *",
-        "Exact invocation only                e.g. git status",
-        "Contains arguments    (any order)    e.g. git push :has --force",
+        format!(
+            "{} {} {}",
+            style::bold("Any args"),
+            style::yellow("(recommended)"),
+            style::dim("e.g. git *"),
+        ),
+        format!(
+            "{} {} {}",
+            style::bold("Subcommand + any"),
+            style::dim("(positional)"),
+            style::dim("e.g. git push *"),
+        ),
+        format!(
+            "{} {}  {}",
+            style::bold("Exact invocation"),
+            style::dim("(strict)"),
+            style::dim("e.g. git status"),
+        ),
+        format!(
+            "{} {} {}",
+            style::bold("Contains args"),
+            style::dim("(any order)"),
+            style::dim("e.g. git push :has --force"),
+        ),
     ];
 
     let sel = match select("How should arguments be matched?", items)? {
@@ -274,8 +324,11 @@ fn prompt_exec() -> Result<Option<ExecMatcher>> {
         // (exec "git" "push" *) — prompt for positional args
         1 => {
             println!(
-                "  Note: arguments are matched by position. \"git push *\" matches\n  \
-                 \"git push origin\" but NOT \"git --verbose push\"."
+                "  {}",
+                style::dim(
+                    "Note: arguments are matched by position. \"git push *\" matches\n  \
+                     \"git push origin\" but NOT \"git --verbose push\".",
+                ),
             );
             let mut sub_args = Vec::new();
             loop {
@@ -328,9 +381,12 @@ fn prompt_exec() -> Result<Option<ExecMatcher>> {
         // (exec "git" "push" :has "--force") — subcommand + order-independent flags
         3 => {
             println!(
-                "  First, enter any subcommands that must appear in order (positional).\n  \
-                 Then, enter arguments that must appear anywhere (any order).\n  \
-                 Example: git push :has \"--force\" matches \"git push --force origin\"."
+                "  {}",
+                style::dim(
+                    "First, enter any subcommands that must appear in order (positional).\n  \
+                     Then, enter arguments that must appear anywhere (any order).\n  \
+                     Example: git push :has \"--force\" matches \"git push --force origin\".",
+                ),
             );
 
             // Optional positional subcommand(s).
@@ -379,7 +435,13 @@ fn prompt_exec() -> Result<Option<ExecMatcher>> {
 
 /// Prompt for a filesystem matcher. Returns `None` to go back.
 fn prompt_fs() -> Result<Option<FsMatcher>> {
-    let op_items = &["Any operation", "read", "write", "create", "delete"];
+    let op_items = &[
+        format!("{} {}", style::bold("*"), style::dim("(any operation)")),
+        style::bold("read"),
+        style::bold("write"),
+        style::bold("create"),
+        style::bold("delete"),
+    ];
     let selections = match multi_select(
         "Which filesystem operations? (space to select, enter to confirm)",
         op_items,
@@ -420,12 +482,28 @@ fn prompt_fs() -> Result<Option<FsMatcher>> {
 /// The inner `Option<PathFilter>` represents "any path" (None) vs a specific filter.
 fn prompt_path_filter() -> Result<Option<Option<PathFilter>>> {
     let items = &[
-        "Any path",
-        "Under current directory ($PWD)",
-        "Under home directory ($HOME)",
-        "Under a custom path",
-        "Exact file path",
-        "Regex pattern on path",
+        format!("{} {}", style::bold("*"), style::dim("(any path)")),
+        format!(
+            "{} {}",
+            style::bold("$PWD"),
+            style::dim("(current directory)"),
+        ),
+        format!(
+            "{} {}",
+            style::bold("$HOME"),
+            style::dim("(home directory)"),
+        ),
+        format!(
+            "{} {}",
+            style::bold("subpath"),
+            style::dim("(custom directory)"),
+        ),
+        format!(
+            "{} {}",
+            style::bold("\"...\""),
+            style::dim("(exact file path)"),
+        ),
+        format!("{} {}", style::bold("/.../"), style::dim("(regex on path)"),),
     ];
 
     let sel = match select("Constrain to which paths?", items)? {
@@ -480,7 +558,23 @@ fn prompt_net() -> Result<Option<NetMatcher>> {
 /// Prompt to build a complete rule. Returns `None` if cancelled at any step.
 fn prompt_rule() -> Result<Option<Rule>> {
     // Effect — Escape cancels the whole rule.
-    let effects = &["Allow", "Deny", "Ask (prompt user)"];
+    let effects = &[
+        format!(
+            "{} {}",
+            style::green_bold("Allow"),
+            style::dim("— permit this action")
+        ),
+        format!(
+            "{} {}",
+            style::red_bold("Deny"),
+            style::dim("— block this action")
+        ),
+        format!(
+            "{} {}",
+            style::yellow_bold("Ask"),
+            style::dim("— prompt the user each time"),
+        ),
+    ];
     let effect = match select("Effect", effects)? {
         Some(0) => Effect::Allow,
         Some(1) => Effect::Deny,
@@ -492,9 +586,24 @@ fn prompt_rule() -> Result<Option<Rule>> {
     // Domain — Escape goes back to effect, so we loop the whole thing.
     let matcher = 'domain: loop {
         let domains = &[
-            "Commands   — what programs can be executed",
-            "Filesystem — read, write, create, delete files",
-            "Network    — which domains can be accessed",
+            format!(
+                "{} {} {}",
+                style::cyan("exec"),
+                style::dim("—"),
+                style::dim("what programs can be executed"),
+            ),
+            format!(
+                "{}   {} {}",
+                style::cyan("fs"),
+                style::dim("—"),
+                style::dim("read, write, create, delete files"),
+            ),
+            format!(
+                "{}  {} {}",
+                style::cyan("net"),
+                style::dim("—"),
+                style::dim("which domains can be accessed"),
+            ),
         ];
 
         let domain_sel = match select("Capability", domains)? {
@@ -524,8 +633,12 @@ fn prompt_rule() -> Result<Option<Rule>> {
 
     // Preview
     println!();
-    println!("  Rule:    {rule}");
-    println!("  Meaning: {}", describe_rule(&rule));
+    println!("  {}    {}", style::bold("Rule:"), colored_rule(&rule));
+    println!(
+        "  {} {}",
+        style::bold("Meaning:"),
+        colored_describe_rule(&rule)
+    );
     println!();
 
     match confirm("Add this rule?", true)? {
@@ -560,10 +673,19 @@ fn show_rules(source: &str) -> Result<()> {
     }
 
     if rules.is_empty() {
-        println!("  (no rules — default effect applies to everything)");
+        println!(
+            "  {}",
+            style::dim("(no rules — default effect applies to everything)")
+        );
     } else {
         for (i, rule) in rules.iter().enumerate() {
-            eprintln!("  {}. {} — {}", i + 1, rule, describe_rule(rule));
+            println!(
+                "  {}. {} {} {}",
+                style::bold(&(i + 1).to_string()),
+                colored_rule(rule),
+                style::dim("—"),
+                style::dim(&describe_rule(rule)),
+            );
         }
     }
 
@@ -597,9 +719,12 @@ fn collect_rules(source: &str) -> Result<Vec<Rule>> {
 
 /// Run the interactive setup wizard.
 pub fn run() -> Result<()> {
-    println!("Clash Policy Setup");
-    println!("==================");
-    println!("Press Escape to go back at any point.\n");
+    println!(
+        "{} {}",
+        style::shield(),
+        style::header("Clash Policy Editor")
+    );
+    println!("{}\n", style::dim("Press Escape to go back at any point."));
 
     // Load or create the policy.
     let path = ClashSettings::policy_file()?;
@@ -610,13 +735,17 @@ pub fn run() -> Result<()> {
         crate::settings::DEFAULT_POLICY.to_string()
     };
 
-    println!("Current rules:\n{}", &source);
+    println!("{}", style::header("Current rules:"));
     show_rules(&source)?;
     println!();
 
     // Main loop.
     loop {
-        let actions = &["Add a rule", "Remove a rule", "Done"];
+        let actions = &[
+            format!("{} Add a rule", style::green_bold("+")),
+            format!("{} Remove a rule", style::red_bold("−")),
+            "  Done".to_string(),
+        ];
         let action = match select("What would you like to do?", actions)? {
             Some(a) => a,
             None => break, // Escape at top level = Done
@@ -628,7 +757,12 @@ pub fn run() -> Result<()> {
                 if let Some(rule) = prompt_rule()? {
                     let policy_name = edit::active_policy(&source)?;
                     source = edit::add_rule(&source, &policy_name, &rule)?;
-                    println!("\nCurrent rules:");
+                    println!(
+                        "\n{} Added: {}",
+                        style::green_bold("✓"),
+                        colored_rule(&rule),
+                    );
+                    println!("\n{}", style::header("Current rules:"));
                     show_rules(&source)?;
                     println!();
                 }
@@ -637,13 +771,20 @@ pub fn run() -> Result<()> {
             1 => {
                 let rules = collect_rules(&source)?;
                 if rules.is_empty() {
-                    println!("  No rules to remove.\n");
+                    println!("  {}\n", style::dim("No rules to remove."));
                     continue;
                 }
 
                 let items: Vec<String> = rules
                     .iter()
-                    .map(|r| format!("{r}  — {}", describe_rule(r)))
+                    .map(|r| {
+                        format!(
+                            "{}  {} {}",
+                            colored_rule(r),
+                            style::dim("—"),
+                            style::dim(&describe_rule(r)),
+                        )
+                    })
                     .collect();
                 let item_refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
 
@@ -651,8 +792,12 @@ pub fn run() -> Result<()> {
                     let rule_text = rules[sel].to_string();
                     let policy_name = edit::active_policy(&source)?;
                     source = edit::remove_rule(&source, &policy_name, &rule_text)?;
-                    println!("  Removed.\n");
-                    println!("Current rules:");
+                    println!(
+                        "\n{} Removed: {}",
+                        style::red_bold("✗"),
+                        style::dim(&rule_text),
+                    );
+                    println!("\n{}", style::header("Current rules:"));
                     show_rules(&source)?;
                     println!();
                 }
@@ -667,9 +812,20 @@ pub fn run() -> Result<()> {
     crate::policy::compile_policy(&source).context("policy validation failed")?;
     std::fs::write(&path, &source).context("failed to write policy file")?;
 
-    println!("\nPolicy saved to {}", path.display());
-    println!("Use 'clash status' to see what Claude can do.");
-    println!("Use 'clash allow' / 'clash deny' to make quick changes anytime.");
+    println!(
+        "\n{} {} Policy saved to {}",
+        style::green_bold("✓"),
+        style::shield(),
+        style::bold(&path.display().to_string()),
+    );
+    println!(
+        "{}",
+        style::dim("Use 'clash status' to see what Claude can do."),
+    );
+    println!(
+        "{}",
+        style::dim("Use 'clash allow' / 'clash deny' to make quick changes anytime."),
+    );
 
     Ok(())
 }
