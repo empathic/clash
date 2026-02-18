@@ -2,12 +2,12 @@
 
 **C**ommand **L**ine **A**gent **S**afety **H**arness
 
-Permission enforcement for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that makes working with agents more fun and less frustrating.
-
-**Platforms:** macOS (Apple Silicon, Intel) | Linux (x86_64, aarch64)
-**License:** [Apache 2.0](LICENSE)
+Stop babysitting Claude, go touch grass.
 
 ---
+> [!IMPORTANT]
+> Clash is under heavy development. It's being used by engineers at Empathic and is quite productive, but the API is not stable and is subject to change. Please report bugs!
+
 
 ## The Problem
 
