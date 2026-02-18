@@ -21,10 +21,20 @@ Clash gives you granular control. Write policy rules that decide what to **allow
 
 There are two ways to run clash depending on what you're doing:
 
-### Install (use clash in your day-to-day work)
+### Install from source (use clash in your day-to-day work)
+
+With just
 
 ```bash
 just install
+```
+
+or
+
+```bash
+cargo install --path clash
+claude plugin marketplace add ./
+claude plugin install clash
 ```
 
 This builds the binary, installs it to `~/.cargo/bin/clash`, and registers the plugin with Claude Code via the marketplace. After install, every `claude` session automatically loads clash.

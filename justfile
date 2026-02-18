@@ -8,7 +8,8 @@ default:
 
 # Build clash and launch Claude Code with the plugin for local development.
 # The symlink lets hooks.json find the binary at ${CLAUDE_PLUGIN_ROOT}/bin/clash.
-dev *ARGS: uninstall
+dev *ARGS:
+    @just -q uninstall
     cargo install --path clash
     claude --plugin-dir ./clash-plugin --debug-file /tmp/clash-debug --allow-dangerously-skip-permissions {{ARGS}}
 
@@ -16,8 +17,11 @@ clean-configs:
     -rm -rf ~/.clash
     -rm -rf .clash
 
+clean-config: clean-configs
+
 # Install clash system-wide: binary to ~/.cargo/bin, plugin via Claude marketplace.
-install: uninstall
+install: 
+    @just -q uninstall
     cargo install --path clash
     claude plugin marketplace add ./
     claude plugin install clash
