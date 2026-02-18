@@ -959,7 +959,7 @@ fn migrate_yaml_policy(yaml_path: &std::path::Path, sexpr_path: &std::path::Path
     let yaml_content =
         std::fs::read_to_string(yaml_path).context("failed to read legacy policy.yaml")?;
 
-    let grammar = include_str!("../../docs/policy-grammar.md");
+    let grammar = include_str!("../docs/policy-grammar.md");
 
     let prompt = format!(
         "Convert this YAML clash policy to the s-expression format described in the grammar below.\n\
