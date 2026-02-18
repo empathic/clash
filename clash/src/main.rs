@@ -852,7 +852,7 @@ fn run_init(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
             .interact()
             .unwrap_or(false)
     }) {
-        return run_init_project();
+        run_init_project()?;
     }
 
     let sexpr_path = ClashSettings::policy_file()?;

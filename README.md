@@ -17,17 +17,25 @@ Clash gives you granular control. Write policy rules that decide what to **allow
 
 ---
 
-## Local Development
+## Quick Start
+
+There are two ways to run clash depending on what you're doing:
+
+### Install (use clash in your day-to-day work)
 
 ```bash
-# 1. Install (requires Rust toolchain)
 just install
-
-# 2. Start Claude Code — clash is now managing permissions
-claude
 ```
 
-That's it. Clash is now intercepting every tool call and evaluating it against your policy. The default policy denies everything except reading files within your project — use `clash allow` to unlock capabilities as you need them.
+This builds the binary, installs it to `~/.cargo/bin/clash`, and registers the plugin with Claude Code via the marketplace. After install, every `claude` session automatically loads clash.
+
+### Develop (hack on clash itself)
+
+```bash
+just dev
+```
+
+This builds the binary, symlinks it into the source plugin directory, and launches a one-off Claude Code session with the plugin loaded directly from source. Changes to skills, hooks, or Rust code take effect on the next `just dev` — no install step needed.
 
 ---
 
@@ -63,7 +71,7 @@ Clash supports three policy levels, each automatically included and evaluated in
 |-------|----------|---------|
 | **User** | `~/.clash/policy.sexpr` | Your personal defaults across all projects |
 | **Project** | `<project>/.clash/policy.sexpr` | Shared rules for a specific repository |
-| **Session** | Created via `clash edit --session` | Temporary overrides for the current session |
+| **Session** | Created via `--scope session` | Temporary overrides for the current session |
 
 **Layer precedence:** Session > Project > User. Higher layers can shadow rules from lower layers — for example, a project-level deny overrides a user-level allow for the same capability. Use `clash status` to see all active layers and which rules are shadowed.
 
@@ -128,16 +136,17 @@ For the full rule syntax, see the [Policy Writing Guide](docs/policy-guide.md).
 ## Useful Commands
 
 ```bash
+clash init                                   # set up clash with a safe default policy
 clash allow bash                             # allow command execution
 clash allow edit                             # allow file editing in project
 clash allow web                              # allow web access
 clash deny '(exec "rm" *)'                   # deny rm commands
+clash ask bash                               # require approval for bash commands
 clash status                                 # see all layers, rules, and shadowing
-clash policy show                            # see active policy and decision tree
-clash policy list                            # list all rules with level tags
-clash policy remove '(exec "rm" *)'          # remove a rule
-clash policy schema                          # show all configurable fields and types
 clash explain bash "git push"                # see which rule matches a command
+clash policy list                            # list all rules with level tags
+clash policy remove '(deny (exec "rm" *))'   # remove a rule
+clash edit                                   # interactive policy editor
 ```
 
 For the full command reference, see the [CLI Reference](docs/cli-reference.md).
@@ -165,13 +174,11 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 ### Double-prompting (clash asks, then Claude Code asks)
 
-This means Claude Code's built-in permissions are still active. Re-run init with `--bypass-permissions`:
+This means Claude Code's built-in permissions are still active. Re-run init — it sets `bypassPermissions: true` in your Claude Code user settings by default so clash is the sole permission handler:
 
 ```bash
-clash init --bypass-permissions
+clash init
 ```
-
-This sets `bypassPermissions: true` in your Claude Code user settings so clash is the sole permission handler.
 
 ### Policy not working as expected
 
@@ -182,12 +189,6 @@ clash explain bash "git push origin main"
 ```
 
 Or use the `/clash:explain` skill inside Claude Code for an interactive walkthrough.
-
-### Filing a bug
-
-```bash
-clash bug "Short description of the issue" --include-config --include-logs
-```
 
 ---
 
@@ -202,10 +203,24 @@ clash bug "Short description of the issue" --include-config --include-logs
 
 ## Development
 
+### How it works
+
+Clash is a Claude Code **plugin**. The plugin registers hooks that intercept every tool call and evaluate it against your policy before Claude Code executes it.
+
+```
+Claude Code → hook (PreToolUse) → clash binary → policy evaluation → allow / deny / ask
+```
+
+The plugin lives in `clash-plugin/` and consists of hook definitions, skill definitions (slash commands), and the `clash` binary. In dev mode, `just dev` symlinks the freshly-built binary into `clash-plugin/bin/` and points Claude Code at the source directory. In install mode, `just install` stages a self-contained copy and registers it via the marketplace.
+
+### Recipes
+
 ```bash
-just dev         # build plugin and launch Claude Code with it
+just dev         # build + launch Claude Code with plugin from source
+just install     # build + install system-wide via marketplace
+just uninstall   # remove installed plugin and binary
 just check       # fmt + test + clippy
-just clester     # end-to-end tests
+just clester     # end-to-end tests (YAML-based hook simulation)
 just ci          # full CI (check + clester)
 ```
 
@@ -213,8 +228,8 @@ just ci          # full CI (check + clester)
 
 ```
 clash/
-├── clash/              # CLI binary + library
-├── clash-plugin/       # Claude Code plugin (hooks, skills)
+├── clash/              # CLI binary + library (Rust)
+├── clash-plugin/       # Claude Code plugin (hooks, skills, bin/)
 ├── clash_notify/       # Notification support (desktop, Zulip)
 ├── claude_settings/    # Claude Code settings library
 ├── clester/            # End-to-end test harness
