@@ -25,6 +25,16 @@
 * If you are corrected by a person when using a skill, or told you should have used the skill, then modify the plugin definition for clash to ensure this doesn't happen again.
 
 
+## Commits
+* All commits MUST follow the [Conventional Commits v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) specification.
+* Commit message structure: `<type>[optional scope]: <description>` with optional body and footer(s).
+* Common types: `feat` (new feature), `fix` (bug fix), `docs` (documentation), `refactor`, `test`, `chore`, `ci`, `style`, `perf`, `build`.
+* A scope MAY be provided in parentheses after the type, e.g. `feat(parser): add array parsing`.
+* Breaking changes MUST be indicated by appending `!` after the type/scope or by including a `BREAKING CHANGE:` footer.
+* The description MUST immediately follow the colon and space after the type/scope prefix.
+* A body MAY be provided after a blank line following the description, for additional context.
+* Footer(s) MAY be provided after a blank line following the body.
+
 ## Policy Model
 * Clash uses a capability-based policy language with s-expression syntax
 * Three capability domains: `exec` (commands), `fs` (filesystem), `net` (network)
