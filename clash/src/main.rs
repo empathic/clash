@@ -15,6 +15,7 @@ use clash::permissions::check_permission;
 use clash::sandbox_cmd;
 use clash::session_policy;
 use clash::settings::{ClashSettings, DEFAULT_POLICY, PolicyLevel};
+use clash::style;
 
 use claude_settings::PermissionRule;
 
@@ -561,9 +562,9 @@ fn print_command_tree(cmd: &clap::Command, depth: usize, show_all: bool) {
     if depth == 0 {
         let about = cmd
             .get_about()
-            .map(|a| format!(" - {a}"))
+            .map(|a| format!(" {} {a}", style::dim("-")))
             .unwrap_or_default();
-        println!("{}{}{}", indent, cmd.get_name(), about);
+        println!("{}{}{}", indent, style::bold(cmd.get_name()), about);
     }
 
     // Print arguments for this command
@@ -572,14 +573,32 @@ fn print_command_tree(cmd: &clap::Command, depth: usize, show_all: bool) {
             continue;
         }
         let arg_indent = "  ".repeat(depth + 1);
-        let help = arg.get_help().map(|h| format!("  {h}")).unwrap_or_default();
+        let help = arg
+            .get_help()
+            .map(|h| format!("  {}", style::dim(&h.to_string())))
+            .unwrap_or_default();
         if let Some(long) = arg.get_long() {
-            println!("{arg_indent}--{long}{help}");
+            println!(
+                "{}{}{}",
+                arg_indent,
+                style::yellow(&format!("--{long}")),
+                help
+            );
         } else if let Some(short) = arg.get_short() {
-            println!("{arg_indent}-{short}{help}");
+            println!(
+                "{}{}{}",
+                arg_indent,
+                style::yellow(&format!("-{short}")),
+                help
+            );
         } else {
             let req = if arg.is_required_set() { "" } else { "?" };
-            println!("{arg_indent}<{}>{req}{help}", arg.get_id());
+            println!(
+                "{}{}{req}{}",
+                arg_indent,
+                style::magenta(&format!("<{}>", arg.get_id())),
+                help
+            );
         }
     }
 
@@ -591,9 +610,9 @@ fn print_command_tree(cmd: &clap::Command, depth: usize, show_all: bool) {
         let sub_indent = "  ".repeat(depth + 1);
         let about = sub
             .get_about()
-            .map(|a| format!("  {a}"))
+            .map(|a| format!("  {}", style::dim(&a.to_string())))
             .unwrap_or_default();
-        println!("{sub_indent}{}{}", sub.get_name(), about);
+        println!("{}{}{}", sub_indent, style::cyan(sub.get_name()), about);
         print_command_tree(sub, depth + 1, show_all);
     }
 }
@@ -731,57 +750,82 @@ fn run_explain(json_output: bool, tool: Option<String>, input_arg: Option<String
         }
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        println!("Input:");
-        println!("  tool:   {}", input.tool_name);
-        println!("  noun:   {}", noun);
+        println!("{}", style::bold("Input:"));
+        println!("  {}   {}", style::cyan("tool:"), input.tool_name);
+        println!("  {}   {}", style::cyan("noun:"), noun);
         println!();
 
-        println!("Decision: {}", decision.effect);
+        println!(
+            "{} {}",
+            style::bold("Decision:"),
+            style::effect(&decision.effect.to_string())
+        );
         if let Some(ref reason) = decision.reason {
-            println!("Reason:   {}", reason);
+            println!("{} {}", style::bold("Reason:  "), reason);
         }
         if multi_level
             && let Some(first_match) = decision.trace.matched_rules.first()
             && let Some(level) = find_origin_level(first_match)
         {
-            println!("Level:    {}", level);
+            println!(
+                "{} {}",
+                style::bold("Level:   "),
+                style::cyan(&level.to_string())
+            );
         }
         println!();
 
         if !decision.trace.matched_rules.is_empty() {
-            println!("Matched rules:");
+            println!("{}", style::header("Matched rules:"));
             for m in &decision.trace.matched_rules {
+                let eff = style::effect(&m.effect.to_string());
                 if multi_level {
                     if let Some(level) = find_origin_level(m) {
                         println!(
-                            "  [{}] [{}] {} -> {}",
-                            m.rule_index, level, m.description, m.effect
+                            "  [{}] {} {} -> {}",
+                            m.rule_index,
+                            style::cyan(&format!("[{}]", level)),
+                            m.description,
+                            eff
                         );
                     } else {
-                        println!("  [{}] {} -> {}", m.rule_index, m.description, m.effect);
+                        println!("  [{}] {} -> {}", m.rule_index, m.description, eff);
                     }
                 } else {
-                    println!("  [{}] {} -> {}", m.rule_index, m.description, m.effect);
+                    println!("  [{}] {} -> {}", m.rule_index, m.description, eff);
                 }
             }
             println!();
         }
 
         if !decision.trace.skipped_rules.is_empty() {
-            println!("Skipped rules:");
+            println!("{}", style::dim("Skipped rules:"));
             for s in &decision.trace.skipped_rules {
-                println!("  [{}] {} ({})", s.rule_index, s.description, s.reason);
+                println!(
+                    "  {} {} {}",
+                    style::dim(&format!("[{}]", s.rule_index)),
+                    style::dim(&s.description),
+                    style::dim(&format!("({})", s.reason))
+                );
             }
             println!();
         }
 
-        println!("Resolution: {}", decision.trace.final_resolution);
+        println!(
+            "{} {}",
+            style::bold("Resolution:"),
+            style::effect(&decision.trace.final_resolution.clone())
+        );
 
         if let Some(ref sandbox) = decision.sandbox {
             println!();
-            println!("Sandbox policy:");
-            println!("  default: {}", sandbox.default.display());
-            println!("  network: {:?}", sandbox.network);
+            println!("{}", style::header("Sandbox policy:"));
+            println!(
+                "  {}: {}",
+                style::cyan("default"),
+                sandbox.default.display()
+            );
+            println!("  {}: {:?}", style::cyan("network"), sandbox.network);
             for rule in &sandbox.rules {
                 println!(
                     "  {:?} {} in {}",
@@ -870,7 +914,11 @@ fn run_init(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
         );
     }
 
-    println!("Clash initialized at {}\n", sexpr_path.display());
+    println!(
+        "{} Clash initialized at {}\n",
+        style::green_bold("✓"),
+        sexpr_path.display()
+    );
 
     // Launch the wizard so the user can customize immediately.
     clash::wizard::run()
@@ -885,7 +933,11 @@ fn run_init_project() -> Result<()> {
     let policy_path = clash_dir.join("policy.sexpr");
 
     if policy_path.exists() {
-        println!("Project policy already exists at {}", policy_path.display());
+        println!(
+            "{} Project policy already exists at {}",
+            style::dim("·"),
+            policy_path.display()
+        );
         return Ok(());
     }
 
@@ -896,7 +948,11 @@ fn run_init_project() -> Result<()> {
     std::fs::write(&policy_path, project_policy)
         .with_context(|| format!("failed to write {}", policy_path.display()))?;
 
-    println!("Project policy initialized at {}", policy_path.display());
+    println!(
+        "{} Project policy initialized at {}",
+        style::green_bold("✓"),
+        policy_path.display()
+    );
     Ok(())
 }
 
@@ -914,7 +970,10 @@ fn migrate_yaml_policy(yaml_path: &std::path::Path, sexpr_path: &std::path::Path
          ## YAML Policy\n\n```yaml\n{yaml_content}\n```"
     );
 
-    println!("Migrating legacy policy.yaml to s-expression format...");
+    println!(
+        "{} Migrating legacy policy.yaml to s-expression format...",
+        style::cyan("~")
+    );
 
     let output = std::process::Command::new("claude")
         .arg("-p")
@@ -942,8 +1001,15 @@ fn migrate_yaml_policy(yaml_path: &std::path::Path, sexpr_path: &std::path::Path
         Ok(_) => {
             std::fs::create_dir_all(sexpr_path.parent().unwrap())?;
             std::fs::write(sexpr_path, &sexpr_content)?;
-            println!("Migrated policy written to {}", sexpr_path.display());
-            println!("Legacy policy.yaml preserved at {}\n", yaml_path.display());
+            println!(
+                "{} Migrated policy written to {}",
+                style::green_bold("✓"),
+                sexpr_path.display()
+            );
+            println!(
+                "  Legacy policy.yaml preserved at {}\n",
+                yaml_path.display()
+            );
         }
         Err(e) => {
             warn!(error = %e, "migrated policy failed validation");
@@ -964,7 +1030,10 @@ fn migrate_yaml_policy(yaml_path: &std::path::Path, sexpr_path: &std::path::Path
 fn set_bypass_permissions() -> Result<()> {
     let claude = claude_settings::ClaudeSettings::new();
     claude.set_bypass_permissions(claude_settings::SettingsLevel::User, true)?;
-    println!("Configured Claude Code to use clash as the sole permission handler.");
+    println!(
+        "{} Configured Claude Code to use clash as the sole permission handler.",
+        style::green_bold("✓")
+    );
     Ok(())
 }
 
@@ -984,6 +1053,10 @@ fn run_status(_json: bool) -> Result<()> {
         }
     };
 
+    // Banner
+    println!("{}", style::banner());
+    println!();
+
     let loaded = settings.loaded_policies();
     let multi_level = loaded.len() > 1;
 
@@ -996,27 +1069,41 @@ fn run_status(_json: bool) -> Result<()> {
     };
 
     // 1. Policy layers
-    println!("Policy layers");
-    println!("=============");
+    println!("{}", style::header("Policy layers"));
+    println!("{}", style::dim("─────────────"));
     for &level in &[
         PolicyLevel::User,
         PolicyLevel::Project,
         PolicyLevel::Session,
     ] {
         match level_path(level) {
-            Some(path) => println!("  {:<10} {}", format!("{}:", level), path),
-            None => println!("  {:<10} (none)", format!("{}:", level)),
+            Some(path) => println!("  {:<10} {}", style::cyan(&format!("{}:", level)), path),
+            None => println!(
+                "  {:<10} {}",
+                style::cyan(&format!("{}:", level)),
+                style::dim("(none)")
+            ),
         }
     }
     if multi_level {
         println!();
-        println!("  Precedence: session > project > user (automatic)");
+        println!(
+            "  {}",
+            style::dim("Precedence: session > project > user (automatic)")
+        );
     }
     println!();
 
     // 2. Effective policy — rules in evaluation order with shadow detection
-    println!("Effective policy (default: {})", tree.default);
-    println!("=================================");
+    println!(
+        "{} {}",
+        style::header("Effective policy"),
+        style::dim(&format!(
+            "(default: {})",
+            style::effect(&tree.default.to_string())
+        ))
+    );
+    println!("{}", style::dim("─────────────────────────────────"));
 
     let shadows = clash::policy::detect_all_shadows(tree);
 
@@ -1027,7 +1114,7 @@ fn run_status(_json: bool) -> Result<()> {
             if rules.is_empty() {
                 return;
             }
-            println!("  {}:", label);
+            println!("  {}:", style::bold(label));
             for (i, rule) in rules.iter().enumerate() {
                 let builtin = rule
                     .origin_policy
@@ -1036,23 +1123,25 @@ fn run_status(_json: bool) -> Result<()> {
 
                 // Source tag: [builtin], [user], [project], [session]
                 let tag = if builtin {
-                    "[builtin]".to_string()
+                    style::dim("[builtin]")
                 } else if let Some(ref level) = rule.origin_level {
-                    format!("[{}]", level)
+                    style::cyan(&format!("[{}]", level))
                 } else {
                     String::new()
                 };
 
                 // Shadow indicator
                 let shadow_note = if let Some(info) = shadow_map.get(&i) {
-                    format!("  <- shadowed by {}", info.shadowed_by_level)
+                    style::yellow(&format!("  <- shadowed by {}", info.shadowed_by_level))
                 } else {
                     String::new()
                 };
 
+                let effect_str = style::effect(&format!("{:<5}", rule.effect));
+
                 println!(
-                    "    [{:<5}] {:<45} {}{}",
-                    rule.effect, rule.source.matcher, tag, shadow_note,
+                    "    [{}] {:<45} {}{}",
+                    effect_str, rule.source.matcher, tag, shadow_note,
                 );
             }
         };
@@ -1066,24 +1155,25 @@ fn run_status(_json: bool) -> Result<()> {
         tree.exec_rules.len() + tree.fs_rules.len() + tree.net_rules.len() + tree.tool_rules.len();
     if total == 0 {
         println!(
-            "  (no rules — default {} applies to everything)",
-            tree.default
+            "  {}",
+            style::dim(&format!(
+                "(no rules — default {} applies to everything)",
+                tree.default
+            ))
         );
     }
 
-    println!(
-        "\n  Everything else: {}",
-        match tree.default {
-            Effect::Allow => "allowed",
-            Effect::Deny => "denied",
-            Effect::Ask => "requires approval",
-        }
-    );
+    let everything_else = match tree.default {
+        Effect::Allow => style::green("allowed"),
+        Effect::Deny => style::red("denied"),
+        Effect::Ask => style::yellow("requires approval"),
+    };
+    println!("\n  Everything else: {}", everything_else);
     println!();
 
     // 3. Potential issues
-    println!("Potential issues");
-    println!("================");
+    println!("{}", style::header("Potential issues"));
+    println!("{}", style::dim("────────────────"));
     let mut issues = Vec::new();
 
     // Check for overly permissive wildcard exec rules
@@ -1161,10 +1251,10 @@ fn run_status(_json: bool) -> Result<()> {
     }
 
     if issues.is_empty() {
-        println!("  No issues detected.");
+        println!("  {} No issues detected.", style::green_bold("✓"));
     } else {
         for issue in &issues {
-            println!("  - {}", issue);
+            println!("  {} {}", style::yellow_bold("!"), issue);
         }
     }
 
@@ -1178,25 +1268,37 @@ fn handle_schema(json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&schema)?);
     } else {
-        println!("Policy Schema");
-        println!("=============\n");
+        println!("{}", style::header("Policy Schema"));
+        println!("{}\n", style::dim("─────────────"));
 
         for section in &schema.sections {
-            println!("{}:", section.key);
+            println!("{}:", style::bold(section.key));
             println!("  {}\n", section.description);
             print_fields(&section.fields, 2);
             println!();
         }
 
-        println!("Rule Syntax:");
-        println!("  Format: {}\n", schema.rule_syntax.format);
-        println!("  Effects: {}", schema.rule_syntax.effects.join(", "));
-        println!("  Fs ops:  {}", schema.rule_syntax.fs_operations.join(", "));
-        println!("\n  Capability domains:");
+        println!("{}", style::bold("Rule Syntax:"));
+        println!(
+            "  {}: {}\n",
+            style::cyan("Format"),
+            schema.rule_syntax.format
+        );
+        println!(
+            "  {}: {}",
+            style::cyan("Effects"),
+            schema.rule_syntax.effects.join(", ")
+        );
+        println!(
+            "  {}: {}",
+            style::cyan("Fs ops"),
+            schema.rule_syntax.fs_operations.join(", ")
+        );
+        println!("\n  {}:", style::bold("Capability domains"));
         print_fields(&schema.rule_syntax.domains, 4);
-        println!("\n  Patterns:");
+        println!("\n  {}:", style::bold("Patterns"));
         print_fields(&schema.rule_syntax.patterns, 4);
-        println!("\n  Path filters:");
+        println!("\n  {}:", style::bold("Path filters"));
         print_fields(&schema.rule_syntax.path_filters, 4);
     }
     Ok(())
@@ -1205,18 +1307,29 @@ fn handle_schema(json: bool) -> Result<()> {
 fn print_fields(fields: &[clash::schema::SchemaField], indent: usize) {
     let pad = " ".repeat(indent);
     for f in fields {
-        let req = if f.required { " (required)" } else { "" };
+        let req = if f.required {
+            format!(" {}", style::yellow("(required)"))
+        } else {
+            String::new()
+        };
         let default_str = match &f.default {
-            Some(v) => format!(" [default: {}]", v),
+            Some(v) => format!(" {}", style::dim(&format!("[default: {}]", v))),
             None => String::new(),
         };
         let values_str = match &f.values {
-            Some(vals) => format!(" ({})", vals.join("|")),
+            Some(vals) => format!(" {}", style::dim(&format!("({})", vals.join("|")))),
             None => String::new(),
         };
         println!(
-            "{}{}: {}{}{}{} — {}",
-            pad, f.key, f.type_name, values_str, default_str, req, f.description
+            "{}{}: {}{}{}{} {} {}",
+            pad,
+            style::cyan(f.key),
+            style::magenta(f.type_name),
+            values_str,
+            default_str,
+            req,
+            style::dim("—"),
+            f.description
         );
         if let Some(ref sub) = f.fields {
             print_fields(sub, indent + 2);
@@ -1276,7 +1389,12 @@ fn run_bug_report(
     };
 
     let issue = linear::create_issue(&report).context("failed to file bug report")?;
-    println!("Filed bug {}: {}", issue.identifier, issue.url);
+    println!(
+        "{} Filed bug {}: {}",
+        style::green_bold("✓"),
+        style::bold(&issue.identifier),
+        issue.url
+    );
     Ok(())
 }
 
@@ -1517,17 +1635,21 @@ fn handle_allow_deny(
     if dry_run {
         print!("{modified}");
     } else if modified == source {
-        println!("Rule already exists (no change).");
+        println!("{} Rule already exists (no change).", style::dim("·"));
     } else {
         write_policy(&path, &modified)?;
-        let level_msg = format!("Added rule to {} policy", level);
+        let level_msg = format!(
+            "{} Added rule to {} policy",
+            style::shield(),
+            style::cyan(&level.to_string())
+        );
         // Print a friendly confirmation for bare verbs, raw s-expr for power users.
         if let Some(msg) = friendly_confirmation(effect, rule_str) {
-            println!("{msg}");
+            println!("{} {msg}", style::green_bold("✓"));
             println!("{level_msg}");
         } else {
             for rule in &rules {
-                println!("Added: {rule}");
+                println!("{} Added: {rule}", style::green_bold("✓"));
             }
             println!("{level_msg}");
         }
@@ -1577,7 +1699,11 @@ fn handle_remove(rule_str: &str, dry_run: bool, scope: Option<&str>) -> Result<(
         print!("{modified}");
     } else {
         write_policy(&path, &modified)?;
-        println!("Removed rule from {} policy: {rule_str}", level);
+        println!(
+            "{} Removed rule from {} policy: {rule_str}",
+            style::red_bold("✗"),
+            style::cyan(&level.to_string())
+        );
     }
     Ok(())
 }
@@ -1624,24 +1750,30 @@ fn handle_list(json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&entries)?);
     } else {
         if all_rules.is_empty() {
-            println!("No rules in policy \"{}\".", tree.policy_name);
+            println!(
+                "No rules in policy {}.",
+                style::cyan(&format!("\"{}\"", tree.policy_name))
+            );
             return Ok(());
         }
         println!(
-            "Policy \"{}\" (default: {}, {} rules):\n",
-            tree.policy_name,
-            tree.default,
-            all_rules.len()
+            "Policy {} {}\n",
+            style::cyan(&format!("\"{}\"", tree.policy_name)),
+            style::dim(&format!(
+                "(default: {}, {} rules)",
+                style::effect(&tree.default.to_string()),
+                all_rules.len()
+            ))
         );
         for rule in &all_rules {
             let tag = if let Some(ref level) = rule.origin_level {
-                format!("[{}] ", level)
+                format!("{} ", style::cyan(&format!("[{}]", level)))
             } else if rule
                 .origin_policy
                 .as_ref()
                 .is_some_and(|p| p.starts_with("__internal_"))
             {
-                "[builtin] ".to_string()
+                format!("{} ", style::dim("[builtin]"))
             } else {
                 String::new()
             };
@@ -1690,8 +1822,12 @@ fn handle_show(json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         for lp in loaded {
-            println!("[{}] {}", lp.level, lp.path.display());
-            println!("{}", "-".repeat(40));
+            println!(
+                "{} {}",
+                style::cyan(&format!("[{}]", lp.level)),
+                lp.path.display()
+            );
+            println!("{}", style::dim(&"─".repeat(40)));
             print!("{}", lp.source);
             if !lp.source.ends_with('\n') {
                 println!();
