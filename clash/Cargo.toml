@@ -29,6 +29,7 @@ lexpr = { workspace = true }
 
 libc = { workspace = true }
 uuid = { workspace = true }
+hotln = { workspace = true }
 ureq = { workspace = true }
 base64 = { workspace = true }
 console = { workspace = true }
