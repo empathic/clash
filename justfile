@@ -6,33 +6,27 @@ wt_root := "../clash-wt"
 default:
     @just -l
 
-build-plugin-in target_dir:
-    #!/usr/bin/env bash
-    cargo build --bins 
-    base={{target_dir}}
-    rm -rf {{target_dir}}
-    plugin="$base/clash-plugin"
-    mkdir -p "$plugin/bin"
-    cp -r clash-plugin/. "$plugin"
-    cp target/debug/clash "$plugin/bin/clash"
-    echo $plugin
+# Build clash and launch Claude Code with the plugin for local development.
+# The symlink lets hooks.json find the binary at ${CLAUDE_PLUGIN_ROOT}/bin/clash.
+dev *ARGS: uninstall
+    cargo install --path clash
+    claude --plugin-dir ./clash-plugin --debug-file /tmp/clash-debug --allow-dangerously-skip-permissions {{ARGS}}
 
-build-plugin: (build-plugin-in plugin_target)
+clean-configs:
+    -rm -rf ~/.clash
+    -rm -rf .clash
 
-dev *ARGS:
-    just build-plugin
-    claude --plugin-dir {{plugin_dir}} --debug-file /tmp/clash-debug --allow-dangerously-skip-permissions {{ARGS}}
-
+# Install clash system-wide: binary to ~/.cargo/bin, plugin via Claude marketplace.
 install: uninstall
-    just build-plugin
+    cargo install --path clash
     claude plugin marketplace add ./
     claude plugin install clash
-    cargo install
 
 uninstall:
     -claude plugin uninstall clash
     -claude plugin marketplace remove clash
     -rm ~/.local/bin/clash
+    -rm ~/.cargo/bin/clash
 
 check:
     cargo fmt

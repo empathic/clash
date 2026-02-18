@@ -1,2 +1,2 @@
-# Local development symlink
-bin/clash-dev
+# Local development symlink (created by `just dev`)
+bin/

@@ -1,5 +1,6 @@
 (default deny "main")
 
 (policy "main"
-  (allow (net /crates\.io/))
+  (allow (exec))
+  (allow (fs (or read write create delete) (subpath (env PWD))))
   (allow (fs (or read write create delete) (subpath "/var/folders"))))
