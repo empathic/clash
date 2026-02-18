@@ -46,7 +46,7 @@ pub fn check_support() -> SupportLevel {
 
 /// Compile a SandboxPolicy into a Seatbelt SBPL profile string.
 #[instrument(level = Level::TRACE)]
-fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
+pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     let mut p = String::from("(version 1)\n(deny default)\n");
 
     // Always needed for basic process operation
