@@ -3,4 +3,5 @@
 (policy "main"
   (allow (exec))
   (allow (fs (or read write create delete) (subpath (env PWD))))
-  (allow (fs (or read write create delete) (subpath "/var/folders"))))
+  (allow (fs (or read write create delete) (subpath "/var/folders")))
+  (allow (exec "ls" "-lha")))

@@ -6,6 +6,7 @@
 
 use anyhow::{Result, bail};
 
+use crate::policy::Effect;
 use crate::policy::ast::{PolicyItem, Rule, TopLevel};
 use crate::policy::parse;
 
@@ -76,6 +77,36 @@ pub fn ensure_policy_block(source: &str, name: &str, body_source: &str) -> Resul
         .unwrap_or(top_levels.len());
     top_levels.insert(pos, block);
 
+    Ok(serialize_top_levels(&top_levels))
+}
+
+/// Update the default declaration's effect and/or policy name. Returns modified source.
+///
+/// If no `(default ...)` exists, prepends one.
+pub fn set_default(source: &str, effect: Effect, policy: &str) -> Result<String> {
+    let mut top_levels = parse::parse(source)?;
+    let mut found = false;
+    for tl in &mut top_levels {
+        if let TopLevel::Default {
+            effect: e,
+            policy: p,
+        } = tl
+        {
+            *e = effect;
+            *p = policy.to_string();
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        top_levels.insert(
+            0,
+            TopLevel::Default {
+                effect,
+                policy: policy.to_string(),
+            },
+        );
+    }
     Ok(serialize_top_levels(&top_levels))
 }
 
@@ -200,6 +231,25 @@ mod tests {
         let reserialized = serialize_top_levels(&ast);
         let ast2 = parse::parse(&reserialized).unwrap();
         assert_eq!(ast, ast2);
+    }
+
+    #[test]
+    fn set_default_changes_effect() {
+        let result = set_default(default_policy(), Effect::Allow, "main").unwrap();
+        assert!(result.contains("(default allow \"main\")"));
+    }
+
+    #[test]
+    fn set_default_changes_policy_name() {
+        let result = set_default(default_policy(), Effect::Deny, "sandbox").unwrap();
+        assert!(result.contains("(default deny \"sandbox\")"));
+    }
+
+    #[test]
+    fn set_default_prepends_when_missing() {
+        let source = "(policy \"main\")\n";
+        let result = set_default(source, Effect::Ask, "main").unwrap();
+        assert!(result.starts_with("(default ask \"main\")"));
     }
 
     #[test]
