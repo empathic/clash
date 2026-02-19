@@ -31,7 +31,7 @@ policy_decl     = "(" "policy" QUOTED_STRING policy_item* ")"
 policy_item     = include | rule
 include         = "(" "include" QUOTED_STRING ")"
 rule            = "(" effect cap_matcher keyword_args* ")"
-keyword_args    = ":sandbox" QUOTED_STRING
+keyword_args    = ":sandbox" ( QUOTED_STRING | rule+ )
 ```
 
 Policy names, include targets, and keyword argument values must be quoted strings. Bare atoms are reserved for language keywords.
@@ -264,13 +264,40 @@ Keywords are atoms starting with `:`. They appear in two positions:
 
 ### `:sandbox`
 
-The `:sandbox` keyword on exec rules references a named policy whose rules define the kernel-level sandbox for matching commands:
+The `:sandbox` keyword on exec rules defines the kernel-level sandbox for matching commands. It accepts either a named policy reference or inline rules.
+
+#### Named sandbox
+
+Reference a named policy whose rules define the sandbox:
 
 ```
-(allow (exec "cargo" *) :sandbox "cargo-env")
+(policy "cargo-env"
+  (allow (fs read (subpath (env PWD))))
+  (allow (net "crates.io")))
+
+(policy "main"
+  (allow (exec "cargo" *) :sandbox "cargo-env"))
 ```
 
-When the exec rule matches, the referenced policy's fs/net rules are used to build a sandbox for the spawned process. See the [sandbox section](./policy-guide.md#sandbox-policies) in the policy guide.
+#### Inline sandbox
+
+Define sandbox rules directly on the exec rule, without a separate named policy:
+
+```
+(allow (exec "clash" "bug" *) :sandbox (allow (net *)))
+```
+
+Multiple inline rules are supported:
+
+```
+(allow (exec "cargo" *) :sandbox
+  (allow (net *))
+  (allow (fs read (subpath (env PWD)))))
+```
+
+Inline sandbox rules cannot have nested `:sandbox` annotations.
+
+When the exec rule matches, the sandbox's fs/net rules are used to build a kernel-level sandbox for the spawned process. See the [sandbox section](./policy-guide.md#sandbox-policies) in the policy guide.
 
 ---
 

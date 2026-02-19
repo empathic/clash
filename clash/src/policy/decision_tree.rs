@@ -738,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn implicit_sandbox_none_without_fs_rules() {
+    fn implicit_sandbox_net_only_without_fs_rules() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
             r#"
@@ -751,7 +751,28 @@ mod tests {
         )
         .unwrap();
 
-        // No fs rules → no implicit sandbox
+        // No fs rules but net allowed → sandbox with network allow
+        let sandbox = tree
+            .build_implicit_sandbox()
+            .expect("net-only implicit sandbox should be present");
+        assert_eq!(sandbox.network, NetworkPolicy::Allow);
+        assert!(sandbox.rules.is_empty());
+    }
+
+    #[test]
+    fn implicit_sandbox_none_when_no_rules() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec)))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        // No fs or net rules → no implicit sandbox
         assert!(tree.build_implicit_sandbox().is_none());
     }
 

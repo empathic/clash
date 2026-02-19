@@ -177,12 +177,16 @@ fn inject_internals(
                     if let PolicyItem::Rule(rule) = item {
                         let specificity = Specificity::from_matcher(&rule.matcher);
                         let compiled_matcher = compile_matcher(&rule.matcher, env)?;
+                        let sandbox_key = match &rule.sandbox {
+                            Some(SandboxRef::Named(n)) => Some(n.clone()),
+                            _ => None,
+                        };
                         let compiled = CompiledRule {
                             effect: rule.effect,
                             matcher: compiled_matcher,
                             source: rule.clone(),
                             specificity,
-                            sandbox: rule.sandbox.clone(),
+                            sandbox: sandbox_key,
                             origin_policy: Some(name.to_string()),
                             origin_level: None,
                         };
@@ -298,18 +302,44 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
     let mut fs_rules = Vec::new();
     let mut net_rules = Vec::new();
     let mut tool_rules = Vec::new();
+    let mut sandbox_policies = HashMap::new();
+    let mut inline_counter = 0usize;
 
     for (rule, origin) in &rules {
-        // Validate sandbox references point to existing policies.
-        if let Some(ref sandbox_name) = rule.sandbox
-            && !policies.contains_key(sandbox_name.as_str())
-        {
-            bail!(
-                "sandbox reference \"{}\" not found: no (policy \"{}\") defined",
-                sandbox_name,
-                sandbox_name
-            );
-        }
+        // Resolve sandbox reference to a key name.
+        let sandbox_key = match &rule.sandbox {
+            Some(SandboxRef::Named(name)) => {
+                if !policies.contains_key(name.as_str()) {
+                    bail!(
+                        "sandbox reference \"{}\" not found: no (policy \"{}\") defined",
+                        name,
+                        name
+                    );
+                }
+                Some(name.clone())
+            }
+            Some(SandboxRef::Inline(inline_rules)) => {
+                let key = format!("__inline_sandbox_{inline_counter}__");
+                inline_counter += 1;
+                let mut compiled_sandbox_rules = Vec::new();
+                for r in inline_rules {
+                    let specificity = Specificity::from_matcher(&r.matcher);
+                    let compiled_matcher = compile_matcher(&r.matcher, env)?;
+                    compiled_sandbox_rules.push(CompiledRule {
+                        effect: r.effect,
+                        matcher: compiled_matcher,
+                        source: r.clone(),
+                        specificity,
+                        sandbox: None,
+                        origin_policy: None,
+                        origin_level: None,
+                    });
+                }
+                sandbox_policies.insert(key.clone(), compiled_sandbox_rules);
+                Some(key)
+            }
+            None => None,
+        };
 
         let specificity = Specificity::from_matcher(&rule.matcher);
         let compiled_matcher = compile_matcher(&rule.matcher, env)?;
@@ -318,7 +348,7 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
             matcher: compiled_matcher,
             source: rule.clone(),
             specificity,
-            sandbox: rule.sandbox.clone(),
+            sandbox: sandbox_key,
             origin_policy: Some(origin.clone()),
             origin_level: None,
         };
@@ -347,9 +377,9 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
     detect_conflicts(&net_rules, "net")?;
     detect_conflicts(&tool_rules, "tool")?;
 
-    // Compile sandbox policies: for each sandbox reference, compile the
-    // referenced policy's rules into a standalone rule set.
-    let mut sandbox_policies = HashMap::new();
+    // Compile named sandbox policies: for each named sandbox reference,
+    // compile the referenced policy's rules into a standalone rule set.
+    // (Inline sandbox policies were already compiled above.)
     let sandbox_names: Vec<String> = exec_rules
         .iter()
         .filter_map(|r| r.sandbox.clone())
@@ -941,6 +971,49 @@ mod tests {
             "got: {}",
             err
         );
+    }
+
+    #[test]
+    fn compile_inline_sandbox() {
+        let source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "clash" "bug" *) :sandbox (allow (net *))))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(source, &env).unwrap();
+        assert_eq!(tree.exec_rules.len(), 1);
+        // Inline sandbox should be stored under a synthetic key.
+        let sandbox_key = tree.exec_rules[0]
+            .sandbox
+            .as_ref()
+            .expect("should have sandbox key");
+        assert!(
+            sandbox_key.starts_with("__inline_sandbox_"),
+            "expected synthetic key, got: {sandbox_key}"
+        );
+        // The sandbox policy should contain one net rule.
+        let sandbox_rules = &tree.sandbox_policies[sandbox_key];
+        assert_eq!(sandbox_rules.len(), 1);
+        assert_eq!(sandbox_rules[0].effect, Effect::Allow);
+        assert!(matches!(&sandbox_rules[0].matcher, CompiledMatcher::Net(_)));
+    }
+
+    #[test]
+    fn compile_inline_sandbox_multiple_rules() {
+        let source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "cargo" *) :sandbox (allow (net *)) (allow (fs read (subpath "/tmp")))))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(source, &env).unwrap();
+        let sandbox_key = tree.exec_rules[0]
+            .sandbox
+            .as_ref()
+            .expect("should have sandbox key");
+        let sandbox_rules = &tree.sandbox_policies[sandbox_key];
+        assert_eq!(sandbox_rules.len(), 2);
     }
 
     #[test]

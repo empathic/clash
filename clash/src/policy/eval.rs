@@ -786,7 +786,35 @@ mod tests {
             &json!({"command": "cargo build"}),
             "/home/user/project",
         );
-        let sandbox = decision.sandbox.expect("net-only sandbox should be present");
+        let sandbox = decision
+            .sandbox
+            .expect("net-only sandbox should be present");
+        assert_eq!(sandbox.network, NetworkPolicy::Allow);
+        assert!(sandbox.rules.is_empty());
+    }
+
+    #[test]
+    fn inline_sandbox_produces_sandbox_policy() {
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "clash" "bug" *) :sandbox (allow (net *))))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "clash bug test"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+        let sandbox = decision
+            .sandbox
+            .expect("inline sandbox should produce SandboxPolicy");
         assert_eq!(sandbox.network, NetworkPolicy::Allow);
         assert!(sandbox.rules.is_empty());
     }
