@@ -321,6 +321,36 @@ clash policy show
 clash policy show --json
 ```
 
+### clash policy validate
+
+Validate policy files and report errors. Checks that each policy file parses and compiles successfully, reporting the policy name, default effect, and rule count on success, or detailed error messages with hints on failure.
+
+```
+clash policy validate [OPTIONS]
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--file <PATH>` | Path to a specific policy file to validate (default: all active levels) |
+| `--json` | Output as JSON |
+
+When no `--file` is given, validates all active policy levels (user, project) and reports results for each. Exits with code 0 if all files are valid, code 1 if any have errors.
+
+**Examples:**
+
+```bash
+# Validate all active policy levels
+clash policy validate
+
+# Validate a specific file
+clash policy validate --file ~/.clash/policy.sexpr
+
+# JSON output for scripting
+clash policy validate --json
+```
+
 ---
 
 ## clash sandbox

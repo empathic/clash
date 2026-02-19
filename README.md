@@ -194,6 +194,22 @@ clash explain bash "git push origin main"
 
 Or use the `/clash:explain` skill inside Claude Code for an interactive walkthrough.
 
+### All actions blocked — policy error
+
+If every tool use is being denied with a "policy failed to compile" message, your policy file has a syntax error. Clash blocks all actions when it can't compile the policy rather than silently degrading.
+
+To diagnose:
+
+```bash
+clash policy validate
+```
+
+This will show which policy file has the error and suggest how to fix it. If you want to start fresh:
+
+```bash
+clash init
+```
+
 ---
 
 ## Documentation

@@ -13,12 +13,48 @@ pub fn check_permission(
     let tree = match settings.decision_tree() {
         Some(t) => t,
         None => {
-            let reason = match settings.policy_error() {
-                Some(err) => format!("{}. All tool uses will require approval.", err),
-                None => "policy engine: no compiled policy available".into(),
+            let (reason, context) = match settings.policy_error() {
+                Some(err) => {
+                    let reason = format!(
+                        "Policy failed to compile: {}. All actions are blocked until the policy is fixed.",
+                        err
+                    );
+                    let context = "POLICY ERROR: clash cannot enforce permissions because the policy failed to compile.\n\
+                         The user's policy file has a syntax or compilation error.\n\n\
+                         Agent instructions:\n\
+                         - Tell the user their clash policy has an error and all actions are blocked\n\
+                         - Suggest running: clash policy validate\n\
+                         - Do NOT retry the tool call — it will be blocked until the policy is fixed\n\
+                         - Do NOT attempt workarounds".to_string();
+                    (reason, context)
+                }
+                None => {
+                    let reason = "No policy configured. All actions are blocked. Run `clash init` to create a policy.".to_string();
+                    let context = "POLICY ERROR: clash has no compiled policy available.\n\
+                         All actions are blocked because there is no valid policy to evaluate.\n\n\
+                         Agent instructions:\n\
+                         - Tell the user clash has no policy configured\n\
+                         - Suggest running: clash init\n\
+                         - Do NOT retry the tool call"
+                        .to_string();
+                    (reason, context)
+                }
             };
+
+            // Print distinctive error to stderr
+            eprintln!(
+                "{} {}",
+                crate::style::err_red_bold("clash policy error:"),
+                &reason
+            );
+            eprintln!(
+                "  {} {}",
+                crate::style::err_dim("To diagnose:"),
+                crate::style::err_yellow("clash policy validate")
+            );
+
             warn!("{}", reason);
-            return Ok(HookOutput::ask(Some(reason), None));
+            return Ok(HookOutput::deny(reason, Some(context)));
         }
     };
 
@@ -421,12 +457,12 @@ mod tests {
     }
 
     #[test]
-    fn test_no_compiled_policy_asks() -> Result<()> {
+    fn test_no_compiled_policy_denies() -> Result<()> {
         let settings = ClashSettings::default();
         let result = check_permission(&bash_input("ls"), &settings)?;
         assert_eq!(
             get_decision(&result),
-            Some(claude_settings::PermissionRule::Ask),
+            Some(claude_settings::PermissionRule::Deny),
         );
         Ok(())
     }

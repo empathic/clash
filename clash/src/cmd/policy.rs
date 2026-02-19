@@ -50,6 +50,7 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
             scope,
         } => handle_remove(&rule, dry_run, scope.as_deref()),
         PolicyCmd::List { json } => handle_list(json),
+        PolicyCmd::Validate { file, json } => handle_validate(file, json),
         PolicyCmd::Show { json } => handle_show(json),
     }
 }
@@ -583,4 +584,204 @@ fn handle_show(json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Handle `clash policy validate`.
+fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
+    if let Some(path) = file {
+        return validate_single_file(&path, json);
+    }
+
+    // Validate all available policy levels.
+    let levels = ClashSettings::available_policy_levels();
+    if levels.is_empty() {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"valid": false, "error": "no policy files found", "hint": "run `clash init` to create a policy"})
+            );
+        } else {
+            eprintln!("{}: no policy files found", style::err_red_bold("error"));
+            eprintln!(
+                "  {}: run {} to create a policy",
+                style::err_cyan_bold("hint"),
+                style::bold("clash init")
+            );
+        }
+        std::process::exit(1);
+    }
+
+    let mut all_valid = true;
+    let mut results: Vec<serde_json::Value> = Vec::new();
+
+    for (level, path) in &levels {
+        let source = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                all_valid = false;
+                if json {
+                    results.push(serde_json::json!({
+                        "level": level.to_string(),
+                        "path": path.display().to_string(),
+                        "valid": false,
+                        "error": format!("failed to read: {}", e),
+                    }));
+                } else {
+                    eprintln!(
+                        "{} {} {}",
+                        style::err_red_bold("✗"),
+                        style::cyan(&format!("[{}]", level)),
+                        path.display()
+                    );
+                    eprintln!("  {}", style::dim(&format!("failed to read: {}", e)));
+                }
+                continue;
+            }
+        };
+
+        match crate::policy::compile_policy(&source) {
+            Ok(tree) => {
+                let rule_count = tree.exec_rules.len()
+                    + tree.fs_rules.len()
+                    + tree.net_rules.len()
+                    + tree.tool_rules.len();
+                if json {
+                    results.push(serde_json::json!({
+                        "level": level.to_string(),
+                        "path": path.display().to_string(),
+                        "valid": true,
+                        "policy_name": tree.policy_name,
+                        "default": format!("{}", tree.default),
+                        "rule_count": rule_count,
+                    }));
+                } else {
+                    println!(
+                        "{} {} {}",
+                        style::green_bold("✓"),
+                        style::cyan(&format!("[{}]", level)),
+                        path.display()
+                    );
+                    println!(
+                        "  policy {}, default {}, {} rules",
+                        style::bold(&format!("\"{}\"", tree.policy_name)),
+                        style::effect(&tree.default.to_string()),
+                        rule_count
+                    );
+                }
+            }
+            Err(e) => {
+                all_valid = false;
+                let hint = extract_policy_hint(&e);
+                if json {
+                    let mut entry = serde_json::json!({
+                        "level": level.to_string(),
+                        "path": path.display().to_string(),
+                        "valid": false,
+                        "error": format!("{}", e),
+                    });
+                    if let Some(h) = &hint {
+                        entry["hint"] = serde_json::json!(h);
+                    }
+                    results.push(entry);
+                } else {
+                    eprintln!(
+                        "{} {} {}",
+                        style::err_red_bold("✗"),
+                        style::cyan(&format!("[{}]", level)),
+                        path.display()
+                    );
+                    eprintln!("  {}", e);
+                    if let Some(h) = hint {
+                        eprintln!("  {}: {}", style::err_cyan_bold("hint"), h);
+                    }
+                }
+            }
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "valid": all_valid,
+                "levels": results,
+            }))?
+        );
+    } else if all_valid {
+        println!("\n{}", style::green_bold("All policy files are valid."));
+    } else {
+        eprintln!("\n{}", style::err_red_bold("Policy validation failed."));
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+fn validate_single_file(path: &std::path::Path, json: bool) -> Result<()> {
+    let source = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read: {}", path.display()))?;
+
+    match crate::policy::compile_policy(&source) {
+        Ok(tree) => {
+            let rule_count = tree.exec_rules.len()
+                + tree.fs_rules.len()
+                + tree.net_rules.len()
+                + tree.tool_rules.len();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "valid": true,
+                        "path": path.display().to_string(),
+                        "policy_name": tree.policy_name,
+                        "default": format!("{}", tree.default),
+                        "rule_count": rule_count,
+                    }))?
+                );
+            } else {
+                println!("{} {}", style::green_bold("✓"), path.display());
+                println!(
+                    "  policy {}, default {}, {} rules",
+                    style::bold(&format!("\"{}\"", tree.policy_name)),
+                    style::effect(&tree.default.to_string()),
+                    rule_count
+                );
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let hint = extract_policy_hint(&e);
+            if json {
+                let mut entry = serde_json::json!({
+                    "valid": false,
+                    "path": path.display().to_string(),
+                    "error": format!("{}", e),
+                });
+                if let Some(h) = &hint {
+                    entry["hint"] = serde_json::json!(h);
+                }
+                println!("{}", serde_json::to_string_pretty(&entry)?);
+            } else {
+                eprintln!("{} {}", style::err_red_bold("✗"), path.display());
+                eprintln!("  {}", e);
+                if let Some(h) = hint {
+                    eprintln!("  {}: {}", style::err_cyan_bold("hint"), h);
+                }
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Extract a help hint from an anyhow error chain.
+fn extract_policy_hint(err: &anyhow::Error) -> Option<String> {
+    err.chain().find_map(|cause| {
+        if let Some(e) = cause.downcast_ref::<crate::policy::error::PolicyParseError>() {
+            return e.help();
+        }
+        if let Some(e) = cause.downcast_ref::<crate::policy::error::CompileError>() {
+            return e.help();
+        }
+        None
+    })
 }
