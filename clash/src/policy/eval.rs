@@ -306,6 +306,7 @@ mod tests {
 
     use crate::policy::Effect;
     use crate::policy::compile::{EnvResolver, compile_policy_with_env};
+    use crate::policy::sandbox_types::NetworkPolicy;
 
     /// Test env resolver with fixed values.
     struct TestEnv(HashMap<String, String>);
@@ -766,7 +767,7 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_no_fs_rules_returns_none() {
+    fn sandbox_net_only_allows_network() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
             r#"
@@ -785,10 +786,9 @@ mod tests {
             &json!({"command": "cargo build"}),
             "/home/user/project",
         );
-        assert!(
-            decision.sandbox.is_none(),
-            "sandbox with only net rules should be None"
-        );
+        let sandbox = decision.sandbox.expect("net-only sandbox should be present");
+        assert_eq!(sandbox.network, NetworkPolicy::Allow);
+        assert!(sandbox.rules.is_empty());
     }
 
     #[test]

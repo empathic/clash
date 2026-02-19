@@ -178,7 +178,7 @@ impl DecisionTree {
             }
         }
 
-        if sandbox_rules.is_empty() {
+        if sandbox_rules.is_empty() && network == NetworkPolicy::Deny {
             return None;
         }
 
