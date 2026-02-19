@@ -24,7 +24,7 @@ There are two ways to run clash depending on what you're doing:
 ### Install (use clash in your day-to-day work)
 
 ```bash
-cargo install --path clash
+cargo install clash
 clash init
 claude
 ```
