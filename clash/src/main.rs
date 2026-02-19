@@ -33,6 +33,12 @@ fn main() -> Result<()> {
                 dry_run,
                 scope,
             } => cmd::policy::handle_allow_deny(Effect::Ask, &rule, dry_run, scope.as_deref()),
+            Commands::Amend {
+                rules,
+                remove,
+                dry_run,
+                scope,
+            } => cmd::policy::handle_amend(rules, remove, dry_run, scope.as_deref()),
             Commands::Edit => clash::wizard::run(),
             Commands::ShowCommands { json, all } => cmd::commands::run(json, all),
             Commands::Explain { json, tool, args } => {

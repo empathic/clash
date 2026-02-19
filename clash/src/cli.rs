@@ -80,6 +80,18 @@ pub enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Transactional policy editor (pipe, interactive, or one-liner)
+    Shell {
+        /// Print resulting policy without writing to disk
+        #[arg(long)]
+        dry_run: bool,
+        /// Policy level to modify: "user", "project", or "session"
+        #[arg(long)]
+        scope: Option<String>,
+        /// Execute a single statement and exit
+        #[arg(short = 'c', long = "command")]
+        command: Option<String>,
+    },
     // --- Hidden/power-user subcommands ---
     /// Show policy summary: active policy, default effect, rule count
     #[command(hide = true)]
@@ -156,6 +168,30 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
         /// Policy level to modify: "user" or "project"
+        #[arg(long)]
+        scope: Option<String>,
+    },
+
+    /// Amend the policy: add and remove multiple rules in one atomic operation
+    ///
+    /// Each rule is either a full s-expr "(effect (matcher ...))" or a shortcut "effect:verb".
+    /// Supports mixing allow/deny/ask rules and removals in a single command.
+    ///
+    /// Deprecated: prefer `clash policy shell` for a transactional editing experience.
+    Amend {
+        /// Rules to add: "(allow (exec \"git\" *))" or "allow:bash"
+        #[arg(required_unless_present = "remove")]
+        rules: Vec<String>,
+
+        /// Rules to remove (Display form, e.g. '(allow (exec "git" *))')
+        #[arg(long, num_args = 1)]
+        remove: Vec<String>,
+
+        /// Print modified policy without writing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Policy level to modify: "user", "project", or "session"
         #[arg(long)]
         scope: Option<String>,
     },

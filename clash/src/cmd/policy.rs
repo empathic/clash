@@ -15,6 +15,11 @@ use crate::style;
 #[instrument(level = Level::TRACE)]
 pub fn run(cmd: PolicyCmd) -> Result<()> {
     match cmd {
+        PolicyCmd::Shell {
+            dry_run,
+            scope,
+            command,
+        } => run_policy_shell(dry_run, scope, command),
         PolicyCmd::Schema { json } => super::schema::run(json),
         PolicyCmd::Explain { json, tool, args } => {
             let input = if args.is_empty() {
@@ -274,6 +279,156 @@ fn friendly_confirmation(effect: Effect, verb: &str) -> Option<String> {
         )),
         _ => None,
     }
+}
+
+/// Run `clash policy shell` — transactional policy editor.
+fn run_policy_shell(dry_run: bool, scope: Option<String>, command: Option<String>) -> Result<()> {
+    use crate::shell::ShellSession;
+    use std::io::IsTerminal;
+
+    if let Some(stmt) = command {
+        // One-liner mode: -c 'add allow:bash'
+        let mut session = ShellSession::new(scope.as_deref(), dry_run, false)?;
+        session.run_command(&stmt)
+    } else if !std::io::stdin().is_terminal() {
+        // Pipe mode: read from stdin
+        let mut session = ShellSession::new(scope.as_deref(), dry_run, false)?;
+        let reader = std::io::BufReader::new(std::io::stdin().lock());
+        session.run_pipe(reader)
+    } else {
+        // Interactive REPL
+        let mut session = ShellSession::new(scope.as_deref(), dry_run, true)?;
+        session.run_interactive()
+    }
+}
+
+/// Parse an amend-style rule: either "(effect (matcher ...))" or "effect:verb".
+///
+/// Unlike `parse_cli_rule`, the effect is embedded in the rule string itself,
+/// allowing mixed effects in a single amend command.
+fn parse_amend_rule(rule_str: &str) -> Result<Vec<AstRule>> {
+    if rule_str.starts_with('(') {
+        let full = format!("(policy \"_\" {rule_str})");
+        let top_levels =
+            crate::policy::parse::parse(&full).context("failed to parse amend rule")?;
+        match top_levels.into_iter().next() {
+            Some(crate::policy::ast::TopLevel::Policy { mut body, .. }) => {
+                let rules: Vec<AstRule> = body
+                    .drain(..)
+                    .filter_map(|item| match item {
+                        crate::policy::ast::PolicyItem::Rule(r) => Some(r),
+                        _ => None,
+                    })
+                    .collect();
+                if rules.is_empty() {
+                    bail!("no rule parsed from: {rule_str}");
+                }
+                Ok(rules)
+            }
+            _ => bail!("unexpected parse result for: {rule_str}"),
+        }
+    } else if let Some((effect_str, verb)) = rule_str.split_once(':') {
+        let effect = match effect_str {
+            "allow" => Effect::Allow,
+            "deny" => Effect::Deny,
+            "ask" => Effect::Ask,
+            _ => bail!(
+                "unknown effect: {effect_str}\n\n\
+                 Supported effects: allow, deny, ask\n\
+                 Example: clash amend allow:bash deny:web"
+            ),
+        };
+        parse_cli_rule(effect, verb)
+    } else {
+        bail!(
+            "invalid amend rule: {rule_str}\n\n\
+             Expected either:\n  \
+             - Full rule: '(allow (exec \"git\" *))'\n  \
+             - Shortcut:  'allow:bash'"
+        )
+    }
+}
+
+/// Handle `clash amend` — add and remove multiple rules atomically.
+pub fn handle_amend(
+    rules: Vec<String>,
+    remove: Vec<String>,
+    dry_run: bool,
+    scope: Option<&str>,
+) -> Result<()> {
+    let level = resolve_scope(scope)?;
+
+    let (path, source) = match load_policy_source(Some(level)) {
+        Ok(ps) => ps,
+        Err(_) if level == PolicyLevel::Project || level == PolicyLevel::Session => {
+            let path = ClashSettings::policy_file_for_level(level)?;
+            (path, MINIMAL_POLICY.to_string())
+        }
+        Err(e) => return Err(e),
+    };
+
+    let policy_name = crate::policy::edit::active_policy(&source)?;
+    let mut modified = source.clone();
+    let mut added_count = 0usize;
+    let mut removed_count = 0usize;
+    let mut added_rules: Vec<String> = Vec::new();
+
+    // Apply removals first (before adds, so we can replace rules atomically).
+    for remove_str in &remove {
+        modified = crate::policy::edit::remove_rule(&modified, &policy_name, remove_str)
+            .with_context(|| format!("failed to remove rule: {remove_str}"))?;
+        removed_count += 1;
+    }
+
+    // Apply additions.
+    for rule_str in &rules {
+        let parsed_rules = parse_amend_rule(rule_str)
+            .with_context(|| format!("failed to parse rule: {rule_str}"))?;
+        for rule in &parsed_rules {
+            let before = modified.clone();
+            modified = crate::policy::edit::add_rule(&modified, &policy_name, rule)?;
+            if modified != before {
+                added_count += 1;
+                added_rules.push(rule.to_string());
+            }
+        }
+    }
+
+    if dry_run {
+        print!("{modified}");
+        return Ok(());
+    }
+
+    if modified == source {
+        println!(
+            "{} No changes needed (policy already up to date).",
+            style::dim("·")
+        );
+        return Ok(());
+    }
+
+    write_policy(&path, &modified)?;
+
+    let level_tag = style::cyan(&level.to_string());
+    if added_count > 0 {
+        for rule_str in &added_rules {
+            println!("{} Added: {rule_str}", style::green_bold("✓"));
+        }
+    }
+    if removed_count > 0 {
+        for remove_str in &remove {
+            println!("{} Removed: {remove_str}", style::red_bold("✗"));
+        }
+    }
+    println!(
+        "{} Amended {} policy ({} added, {} removed)",
+        style::shield(),
+        level_tag,
+        added_count,
+        removed_count,
+    );
+
+    Ok(())
 }
 
 /// Handle `clash policy remove`.

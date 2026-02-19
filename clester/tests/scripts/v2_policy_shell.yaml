@@ -1,0 +1,118 @@
+meta:
+  name: v2 policy shell — transactional policy editor
+  description: >
+    Test `clash policy shell` one-liner mode (-c), dry-run, and multiple
+    mutations via sequential one-liners.
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *))
+      (deny (exec "npm" *)))
+
+steps:
+  # Baseline: git allowed, npm denied, curl denied
+  - name: git is allowed (baseline)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: npm is denied (baseline)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: deny
+
+  - name: curl is denied (baseline)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: curl https://example.com
+    expect:
+      decision: deny
+
+  # Test 1: dry-run shows result without persisting
+  - name: dry-run shell add
+    command: policy shell --dry-run -c 'add (allow (exec "cargo" *))'
+    expect:
+      exit_code: 0
+      stdout_contains: '(allow (exec "cargo" *))'
+
+  - name: curl still denied after dry-run
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: cargo build
+    expect:
+      decision: deny
+
+  # Test 2: add a rule via one-liner
+  - name: shell add cargo allow
+    command: policy shell -c 'add (allow (exec "cargo" *))'
+    expect:
+      exit_code: 0
+
+  - name: cargo is now allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: cargo build
+    expect:
+      decision: allow
+
+  # Test 3: add deny rule via one-liner
+  - name: shell add git push force deny
+    command: policy shell -c 'add (deny (exec "git" "push" :has "--force"))'
+    expect:
+      exit_code: 0
+
+  - name: git push force is now denied
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git push --force
+    expect:
+      decision: deny
+
+  - name: git status still allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  # Test 4: remove rule via one-liner
+  - name: shell remove npm deny
+    command: policy shell -c 'remove (deny (exec "npm" *))'
+    expect:
+      exit_code: 0
+
+  - name: npm falls through to default deny
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: deny
+
+  # Test 5: bare verb shortcuts
+  - name: shell add via shortcut
+    command: policy shell -c 'add allow:web'
+    expect:
+      exit_code: 0
+
+  - name: web fetch now allowed
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: https://example.com
+      prompt: test
+    expect:
+      decision: allow

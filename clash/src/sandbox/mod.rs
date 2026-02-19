@@ -155,6 +155,72 @@ pub fn exec_sandboxed(
     }
 }
 
+/// Compile a sandbox policy into a platform-specific profile string.
+///
+/// On macOS, returns an SBPL profile suitable for `sandbox-exec -p`.
+/// On Linux, returns a description string (Landlock is applied in-process, not via a profile).
+/// On unsupported platforms, returns an error.
+pub fn compile_sandbox_profile(
+    policy: &SandboxPolicy,
+    cwd: &Path,
+) -> Result<String, SandboxError> {
+    let cwd_str = cwd.to_string_lossy();
+
+    #[cfg(target_os = "macos")]
+    {
+        Ok(macos::compile_to_sbpl(policy, &cwd_str))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (policy, &cwd_str);
+        Err(SandboxError::Unsupported(
+            "sandbox profile compilation not supported on Linux (Landlock is applied in-process)"
+                .into(),
+        ))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (policy, &cwd_str);
+        Err(SandboxError::Unsupported(
+            "sandbox only supported on Linux and macOS".into(),
+        ))
+    }
+}
+
+/// Spawn an interactive shell under the sandbox policy.
+///
+/// On macOS, uses `sandbox-exec -p <profile> -- /bin/bash -i`.
+/// Returns when the shell exits.
+pub fn spawn_sandboxed_shell(
+    policy: &SandboxPolicy,
+    cwd: &Path,
+) -> Result<std::process::ExitStatus, SandboxError> {
+    let profile = compile_sandbox_profile(policy, cwd)?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("sandbox-exec")
+            .args(["-p", &profile, "--", "/bin/bash", "-i"])
+            .current_dir(cwd)
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .status()
+            .map_err(SandboxError::Exec)?;
+        Ok(status)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = profile;
+        Err(SandboxError::Unsupported(
+            "interactive sandboxed shell only supported on macOS".into(),
+        ))
+    }
+}
+
 /// Check whether sandboxing is supported on the current platform.
 #[instrument(level = Level::TRACE)]
 pub fn check_support() -> SupportLevel {

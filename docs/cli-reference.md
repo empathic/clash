@@ -97,6 +97,121 @@ clash status
 
 ---
 
+## clash policy shell
+
+Transactional policy editor. Accumulates changes in memory and applies them atomically. Works as a pipe-friendly protocol (for Claude via stdin), an interactive REPL (for humans), or a one-liner (via `-c`).
+
+```
+clash policy shell [OPTIONS]
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Print resulting policy without writing to disk |
+| `--scope <LEVEL>` | Policy level to modify: `user`, `project`, or `session` |
+| `-c`, `--command <STMT>` | Execute a single statement and exit |
+
+**Command language:**
+
+| Command | Syntax | Description |
+|---------|--------|-------------|
+| `add` | `add [<policy>] <rule>` | Add a rule to current (or named) policy block |
+| `remove` | `remove [<policy>] <rule>` | Remove a rule by its Display form |
+| `create` | `create <policy>` | Create a new empty policy block |
+| `default` | `default <effect> [<policy>]` | Change the default declaration |
+| `use` | `use <policy>` | Switch current policy context |
+| `show` | `show` | Display current policy with pending changes |
+| `rules` | `rules [<policy>]` | List rules in a policy block |
+| `test` | `test <tool> <args...>` | Test if a tool invocation would be allowed/denied |
+| `diff` | `diff` | Show pending changes as a unified diff |
+| `apply` | `apply` | Write changes to disk and exit |
+| `abort` | `abort` | Discard changes and exit |
+| `help` | `help [<command>]` | Show available commands |
+
+Rules can be full s-expressions `(allow (exec "git" *))` or shortcuts `allow:bash`.
+
+**Input mode detection:**
+
+- `-c` flag: parse and execute single statement, apply, exit
+- stdin is not a TTY (pipe mode): read all lines, apply atomically at end
+- stdin is a TTY: interactive REPL with line editing, tab completion, and history
+
+**Examples:**
+
+```bash
+# One-liner: add a rule
+clash policy shell --scope project -c 'add (allow (exec "git" *))'
+
+# One-liner with shortcut
+clash policy shell --scope project -c 'add allow:bash'
+
+# Pipe mode: multiple changes atomically
+clash policy shell --scope project <<EOF
+add (allow (exec "cargo" *))
+add (deny (exec "git" "push" :has "--force"))
+remove (deny (exec "npm" *))
+EOF
+
+# Dry-run to preview
+clash policy shell --scope project --dry-run -c 'add (allow (exec "cargo" *))'
+
+# Interactive REPL
+clash policy shell --scope project
+```
+
+---
+
+## clash amend
+
+> **Deprecated:** prefer `clash policy shell` for a transactional editing experience.
+
+Amend the policy: add and remove multiple rules in one atomic operation. Unlike `clash allow` / `clash deny` which handle one rule at a time, `clash amend` supports mixed effects and combined add/remove operations.
+
+```
+clash amend [OPTIONS] [RULES]...
+```
+
+**Arguments:**
+
+| Arg | Description |
+|-----|-------------|
+| `[RULES]...` | Rules to add, each as `(effect (matcher ...))` or `effect:verb` |
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--remove <RULE>` | Remove a rule (repeatable). Rule text in Display form |
+| `--dry-run` | Print modified policy without writing to disk |
+| `--scope <LEVEL>` | Policy level to modify: `user`, `project`, or `session` |
+
+Each rule includes its effect, so you can mix allow/deny/ask in one command:
+
+**Examples:**
+
+```bash
+# Add multiple rules with mixed effects
+clash amend '(allow (exec "git" *))' '(deny (exec "git" "push" :has "--force"))' --scope project
+
+# Bare verb shortcuts (effect:verb format)
+clash amend allow:bash deny:web --scope session
+
+# Add and remove atomically
+clash amend '(allow (exec "npm" *))' --remove '(deny (exec "npm" *))' --scope project
+
+# Preview changes without applying
+clash amend --dry-run '(allow (exec "git" *))' '(deny (exec "git" "push" :has "--force"))'
+
+# Session-scoped rules (temporary, current session only)
+clash amend allow:bash allow:edit --scope session
+```
+
+Removals are applied before additions, so you can atomically replace rules. The entire operation is validated before writing — if any rule fails to parse or the resulting policy is invalid, no changes are made.
+
+---
+
 ## clash launch
 
 Launch Claude Code with clash managing hooks and sandbox enforcement.

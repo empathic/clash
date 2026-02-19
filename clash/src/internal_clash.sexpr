@@ -13,13 +13,19 @@
   ; Dry-run modifications
   (allow (exec "clash" "allow" :has "--dry-run"))
   (allow (exec "clash" "deny" :has "--dry-run"))
+  (allow (exec "clash" "amend" :has "--dry-run"))
   (allow (exec "clash" "policy" "allow" :has "--dry-run"))
   (allow (exec "clash" "policy" "deny" :has "--dry-run"))
   (allow (exec "clash" "policy" "remove" :has "--dry-run"))
 
+  ; Policy shell: dry-run is safe, regular invocations need confirmation
+  (allow (exec "clash" "policy" "shell" :has "--dry-run"))
+  (ask (exec "clash" "policy" "shell" *))
+
   ; Actual modifications require confirmation
   (ask (exec "clash" "allow" *))
   (ask (exec "clash" "deny" *))
+  (ask (exec "clash" "amend" *))
   (ask (exec "clash" "policy" "allow" *))
   (ask (exec "clash" "policy" "deny" *))
   (ask (exec "clash" "policy" "remove" *))

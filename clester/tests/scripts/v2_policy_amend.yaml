@@ -1,0 +1,112 @@
+meta:
+  name: v2 policy amend — batch rule changes
+  description: >
+    Test that `clash amend` can add multiple rules with mixed effects,
+    remove rules, dry-run, and apply atomically.
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *))
+      (deny (exec "npm" *)))
+
+steps:
+  # Baseline: git allowed, npm denied, curl denied
+  - name: git is allowed (baseline)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: npm is denied (baseline)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: deny
+
+  - name: curl is denied (baseline)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: curl https://example.com
+    expect:
+      decision: deny
+
+  # Test 1: dry-run shows result without persisting
+  - name: dry-run amend multiple rules
+    command: amend --dry-run '(allow (exec "cargo" *))' '(allow (exec "curl" *))'
+    expect:
+      exit_code: 0
+      stdout_contains: '(allow (exec "cargo" *))'
+
+  - name: curl still denied after dry-run
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: curl https://example.com
+    expect:
+      decision: deny
+
+  # Test 2: add multiple rules with mixed effects
+  - name: amend add allow cargo and deny git push force
+    command: amend '(allow (exec "cargo" *))' '(deny (exec "git" "push" :has "--force"))'
+    expect:
+      exit_code: 0
+
+  - name: cargo is now allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: cargo build
+    expect:
+      decision: allow
+
+  - name: git push force is now denied
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git push --force
+    expect:
+      decision: deny
+
+  - name: git status still allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  # Test 3: amend with --remove to replace a rule
+  - name: amend remove npm deny and add npm allow
+    command: amend '(allow (exec "npm" *))' --remove '(deny (exec "npm" *))'
+    expect:
+      exit_code: 0
+
+  - name: npm is now allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: allow
+
+  # Test 4: bare verb shortcuts
+  - name: amend with bare verb shortcut
+    command: amend allow:web
+    expect:
+      exit_code: 0
+
+  - name: web fetch now allowed
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: https://example.com
+      prompt: test
+    expect:
+      decision: allow
