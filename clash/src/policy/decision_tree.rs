@@ -234,12 +234,19 @@ impl DecisionTree {
                 for rule in rules {
                     out.push_str(&format!("\n  {}", rule.source));
                 }
-                out.push_str(")\n");
+                if rules.is_empty() {
+                    out.push_str(")\n");
+                } else {
+                    out.push_str("\n)\n");
+                }
                 included.push(origin);
             }
         }
 
         // Active policy with includes.
+        let has_content = |inc: &[&str], rules: Option<&&Vec<&CompiledRule>>| -> bool {
+            !inc.is_empty() || rules.is_some_and(|r| !r.is_empty())
+        };
         if let Some(active_rules) = groups.get(self.policy_name.as_str()) {
             out.push_str(&format!("\n(policy \"{}\"", self.policy_name));
             for inc in &included {
@@ -248,14 +255,18 @@ impl DecisionTree {
             for rule in active_rules {
                 out.push_str(&format!("\n  {}", rule.source));
             }
-            out.push_str(")\n");
+            if has_content(&included, Some(&active_rules)) {
+                out.push_str("\n)\n");
+            } else {
+                out.push_str(")\n");
+            }
         } else if !included.is_empty() {
             // Active policy has no direct rules but includes others.
             out.push_str(&format!("\n(policy \"{}\"", self.policy_name));
             for inc in &included {
                 out.push_str(&format!("\n  (include \"{}\")", inc));
             }
-            out.push_str(")\n");
+            out.push_str("\n)\n");
         }
 
         out
