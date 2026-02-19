@@ -454,6 +454,16 @@ impl ClaudeSettings {
         })
     }
 
+    /// Sets the default permission mode at the specified level.
+    ///
+    /// Common values: `"default"`, `"bypassPermissions"`, `"plan"`.
+    #[instrument(level = Level::TRACE, skip(self))]
+    pub fn set_default_permission_mode(&self, level: SettingsLevel, mode: &str) -> Result<()> {
+        self.update(level, |settings| {
+            settings.permissions.set_default_mode(mode);
+        })
+    }
+
     /// Sets sandbox enabled/disabled at the specified level.
     #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_sandbox_enabled(&self, level: SettingsLevel, enabled: bool) -> Result<()> {
@@ -808,5 +818,17 @@ mod tests {
 
         let read = manager.read(SettingsLevel::User).unwrap().unwrap();
         assert_eq!(read.bypass_permissions, Some(true));
+    }
+
+    #[test]
+    fn test_set_default_permission_mode() {
+        let (_temp, manager) = setup_test_manager();
+
+        manager
+            .set_default_permission_mode(SettingsLevel::User, "bypassPermissions")
+            .unwrap();
+
+        let read = manager.read(SettingsLevel::User).unwrap().unwrap();
+        assert_eq!(read.permissions.default_mode(), Some("bypassPermissions"));
     }
 }

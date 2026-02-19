@@ -277,7 +277,11 @@ impl<'de> Deserialize<'de> for Permission {
 ///
 /// This provides an easy-to-use API for querying and mutating permissions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct PermissionSet {
+    /// The default permission mode (e.g., "default", "bypassPermissions", "plan").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_mode: Option<String>,
     /// Permissions that are allowed without confirmation.
     #[serde(default)]
     allow: Vec<Permission>,
@@ -298,7 +302,29 @@ impl PermissionSet {
 
     #[instrument(level = Level::TRACE, skip(self))]
     pub fn is_empty(&self) -> bool {
-        self.allow.is_empty() && self.deny.is_empty() && self.ask.is_empty()
+        self.default_mode.is_none()
+            && self.allow.is_empty()
+            && self.deny.is_empty()
+            && self.ask.is_empty()
+    }
+
+    /// Sets the default permission mode (builder pattern).
+    #[instrument(level = Level::TRACE, skip(self, mode))]
+    pub fn with_default_mode(mut self, mode: impl Into<String>) -> Self {
+        self.default_mode = Some(mode.into());
+        self
+    }
+
+    /// Returns the default permission mode, if set.
+    pub fn default_mode(&self) -> Option<&str> {
+        self.default_mode.as_deref()
+    }
+
+    /// Sets the default permission mode in place.
+    #[instrument(level = Level::TRACE, skip(self, mode))]
+    pub fn set_default_mode(&mut self, mode: impl Into<String>) -> &mut Self {
+        self.default_mode = Some(mode.into());
+        self
     }
 
     /// Creates a permission set from a Permissions struct.
@@ -507,9 +533,10 @@ impl PermissionSet {
         }
     }
 
-    /// Clears all permissions.
+    /// Clears all permissions and resets the default mode.
     #[instrument(level = Level::TRACE, skip(self))]
     pub fn clear(&mut self) {
+        self.default_mode = None;
         self.allow.clear();
         self.ask.clear();
         self.deny.clear();
@@ -521,6 +548,10 @@ impl PermissionSet {
     #[instrument(level = Level::TRACE, skip(self))]
     pub fn merge(&self, other: &Self) -> Self {
         let mut this = self.clone();
+        // Higher precedence default_mode wins
+        if other.default_mode.is_some() {
+            this.default_mode = other.default_mode.clone();
+        }
         // Add other's permissions, avoiding duplicates
         for perm in &other.allow {
             if !this.allow.contains(perm) {
@@ -731,6 +762,50 @@ mod tests {
 
         assert_eq!(base.allowed().len(), 2);
         assert_eq!(base.denied().len(), 1);
+    }
+
+    #[test]
+    fn test_default_mode_builder() {
+        let set = PermissionSet::new().with_default_mode("bypassPermissions");
+        assert_eq!(set.default_mode(), Some("bypassPermissions"));
+        assert!(!set.is_empty());
+    }
+
+    #[test]
+    fn test_default_mode_serialization() {
+        let set = PermissionSet::new()
+            .with_default_mode("bypassPermissions")
+            .allow(Permission::prefix("Bash", "git"));
+        let json = serde_json::to_string(&set).unwrap();
+        assert!(json.contains("\"defaultMode\":\"bypassPermissions\""));
+
+        let parsed: PermissionSet = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.default_mode(), Some("bypassPermissions"));
+        assert_eq!(parsed.allowed().len(), 1);
+    }
+
+    #[test]
+    fn test_default_mode_deserialization() {
+        let json = r#"{"defaultMode": "bypassPermissions", "allow": ["Edit"]}"#;
+        let set: PermissionSet = serde_json::from_str(json).unwrap();
+        assert_eq!(set.default_mode(), Some("bypassPermissions"));
+        assert_eq!(set.allowed().len(), 1);
+    }
+
+    #[test]
+    fn test_default_mode_merge_precedence() {
+        let base = PermissionSet::new().with_default_mode("default");
+        let overlay = PermissionSet::new().with_default_mode("bypassPermissions");
+        let merged = base.merge(&overlay);
+        assert_eq!(merged.default_mode(), Some("bypassPermissions"));
+    }
+
+    #[test]
+    fn test_default_mode_merge_preserves_lower() {
+        let base = PermissionSet::new().with_default_mode("bypassPermissions");
+        let overlay = PermissionSet::new(); // no default_mode
+        let merged = base.merge(&overlay);
+        assert_eq!(merged.default_mode(), Some("bypassPermissions"));
     }
 
     #[test]
