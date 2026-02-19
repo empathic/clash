@@ -20,37 +20,42 @@ All commands accept:
 Initialize a new clash policy with a safe default configuration.
 
 ```
-clash init [OPTIONS]
+clash init [SCOPE] [OPTIONS]
 ```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `SCOPE` | Scope to initialize: `user` (global) or `project` (this repo). When omitted, an interactive prompt lets you choose. |
 
 **Options:**
 
 | Flag | Description |
 |------|-------------|
-| `--no-bypass` | Skip setting `bypassPermissions` in Claude Code settings |
-| `--project` | Initialize a project-level policy instead of user-level |
+| `--no-bypass` | Skip setting `bypassPermissions` in Claude Code settings (user scope only) |
 
 **What it does:**
 
-1. Creates `~/.clash/policy.sexpr` with a safe default policy (or reconfigures an existing one)
-2. Installs the clash plugin from the GitHub marketplace
-3. Sets `bypassPermissions: true` in Claude Code settings so clash is the sole permission handler
-4. Drops into the policy shell so you can customize your policy immediately
+- **`clash init user`** — Creates `~/.clash/policy.sexpr` with a safe default policy, installs the Claude Code plugin, sets `bypassPermissions`, and drops into the policy shell.
+- **`clash init project`** — Creates `.clash/policy.sexpr` in the current repository root with a minimal deny-all policy.
+
+Only one scope is initialized per invocation. When no scope is given, clash explains both options and asks you to choose.
 
 **Examples:**
 
 ```bash
-# First-time setup
+# Interactive — prompts you to choose user or project scope
 clash init
 
-# Re-run to reconfigure (interactive prompt)
-clash init
+# Set up your global (user-level) policy
+clash init user
 
-# Initialize without touching Claude Code settings
-clash init --no-bypass
+# Create a repo-specific policy
+clash init project
 
-# Initialize a project-level policy
-clash init --project
+# User-level init without touching Claude Code settings
+clash init user --no-bypass
 ```
 
 ---
