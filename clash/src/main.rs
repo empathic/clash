@@ -16,7 +16,7 @@ fn main() -> Result<()> {
 
     debug_span!("main", cmd = ?cli.command).in_scope(|| {
         let resp = match cli.command {
-            Commands::Init { no_bypass, project } => cmd::init::run(no_bypass, project),
+            Commands::Init { no_bypass, scope } => cmd::init::run(no_bypass, scope),
             Commands::Status { json } => cmd::status::run(json),
             Commands::Allow {
                 rule,
