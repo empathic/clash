@@ -28,12 +28,14 @@ clash init [OPTIONS]
 | Flag | Description |
 |------|-------------|
 | `--no-bypass` | Skip setting `bypassPermissions` in Claude Code settings |
+| `--project` | Initialize a project-level policy instead of user-level |
 
 **What it does:**
 
 1. Creates `~/.clash/policy.sexpr` with a safe default policy (or reconfigures an existing one)
-2. Sets `bypassPermissions: true` in Claude Code settings so clash is the sole permission handler
-3. Offers an interactive wizard to configure capabilities
+2. Installs the clash plugin from the GitHub marketplace
+3. Sets `bypassPermissions: true` in Claude Code settings so clash is the sole permission handler
+4. Drops into the policy shell so you can customize your policy immediately
 
 **Examples:**
 
@@ -46,19 +48,22 @@ clash init
 
 # Initialize without touching Claude Code settings
 clash init --no-bypass
+
+# Initialize a project-level policy
+clash init --project
 ```
 
 ---
 
 ## clash edit
 
-Interactive policy editor. Walks through building a policy rule by rule using a decision-tree interface.
+Interactive policy editor. Opens the policy shell for transactional editing with tab completion, inline help, and rule testing.
 
 ```
 clash edit
 ```
 
-Opens an interactive wizard that lets you add and remove rules from your policy. Each step presents only valid options. Press Escape to go back at any point.
+Equivalent to `clash policy shell` — opens an interactive REPL where you can add, remove, and test rules. Type `help` for available commands, and `apply` to save changes.
 
 **Examples:**
 

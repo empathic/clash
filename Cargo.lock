@@ -393,7 +393,7 @@ checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
 name = "clash"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -405,6 +405,7 @@ dependencies = [
  "dialoguer",
  "dirs",
  "figment",
+ "hotln",
  "landlock",
  "lexpr",
  "libc",
@@ -432,7 +433,7 @@ dependencies = [
 
 [[package]]
 name = "clash_notify"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "mac-notification-sys",
  "notify-rust",
@@ -441,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "claude_settings"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -457,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "clester"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -941,6 +942,18 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hotln"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f641ff18588c6cb6f6c7a35f612d9c9fd119d0028ed333d7b61947f279a5b8f"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+ "ureq",
+]
 
 [[package]]
 name = "http"
