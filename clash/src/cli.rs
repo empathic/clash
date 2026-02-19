@@ -4,6 +4,7 @@ use crate::sandbox_cmd::SandboxCmd;
 
 #[derive(Parser, Debug)]
 #[command(name = "clash")]
+#[command(version)]
 #[command(about = "Command line agent safety harness")]
 pub struct Cli {
     #[arg(short, long, global = true)]
@@ -245,6 +246,21 @@ pub enum Commands {
         /// The command, file path, or noun to check (remaining args joined)
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
+    },
+
+    /// Update clash to the latest release (or a specific version)
+    Update {
+        /// Only check for updates, don't install
+        #[arg(long)]
+        check: bool,
+
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+
+        /// Update to a specific version (e.g., 0.4.0)
+        #[arg(long)]
+        version: Option<String>,
     },
 
     /// File a bug report to the clash issue tracker

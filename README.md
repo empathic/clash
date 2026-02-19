@@ -147,6 +147,8 @@ clash allow web                              # allow web access
 clash deny '(exec "rm" *)'                   # deny rm commands
 clash ask bash                               # require approval for bash commands
 clash status                                 # see all layers, rules, and shadowing
+clash update                                 # update clash to the latest release
+clash update --check                         # check for updates without installing
 clash explain bash "git push"                # see which rule matches a command
 clash policy list                            # list all rules with level tags
 clash policy remove '(deny (exec "rm" *))'   # remove a rule
@@ -226,6 +228,7 @@ just uninstall   # remove installed plugin and binary
 just check       # fmt + test + clippy
 just clester     # end-to-end tests (YAML-based hook simulation)
 just ci          # full CI (check + clester)
+just release 0.4.0  # bump versions, commit, tag (push to trigger release)
 ```
 
 ### Project Structure

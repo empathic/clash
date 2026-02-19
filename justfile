@@ -67,6 +67,55 @@ clash *ARGS:
 fix:
     cargo fix --allow-dirty
 
+# Bump all crate versions, commit, tag, and push to trigger a release.
+# Usage: just release 0.4.0
+release version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    new="{{version}}"
+
+    # Validate semver format
+    if ! [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "error: version must be semver (e.g., 0.4.0), got: $new" >&2
+        exit 1
+    fi
+
+    # Detect current version from clash/Cargo.toml
+    old=$(grep '^version' clash/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    if [ "$old" = "$new" ]; then
+        echo "error: version $new is already the current version" >&2
+        exit 1
+    fi
+
+    echo "Bumping $old → $new"
+
+    # Update all Cargo.toml files (perl -pi works on both macOS and Linux)
+    for f in clash/Cargo.toml clash_notify/Cargo.toml claude_settings/Cargo.toml clester/Cargo.toml; do
+        perl -pi -e "s/^version = \"$old\"/version = \"$new\"/" "$f"
+        echo "  updated $f"
+    done
+
+    # Update workspace dependency versions
+    perl -pi -e "s/version = \"$old\"/version = \"$new\"/g" Cargo.toml
+    echo "  updated Cargo.toml (workspace deps)"
+
+    # Regenerate lockfile
+    cargo check --quiet 2>/dev/null
+    echo "  updated Cargo.lock"
+
+    # Commit and tag
+    git add -A '*.toml' Cargo.lock
+    git commit -m "chore: bump package versions to v$new"
+    git tag "v$new"
+
+    echo ""
+    echo "Created commit and tag v$new."
+    echo "To trigger the release, push the tag:"
+    echo ""
+    echo "  git push origin main --follow-tags"
+    echo ""
+
 # Launch a Claude session for a Linear issue in a new tmux window.
 # Usage: just work EMP-123
 #        just work https://linear.app/empathic/issue/EMP-123/title-slug
