@@ -1,9 +1,12 @@
 use anyhow::{Context, Result};
 use dialoguer::Confirm;
-use tracing::{Level, instrument, warn};
+use tracing::{Level, info, instrument, warn};
 
 use crate::settings::{ClashSettings, DEFAULT_POLICY};
 use crate::style;
+
+/// GitHub repository used to install the clash plugin marketplace.
+const GITHUB_MARKETPLACE: &str = "empathic/clash";
 
 /// Initialize or reconfigure a clash policy.
 ///
@@ -65,14 +68,44 @@ pub fn run(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
     std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
     std::fs::write(&sexpr_path, DEFAULT_POLICY)?;
 
-    // TODO: detect whether the clash plugin is installed so this prompt can be more helpful
-    if !no_bypass.unwrap_or_else(||dialoguer::Confirm::new().with_prompt("Use clash as your default permissions provider in claude? (This will set bypassPermissions in your claude settings, which is only safe if you have the clash plugin installed)").interact().unwrap_or(true))
-        && let Err(e) = set_bypass_permissions()
-    {
-        warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
+    // Install the Claude Code plugin from GitHub.
+    let plugin_installed = match install_plugin() {
+        Ok(()) => true,
+        Err(e) => {
+            warn!(error = %e, "Could not install clash plugin");
+            eprintln!(
+                "{} Could not install the clash plugin: {e}\n  \
+                 You can install it manually later:\n    \
+                 claude plugin marketplace add {GITHUB_MARKETPLACE}\n    \
+                 claude plugin install clash",
+                style::yellow("!"),
+            );
+            false
+        }
+    };
+
+    if plugin_installed {
+        // Plugin is installed, so bypassPermissions is safe.
+        if !no_bypass.unwrap_or_else(|| {
+            dialoguer::Confirm::new()
+                .with_prompt(
+                    "Use clash as your default permissions provider in Claude Code? \
+                     (This sets bypassPermissions so clash handles all permission decisions)",
+                )
+                .interact()
+                .unwrap_or(true)
+        }) && let Err(e) = set_bypass_permissions()
+        {
+            warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
+            eprintln!(
+                "warning: could not configure Claude Code to use clash as sole permission handler.\n\
+                 You may see double prompts. Run with --dangerously-skip-permissions to avoid this."
+            );
+        }
+    } else {
         eprintln!(
-            "warning: could not configure Claude Code to use clash as sole permission handler.\n\
-             You may see double prompts. Run with --dangerously-skip-permissions to avoid this."
+            "{} Skipping bypassPermissions — the clash plugin must be installed first.",
+            style::dim("·"),
         );
     }
 
@@ -195,6 +228,54 @@ fn set_bypass_permissions() -> Result<()> {
     println!(
         "{} Configured Claude Code to use clash as the sole permission handler.",
         style::green_bold("✓")
+    );
+    Ok(())
+}
+
+/// Install the clash plugin into Claude Code from the GitHub marketplace.
+///
+/// Registers the `empathic/clash` GitHub repo as a marketplace, then installs
+/// the `clash` plugin from it. Idempotent — safe to run if already installed.
+fn install_plugin() -> Result<()> {
+    println!(
+        "{} Installing clash plugin from {}...",
+        style::cyan("~"),
+        GITHUB_MARKETPLACE,
+    );
+
+    // Register the marketplace.
+    let add_output = std::process::Command::new("claude")
+        .args(["plugin", "marketplace", "add", GITHUB_MARKETPLACE])
+        .output()
+        .context("failed to run `claude plugin marketplace add` — is claude on PATH?")?;
+
+    if !add_output.status.success() {
+        let stderr = String::from_utf8_lossy(&add_output.stderr);
+        // "already exists" is fine — marketplace was previously registered.
+        if !stderr.contains("already") {
+            anyhow::bail!("claude plugin marketplace add failed: {stderr}");
+        }
+        info!("marketplace already registered, continuing");
+    }
+
+    // Install the plugin.
+    let install_output = std::process::Command::new("claude")
+        .args(["plugin", "install", "clash"])
+        .output()
+        .context("failed to run `claude plugin install`")?;
+
+    if !install_output.status.success() {
+        let stderr = String::from_utf8_lossy(&install_output.stderr);
+        // "already installed" is fine.
+        if !stderr.contains("already") {
+            anyhow::bail!("claude plugin install failed: {stderr}");
+        }
+        info!("plugin already installed");
+    }
+
+    println!(
+        "{} Clash plugin installed in Claude Code.",
+        style::green_bold("✓"),
     );
     Ok(())
 }

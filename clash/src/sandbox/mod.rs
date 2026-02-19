@@ -160,10 +160,7 @@ pub fn exec_sandboxed(
 /// On macOS, returns an SBPL profile suitable for `sandbox-exec -p`.
 /// On Linux, returns a description string (Landlock is applied in-process, not via a profile).
 /// On unsupported platforms, returns an error.
-pub fn compile_sandbox_profile(
-    policy: &SandboxPolicy,
-    cwd: &Path,
-) -> Result<String, SandboxError> {
+pub fn compile_sandbox_profile(policy: &SandboxPolicy, cwd: &Path) -> Result<String, SandboxError> {
     let cwd_str = cwd.to_string_lossy();
 
     #[cfg(target_os = "macos")]
