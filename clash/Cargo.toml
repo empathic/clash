@@ -1,6 +1,6 @@
 [package]
 name = "clash"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Command Line Agent Safety Harness — permission policies for Claude Code"
 license.workspace = true
@@ -29,6 +29,7 @@ lexpr = { workspace = true }
 
 libc = { workspace = true }
 uuid = { workspace = true }
+hotln = { workspace = true }
 ureq = { workspace = true }
 base64 = { workspace = true }
 console = { workspace = true }

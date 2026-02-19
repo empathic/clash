@@ -14,7 +14,6 @@
 //! - [`sandbox`] — Platform-specific (Linux/macOS) sandbox enforcement backends.
 //! - [`audit`] — Structured audit logging of policy decisions.
 //! - [`notifications`] — Desktop notifications and Zulip integration.
-//! - [`linear`] — Linear API client for filing bug reports.
 //!
 //! # Example
 //!
@@ -35,7 +34,6 @@ pub mod cmd;
 pub mod errors;
 pub mod handlers;
 pub mod hooks;
-pub mod linear;
 pub mod network_hints;
 pub mod notifications;
 pub mod permissions;

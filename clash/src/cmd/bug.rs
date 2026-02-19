@@ -1,10 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tracing::{Level, instrument};
 
 use crate::settings::ClashSettings;
 use crate::style;
 
-/// File a bug report to Linear if the key was supplied at compile time
+/// File a bug report to Linear.
 #[instrument(level = Level::TRACE)]
 pub fn run(
     title: String,
@@ -12,56 +12,73 @@ pub fn run(
     include_config: bool,
     include_logs: bool,
 ) -> Result<()> {
-    use crate::linear;
+    // Build the description by combining user text with optional config/logs.
+    let mut desc_parts: Vec<String> = Vec::new();
 
-    if !linear::api_key_available() {
-        anyhow::bail!(
-            "Bug reporting is not configured in this build.\n\
-             Rebuild with CLASH_LINEAR_API_KEY set to enable it."
-        );
+    if let Some(ref d) = description {
+        desc_parts.push(d.clone());
     }
-
-    let mut attachments = Vec::new();
 
     if include_config {
         match ClashSettings::policy_file().and_then(|p| {
             std::fs::read_to_string(&p).with_context(|| format!("failed to read {}", p.display()))
         }) {
-            Ok(contents) => attachments.push(linear::Attachment {
-                filename: "policy.sexpr".into(),
-                content_type: "text/plain".into(),
-                title: "Policy Config".into(),
-                body: contents.into_bytes(),
-            }),
+            Ok(contents) => {
+                desc_parts.push(format!("### Policy Config\n\n```\n{}\n```", contents));
+            }
             Err(e) => eprintln!("Warning: could not read config: {}", e),
         }
     }
 
     if include_logs {
         match read_recent_logs(100) {
-            Ok(contents) => attachments.push(linear::Attachment {
-                filename: "clash.log".into(),
-                content_type: "text/plain".into(),
-                title: "Debug Logs".into(),
-                body: contents.into_bytes(),
-            }),
+            Ok(contents) => {
+                desc_parts.push(format!("### Debug Logs\n\n```\n{}\n```", contents));
+            }
             Err(e) => eprintln!("Warning: could not read logs: {}", e),
         }
     }
 
-    let report = linear::BugReport {
-        title,
-        description,
-        attachments,
+    let full_description = if desc_parts.is_empty() {
+        None
+    } else {
+        Some(desc_parts.join("\n\n"))
     };
 
-    let issue = linear::create_issue(&report).context("failed to file bug report")?;
-    println!(
-        "{} Filed bug {}: {}",
-        style::green_bold("✓"),
-        style::bold(&issue.identifier),
-        issue.url
-    );
+    let system_info = [
+        ("OS", std::env::consts::OS),
+        ("Arch", std::env::consts::ARCH),
+        ("Version", env!("CARGO_PKG_VERSION")),
+    ];
+
+    let url = if let Some(api_key) = option_env!("CLASH_HOTLINE_LINEAR_KEY") {
+        let Some(team_id) = option_env!("CLASH_HOTLINE_LINEAR_TEAM") else {
+            bail!("CLASH_HOTLINE_LINEAR_KEY is set but CLASH_HOTLINE_LINEAR_TEAM is missing");
+        };
+        let Some(project_id) = option_env!("CLASH_HOTLINE_LINEAR_PROJECT") else {
+            bail!("CLASH_HOTLINE_LINEAR_KEY is set but CLASH_HOTLINE_LINEAR_PROJECT is missing");
+        };
+        hotln::direct(api_key, team_id, project_id)
+            .create_issue(&title, full_description.as_deref(), &system_info)
+            .context("failed to file bug report")?
+    } else {
+        let Some(hotline_url) = option_env!("CLASH_HOTLINE_PROXY_URL") else {
+            bail!(
+                "Bug reporting is not configured in this build.\n\
+                 Set CLASH_HOTLINE_LINEAR_KEY or CLASH_HOTLINE_PROXY_URL to enable it."
+            );
+        };
+        let Some(hotline_token) = option_env!("CLASH_HOTLINE_PROXY_TOKEN") else {
+            bail!("CLASH_HOTLINE_PROXY_URL is set but CLASH_HOTLINE_PROXY_TOKEN is missing");
+        };
+        hotln::proxy(hotline_url)
+            .with_token(hotline_token)
+            .create_issue(&title, full_description.as_deref(), &system_info)
+            .context("failed to file bug report")?
+    };
+
+    println!("{} Filed bug: {}", style::green_bold("✓"), url);
+
     Ok(())
 }
 
