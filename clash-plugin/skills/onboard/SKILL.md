@@ -14,8 +14,8 @@ description: Interactively create your clash policy
 1. **Check current state.** Run `clash policy list 2>&1` to see if rules exist.
 
 2. **If no rules exist** (fresh install or empty policy):
-   - Tell the user: "You don't have any policy rules yet. The easiest way to set up clash is the interactive wizard."
-   - Instruct them to run `clash edit` in their terminal (NOT inside this chat — the wizard uses interactive terminal prompts).
+   - Tell the user: "You don't have any policy rules yet. The easiest way to set up clash is the interactive policy editor."
+   - Instruct them to run `clash edit` in their terminal (NOT inside this chat — the editor uses interactive terminal prompts with tab completion).
    - If they can't run it right now, mention they can also use `/clash:edit` to add rules one at a time.
 
 3. **If rules already exist:**
@@ -28,4 +28,4 @@ description: Interactively create your clash policy
 
 ## Important
 
-Do NOT ask configuration questions yourself. The CLI wizard (`clash edit`) handles interactive configuration deterministically in the terminal. This skill is a thin wrapper that checks state and directs the user to the right tool.
+Do NOT ask configuration questions yourself. The CLI policy editor (`clash edit`) handles interactive configuration in the terminal with tab completion, inline help, and rule testing. This skill is a thin wrapper that checks state and directs the user to the right tool.
