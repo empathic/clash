@@ -169,7 +169,11 @@ impl fmt::Display for TopLevel {
                 for item in body {
                     write!(f, "\n  {item}")?;
                 }
-                write!(f, ")")
+                if body.is_empty() {
+                    write!(f, ")")
+                } else {
+                    write!(f, "\n)")
+                }
             }
         }
     }

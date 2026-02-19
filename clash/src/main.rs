@@ -16,7 +16,7 @@ fn main() -> Result<()> {
 
     debug_span!("main", cmd = ?cli.command).in_scope(|| {
         let resp = match cli.command {
-            Commands::Init { no_bypass, project } => cmd::init::run(no_bypass, project),
+            Commands::Init { no_bypass, scope } => cmd::init::run(no_bypass, scope),
             Commands::Status { json } => cmd::status::run(json),
             Commands::Allow {
                 rule,
@@ -39,7 +39,8 @@ fn main() -> Result<()> {
                 dry_run,
                 scope,
             } => cmd::policy::handle_amend(rules, remove, dry_run, scope.as_deref()),
-            Commands::Edit => clash::wizard::run(),
+            Commands::Edit => clash::shell::ShellSession::new(None, false, true)
+                .and_then(|mut s| s.run_interactive()),
             Commands::ShowCommands { json, all } => cmd::commands::run(json, all),
             Commands::Explain { json, tool, args } => {
                 let input = if args.is_empty() {

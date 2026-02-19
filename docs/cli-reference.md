@@ -21,45 +21,55 @@ All commands accept:
 Initialize a new clash policy with a safe default configuration.
 
 ```
-clash init [OPTIONS]
+clash init [SCOPE] [OPTIONS]
 ```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `SCOPE` | Scope to initialize: `user` (global) or `project` (this repo). When omitted, an interactive prompt lets you choose. |
 
 **Options:**
 
 | Flag | Description |
 |------|-------------|
-| `--no-bypass` | Skip setting `bypassPermissions` in Claude Code settings |
+| `--no-bypass` | Skip setting `bypassPermissions` in Claude Code settings (user scope only) |
 
 **What it does:**
 
-1. Creates `~/.clash/policy.sexpr` with a safe default policy (or reconfigures an existing one)
-2. Sets `bypassPermissions: true` in Claude Code settings so clash is the sole permission handler
-3. Offers an interactive wizard to configure capabilities
+- **`clash init user`** — Creates `~/.clash/policy.sexpr` with a safe default policy, installs the Claude Code plugin, sets `bypassPermissions`, and drops into the policy shell.
+- **`clash init project`** — Creates `.clash/policy.sexpr` in the current repository root with a minimal deny-all policy.
+
+Only one scope is initialized per invocation. When no scope is given, clash explains both options and asks you to choose.
 
 **Examples:**
 
 ```bash
-# First-time setup
+# Interactive — prompts you to choose user or project scope
 clash init
 
-# Re-run to reconfigure (interactive prompt)
-clash init
+# Set up your global (user-level) policy
+clash init user
 
-# Initialize without touching Claude Code settings
-clash init --no-bypass
+# Create a repo-specific policy
+clash init project
+
+# User-level init without touching Claude Code settings
+clash init user --no-bypass
 ```
 
 ---
 
 ## clash edit
 
-Interactive policy editor. Walks through building a policy rule by rule using a decision-tree interface.
+Interactive policy editor. Opens the policy shell for transactional editing with tab completion, inline help, and rule testing.
 
 ```
 clash edit
 ```
 
-Opens an interactive wizard that lets you add and remove rules from your policy. Each step presents only valid options. Press Escape to go back at any point.
+Equivalent to `clash policy shell` — opens an interactive REPL where you can add, remove, and test rules. Type `help` for available commands, and `apply` to save changes.
 
 **Examples:**
 
@@ -315,6 +325,36 @@ clash policy show [OPTIONS]
 ```bash
 clash policy show
 clash policy show --json
+```
+
+### clash policy validate
+
+Validate policy files and report errors. Checks that each policy file parses and compiles successfully, reporting the policy name, default effect, and rule count on success, or detailed error messages with hints on failure.
+
+```
+clash policy validate [OPTIONS]
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--file <PATH>` | Path to a specific policy file to validate (default: all active levels) |
+| `--json` | Output as JSON |
+
+When no `--file` is given, validates all active policy levels (user, project) and reports results for each. Exits with code 0 if all files are valid, code 1 if any have errors.
+
+**Examples:**
+
+```bash
+# Validate all active policy levels
+clash policy validate
+
+# Validate a specific file
+clash policy validate --file ~/.clash/policy.sexpr
+
+# JSON output for scripting
+clash policy validate --json
 ```
 
 ---

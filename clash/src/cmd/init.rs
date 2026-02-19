@@ -3,28 +3,76 @@ use dialoguer::Confirm;
 use tracing::{Level, info, instrument, warn};
 
 use crate::settings::{ClashSettings, DEFAULT_POLICY};
+use crate::shell::ShellSession;
 use crate::style;
 
 /// GitHub repository used to install the clash plugin marketplace.
 const GITHUB_MARKETPLACE: &str = "empathic/clash";
 
-/// Initialize or reconfigure a clash policy.
+/// Initialize clash at the chosen scope.
 ///
-/// - If a sexp policy already exists, drop into the interactive wizard.
-/// - If only a legacy YAML policy exists, convert it via `claude -p` then
-///   drop into the wizard.
-/// - Otherwise, write the default policy and launch the wizard.
+/// When `scope` is provided ("user" or "project"), initializes that scope
+/// directly. When omitted, an interactive prompt asks the user to choose.
+/// Only one scope is initialized per invocation.
 #[instrument(level = Level::TRACE)]
-pub fn run(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
-    if project.unwrap_or_else(|| {
-        dialoguer::Confirm::new()
-            .with_prompt("Init clash for the current project?")
-            .interact()
-            .unwrap_or(false)
-    }) {
-        run_init_project()?;
-    }
+pub fn run(no_bypass: Option<bool>, scope: Option<String>) -> Result<()> {
+    let scope = match scope.as_deref() {
+        Some("user") => "user",
+        Some("project") => "project",
+        Some(other) => {
+            anyhow::bail!("unknown scope: \"{other}\" (expected \"user\" or \"project\")")
+        }
+        None => prompt_scope()?,
+    };
 
+    match scope {
+        "user" => run_init_user(no_bypass),
+        "project" => run_init_project(),
+        _ => unreachable!(),
+    }
+}
+
+/// Interactively ask which scope to initialize.
+///
+/// Presents a clear description of each option so new users understand the
+/// difference between user-level and project-level policies.
+fn prompt_scope() -> Result<&'static str> {
+    let items = &[
+        format!(
+            "{}  {} {}",
+            style::bold("User"),
+            style::dim("(global)"),
+            style::dim("— default policy for all your projects (~/.clash/)"),
+        ),
+        format!(
+            "{}  {} {}",
+            style::bold("Project"),
+            style::dim("(this repo)"),
+            style::dim("— policy scoped to the current repository (.clash/)"),
+        ),
+    ];
+
+    let sel = dialoguer::Select::new()
+        .with_prompt("Initialize clash at which scope?")
+        .items(items)
+        .default(0)
+        .interact()
+        .context("failed to read scope selection (hint: pass 'user' or 'project' as an argument in non-interactive mode)")?;
+
+    match sel {
+        0 => Ok("user"),
+        1 => Ok("project"),
+        _ => unreachable!(),
+    }
+}
+
+/// Initialize or reconfigure the user-level policy at `~/.clash/policy.sexpr`.
+///
+/// - If a sexp policy already exists, offers to reconfigure via the wizard.
+/// - If only a legacy YAML policy exists, migrates it via `claude -p`.
+/// - Otherwise, writes the default policy, installs the plugin, configures
+///   bypassPermissions, and launches the wizard.
+fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     let sexpr_path = ClashSettings::policy_file()?;
 
     if sexpr_path.exists() && sexpr_path.is_dir() {
@@ -34,12 +82,12 @@ pub fn run(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
                 sexpr_path.to_string_lossy(),
             ))
             .interact()
-            .context("confirm removeal of dir at sexpr path")?
+            .context("confirm removal of dir at sexpr path")?
         {
             std::fs::remove_dir_all(&sexpr_path)?;
         } else {
             anyhow::bail!(
-                "{} is a directory. Remove it first, then run `clash init`.",
+                "{} is a directory. Remove it first, then run `clash init user`.",
                 sexpr_path.display()
             );
         }
@@ -58,10 +106,19 @@ pub fn run(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
     }
 
     let yaml_path = ClashSettings::legacy_policy_file()?;
-    if yaml_path.exists() && yaml_path.is_file() && Confirm::new().with_prompt("An existing policy.yaml file was found at {}. Should we attempt to migrate your settings?").default(false).interact().unwrap_or(false){
-        // Legacy YAML policy found — attempt migration, then launch wizard.
+    if yaml_path.exists()
+        && yaml_path.is_file()
+        && Confirm::new()
+            .with_prompt(
+                "An existing policy.yaml was found. Should we attempt to migrate your settings?",
+            )
+            .default(false)
+            .interact()
+            .unwrap_or(false)
+    {
         migrate_yaml_policy(&yaml_path, &sexpr_path)?;
-        return crate::wizard::run();
+        let mut session = ShellSession::new(None, false, true)?;
+        return session.run_interactive();
     }
 
     // Fresh install — write default policy.
@@ -115,8 +172,9 @@ pub fn run(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
         sexpr_path.display()
     );
 
-    // Launch the wizard so the user can customize immediately.
-    crate::wizard::run()
+    // Launch the policy shell so the user can customize immediately.
+    let mut session = ShellSession::new(None, false, true)?;
+    session.run_interactive()
 }
 
 /// Initialize a project-level policy in the project root's `.clash/` directory.
@@ -148,6 +206,11 @@ fn run_init_project() -> Result<()> {
         style::green_bold("✓"),
         policy_path.display()
     );
+    println!(
+        "\n{}",
+        style::dim("Add rules with: clash policy allow --scope project <rule>"),
+    );
+    println!("{}", style::dim("View status with: clash status"),);
     Ok(())
 }
 

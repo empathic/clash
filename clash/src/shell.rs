@@ -247,6 +247,10 @@ impl ShellSession {
             Err(e) => return Err(e),
         };
 
+        // Normalize through parse→serialize so original and edited sources share
+        // the same baseline formatting, producing clean diffs.
+        let source = edit::normalize(&source)?;
+
         let current_policy = edit::active_policy(&source)?;
 
         Ok(ShellSession {
@@ -657,20 +661,32 @@ impl ShellSession {
         Ok(ShellOutput::Message(output))
     }
 
-    /// Raw unified-diff string between original and current source.
+    /// Diff fragments between original and current source.
+    ///
+    /// Uses `grouped_ops` with a context radius of 3 so only hunks around
+    /// actual changes are shown, not the entire file.
     fn diff_string(&self) -> String {
         let diff = similar::TextDiff::from_lines(&self.original_source, &self.source);
         let mut output = String::new();
-        for change in diff.iter_all_changes() {
-            let sign = match change.tag() {
-                similar::ChangeTag::Delete => "-",
-                similar::ChangeTag::Insert => "+",
-                similar::ChangeTag::Equal => " ",
-            };
-            output.push_str(sign);
-            output.push_str(change.value());
-            if !change.value().ends_with('\n') {
-                output.push('\n');
+        let groups = diff.grouped_ops(3);
+
+        for (idx, group) in groups.iter().enumerate() {
+            if idx > 0 {
+                output.push_str("...\n");
+            }
+            for op in group {
+                for change in diff.iter_changes(op) {
+                    let sign = match change.tag() {
+                        similar::ChangeTag::Delete => "-",
+                        similar::ChangeTag::Insert => "+",
+                        similar::ChangeTag::Equal => " ",
+                    };
+                    output.push_str(sign);
+                    output.push_str(change.value());
+                    if !change.value().ends_with('\n') {
+                        output.push('\n');
+                    }
+                }
             }
         }
         output
@@ -684,6 +700,8 @@ impl ShellSession {
                     format!("{}\n", style::green(line))
                 } else if line.starts_with('-') {
                     format!("{}\n", style::red(line))
+                } else if line == "..." {
+                    format!("{}\n", style::dim(line))
                 } else {
                     format!("{line}\n")
                 }

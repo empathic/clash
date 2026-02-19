@@ -1,7 +1,7 @@
 meta:
-  name: v2 multi-level policy — init --project
+  name: v2 multi-level policy — init project
   description: >
-    Test that `clash init --project` creates a project-level policy
+    Test that `clash init project` creates a project-level policy
     and that it can be used alongside a user-level policy.
 
 clash:
@@ -31,19 +31,19 @@ steps:
 
   # Initialize project-level policy
   - name: init project policy
-    command: init --project
+    command: init project
     expect:
       exit_code: 0
       stdout_contains: "Project policy initialized"
 
-  # Running init --project again is idempotent
+  # Running init project again is idempotent
   - name: init project policy again (idempotent)
-    command: init --project
+    command: init project
     expect:
       exit_code: 0
       stdout_contains: "already exists"
 
-  # After init --project, status should show policy layers
+  # After init project, status should show policy layers
   - name: status shows two policy layers
     command: status
     expect:

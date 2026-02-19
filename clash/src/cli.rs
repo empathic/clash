@@ -81,6 +81,15 @@ pub enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Validate policy files and report errors
+    Validate {
+        /// Path to a specific policy file to validate (default: all active levels)
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Transactional policy editor (pipe, interactive, or one-liner)
     Shell {
         /// Print resulting policy without writing to disk
@@ -124,13 +133,16 @@ pub enum PolicyCmd {
 #[allow(clippy::enum_variant_names)]
 pub enum Commands {
     /// Initialize a new clash policy with a safe default configuration
+    ///
+    /// Pass "user" to create a global policy (~/.clash/policy.sexpr) or
+    /// "project" to create a repo-scoped policy (.clash/policy.sexpr).
+    /// When no scope is given, an interactive prompt lets you choose.
     Init {
         /// Skip setting bypassPermissions in Claude Code settings
         #[arg(long, default_missing_value = "true", num_args = 0..=1)]
         no_bypass: Option<bool>,
-        /// Initialize a project-level policy instead of user-level
-        #[arg(long, default_missing_value = "true", num_args = 0..=1)]
-        project: Option<bool>,
+        /// Scope to initialize: "user" (global) or "project" (this repo)
+        scope: Option<String>,
     },
 
     /// Show policy status: layers, rules with shadowing, and potential issues
