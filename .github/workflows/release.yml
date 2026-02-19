@@ -44,7 +44,8 @@ jobs:
       - name: Build
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CLASH_LINEAR_API_KEY: ${{ secrets.CLASH_LINEAR_API_KEY }}
+          CLASH_HOTLINE_PROXY_URL: ${{ secrets.CLASH_HOTLINE_PROXY_URL }}
+          CLASH_HOTLINE_PROXY_TOKEN: ${{ secrets.CLASH_HOTLINE_PROXY_TOKEN }}
         run: cargo build --release --target ${{ matrix.target }} -p clash
 
       - name: Package
