@@ -21,23 +21,17 @@ Clash gives you granular control. Write policy rules that decide what to **allow
 
 There are two ways to run clash depending on what you're doing:
 
-### Install from source (use clash in your day-to-day work)
-
-With just
-
-```bash
-just install
-```
-
-or
+### Install (use clash in your day-to-day work)
 
 ```bash
 cargo install --path clash
-claude plugin marketplace add ./
-claude plugin install clash
+clash init
+claude
 ```
 
-This builds the binary, installs it to `~/.cargo/bin/clash`, and registers the plugin with Claude Code via the marketplace. After install, every `claude` session automatically loads clash.
+`clash init` writes a default policy, installs the Claude Code plugin from GitHub, and walks you through initial configuration. After init, every `claude` session automatically loads clash.
+
+If you have the repo checked out, you can also use `just install` which registers the plugin from the local source tree instead of GitHub.
 
 ### Develop (hack on clash itself)
 
@@ -199,6 +193,22 @@ clash explain bash "git push origin main"
 ```
 
 Or use the `/clash:explain` skill inside Claude Code for an interactive walkthrough.
+
+### All actions blocked — policy error
+
+If every tool use is being denied with a "policy failed to compile" message, your policy file has a syntax error. Clash blocks all actions when it can't compile the policy rather than silently degrading.
+
+To diagnose:
+
+```bash
+clash policy validate
+```
+
+This will show which policy file has the error and suggest how to fix it. If you want to start fresh:
+
+```bash
+clash init
+```
 
 ---
 

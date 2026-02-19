@@ -1,16 +1,20 @@
 use anyhow::{Context, Result};
 use dialoguer::Confirm;
-use tracing::{Level, instrument, warn};
+use tracing::{Level, info, instrument, warn};
 
 use crate::settings::{ClashSettings, DEFAULT_POLICY};
+use crate::shell::ShellSession;
 use crate::style;
+
+/// GitHub repository used to install the clash plugin marketplace.
+const GITHUB_MARKETPLACE: &str = "empathic/clash";
 
 /// Initialize or reconfigure a clash policy.
 ///
-/// - If a sexp policy already exists, drop into the interactive wizard.
+/// - If a sexp policy already exists, drop into the policy shell.
 /// - If only a legacy YAML policy exists, convert it via `claude -p` then
-///   drop into the wizard.
-/// - Otherwise, write the default policy and launch the wizard.
+///   drop into the policy shell.
+/// - Otherwise, write the default policy and launch the policy shell.
 #[instrument(level = Level::TRACE)]
 pub fn run(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
     if project.unwrap_or_else(|| {
@@ -56,23 +60,54 @@ pub fn run(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
 
     let yaml_path = ClashSettings::legacy_policy_file()?;
     if yaml_path.exists() && yaml_path.is_file() && Confirm::new().with_prompt("An existing policy.yaml file was found at {}. Should we attempt to migrate your settings?").default(false).interact().unwrap_or(false){
-        // Legacy YAML policy found — attempt migration, then launch wizard.
+        // Legacy YAML policy found — attempt migration, then launch policy shell.
         migrate_yaml_policy(&yaml_path, &sexpr_path)?;
-        return crate::wizard::run();
+        let mut session = ShellSession::new(None, false, true)?;
+        return session.run_interactive();
     }
 
     // Fresh install — write default policy.
     std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
     std::fs::write(&sexpr_path, DEFAULT_POLICY)?;
 
-    // TODO: detect whether the clash plugin is installed so this prompt can be more helpful
-    if !no_bypass.unwrap_or_else(||dialoguer::Confirm::new().with_prompt("Use clash as your default permissions provider in claude? (This will set bypassPermissions in your claude settings, which is only safe if you have the clash plugin installed)").interact().unwrap_or(true))
-        && let Err(e) = set_bypass_permissions()
-    {
-        warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
+    // Install the Claude Code plugin from GitHub.
+    let plugin_installed = match install_plugin() {
+        Ok(()) => true,
+        Err(e) => {
+            warn!(error = %e, "Could not install clash plugin");
+            eprintln!(
+                "{} Could not install the clash plugin: {e}\n  \
+                 You can install it manually later:\n    \
+                 claude plugin marketplace add {GITHUB_MARKETPLACE}\n    \
+                 claude plugin install clash",
+                style::yellow("!"),
+            );
+            false
+        }
+    };
+
+    if plugin_installed {
+        // Plugin is installed, so bypassPermissions is safe.
+        if !no_bypass.unwrap_or_else(|| {
+            dialoguer::Confirm::new()
+                .with_prompt(
+                    "Use clash as your default permissions provider in Claude Code? \
+                     (This sets bypassPermissions so clash handles all permission decisions)",
+                )
+                .interact()
+                .unwrap_or(true)
+        }) && let Err(e) = set_bypass_permissions()
+        {
+            warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
+            eprintln!(
+                "warning: could not configure Claude Code to use clash as sole permission handler.\n\
+                 You may see double prompts. Run with --dangerously-skip-permissions to avoid this."
+            );
+        }
+    } else {
         eprintln!(
-            "warning: could not configure Claude Code to use clash as sole permission handler.\n\
-             You may see double prompts. Run with --dangerously-skip-permissions to avoid this."
+            "{} Skipping bypassPermissions — the clash plugin must be installed first.",
+            style::dim("·"),
         );
     }
 
@@ -82,8 +117,9 @@ pub fn run(no_bypass: Option<bool>, project: Option<bool>) -> Result<()> {
         sexpr_path.display()
     );
 
-    // Launch the wizard so the user can customize immediately.
-    crate::wizard::run()
+    // Launch the policy shell so the user can customize immediately.
+    let mut session = ShellSession::new(None, false, true)?;
+    session.run_interactive()
 }
 
 /// Initialize a project-level policy in the project root's `.clash/` directory.
@@ -195,6 +231,54 @@ fn set_bypass_permissions() -> Result<()> {
     println!(
         "{} Configured Claude Code to use clash as the sole permission handler.",
         style::green_bold("✓")
+    );
+    Ok(())
+}
+
+/// Install the clash plugin into Claude Code from the GitHub marketplace.
+///
+/// Registers the `empathic/clash` GitHub repo as a marketplace, then installs
+/// the `clash` plugin from it. Idempotent — safe to run if already installed.
+fn install_plugin() -> Result<()> {
+    println!(
+        "{} Installing clash plugin from {}...",
+        style::cyan("~"),
+        GITHUB_MARKETPLACE,
+    );
+
+    // Register the marketplace.
+    let add_output = std::process::Command::new("claude")
+        .args(["plugin", "marketplace", "add", GITHUB_MARKETPLACE])
+        .output()
+        .context("failed to run `claude plugin marketplace add` — is claude on PATH?")?;
+
+    if !add_output.status.success() {
+        let stderr = String::from_utf8_lossy(&add_output.stderr);
+        // "already exists" is fine — marketplace was previously registered.
+        if !stderr.contains("already") {
+            anyhow::bail!("claude plugin marketplace add failed: {stderr}");
+        }
+        info!("marketplace already registered, continuing");
+    }
+
+    // Install the plugin.
+    let install_output = std::process::Command::new("claude")
+        .args(["plugin", "install", "clash"])
+        .output()
+        .context("failed to run `claude plugin install`")?;
+
+    if !install_output.status.success() {
+        let stderr = String::from_utf8_lossy(&install_output.stderr);
+        // "already installed" is fine.
+        if !stderr.contains("already") {
+            anyhow::bail!("claude plugin install failed: {stderr}");
+        }
+        info!("plugin already installed");
+    }
+
+    println!(
+        "{} Clash plugin installed in Claude Code.",
+        style::green_bold("✓"),
     );
     Ok(())
 }

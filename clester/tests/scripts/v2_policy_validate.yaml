@@ -1,0 +1,22 @@
+meta:
+  name: v2 policy validate command
+  description: Test clash policy validate with valid and invalid policies
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *)))
+
+steps:
+  - name: validate valid policy succeeds
+    command: policy validate
+    expect:
+      exit_code: 0
+      stdout_contains: "✓"
+
+  - name: validate valid policy JSON output
+    command: policy validate --json
+    expect:
+      exit_code: 0
+      stdout_contains: '"valid": true'

@@ -32,8 +32,8 @@ tracing-subscriber = { version = "0.3.22", features = [
 ] }
 
 # Workspace crates
-clash_notify = { path = "clash_notify", version = "0.1.0" }
-claude_settings = { path = "claude_settings", version = "0.1.0" }
+clash_notify = { path = "clash_notify", version = "0.3.0" }
+claude_settings = { path = "claude_settings", version = "0.3.0" }
 
 landlock = "0.4"
 seccompiler = "0.4"
@@ -47,6 +47,7 @@ dialoguer = "0.11"
 console = "0.15"
 mac-notification-sys = "0.6"
 notify-rust = "4"
+hotln = "0.1.1"
 
 nu-ansi-term = "0.50"
 reedline = "0.45"

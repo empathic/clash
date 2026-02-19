@@ -1,0 +1,36 @@
+meta:
+  name: v2 broken policy denies all
+  description: When policy fails to compile, all hooks should deny
+
+clash:
+  policy_sexpr: |
+    (((this is not valid policy syntax
+
+steps:
+  - name: bash denied with broken policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: deny
+      reason_contains: "Policy failed to compile"
+
+  - name: read denied with broken policy
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/test.txt
+    expect:
+      decision: deny
+      reason_contains: "Policy failed to compile"
+
+  - name: write denied with broken policy
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/test.txt
+      content: hello
+    expect:
+      decision: deny
+      reason_contains: "Policy failed to compile"
