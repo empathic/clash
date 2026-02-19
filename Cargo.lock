@@ -405,6 +405,7 @@ dependencies = [
  "dialoguer",
  "dirs",
  "figment",
+ "hotln",
  "landlock",
  "lexpr",
  "libc",
@@ -941,6 +942,18 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hotln"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f641ff18588c6cb6f6c7a35f612d9c9fd119d0028ed333d7b61947f279a5b8f"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+ "ureq",
+]
 
 [[package]]
 name = "http"
