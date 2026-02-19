@@ -1375,10 +1375,6 @@ fn load_source(level: PolicyLevel) -> Result<(PathBuf, String)> {
 mod tests {
     use super::*;
 
-    fn test_source() -> &'static str {
-        "(default deny \"main\")\n\n(policy \"main\"\n  (allow (exec \"git\" *)))\n"
-    }
-
     #[test]
     fn parse_add_sexpr() {
         let cmd = parse_command("add (allow (exec \"cargo\" *))").unwrap();
