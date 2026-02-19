@@ -80,6 +80,15 @@ pub enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Validate policy files and report errors
+    Validate {
+        /// Path to a specific policy file to validate (default: all active levels)
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Transactional policy editor (pipe, interactive, or one-liner)
     Shell {
         /// Print resulting policy without writing to disk
