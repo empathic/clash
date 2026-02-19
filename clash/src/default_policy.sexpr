@@ -7,7 +7,9 @@
 (default deny "main")
 
 (policy "cwd-access"
-  (allow (fs read (subpath (env PWD)))))
+  (allow (fs read (subpath (env PWD))))
+)
 
 (policy "main"
-  (include "cwd-access"))
+  (include "cwd-access")
+)

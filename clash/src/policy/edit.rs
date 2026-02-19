@@ -121,6 +121,13 @@ pub fn active_policy(source: &str) -> Result<String> {
     bail!("no (default ...) declaration found in policy")
 }
 
+/// Normalize source by parsing and re-serializing. Strips comments and applies
+/// canonical formatting so that subsequent edits diff cleanly against the baseline.
+pub fn normalize(source: &str) -> Result<String> {
+    let top_levels = parse::parse(source)?;
+    Ok(serialize_top_levels(&top_levels))
+}
+
 /// Serialize `Vec<TopLevel>` back to source text.
 fn serialize_top_levels(items: &[TopLevel]) -> String {
     items
