@@ -306,6 +306,7 @@ mod tests {
 
     use crate::policy::Effect;
     use crate::policy::compile::{EnvResolver, compile_policy_with_env};
+    use crate::policy::sandbox_types::NetworkPolicy;
 
     /// Test env resolver with fixed values.
     struct TestEnv(HashMap<String, String>);
@@ -766,7 +767,7 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_no_fs_rules_returns_none() {
+    fn sandbox_net_only_allows_network() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
             r#"
@@ -785,10 +786,37 @@ mod tests {
             &json!({"command": "cargo build"}),
             "/home/user/project",
         );
-        assert!(
-            decision.sandbox.is_none(),
-            "sandbox with only net rules should be None"
+        let sandbox = decision
+            .sandbox
+            .expect("net-only sandbox should be present");
+        assert_eq!(sandbox.network, NetworkPolicy::Allow);
+        assert!(sandbox.rules.is_empty());
+    }
+
+    #[test]
+    fn inline_sandbox_produces_sandbox_policy() {
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "clash" "bug" *) :sandbox (allow (net *))))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "clash bug test"}),
+            "/home/user/project",
         );
+        assert_eq!(decision.effect, Effect::Allow);
+        let sandbox = decision
+            .sandbox
+            .expect("inline sandbox should produce SandboxPolicy");
+        assert_eq!(sandbox.network, NetworkPolicy::Allow);
+        assert!(sandbox.rules.is_empty());
     }
 
     #[test]

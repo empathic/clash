@@ -79,20 +79,62 @@ fn parse_policy_item(expr: &SExpr) -> Result<PolicyItem> {
     }
 }
 
-/// Parse an optional `:sandbox "name"` keyword argument from remaining elements.
-fn parse_keyword_sandbox(rest: &[SExpr]) -> Result<Option<String>> {
-    if let Some((i, expr)) = rest.iter().enumerate().next() {
-        match expr {
-            SExpr::Atom(s, _) if s == ":sandbox" => {
-                ensure!(i + 1 < rest.len(), ":sandbox requires a string argument");
-                let name = require_string(&rest[i + 1], ":sandbox value")?;
-                Ok(Some(name.to_string()))
-            }
-            other => bail!("unexpected element in rule: {:?}", other),
-        }
-    } else {
-        Ok(None)
+/// Parse an optional `:sandbox` keyword argument from remaining elements.
+///
+/// Accepts either a named reference or inline rules:
+///   `:sandbox "name"`
+///   `:sandbox (allow (net *)) (allow (fs read ...))`
+fn parse_keyword_sandbox(rest: &[SExpr]) -> Result<Option<SandboxRef>> {
+    if rest.is_empty() {
+        return Ok(None);
     }
+    match &rest[0] {
+        SExpr::Atom(s, _) if s == ":sandbox" => {
+            ensure!(rest.len() >= 2, ":sandbox requires an argument");
+            match &rest[1] {
+                SExpr::Str(name, _) => {
+                    ensure!(
+                        rest.len() == 2,
+                        "unexpected elements after :sandbox \"{name}\""
+                    );
+                    Ok(Some(SandboxRef::Named(name.clone())))
+                }
+                SExpr::List(..) => {
+                    let mut rules = Vec::new();
+                    for expr in &rest[1..] {
+                        rules.push(parse_inline_sandbox_rule(expr)?);
+                    }
+                    Ok(Some(SandboxRef::Inline(rules)))
+                }
+                other => bail!("expected string or rule after :sandbox, got {:?}", other),
+            }
+        }
+        other => bail!("unexpected element in rule: {:?}", other),
+    }
+}
+
+/// Parse a single inline sandbox rule: `(effect (matcher))`.
+///
+/// Inline sandbox rules cannot themselves have `:sandbox` annotations.
+fn parse_inline_sandbox_rule(expr: &SExpr) -> Result<Rule> {
+    let list = require_list(expr, "inline sandbox rule")?;
+    ensure!(!list.is_empty(), "empty inline sandbox rule");
+    let head = require_atom(&list[0], "inline sandbox rule effect")?;
+    let effect = parse_effect_str(head)?;
+    ensure!(
+        list.len() >= 2,
+        "inline sandbox rule ({head}) expects a capability matcher"
+    );
+    let matcher = parse_cap_matcher(&list[1])?;
+    ensure!(
+        list.len() == 2,
+        "inline sandbox rules cannot have :sandbox annotations"
+    );
+    Ok(Rule {
+        effect,
+        matcher,
+        sandbox: None,
+    })
 }
 
 fn parse_cap_matcher(expr: &SExpr) -> Result<CapMatcher> {
@@ -495,14 +537,14 @@ mod tests {
             _ => panic!(),
         };
         assert_eq!(rule.effect, Effect::Allow);
-        assert_eq!(rule.sandbox, Some("cargo-env".into()));
+        assert_eq!(rule.sandbox, Some(SandboxRef::Named("cargo-env".into())));
     }
 
     #[test]
     fn parse_error_sandbox_without_value() {
         let err = parse(r#"(policy "p" (allow (exec "cargo" *) :sandbox))"#).unwrap_err();
         assert!(
-            err.to_string().contains(":sandbox requires a string"),
+            err.to_string().contains(":sandbox requires an argument"),
             "got: {}",
             err
         );
@@ -807,5 +849,74 @@ mod tests {
     fn parse_error_unknown_capability() {
         let err = parse(r#"(policy "p" (allow (foobar)))"#).unwrap_err();
         assert!(err.to_string().contains("unknown capability: foobar"));
+    }
+
+    #[test]
+    fn parse_inline_sandbox_single_rule() {
+        let ast =
+            parse(r#"(policy "p" (allow (exec "clash" *) :sandbox (allow (net *))))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.sandbox {
+            Some(SandboxRef::Inline(rules)) => {
+                assert_eq!(rules.len(), 1);
+                assert_eq!(rules[0].effect, Effect::Allow);
+                assert!(matches!(&rules[0].matcher, CapMatcher::Net(_)));
+                assert!(rules[0].sandbox.is_none());
+            }
+            other => panic!("expected Inline sandbox, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_inline_sandbox_multiple_rules() {
+        let ast = parse(
+            r#"(policy "p" (allow (exec "cargo" *) :sandbox (allow (net *)) (allow (fs read (subpath "/tmp")))))"#,
+        )
+        .unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.sandbox {
+            Some(SandboxRef::Inline(rules)) => {
+                assert_eq!(rules.len(), 2);
+                assert!(matches!(&rules[0].matcher, CapMatcher::Net(_)));
+                assert!(matches!(&rules[1].matcher, CapMatcher::Fs(_)));
+            }
+            other => panic!("expected Inline sandbox, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_error_nested_sandbox_in_inline() {
+        let err = parse(
+            r#"(policy "p" (allow (exec "x" *) :sandbox (allow (exec "y" *) :sandbox "z")))"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("cannot have :sandbox"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn round_trip_inline_sandbox() {
+        let source = r#"(policy "p" (allow (exec "clash" *) :sandbox (allow (net *)) (deny (net /.*\.evil\.com/))))"#;
+        let ast1 = parse(source).unwrap();
+        let printed = ast1[0].to_string();
+        let ast2 = parse(&printed).unwrap();
+        assert_eq!(ast1, ast2, "round-trip failed:\n{printed}");
     }
 }
