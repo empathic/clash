@@ -37,7 +37,7 @@ clash init [SCOPE] [OPTIONS]
 
 **What it does:**
 
-- **`clash init user`** — Creates `~/.clash/policy.sexpr` with a safe default policy, installs the Claude Code plugin, sets `bypassPermissions`, and drops into the policy shell.
+- **`clash init user`** — Creates `~/.clash/policy.sexpr` with a safe default policy, installs the Claude Code plugin, configures Claude Code so clash is the sole permission handler (`bypassPermissions: true` and `permissions.defaultMode: "bypassPermissions"`), and drops into the policy shell.
 - **`clash init project`** — Creates `.clash/policy.sexpr` in the current repository root with a minimal deny-all policy.
 
 Only one scope is initialized per invocation. When no scope is given, clash explains both options and asks you to choose.

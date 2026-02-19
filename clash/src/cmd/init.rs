@@ -143,15 +143,18 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
 
     if plugin_installed {
         // Plugin is installed, so bypassPermissions is safe.
-        if !no_bypass.unwrap_or_else(|| {
-            dialoguer::Confirm::new()
+        let skip_bypass = no_bypass.unwrap_or_else(|| {
+            !dialoguer::Confirm::new()
                 .with_prompt(
                     "Use clash as your default permissions provider in Claude Code? \
                      (This sets bypassPermissions so clash handles all permission decisions)",
                 )
                 .interact()
                 .unwrap_or(true)
-        }) && let Err(e) = set_bypass_permissions()
+        });
+
+        if !skip_bypass
+            && let Err(e) = set_bypass_permissions()
         {
             warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
             eprintln!(
@@ -281,13 +284,16 @@ fn migrate_yaml_policy(yaml_path: &std::path::Path, sexpr_path: &std::path::Path
     Ok(())
 }
 
-/// Set `bypassPermissions: true` in user-level Claude Code settings.
+/// Configure Claude Code to let Clash handle all permission decisions.
 ///
-/// This tells Claude Code to skip its built-in permission system so Clash
-/// becomes the sole permission handler, avoiding double-prompting.
+/// Sets both `bypassPermissions: true` (legacy) and
+/// `permissions.defaultMode: "bypassPermissions"` in user-level settings
+/// so Clash becomes the sole permission handler, avoiding double-prompting.
 fn set_bypass_permissions() -> Result<()> {
     let claude = claude_settings::ClaudeSettings::new();
     claude.set_bypass_permissions(claude_settings::SettingsLevel::User, true)?;
+    claude
+        .set_default_permission_mode(claude_settings::SettingsLevel::User, "bypassPermissions")?;
     println!(
         "{} Configured Claude Code to use clash as the sole permission handler.",
         style::green_bold("✓")
