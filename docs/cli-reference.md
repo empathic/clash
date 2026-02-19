@@ -11,6 +11,7 @@ All commands accept:
 | Flag | Description |
 |------|-------------|
 | `-v`, `--verbose` | Enable verbose/debug output |
+| `-V`, `--version` | Print version |
 | `-h`, `--help` | Print help |
 
 ---
@@ -453,6 +454,44 @@ Called when a Claude Code session begins. Initializes session state, symlinks th
 
 ```
 clash hook session-start
+```
+
+---
+
+## clash update
+
+Update clash to the latest release from GitHub, or check if an update is available.
+
+```
+clash update [OPTIONS]
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--check` | Only check for updates, don't install |
+| `-y`, `--yes` | Skip confirmation prompt |
+| `--version <VERSION>` | Update to a specific version (e.g., `0.4.0`) |
+
+The command compares the running version against the latest GitHub release, downloads the matching binary for your platform, verifies the SHA-256 checksum, and atomically replaces the current binary.
+
+If clash was installed via `cargo install`, the command prints the appropriate cargo command instead of replacing the binary directly.
+
+**Examples:**
+
+```bash
+# Update to latest release
+clash update
+
+# Check for updates without installing
+clash update --check
+
+# Update non-interactively (e.g., in a script)
+clash update --yes
+
+# Install a specific version
+clash update --version 0.2.0
 ```
 
 ---
