@@ -7,7 +7,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::{Level, instrument, warn};
 
 use crate::policy::Effect;
@@ -58,15 +58,152 @@ impl AuditConfig {
     }
 }
 
+/// Accumulated session statistics for the status line.
+///
+/// Pre-aggregated counters and last-decision metadata, serialized as JSON.
+/// Updated atomically on every policy decision.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStats {
+    pub allowed: u64,
+    pub denied: u64,
+    pub asked: u64,
+    pub last_tool: Option<String>,
+    pub last_input_summary: Option<String>,
+    pub last_effect: Option<Effect>,
+    pub last_at: Option<String>,
+    /// Suggested allow command when the last decision was deny.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_deny_hint: Option<String>,
+}
+
+impl Default for SessionStats {
+    fn default() -> Self {
+        Self {
+            allowed: 0,
+            denied: 0,
+            asked: 0,
+            last_tool: None,
+            last_input_summary: None,
+            last_effect: None,
+            last_at: None,
+            last_deny_hint: None,
+        }
+    }
+}
+
 /// Return the session-specific temp directory for the given session ID.
 pub fn session_dir(session_id: &str) -> PathBuf {
     std::env::temp_dir().join(format!("clash-{}", session_id))
 }
 
-/// Initialize a per-session history directory.
+/// Path to the session stats sidecar file.
+fn stats_path(session_id: &str) -> PathBuf {
+    session_dir(session_id).join("stats.json")
+}
+
+/// Errors that can occur when reading session stats.
+#[derive(Debug, thiserror::Error)]
+pub enum StatsReadError {
+    /// The stats file does not exist yet (no session initialized).
+    #[error("stats file not found")]
+    NotFound,
+    /// The file exists but couldn't be read (permissions, etc.).
+    #[error("failed to read stats: {0}")]
+    Io(#[from] std::io::Error),
+    /// The file exists but contains invalid JSON.
+    #[error("malformed stats JSON: {0}")]
+    Malformed(#[from] serde_json::Error),
+}
+
+/// Read the current session stats.
 ///
-/// Creates `/tmp/clash-<session_id>/` with a `metadata.json` containing
-/// session info. Returns the session directory path on success.
+/// Distinguishes missing file, IO failure, and malformed JSON via
+/// `StatsReadError` variants.
+pub fn read_session_stats(session_id: &str) -> Result<SessionStats, StatsReadError> {
+    let path = stats_path(session_id);
+    let contents = std::fs::read_to_string(&path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            StatsReadError::NotFound
+        } else {
+            StatsReadError::Io(e)
+        }
+    })?;
+    Ok(serde_json::from_str(&contents)?)
+}
+
+/// Record a policy decision in the session stats.
+///
+/// Increments the counter for `effect`, updates last-decision metadata,
+/// and persists atomically. Must be called at most once per tool use.
+pub fn update_session_stats(
+    session_id: &str,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    effect: Effect,
+    cwd: &str,
+) {
+    let mut stats = match read_session_stats(session_id) {
+        Ok(s) => s,
+        Err(StatsReadError::NotFound) => SessionStats::default(),
+        Err(e) => {
+            warn!(error = %e, "Failed to read session stats, resetting");
+            SessionStats::default()
+        }
+    };
+
+    match effect {
+        Effect::Allow => stats.allowed += 1,
+        Effect::Deny => stats.denied += 1,
+        Effect::Ask => stats.asked += 1,
+    }
+
+    stats.last_tool = Some(tool_name.to_string());
+    stats.last_effect = Some(effect);
+    stats.last_at = Some(chrono_timestamp());
+
+    stats.last_input_summary = Some(tool_input_summary(tool_name, tool_input, cwd));
+
+    stats.last_deny_hint = if effect == Effect::Deny {
+        match deny_hint(tool_name, tool_input, cwd) {
+            Ok(hint) => Some(hint),
+            Err(e) => {
+                warn!(error = %e, "Failed to generate deny hint");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    write_session_stats(session_id, &stats);
+}
+
+/// Persist stats atomically to prevent partial reads by concurrent renders.
+fn write_session_stats(session_id: &str, stats: &SessionStats) {
+    let path = stats_path(session_id);
+    let tmp_path = session_dir(session_id).join(".stats.json.tmp");
+
+    let json = match serde_json::to_string(stats) {
+        Ok(j) => j,
+        Err(e) => {
+            warn!(error = %e, "Failed to serialize session stats");
+            return;
+        }
+    };
+
+    if let Err(e) = std::fs::write(&tmp_path, &json) {
+        warn!(error = %e, path = %tmp_path.display(), "Failed to write session stats temp file");
+        return;
+    }
+
+    if let Err(e) = std::fs::rename(&tmp_path, &path) {
+        warn!(error = %e, "Failed to rename session stats temp file");
+    }
+}
+
+/// Initialize a per-session history directory with session metadata.
+///
+/// Returns the directory path on success.
 pub fn init_session(
     session_id: &str,
     cwd: &str,
@@ -145,6 +282,94 @@ pub fn log_decision(
     {
         warn!(error = %e, path = %session_log.display(), "Failed to write session audit entry");
     }
+}
+
+/// Generate the narrowest possible allow rule for a denied tool invocation.
+///
+/// Returns a `clash allow '(...)'` command with exact arguments matching
+/// the denied capability. Errors if the tool produces no capability queries.
+fn deny_hint(tool_name: &str, tool_input: &serde_json::Value, cwd: &str) -> Result<String, String> {
+    use crate::policy::eval::{CapQuery, tool_to_queries};
+
+    let queries = tool_to_queries(tool_name, tool_input, cwd);
+    let query = queries
+        .first()
+        .ok_or_else(|| format!("tool_to_queries returned no queries for {tool_name}"))?;
+
+    let rule = match query {
+        CapQuery::Exec { bin, args } => {
+            if args.is_empty() {
+                format!("(exec \"{}\")", bin)
+            } else {
+                let quoted_args: Vec<String> = args.iter().map(|a| format!("\"{}\"", a)).collect();
+                format!("(exec \"{}\" {})", bin, quoted_args.join(" "))
+            }
+        }
+        CapQuery::Fs { op, path } => {
+            format!("(fs {} \"{}\")", op, path)
+        }
+        CapQuery::Net { domain } => {
+            format!("(net \"{}\")", domain)
+        }
+        CapQuery::Tool { name } => {
+            format!("(tool \"{}\")", name)
+        }
+    };
+
+    Ok(format!("clash allow '{}'", rule))
+}
+
+/// Concise, human-readable summary of a tool invocation for display.
+fn tool_input_summary(tool_name: &str, input: &serde_json::Value, cwd: &str) -> String {
+    use crate::policy::eval::{CapQuery, tool_to_queries};
+
+    let queries = tool_to_queries(tool_name, input, cwd);
+    let summary = match queries.first() {
+        Some(CapQuery::Exec { bin, args }) => {
+            if args.is_empty() {
+                bin.clone()
+            } else {
+                format!("{} {}", bin, args.join(" "))
+            }
+        }
+        Some(CapQuery::Fs { path, .. }) => shorten_path(path),
+        Some(CapQuery::Net { domain }) => domain.clone(),
+        Some(CapQuery::Tool { name }) => name.clone(),
+        None => String::new(),
+    };
+
+    truncate_str(&summary, 60)
+}
+
+/// Shorten a file path to just the last two components.
+fn shorten_path(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    let components: Vec<_> = p.components().rev().take(2).collect();
+    if components.len() == 2 {
+        format!(
+            "{}/{}",
+            components[1].as_os_str().to_string_lossy(),
+            components[0].as_os_str().to_string_lossy()
+        )
+    } else {
+        p.file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string())
+    }
+}
+
+/// Truncate a string to `max` chars, appending "..." if needed.
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let truncate_at = s
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= max)
+        .last()
+        .unwrap_or(0);
+    format!("{}...", &s[..truncate_at])
 }
 
 fn effect_str(effect: Effect) -> &'static str {
