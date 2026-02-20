@@ -7,4 +7,5 @@ pub mod launch;
 pub mod policy;
 pub mod schema;
 pub mod status;
+pub mod statusline;
 pub mod update;

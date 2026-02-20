@@ -188,7 +188,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
     // Ensure the user has a policy file — create one with safe defaults if not.
     let created_policy = ClashSettings::ensure_user_policy_exists()?;
 
-    let _settings = ClashSettings::load_or_create_with_session(Some(&input.session_id))?;
+    let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id))?;
 
     let mut lines = Vec::new();
 
@@ -224,7 +224,8 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
         );
     }
 
-    check_sandbox_and_session(&mut lines, input);
+    let default_effect = settings.decision_tree().map(|t| t.default.to_string());
+    check_sandbox_and_session(&mut lines, input, default_effect.as_deref());
 
     finish_session_start(lines)
 }
@@ -238,7 +239,11 @@ fn clash_session_context() -> &'static str {
 }
 
 /// Check sandbox support, init session, and symlink — shared by both paths.
-fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookInput) {
+fn check_sandbox_and_session(
+    lines: &mut Vec<String>,
+    input: &SessionStartHookInput,
+    default_effect: Option<&str>,
+) {
     // 3. Check sandbox support
     let support = crate::sandbox::check_support();
     match support {
@@ -262,6 +267,7 @@ fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookIn
         &input.cwd,
         input.source.as_deref(),
         input.model.as_deref(),
+        default_effect,
     ) {
         Ok(session_dir) => {
             lines.push(format!("session history: {}", session_dir.display()));

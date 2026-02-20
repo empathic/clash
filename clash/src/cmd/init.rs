@@ -153,9 +153,7 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
                 .unwrap_or(true)
         });
 
-        if !skip_bypass
-            && let Err(e) = set_bypass_permissions()
-        {
+        if !skip_bypass && let Err(e) = set_bypass_permissions() {
             warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
             eprintln!(
                 "warning: could not configure Claude Code to use clash as sole permission handler.\n\
