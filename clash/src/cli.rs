@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+use crate::cmd::statusline::StatuslineCmd;
 use crate::sandbox_cmd::SandboxCmd;
 
 #[derive(Parser, Debug)]
@@ -274,6 +275,10 @@ pub enum Commands {
         #[arg(long)]
         version: Option<String>,
     },
+
+    /// Display clash status in the Claude Code status line
+    #[command(subcommand)]
+    Statusline(StatuslineCmd),
 
     /// File a bug report to the clash issue tracker
     #[command(alias = "rage", hide = true)]
