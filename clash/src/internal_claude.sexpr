@@ -1,6 +1,10 @@
 ; Internal: Claude agent workspace
 (policy "__internal_claude__"
   (allow (fs (or read write) (subpath (join (env HOME) "/.claude"))))
+  ; Allow reading from the session transcript directory. Agent subprocesses
+  ; write output files here and the main agent must be able to read them.
+  ; TRANSCRIPT_DIR is provided by the hook context at runtime.
+  (allow (fs read (subpath (env TRANSCRIPT_DIR))))
   ; Agent-internal tools (Skill, Task, AskUserQuestion, EnterPlanMode, etc.)
   ; are always allowed — they have no external side effects.
   (allow (tool)))
