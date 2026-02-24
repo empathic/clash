@@ -437,6 +437,11 @@ fn send_error(stream: &TcpStream, code: u16, reason: &str) -> io::Result<()> {
     let mut w = stream.try_clone()?;
     w.write_all(response.as_bytes())?;
     w.flush()?;
+    // Explicitly shut down the write half so the client receives a TCP FIN
+    // instead of RST when the socket is dropped.  Without this, the implicit
+    // close can race the response data, producing "Connection reset by peer"
+    // on the client side.
+    let _ = stream.shutdown(Shutdown::Write);
     Ok(())
 }
 
