@@ -155,24 +155,46 @@ fn is_env_assignment(token: &str) -> bool {
 }
 
 /// Extract the binary name and arguments from whitespace-split Bash command tokens,
-/// skipping leading environment variable assignments (`VAR=value ...`).
+/// skipping leading environment variable assignments (`VAR=value ...`), the `env`
+/// utility, and transparent prefix commands (`time`, `nice`, etc.).
 ///
-/// Also handles the `env` utility: `env VAR=val ... cmd args` is parsed as `cmd args`.
+/// Transparent prefix commands are wrapper utilities that don't change the semantics
+/// of the wrapped command (e.g. `time`, `nice`, `nohup`, `timeout`, `command`).
+/// They are stripped so that policy rules evaluate against the real command:
+///   `time git push origin main` → bin="git", args=["push", "origin", "main"]
+///
+/// Prefixes can be chained: `time nice -n 19 env FOO=bar cargo build` → bin="cargo".
+///
 /// Note: `env` flags (e.g. `env -i`, `env -u VAR`) are not handled — the flag would be
 /// treated as the binary name, which fails safe to the default policy.
 fn parse_bash_bin_args(parts: &[&str]) -> (String, Vec<String>) {
-    // Skip leading VAR=value assignments.
     let mut i = 0;
-    while i < parts.len() && is_env_assignment(parts[i]) {
-        i += 1;
-    }
 
-    // If the first non-assignment token is "env", skip it and any further assignments.
-    if i < parts.len() && parts[i] == "env" {
-        i += 1;
+    loop {
+        // Skip leading VAR=value assignments.
         while i < parts.len() && is_env_assignment(parts[i]) {
             i += 1;
         }
+
+        // If the next token is "env", skip it and any further assignments.
+        if i < parts.len() && parts[i] == "env" {
+            i += 1;
+            while i < parts.len() && is_env_assignment(parts[i]) {
+                i += 1;
+            }
+            continue;
+        }
+
+        // Check for transparent prefix commands (time, nice, nohup, etc.).
+        if i < parts.len()
+            && let Some(skip) =
+                transparent_prefix_skip(parts[i], parts.get(i + 1..).unwrap_or(&[]))
+        {
+            i += 1 + skip;
+            continue;
+        }
+
+        break;
     }
 
     match parts.get(i) {
@@ -182,6 +204,70 @@ fn parse_bash_bin_args(parts: &[&str]) -> (String, Vec<String>) {
         ),
         None => (String::new(), vec![]),
     }
+}
+
+/// Check if `cmd` is a transparent prefix command and return how many tokens
+/// after the command name to skip (its flags and required positional args).
+///
+/// Returns `None` if `cmd` is not a recognized transparent prefix.
+fn transparent_prefix_skip(cmd: &str, rest: &[&str]) -> Option<usize> {
+    match cmd {
+        // time [-p] command — bash builtin / POSIX time
+        // GNU time has -f, -o flags that take values; handled explicitly.
+        "time" => Some(skip_flags(rest, &["-f", "-o"])),
+
+        // command [-p] command — bash builtin, bypasses functions
+        // -v and -V are query modes (print path/description), not execution.
+        "command" => {
+            if rest.first().is_some_and(|f| *f == "-v" || *f == "-V") {
+                None
+            } else {
+                Some(skip_flags(rest, &[]))
+            }
+        }
+
+        // nice [-n ADJUSTMENT] command
+        "nice" => Some(skip_flags(rest, &["-n"])),
+
+        // nohup command — no flags
+        "nohup" => Some(0),
+
+        // timeout [OPTIONS] DURATION command
+        // -s/-k/--signal/--kill-after take value args, then a mandatory DURATION positional.
+        "timeout" => {
+            let flags = skip_flags(rest, &["-s", "-k", "--signal", "--kill-after"]);
+            // Skip the mandatory DURATION positional argument after flags.
+            if flags < rest.len() {
+                Some(flags + 1)
+            } else {
+                Some(flags)
+            }
+        }
+
+        _ => None,
+    }
+}
+
+/// Skip flag tokens and their value arguments. Returns the number of tokens consumed.
+///
+/// Flags are tokens starting with `-`. Long flags with `=` (e.g. `--format=FMT`) are
+/// self-contained (one token). Short flags listed in `value_flags` consume the next
+/// token as their value (e.g. `-f FMT` → 2 tokens).
+fn skip_flags(tokens: &[&str], value_flags: &[&str]) -> usize {
+    let mut i = 0;
+    while i < tokens.len() && tokens[i].starts_with('-') {
+        let flag = tokens[i];
+        i += 1;
+        // Self-contained long flag (--flag=value): already consumed.
+        if flag.contains('=') {
+            continue;
+        }
+        // Check if this flag takes a separate value argument.
+        if value_flags.contains(&flag) && i < tokens.len() {
+            i += 1;
+        }
+    }
+    i
 }
 
 impl DecisionTree {
@@ -1039,5 +1125,369 @@ mod tests {
             "/home/user/project",
         );
         assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    // ── Transparent prefix: unit tests ────────────────────────────────
+
+    #[test]
+    fn transparent_time_no_flags() {
+        let parts = vec!["time", "cargo", "build"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build"]);
+    }
+
+    #[test]
+    fn transparent_time_with_flag() {
+        let parts = vec!["time", "-p", "cargo", "build"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build"]);
+    }
+
+    #[test]
+    fn transparent_time_with_value_flag() {
+        // GNU time: -o takes a filename argument
+        let parts = vec!["time", "-o", "/tmp/timing.txt", "cargo", "build"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build"]);
+    }
+
+    #[test]
+    fn transparent_command_no_flags() {
+        let parts = vec!["command", "git", "status"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "git");
+        assert_eq!(args, vec!["status"]);
+    }
+
+    #[test]
+    fn transparent_command_with_p_flag() {
+        let parts = vec!["command", "-p", "git", "status"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "git");
+        assert_eq!(args, vec!["status"]);
+    }
+
+    #[test]
+    fn transparent_command_v_is_not_prefix() {
+        // command -v is a query mode, not execution — should NOT be stripped
+        let parts = vec!["command", "-v", "git"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "command");
+        assert_eq!(args, vec!["-v", "git"]);
+    }
+
+    #[test]
+    fn transparent_command_capital_v_is_not_prefix() {
+        let parts = vec!["command", "-V", "git"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "command");
+        assert_eq!(args, vec!["-V", "git"]);
+    }
+
+    #[test]
+    fn transparent_nice_with_n_flag() {
+        let parts = vec!["nice", "-n", "10", "cargo", "build"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build"]);
+    }
+
+    #[test]
+    fn transparent_nice_no_flags() {
+        let parts = vec!["nice", "cargo", "build"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build"]);
+    }
+
+    #[test]
+    fn transparent_nohup() {
+        let parts = vec!["nohup", "./script.sh", "&"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "./script.sh");
+        assert_eq!(args, vec!["&"]);
+    }
+
+    #[test]
+    fn transparent_timeout_simple() {
+        let parts = vec!["timeout", "30s", "cargo", "build"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build"]);
+    }
+
+    #[test]
+    fn transparent_timeout_with_signal_flag() {
+        let parts = vec!["timeout", "-s", "KILL", "30s", "cargo", "build"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build"]);
+    }
+
+    #[test]
+    fn transparent_timeout_with_multiple_flags() {
+        let parts = vec![
+            "timeout",
+            "--preserve-status",
+            "-k",
+            "5s",
+            "30s",
+            "cargo",
+            "build",
+        ];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build"]);
+    }
+
+    // ── Transparent prefix: chaining ──────────────────────────────────
+
+    #[test]
+    fn transparent_chained_time_nice() {
+        let parts = vec!["time", "nice", "-n", "19", "cargo", "build"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build"]);
+    }
+
+    #[test]
+    fn transparent_chained_with_env() {
+        let parts = vec!["time", "env", "FOO=bar", "cargo", "build"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build"]);
+    }
+
+    #[test]
+    fn transparent_chained_env_time() {
+        // env vars → env utility → time → real command
+        let parts = vec!["RUST_LOG=debug", "env", "FOO=bar", "time", "cargo", "test"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["test"]);
+    }
+
+    #[test]
+    fn transparent_chained_time_nohup() {
+        let parts = vec!["time", "nohup", "cargo", "build"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build"]);
+    }
+
+    // ── Transparent prefix: policy integration ────────────────────────
+
+    #[test]
+    fn transparent_time_preserves_deny() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny  (exec "git" "push" *))
+  (allow (exec "git" *)))
+"#,
+        );
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "time git push origin main"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn transparent_time_preserves_allow() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny  (exec "git" "push" *))
+  (allow (exec "git" *)))
+"#,
+        );
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "time git status"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn transparent_nice_preserves_deny() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny  (exec "git" "push" *))
+  (allow (exec "git" *)))
+"#,
+        );
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "nice -n 10 git push origin main"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn transparent_nohup_preserves_deny() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny  (exec "git" "push" *))
+  (allow (exec "git" *)))
+"#,
+        );
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "nohup git push origin main"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn transparent_timeout_preserves_deny() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny  (exec "git" "push" *))
+  (allow (exec "git" *)))
+"#,
+        );
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "timeout 30 git push origin main"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn transparent_chained_preserves_deny() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny  (exec "git" "push" *))
+  (allow (exec "git" *)))
+"#,
+        );
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "time nice -n 19 git push origin main"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn transparent_prefix_with_env_preserves_deny() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny  (exec "git" "push" *))
+  (allow (exec "git" *)))
+"#,
+        );
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "time env GIT_SSH=ssh git push origin main"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn transparent_command_v_falls_through_to_default() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *)))
+"#,
+        );
+
+        // command -v is a query, not transparent — evaluates as bin="command"
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "command -v git"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    // ── skip_flags unit tests ─────────────────────────────────────────
+
+    #[test]
+    fn skip_flags_no_flags() {
+        assert_eq!(super::skip_flags(&["cargo", "build"], &[]), 0);
+    }
+
+    #[test]
+    fn skip_flags_simple_flags() {
+        assert_eq!(super::skip_flags(&["-p", "-v", "cargo"], &[]), 2);
+    }
+
+    #[test]
+    fn skip_flags_with_value() {
+        assert_eq!(super::skip_flags(&["-f", "fmt", "cargo"], &["-f"]), 2);
+    }
+
+    #[test]
+    fn skip_flags_long_with_equals() {
+        assert_eq!(
+            super::skip_flags(&["--format=fmt", "cargo"], &["--format"]),
+            1
+        );
+    }
+
+    #[test]
+    fn skip_flags_double_dash_separator() {
+        // -- starts with - so it's consumed as a flag, correctly stopping before the command
+        assert_eq!(super::skip_flags(&["--", "cargo"], &[]), 1);
+    }
+
+    // ── transparent_prefix_skip unit tests ────────────────────────────
+
+    #[test]
+    fn prefix_skip_unknown_command() {
+        assert_eq!(super::transparent_prefix_skip("cargo", &["build"]), None);
+    }
+
+    #[test]
+    fn prefix_skip_time_no_args() {
+        assert_eq!(super::transparent_prefix_skip("time", &[]), Some(0));
+    }
+
+    #[test]
+    fn prefix_skip_timeout_duration() {
+        assert_eq!(
+            super::transparent_prefix_skip("timeout", &["30s", "cargo"]),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn prefix_skip_timeout_flags_and_duration() {
+        assert_eq!(
+            super::transparent_prefix_skip("timeout", &["-s", "KILL", "30s", "cargo"]),
+            Some(3)
+        );
     }
 }
