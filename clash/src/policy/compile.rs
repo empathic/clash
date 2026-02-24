@@ -4,6 +4,7 @@
 //! capability domain, sorts by specificity, and detects conflicts.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use regex::Regex;
@@ -116,22 +117,34 @@ pub fn compile_multi_level_with_internals(
     // specificity, higher-precedence rules come first.
     for (level, tree) in &level_trees {
         for rule in &tree.exec_rules {
-            exec_rules.push(clone_compiled_rule(rule, Some(*level)));
+            let mut cloned = rule.clone();
+            cloned.origin_level = Some(*level);
+            exec_rules.push(cloned);
         }
         for rule in &tree.fs_rules {
-            fs_rules.push(clone_compiled_rule(rule, Some(*level)));
+            let mut cloned = rule.clone();
+            cloned.origin_level = Some(*level);
+            fs_rules.push(cloned);
         }
         for rule in &tree.net_rules {
-            net_rules.push(clone_compiled_rule(rule, Some(*level)));
+            let mut cloned = rule.clone();
+            cloned.origin_level = Some(*level);
+            net_rules.push(cloned);
         }
         for rule in &tree.tool_rules {
-            tool_rules.push(clone_compiled_rule(rule, Some(*level)));
+            let mut cloned = rule.clone();
+            cloned.origin_level = Some(*level);
+            tool_rules.push(cloned);
         }
         for (name, rules) in &tree.sandbox_policies {
             sandbox_policies.entry(name.clone()).or_insert_with(|| {
                 rules
                     .iter()
-                    .map(|r| clone_compiled_rule(r, Some(*level)))
+                    .map(|r| {
+                        let mut cloned = r.clone();
+                        cloned.origin_level = Some(*level);
+                        cloned
+                    })
                     .collect()
             });
         }
@@ -164,25 +177,6 @@ pub fn compile_multi_level_with_internals(
     inject_internals(&mut merged, env, internals)?;
 
     Ok(merged)
-}
-
-/// Clone a CompiledRule, setting origin_level. CompiledRule can't derive Clone
-/// because it contains Regex, so we reconstruct it.
-fn clone_compiled_rule(
-    rule: &CompiledRule,
-    level: Option<crate::settings::PolicyLevel>,
-) -> CompiledRule {
-    let compiled_matcher = compile_matcher(&rule.source.matcher, &StdEnvResolver)
-        .expect("rule was already compiled once");
-    CompiledRule {
-        effect: rule.effect,
-        matcher: compiled_matcher,
-        source: rule.source.clone(),
-        specificity: rule.specificity,
-        sandbox: rule.sandbox.clone(),
-        origin_policy: rule.origin_policy.clone(),
-        origin_level: level,
-    }
 }
 
 /// Inject internal policies into a merged DecisionTree.
@@ -604,7 +598,7 @@ fn compile_pattern(pattern: &Pattern) -> Result<CompiledPattern> {
         Pattern::Literal(s) => Ok(CompiledPattern::Literal(s.clone())),
         Pattern::Regex(r) => {
             let regex = Regex::new(r).map_err(|e| anyhow::anyhow!("invalid regex /{r}/: {e}"))?;
-            Ok(CompiledPattern::Regex(regex))
+            Ok(CompiledPattern::Regex(Arc::new(regex)))
         }
         Pattern::Or(ps) => {
             let compiled = ps.iter().map(compile_pattern).collect::<Result<_>>()?;
@@ -627,7 +621,7 @@ fn compile_path_filter(pf: &PathFilter, env: &dyn EnvResolver) -> Result<Compile
         PathFilter::Regex(r) => {
             let regex =
                 Regex::new(r).map_err(|e| anyhow::anyhow!("invalid path regex /{r}/: {e}"))?;
-            Ok(CompiledPathFilter::Regex(regex))
+            Ok(CompiledPathFilter::Regex(Arc::new(regex)))
         }
         PathFilter::Or(fs) => {
             let compiled = fs
