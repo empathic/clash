@@ -51,16 +51,18 @@ pub fn run(
         ("Version", env!("CARGO_PKG_VERSION")),
     ];
 
-    let url = if let Some(api_key) = option_env!("CLASH_HOTLINE_LINEAR_KEY") {
+    let result = if let Some(api_key) = option_env!("CLASH_HOTLINE_LINEAR_KEY") {
         let Some(team_id) = option_env!("CLASH_HOTLINE_LINEAR_TEAM") else {
             bail!("CLASH_HOTLINE_LINEAR_KEY is set but CLASH_HOTLINE_LINEAR_TEAM is missing");
         };
         let Some(project_id) = option_env!("CLASH_HOTLINE_LINEAR_PROJECT") else {
             bail!("CLASH_HOTLINE_LINEAR_KEY is set but CLASH_HOTLINE_LINEAR_PROJECT is missing");
         };
-        hotln::direct(api_key, team_id, project_id)
-            .create_issue(&title, full_description.as_deref(), &system_info)
-            .context("failed to file bug report")?
+        hotln::direct(api_key, team_id, project_id).create_issue(
+            &title,
+            full_description.as_deref(),
+            &system_info,
+        )
     } else {
         let Some(hotline_url) = option_env!("CLASH_HOTLINE_PROXY_URL") else {
             bail!(
@@ -74,12 +76,15 @@ pub fn run(
         hotln::proxy(hotline_url)
             .with_token(hotline_token)
             .create_issue(&title, full_description.as_deref(), &system_info)
-            .context("failed to file bug report")?
     };
 
-    println!("{} Filed bug: {}", style::green_bold("✓"), url);
-
-    Ok(())
+    match result {
+        Ok(url) => {
+            println!("{} Filed bug: {}", style::green_bold("✓"), url);
+            Ok(())
+        }
+        Err(e) => bail!("failed to file bug report: {e}"),
+    }
 }
 
 /// Read the last `n` lines from the clash log file.
