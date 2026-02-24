@@ -159,7 +159,7 @@ Multiple inline rules are supported:
 (allow (exec "cargo" "build" *) :sandbox
   (allow (fs read (subpath (env PWD))))
   (allow (fs write (subpath "./target")))
-  (allow (net "crates.io")))
+  (allow (net)))
 ```
 
 ### Named sandbox
@@ -172,7 +172,7 @@ For sandbox policies reused across multiple exec rules, define a named policy an
 (policy "cargo-env"
   (allow (fs read (subpath (env PWD))))
   (allow (fs write (subpath "./target")))
-  (allow (net "crates.io")))
+  (allow (net)))
 
 (policy "git-env"
   (allow (fs read (subpath (env PWD)))))
@@ -185,7 +185,7 @@ For sandbox policies reused across multiple exec rules, define a named policy an
   (allow (net "github.com")))
 ```
 
-When `cargo build` matches the exec rule, the `"cargo-env"` policy defines the sandbox: the process can read the project, write to `./target`, and access `crates.io`. When `git status` matches, it gets only read access to the project via `"git-env"`.
+When `cargo build` matches the exec rule, the `"cargo-env"` policy defines the sandbox: the process can read the project, write to `./target`, and has unrestricted network access. When `git status` matches, it gets only read access to the project via `"git-env"`.
 
 Named sandbox references must point to a policy defined with `(policy "name" ...)` in the same file. A compile error is raised if the referenced policy doesn't exist.
 
@@ -196,6 +196,18 @@ When no `:sandbox` is specified on an exec allow, the spawned process gets no fi
 ### What sandboxes enforce
 
 Sandbox policies constrain **filesystem and network access** at the kernel level — these restrictions are inherited by all child processes and cannot be bypassed. However, sandboxes do not enforce **exec-level argument matching** on child processes. If a sandboxed command spawns a subprocess, the subprocess inherits the filesystem and network restrictions but is not checked against exec rules. Tracking issue: [#136](https://github.com/empathic/clash/issues/136).
+
+### Sandbox network restrictions
+
+Sandbox network access has three modes:
+
+- `(allow (net))` or `(allow (net *))` — sandbox **allows** all network access (no restrictions)
+- `(allow (net "domain.com"))` — sandbox allows network access **only to listed domains** via a local HTTP proxy
+- No net rule — sandbox **denies** all network access
+
+Domain-specific net rules like `(allow (net "crates.io"))` are enforced using a local HTTP proxy. The OS sandbox restricts the process to localhost-only connections, and clash starts a proxy that checks each request against the domain allowlist. Programs that respect `HTTP_PROXY`/`HTTPS_PROXY` environment variables (curl, cargo, npm, pip, etc.) are filtered; programs that bypass the proxy can still reach any host on Linux (advisory enforcement). On macOS, Seatbelt blocks non-localhost connections at the kernel level.
+
+Subdomain matching is supported: `(allow (net "github.com"))` also permits `api.github.com`.
 
 ---
 
@@ -366,7 +378,7 @@ Allow build tools with constrained sandbox environments:
 (policy "cargo-env"
   (allow (fs read (subpath (env PWD))))
   (allow (fs write (subpath "./target")))
-  (allow (net "crates.io")))
+  (allow (net)))
 
 (policy "npm-env"
   (allow (fs read (subpath (env PWD))))

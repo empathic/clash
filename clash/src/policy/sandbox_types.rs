@@ -179,14 +179,80 @@ pub enum RuleEffect {
 }
 
 /// Network access policy for sandboxed processes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
+///
+/// Three modes:
+/// - `Deny`: block all network at kernel level
+/// - `Allow`: unrestricted network access
+/// - `AllowDomains`: domain-specific filtering via local HTTP proxy.
+///   The sandbox restricts connections to localhost only; a proxy enforces
+///   the domain allowlist.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum NetworkPolicy {
     /// No network access. Unix domain sockets still allowed where possible.
     #[default]
     Deny,
     /// Unrestricted network access.
     Allow,
+    /// Allow network access only to specific domains via HTTP proxy.
+    /// Domains support exact match and subdomain match (e.g., "github.com"
+    /// also matches "api.github.com").
+    AllowDomains(Vec<String>),
+}
+
+impl Serialize for NetworkPolicy {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            NetworkPolicy::Deny => serializer.serialize_str("deny"),
+            NetworkPolicy::Allow => serializer.serialize_str("allow"),
+            NetworkPolicy::AllowDomains(domains) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("allow_domains", domains)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NetworkPolicy {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de;
+
+        struct NetworkPolicyVisitor;
+
+        impl<'de> de::Visitor<'de> for NetworkPolicyVisitor {
+            type Value = NetworkPolicy;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str(r#""deny", "allow", or {"allow_domains": [...]}"#)
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<NetworkPolicy, E> {
+                match value {
+                    "deny" => Ok(NetworkPolicy::Deny),
+                    "allow" => Ok(NetworkPolicy::Allow),
+                    other => Err(de::Error::unknown_variant(other, &["deny", "allow"])),
+                }
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<NetworkPolicy, A::Error> {
+                let key: String = map
+                    .next_key()?
+                    .ok_or_else(|| de::Error::custom("expected allow_domains key"))?;
+                if key == "allow_domains" {
+                    let domains: Vec<String> = map.next_value()?;
+                    Ok(NetworkPolicy::AllowDomains(domains))
+                } else {
+                    Err(de::Error::unknown_field(&key, &["allow_domains"]))
+                }
+            }
+        }
+
+        deserializer.deserialize_any(NetworkPolicyVisitor)
+    }
 }
 
 impl SandboxPolicy {
