@@ -24,13 +24,22 @@ pub enum PolicyItem {
     Rule(Rule),
 }
 
+/// How a sandbox is specified on an exec rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SandboxRef {
+    /// Reference a named policy: `:sandbox "name"`.
+    Named(String),
+    /// Inline rules: `:sandbox (allow (net *)) (allow (fs read ...))`.
+    Inline(Vec<Rule>),
+}
+
 /// A single permission rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rule {
     pub effect: Effect,
     pub matcher: CapMatcher,
-    /// Optional sandbox policy reference for exec rules: `:sandbox "name"`.
-    pub sandbox: Option<String>,
+    /// Optional sandbox policy for exec rules.
+    pub sandbox: Option<SandboxRef>,
 }
 
 /// A capability matcher — one of the four capability domains.
@@ -191,8 +200,15 @@ impl fmt::Display for PolicyItem {
 impl fmt::Display for Rule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "({} {}", self.effect, self.matcher)?;
-        if let Some(name) = &self.sandbox {
-            write!(f, " :sandbox \"{name}\"")?;
+        match &self.sandbox {
+            Some(SandboxRef::Named(name)) => write!(f, " :sandbox \"{name}\"")?,
+            Some(SandboxRef::Inline(rules)) => {
+                write!(f, " :sandbox")?;
+                for rule in rules {
+                    write!(f, " {rule}")?;
+                }
+            }
+            None => {}
         }
         write!(f, ")")
     }
@@ -391,7 +407,7 @@ mod tests {
                 args: vec![Pattern::Any],
                 has_args: vec![],
             }),
-            sandbox: Some("cargo-env".into()),
+            sandbox: Some(SandboxRef::Named("cargo-env".into())),
         };
         assert_eq!(
             r.to_string(),
