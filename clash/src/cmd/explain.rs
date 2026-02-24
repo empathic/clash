@@ -25,32 +25,44 @@ fn default_cwd() -> String {
 #[instrument(level = Level::TRACE)]
 pub fn run(json_output: bool, tool: Option<String>, input_arg: Option<String>) -> Result<()> {
     let input: ExplainInput = if let Some(tool_str) = tool {
-        // Build from CLI arguments
-        let (tool_name, input_field) = match tool_str.to_lowercase().as_str() {
-            "bash" => ("Bash", "command"),
-            "read" => ("Read", "file_path"),
-            "write" => ("Write", "file_path"),
-            "edit" => ("Edit", "file_path"),
-            _ => {
-                // Allow full tool names (Bash, Read, etc.) as-is
-                let field = match tool_str.as_str() {
-                    "Bash" => "command",
-                    "Read" | "Write" | "Edit" | "NotebookEdit" => "file_path",
-                    "Glob" | "Grep" => "pattern",
-                    "WebFetch" => "url",
-                    "WebSearch" => "query",
-                    _ => "command",
-                };
-                // Leak to get 'static -- fine for a CLI tool that runs once
-                let name: &'static str = Box::leak(tool_str.into_boxed_str());
-                (name, field)
+        // "tool" is a domain keyword — the second arg is the tool name itself,
+        // not input to a tool called "tool". This mirrors how "bash", "read",
+        // etc. are domain keywords that map the noun to the appropriate field.
+        if tool_str.to_lowercase() == "tool" {
+            let tool_name = input_arg.unwrap_or_default();
+            ExplainInput {
+                tool_name,
+                tool_input: serde_json::json!({}),
+                cwd: default_cwd(),
             }
-        };
-        let noun = input_arg.unwrap_or_default();
-        ExplainInput {
-            tool_name: tool_name.to_string(),
-            tool_input: serde_json::json!({ input_field: noun }),
-            cwd: default_cwd(),
+        } else {
+            // Build from CLI arguments
+            let (tool_name, input_field) = match tool_str.to_lowercase().as_str() {
+                "bash" => ("Bash", "command"),
+                "read" => ("Read", "file_path"),
+                "write" => ("Write", "file_path"),
+                "edit" => ("Edit", "file_path"),
+                _ => {
+                    // Allow full tool names (Bash, Read, etc.) as-is
+                    let field = match tool_str.as_str() {
+                        "Bash" => "command",
+                        "Read" | "Write" | "Edit" | "NotebookEdit" => "file_path",
+                        "Glob" | "Grep" => "pattern",
+                        "WebFetch" => "url",
+                        "WebSearch" => "query",
+                        _ => "command",
+                    };
+                    // Leak to get 'static -- fine for a CLI tool that runs once
+                    let name: &'static str = Box::leak(tool_str.into_boxed_str());
+                    (name, field)
+                }
+            };
+            let noun = input_arg.unwrap_or_default();
+            ExplainInput {
+                tool_name: tool_name.to_string(),
+                tool_input: serde_json::json!({ input_field: noun }),
+                cwd: default_cwd(),
+            }
         }
     } else {
         // Read from stdin

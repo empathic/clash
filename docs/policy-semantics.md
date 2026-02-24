@@ -164,6 +164,12 @@ The sandbox policy is enforced at the kernel level:
 - **Linux**: Landlock LSM restricts file and network access
 - **macOS**: Seatbelt sandbox profiles restrict file and network access
 
+Network enforcement in sandboxes has three tiers:
+
+- **Wildcard** `(allow (net))` — unrestricted network access
+- **Domain-specific** `(allow (net "crates.io"))` — a local HTTP proxy enforces domain filtering. The OS sandbox restricts the process to localhost-only connections; the proxy checks each request against the allowlist. On macOS, Seatbelt enforces the localhost restriction at the kernel level. On Linux, seccomp cannot filter `connect()` by destination (pointer argument), so proxy enforcement is advisory for programs that bypass `HTTP_PROXY`/`HTTPS_PROXY`.
+- **No net rule** — all network access denied at the kernel level
+
 When no `:sandbox` is specified on an exec allow, the spawned process gets a deny-all sandbox by default.
 
 Sandbox enforcement covers filesystem and network access only. Exec-level argument matching (e.g., distinguishing `git push` from `git status`) is not enforced on child processes within the sandbox — only the top-level command is checked against exec rules. See [#136](https://github.com/empathic/clash/issues/136) for the tracking issue.

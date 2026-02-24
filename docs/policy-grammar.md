@@ -306,7 +306,7 @@ Reference a named policy whose rules define the sandbox:
 ```
 (policy "cargo-env"
   (allow (fs read (subpath (env PWD))))
-  (allow (net "crates.io")))
+  (allow (net)))
 
 (policy "main"
   (allow (exec "cargo" *) :sandbox "cargo-env"))
