@@ -31,3 +31,7 @@ target
 
 # env
 .env
+
+# Agents stuff
+.claude
+.clash
