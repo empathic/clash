@@ -187,8 +187,7 @@ fn parse_bash_bin_args(parts: &[&str]) -> (String, Vec<String>) {
 
         // Check for transparent prefix commands (time, nice, nohup, etc.).
         if i < parts.len()
-            && let Some(skip) =
-                transparent_prefix_skip(parts[i], parts.get(i + 1..).unwrap_or(&[]))
+            && let Some(skip) = transparent_prefix_skip(parts[i], parts.get(i + 1..).unwrap_or(&[]))
         {
             i += 1 + skip;
             continue;
