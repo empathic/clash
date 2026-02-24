@@ -9,7 +9,8 @@ clash:
     (default deny "main")
     (policy "main"
       (allow (exec "git" *))
-      (deny (exec "git" "push" *)))
+      (deny (exec "git" "push" *))
+      (ask (tool "ExitPlanMode")))
 
 steps:
   # List the active policy
@@ -44,3 +45,24 @@ steps:
     expect:
       exit_code: 0
       stdout_contains: allow
+
+  # Tool domain: "tool" keyword with quoted tool name (the reported bug)
+  - name: explain tool domain with quoted name
+    command: policy explain tool "ExitPlanMode"
+    expect:
+      exit_code: 0
+      stdout_contains: ask
+
+  # Tool domain: "tool" keyword without quotes
+  - name: explain tool domain without quotes
+    command: policy explain tool ExitPlanMode
+    expect:
+      exit_code: 0
+      stdout_contains: ask
+
+  # Tool domain: full tool name directly (already worked before fix)
+  - name: explain tool by full name
+    command: explain ExitPlanMode
+    expect:
+      exit_code: 0
+      stdout_contains: ask

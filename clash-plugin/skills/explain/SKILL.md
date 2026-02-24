@@ -14,6 +14,7 @@ clash policy explain bash "git push"
 clash policy explain read "/etc/passwd"
 clash policy explain write "/tmp/output.txt"
 clash policy explain edit "src/main.rs"
+clash policy explain tool "ExitPlanMode"
 ```
 
 For machine-readable output (useful when chaining with other tools):

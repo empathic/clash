@@ -161,6 +161,32 @@ For the full command reference, see the [CLI Reference](docs/cli-reference.md).
 
 ---
 
+## Status Line
+
+Clash can display a live scoreboard in Claude Code's status bar, giving you ambient visibility into policy enforcement without interrupting your workflow.
+
+```
+⚡clash ✓12 ✗3 ?1 · ✗ Bash(touch ...)
+  allow with: clash allow '(exec "touch" *)'
+```
+
+The status line shows:
+
+- **Counts**: `✓` allowed, `✗` denied, `?` asked — color-coded green/red/yellow
+- **Last action**: the most recent policy decision with tool name and input summary
+- **Allow hint**: when the last action was denied, a second line shows the narrowest rule to allow it
+
+### Setup
+
+```bash
+clash statusline install     # add status line to Claude Code settings
+clash statusline uninstall   # remove it
+```
+
+After installing, the status line appears automatically in your next Claude Code session.
+
+---
+
 ## Requirements
 
 - **macOS** (Apple Silicon or Intel) or **Linux** (x86_64 or aarch64)
