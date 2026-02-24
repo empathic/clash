@@ -210,7 +210,15 @@ pub enum Commands {
     },
 
     /// Interactive policy editor
-    Edit,
+    Edit {
+        /// Print modified policy without writing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Policy level to modify: "user", "project", or "session"
+        #[arg(long)]
+        scope: Option<String>,
+    },
 
     /// View and edit policy rules
     #[command(subcommand)]
