@@ -96,6 +96,37 @@ But does not match:
 - `git --force push` (arg[0] is `--force`, not `push`)
 - `git pull --force` (arg[0] is `pull`, not `push`)
 
+#### Transparent prefix commands
+
+When evaluating Bash commands, Clash automatically strips well-known "transparent prefix" commands to find the real command being executed. This ensures that policy rules evaluate against the actual command, not the wrapper.
+
+Recognized transparent prefixes:
+
+| Command | Description | Flags handled |
+|---------|-------------|---------------|
+| `time` | Execution timer | `-p`, `-f FILE`, `-o FILE` |
+| `command` | Bash builtin (bypass functions) | `-p` (not `-v`/`-V` query modes) |
+| `nice` | Priority adjustment | `-n VALUE` |
+| `nohup` | Ignore HUP signal | (none) |
+| `timeout` | Execution time limit | `-s SIGNAL`, `-k DURATION` + mandatory DURATION arg |
+
+For example, with the policy `(deny (exec "git" "push" *))`:
+
+```
+git push origin main              ; denied — matches git push
+time git push origin main         ; denied — time stripped, matches git push
+nice -n 10 git push origin main   ; denied — nice stripped, matches git push
+timeout 30 git push origin main   ; denied — timeout stripped, matches git push
+```
+
+Prefixes can be chained and combined with environment variables:
+
+```
+time nice -n 19 env FOO=bar cargo build   ; evaluates as: cargo build
+```
+
+Commands like `sudo`, `xargs`, and `strace` are **not** treated as transparent prefixes because they fundamentally change the execution context or command semantics.
+
 ### Fs Matcher
 
 Matches filesystem operations. Optional operation filter and path filter.
