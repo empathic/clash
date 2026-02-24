@@ -71,6 +71,53 @@ pub const INTERNAL_POLICIES: &[(&str, &str)] = &[
     ("__internal_claude__", include_str!("internal_claude.sexpr")),
 ];
 
+/// Session-level context from Claude Code hook input.
+///
+/// Carries runtime values that aren't available as standard environment
+/// variables but are needed to resolve session-specific policy variables.
+#[derive(Debug, Clone, Default)]
+pub struct HookContext {
+    /// Parent directory of the session transcript file. Agent output files
+    /// are stored here and must always be readable.
+    pub transcript_dir: Option<String>,
+}
+
+impl HookContext {
+    /// Build from a transcript_path (as received in hook input).
+    pub fn from_transcript_path(transcript_path: &str) -> Self {
+        let transcript_dir = if transcript_path.is_empty() {
+            None
+        } else {
+            std::path::Path::new(transcript_path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .filter(|s| !s.is_empty())
+        };
+        Self { transcript_dir }
+    }
+}
+
+/// Environment resolver that provides session-level variables from [`HookContext`]
+/// in addition to standard environment variables.
+///
+/// Overrides `TRANSCRIPT_DIR` with the real value from hook context when available,
+/// otherwise falls through to [`StdEnvResolver`](crate::policy::compile::StdEnvResolver)
+/// which returns a safe sentinel.
+struct SessionEnvResolver<'a> {
+    hook_ctx: Option<&'a HookContext>,
+}
+
+impl crate::policy::compile::EnvResolver for SessionEnvResolver<'_> {
+    fn resolve(&self, name: &str) -> anyhow::Result<String> {
+        if name == "TRANSCRIPT_DIR"
+            && let Some(dir) = self.hook_ctx.and_then(|ctx| ctx.transcript_dir.clone())
+        {
+            return Ok(dir);
+        }
+        crate::policy::compile::StdEnvResolver.resolve(name)
+    }
+}
+
 /// A policy source loaded from a specific level.
 #[derive(Debug, Clone)]
 pub struct LoadedPolicy {
@@ -439,7 +486,7 @@ impl ClashSettings {
     /// Use `load_or_create_with_session()` with an explicit session ID (from hook
     /// input) to include session-level policies.
     pub fn load_or_create() -> Result<Self> {
-        Self::load_or_create_with_session(None)
+        Self::load_or_create_with_session(None, None)
     }
 
     /// Return the loaded policy sources (ordered by precedence, highest first).
@@ -454,8 +501,14 @@ impl ClashSettings {
     ///
     /// Pass `session_id` when processing a hook event (it's in the hook input JSON).
     /// For CLI commands, pass `None` — session policy won't be loaded.
-    #[instrument(level = Level::TRACE, skip(session_id))]
-    pub fn load_or_create_with_session(session_id: Option<&str>) -> Result<Self> {
+    ///
+    /// Pass `hook_ctx` to inject session-specific internal policies (e.g., the
+    /// transcript directory). Pass `None` for CLI commands.
+    #[instrument(level = Level::TRACE, skip(session_id, hook_ctx))]
+    pub fn load_or_create_with_session(
+        session_id: Option<&str>,
+        hook_ctx: Option<&HookContext>,
+    ) -> Result<Self> {
         let mut this = Self::default();
 
         // Collect policy sources from all available levels.
@@ -490,27 +543,37 @@ impl ClashSettings {
             return Ok(this);
         }
 
-        // If only one level, compile directly (backward-compatible path).
-        if level_sources.len() == 1 {
+        // Use a session-aware resolver that provides TRANSCRIPT_DIR etc.
+        let resolver = SessionEnvResolver { hook_ctx };
+
+        // Compile (single-level or multi-level).
+        let result = if level_sources.len() == 1 {
             let (_, source) = &level_sources[0];
-            this.set_policy_source(source);
-            return Ok(this);
-        }
+            crate::policy::compile_policy_with_internals(
+                source,
+                &resolver,
+                INTERNAL_POLICIES,
+            )
+        } else {
+            let level_refs: Vec<(PolicyLevel, &str)> = level_sources
+                .iter()
+                .map(|(l, s)| (*l, s.as_str()))
+                .collect();
+            crate::policy::compile_multi_level_with_internals(
+                &level_refs,
+                &resolver,
+                INTERNAL_POLICIES,
+            )
+        };
 
-        // Multiple levels: compile and merge.
-        let level_refs: Vec<(PolicyLevel, &str)> = level_sources
-            .iter()
-            .map(|(l, s)| (*l, s.as_str()))
-            .collect();
-
-        match crate::policy::compile_multi_level(&level_refs) {
+        match result {
             Ok(tree) => {
                 this.compiled = Some(tree);
                 this.policy_error = None;
             }
             Err(e) => {
-                let msg = format!("Failed to compile merged policy: {}", e);
-                warn!(error = %e, "Failed to compile merged policy");
+                let msg = format!("Failed to compile policy: {}", e);
+                warn!(error = %e, "Failed to compile policy");
                 this.policy_error = Some(msg);
             }
         }
@@ -870,5 +933,96 @@ mod test {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600, "policy file should be owner-only read/write");
+    }
+
+    // --- HookContext / SessionEnvResolver tests ---
+
+    #[test]
+    fn hook_context_from_transcript_path() {
+        let ctx = HookContext::from_transcript_path("/tmp/session-123/transcript.jsonl");
+        assert_eq!(ctx.transcript_dir.as_deref(), Some("/tmp/session-123"));
+    }
+
+    #[test]
+    fn hook_context_from_empty_path() {
+        let ctx = HookContext::from_transcript_path("");
+        assert!(ctx.transcript_dir.is_none());
+    }
+
+    #[test]
+    fn hook_context_from_root_file() {
+        let ctx = HookContext::from_transcript_path("/transcript.jsonl");
+        assert_eq!(ctx.transcript_dir.as_deref(), Some("/"));
+    }
+
+    #[test]
+    fn session_resolver_provides_transcript_dir() {
+        use crate::policy::compile::EnvResolver;
+        let ctx = HookContext::from_transcript_path("/tmp/session-123/transcript.jsonl");
+        let resolver = SessionEnvResolver {
+            hook_ctx: Some(&ctx),
+        };
+        assert_eq!(
+            resolver.resolve("TRANSCRIPT_DIR").unwrap(),
+            "/tmp/session-123"
+        );
+    }
+
+    #[test]
+    fn session_resolver_returns_sentinel_without_context() {
+        use crate::policy::compile::{EnvResolver, UNAVAILABLE_SESSION_PATH};
+        let resolver = SessionEnvResolver { hook_ctx: None };
+        let result = resolver.resolve("TRANSCRIPT_DIR").unwrap();
+        assert_eq!(result, UNAVAILABLE_SESSION_PATH);
+    }
+
+    #[test]
+    fn session_resolver_falls_through_to_std_env() {
+        use crate::policy::compile::EnvResolver;
+        let resolver = SessionEnvResolver { hook_ctx: None };
+        // HOME should always be set in test environments
+        let result = resolver.resolve("HOME");
+        assert!(result.is_ok(), "HOME should resolve via StdEnvResolver");
+    }
+
+    #[test]
+    fn internal_claude_policy_compiles_with_session_context() {
+        use crate::policy::compile::EnvResolver;
+        let ctx = HookContext::from_transcript_path("/tmp/session/transcript.jsonl");
+        let resolver = SessionEnvResolver {
+            hook_ctx: Some(&ctx),
+        };
+        // Verify TRANSCRIPT_DIR resolves to the actual directory
+        assert_eq!(resolver.resolve("TRANSCRIPT_DIR").unwrap(), "/tmp/session");
+
+        // Verify the internal_claude.sexpr compiles with this resolver
+        let source = format!(
+            "(default deny \"main\")\n(policy \"main\")\n{}",
+            include_str!("internal_claude.sexpr")
+        );
+        let result =
+            crate::policy::compile::compile_policy_with_env(&source, &resolver);
+        assert!(
+            result.is_ok(),
+            "internal_claude.sexpr should compile with session resolver: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn internal_claude_policy_compiles_without_session_context() {
+        // Even without hook context, the policy should compile (using sentinel).
+        let resolver = SessionEnvResolver { hook_ctx: None };
+        let source = format!(
+            "(default deny \"main\")\n(policy \"main\")\n{}",
+            include_str!("internal_claude.sexpr")
+        );
+        let result =
+            crate::policy::compile::compile_policy_with_env(&source, &resolver);
+        assert!(
+            result.is_ok(),
+            "internal_claude.sexpr should compile with sentinel: {:?}",
+            result.err()
+        );
     }
 }

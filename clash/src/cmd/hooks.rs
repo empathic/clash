@@ -6,7 +6,7 @@ use crate::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput};
 use crate::permissions::check_permission;
 use crate::policy::Effect;
 use crate::session_policy;
-use crate::settings::ClashSettings;
+use crate::settings::{ClashSettings, HookContext};
 
 use claude_settings::PermissionRule;
 
@@ -16,7 +16,8 @@ impl HooksCmd {
         let output = match self {
             Self::PreToolUse => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
-                let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id))?;
+                let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+                let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx))?;
                 let output = check_permission(&input, &settings)?;
 
                 // Update session stats for the status line (only here, not in
@@ -71,8 +72,9 @@ impl HooksCmd {
                 // Check if a sandboxed Bash command failed with network errors
                 // and provide a hint about sandbox network restrictions.
                 let network_context = {
+                    let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
                     let settings =
-                        ClashSettings::load_or_create_with_session(Some(&input.session_id)).ok();
+                        ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx)).ok();
                     settings.and_then(|s| {
                         crate::network_hints::check_for_sandbox_network_hint(&input, &s)
                     })
@@ -90,7 +92,8 @@ impl HooksCmd {
             }
             Self::PermissionRequest => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
-                let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id))?;
+                let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+                let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx))?;
                 crate::handlers::handle_permission_request(&input, &settings)?
             }
             Self::SessionStart => {
