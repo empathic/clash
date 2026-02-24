@@ -72,8 +72,10 @@ fix:
 release version:
     #!/usr/bin/env bash
     set -euo pipefail
-
+    git switch main
     new="{{version}}"
+    tag="v$new"
+    git switch -c "$tag"
 
     # Validate semver format
     if ! [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -107,20 +109,19 @@ release version:
     # Commit and tag
     git add -A '*.toml' Cargo.lock
     git commit -m "chore: bump package versions to v$new"
-    git tag "v$new"
+    git tag "v$new" -m "chore: bump package versions to v$new"
+    git push --follow-tags
+    gh pr create -f
 
     echo ""
     echo "Created commit and tag v$new."
-    echo "To trigger the release, push the tag:"
-    echo ""
-    echo "  git push origin main --follow-tags"
-    echo ""
+    echo "To trigger the release, merge the pr"
 
 # Launch a Claude session for a GitHub issue in a new tmux window.
 # Usage: just work 123
 #        just work https://github.com/empathic/clash/issues/123
 #        just work 123 plugin=true
-work issue plugin="":
+work issue:
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -136,14 +137,7 @@ work issue plugin="":
     dir="{{wt_root}}/$branch"
 
     # Create worktree + branch
-    git worktree add -b "claude/$branch" "$dir" >&2 || true
-
-    # Build plugin args if requested
-    plugin_args=""
-    if [ -n "{{plugin}}" ]; then
-        just build-plugin >&2
-        plugin_args="--plugin-dir {{plugin_dir}}"
-    fi
+    git worktree add -b "eliot/$branch" "$dir" >&2 || true
 
     # Write the prompt to a temp file to avoid shell escaping issues
     prompt_file=$(mktemp)
@@ -153,7 +147,7 @@ work issue plugin="":
 
     # Launch Claude in a new tmux window
     tmux new-window -n "$branch" -c "$dir" \
-        "claude $plugin_args --dangerously-skip-permissions < $prompt_file"
+        "claude --dangerously-skip-permissions < $prompt_file"
 
 # Remove all worktrees under clash-wt/ and prune
 wt-clean:
