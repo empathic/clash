@@ -148,6 +148,8 @@ Suggest one of these fixes:
 2. Run `clash allow web` for broader network access
 3. Use `/clash:edit` to interactively update the policy
 
+**Note:** Domain-specific net rules like `(allow (net "crates.io"))` enable network access only to listed domains via a local HTTP proxy. The proxy enforces domain filtering for programs that respect `HTTP_PROXY`/`HTTPS_PROXY` env vars. If a domain-filtered sandbox still shows network errors, the target domain may not be in the allowlist.
+
 **Do NOT retry the command** — it will fail again until the sandbox policy is updated.
 
 ### Important Behaviors
