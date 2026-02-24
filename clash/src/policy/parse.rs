@@ -193,6 +193,24 @@ fn parse_fs_matcher(args: &[SExpr]) -> Result<FsMatcher> {
             path: None,
         });
     }
+
+    // When the first arg is a path filter rather than an op pattern, treat it
+    // as shorthand for `(fs * <path_filter>)`.  This lets users write e.g.
+    //   (fs (subpath (env HOME)))
+    // instead of the more verbose
+    //   (fs * (subpath (env HOME)))
+    if is_path_filter(&args[0]) {
+        ensure!(
+            args.len() == 1,
+            "(fs) shorthand expects exactly 1 path filter argument"
+        );
+        let path = parse_path_filter(&args[0])?;
+        return Ok(FsMatcher {
+            op: OpPattern::Any,
+            path: Some(path),
+        });
+    }
+
     let op = parse_op_pattern(&args[0])?;
     let path = if args.len() > 1 {
         Some(parse_path_filter(&args[1])?)
@@ -200,6 +218,29 @@ fn parse_fs_matcher(args: &[SExpr]) -> Result<FsMatcher> {
         None
     };
     Ok(FsMatcher { op, path })
+}
+
+/// Returns true when an s-expression looks like a path filter rather than an
+/// op pattern.  Path filters are quoted strings, regexes, or lists headed by a
+/// path-filter keyword (`subpath`, `not`).
+///
+/// The `(or ...)` form is intentionally *not* treated as a path filter here
+/// because it is also a valid op pattern — `(or read write)`.  In that
+/// ambiguous case the caller falls through to `parse_op_pattern`.
+fn is_path_filter(expr: &SExpr) -> bool {
+    match expr {
+        // Quoted strings and regexes are always path filters (op patterns are
+        // bare atoms like `read` or `*`).
+        SExpr::Str(..) | SExpr::Regex(..) => true,
+        // Lists headed by a path-filter-only keyword.
+        SExpr::List(children, _) => {
+            matches!(
+                children.first(),
+                Some(SExpr::Atom(head, _)) if head == "subpath" || head == "not" || head == "join"
+            )
+        }
+        _ => false,
+    }
 }
 
 fn parse_net_matcher(args: &[SExpr]) -> Result<NetMatcher> {
@@ -918,5 +959,154 @@ mod tests {
         let printed = ast1[0].to_string();
         let ast2 = parse(&printed).unwrap();
         assert_eq!(ast1, ast2, "round-trip failed:\n{printed}");
+    }
+
+    #[test]
+    fn parse_fs_shorthand_subpath_without_op() {
+        // (fs (subpath ...)) should be equivalent to (fs * (subpath ...))
+        let shorthand =
+            parse(r#"(policy "p" (allow (fs (subpath (join (env HOME) "/.cargo")))))"#).unwrap();
+        let explicit =
+            parse(r#"(policy "p" (allow (fs * (subpath (join (env HOME) "/.cargo")))))"#).unwrap();
+
+        let get_fs = |ast: &[TopLevel]| -> FsMatcher {
+            let body = match &ast[0] {
+                TopLevel::Policy { body, .. } => body,
+                _ => panic!(),
+            };
+            match &body[0] {
+                PolicyItem::Rule(r) => match &r.matcher {
+                    CapMatcher::Fs(m) => m.clone(),
+                    _ => panic!("expected Fs"),
+                },
+                _ => panic!(),
+            }
+        };
+
+        let short_fs = get_fs(&shorthand);
+        let explicit_fs = get_fs(&explicit);
+
+        assert_eq!(short_fs.op, OpPattern::Any);
+        assert_eq!(short_fs, explicit_fs);
+    }
+
+    #[test]
+    fn parse_fs_shorthand_env_subpath() {
+        // (fs (subpath (env PWD))) should parse as OpPattern::Any + Subpath(Env(PWD))
+        let ast = parse(r#"(policy "p" (allow (fs (subpath (env PWD)))))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Fs(m) => {
+                assert_eq!(m.op, OpPattern::Any);
+                match &m.path {
+                    Some(PathFilter::Subpath(PathExpr::Env(name))) => {
+                        assert_eq!(name, "PWD");
+                    }
+                    other => panic!("expected Subpath(Env(PWD)), got {other:?}"),
+                }
+            }
+            _ => panic!("expected Fs"),
+        }
+    }
+
+    #[test]
+    fn parse_fs_shorthand_literal_path() {
+        // (fs "/tmp/foo") should parse as OpPattern::Any + Literal("/tmp/foo")
+        let ast = parse(r#"(policy "p" (deny (fs "/tmp/foo")))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Fs(m) => {
+                assert_eq!(m.op, OpPattern::Any);
+                assert_eq!(m.path, Some(PathFilter::Literal("/tmp/foo".into())));
+            }
+            _ => panic!("expected Fs"),
+        }
+    }
+
+    #[test]
+    fn parse_fs_shorthand_regex_path() {
+        // (fs /\.log$/) should parse as OpPattern::Any + Regex
+        let ast = parse(r#"(policy "p" (deny (fs /\.log$/)))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Fs(m) => {
+                assert_eq!(m.op, OpPattern::Any);
+                assert_eq!(m.path, Some(PathFilter::Regex(r"\.log$".into())));
+            }
+            _ => panic!("expected Fs"),
+        }
+    }
+
+    #[test]
+    fn parse_fs_shorthand_not_path_filter() {
+        // (fs (not "/secret")) should parse as OpPattern::Any + Not(Literal)
+        let ast = parse(r#"(policy "p" (deny (fs (not "/secret"))))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Fs(m) => {
+                assert_eq!(m.op, OpPattern::Any);
+                match &m.path {
+                    Some(PathFilter::Not(inner)) => {
+                        assert_eq!(**inner, PathFilter::Literal("/secret".into()));
+                    }
+                    other => panic!("expected Not(Literal), got {other:?}"),
+                }
+            }
+            _ => panic!("expected Fs"),
+        }
+    }
+
+    #[test]
+    fn parse_fs_explicit_op_still_works() {
+        // Explicit op pattern should still work as before
+        let ast = parse(r#"(policy "p" (allow (fs read (subpath (env PWD)))))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Fs(m) => {
+                assert_eq!(m.op, OpPattern::Single(FsOp::Read));
+                match &m.path {
+                    Some(PathFilter::Subpath(PathExpr::Env(name))) => {
+                        assert_eq!(name, "PWD");
+                    }
+                    other => panic!("expected Subpath(Env(PWD)), got {other:?}"),
+                }
+            }
+            _ => panic!("expected Fs"),
+        }
     }
 }

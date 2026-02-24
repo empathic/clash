@@ -131,13 +131,15 @@ Commands like `sudo`, `xargs`, and `strace` are **not** treated as transparent p
 
 ### Fs Matcher
 
-Matches filesystem operations. Optional operation filter and path filter.
+Matches filesystem operations. Optional operation filter and path filter. When the operation is omitted, any operation matches (equivalent to `*`).
 
 ```
 (fs)                                  ; match any fs operation
 (fs read)                             ; match reads only
 (fs write (subpath (env PWD)))        ; match writes under CWD
 (fs (or read write) (subpath "/tmp")) ; match reads or writes under /tmp
+(fs (subpath (env HOME)))             ; any op under HOME (shorthand for: fs * (subpath ...))
+(fs "/tmp/foo")                       ; any op on /tmp/foo exactly
 ```
 
 ### Net Matcher
