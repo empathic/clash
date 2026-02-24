@@ -156,3 +156,5 @@ Suggest one of these fixes:
 - When the user asks to allow something currently denied, they must remove the deny rule first
 - Always use `--dry-run` before applying policy changes
 - Summarize command output in plain English — never paste raw terminal output to the user
+- Exec rules (e.g., `(deny (exec "git" "push" *))`) apply only to the **top-level command** Claude invokes via Bash. They do NOT catch commands run by child processes. If a user asks whether an exec deny rule prevents a subprocess from running a command, explain this limitation honestly
+- Kernel sandbox restrictions on filesystem and network access DO apply to all child processes and cannot be bypassed

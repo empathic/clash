@@ -133,6 +133,8 @@ Allowed exec rules can carry sandbox constraints that clash compiles into OS-enf
 
 Even if a command is allowed by policy, the sandbox ensures it can only access the paths you specify.
 
+> **Note:** Exec rules (like `(deny (exec "git" "push" *))`) apply to the top-level command Claude runs. If an allowed command spawns a subprocess that runs a denied command, the exec rule does not fire. Kernel sandbox restrictions on filesystem and network access *do* apply to all child processes. See [#136](https://github.com/empathic/clash/issues/136) for tracking deeper exec enforcement.
+
 For the full rule syntax, see the [Policy Writing Guide](docs/policy-guide.md).
 
 ---

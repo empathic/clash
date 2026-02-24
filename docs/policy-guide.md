@@ -47,6 +47,8 @@ Clash controls three capability domains, not individual tools. A single rule can
 
 The first pattern matches the binary name, subsequent patterns match positional arguments. More arguments = more specific.
 
+> **Scope:** Exec rules evaluate the top-level command that Claude Code invokes via the Bash tool. They do not apply to child processes spawned by that command. For example, `(deny (exec "git" "push" *))` prevents Claude from directly running `git push`, but if an allowed command like `make deploy` internally calls `git push`, the deny rule does not fire — the policy engine only sees the top-level `make` command. Sandbox restrictions for filesystem and network access *are* enforced on all child processes at the kernel level (see [Sandbox Policies](#sandbox-policies)).
+
 ### Fs — File Operations
 
 ```
@@ -190,6 +192,10 @@ Named sandbox references must point to a policy defined with `(policy "name" ...
 ### Default behavior
 
 When no `:sandbox` is specified on an exec allow, the spawned process gets no filesystem/network access beyond bare minimum (deny-all sandbox by default).
+
+### What sandboxes enforce
+
+Sandbox policies constrain **filesystem and network access** at the kernel level — these restrictions are inherited by all child processes and cannot be bypassed. However, sandboxes do not enforce **exec-level argument matching** on child processes. If a sandboxed command spawns a subprocess, the subprocess inherits the filesystem and network restrictions but is not checked against exec rules. Tracking issue: [#136](https://github.com/empathic/clash/issues/136).
 
 ---
 
