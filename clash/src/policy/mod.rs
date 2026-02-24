@@ -53,3 +53,16 @@ impl fmt::Display for Effect {
         }
     }
 }
+
+impl std::str::FromStr for Effect {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "allow" => Ok(Effect::Allow),
+            "deny" => Ok(Effect::Deny),
+            "ask" => Ok(Effect::Ask),
+            _ => Err(format!("unknown effect: {s:?}")),
+        }
+    }
+}

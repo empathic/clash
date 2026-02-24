@@ -4,6 +4,7 @@ use tracing::{Level, info, instrument};
 use crate::cli::HooksCmd;
 use crate::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput};
 use crate::permissions::check_permission;
+use crate::policy::Effect;
 use crate::session_policy;
 use crate::settings::{ClashSettings, HookContext};
 
@@ -18,6 +19,18 @@ impl HooksCmd {
                 let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
                 let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx))?;
                 let output = check_permission(&input, &settings)?;
+
+                // Update session stats for the status line (only here, not in
+                // log_decision, to avoid double-counting PermissionRequest).
+                if let Some(effect) = extract_effect(&output) {
+                    crate::audit::update_session_stats(
+                        &input.session_id,
+                        &input.tool_name,
+                        &input.tool_input,
+                        effect,
+                        &input.cwd,
+                    );
+                }
 
                 // If the decision is Ask, record it so PostToolUse can detect
                 // user approval and suggest a session policy rule.
@@ -95,10 +108,18 @@ impl HooksCmd {
     }
 }
 
+fn extract_effect(output: &HookOutput) -> Option<Effect> {
+    match &output.hook_specific_output {
+        Some(HookSpecificOutput::PreToolUse(pre)) => match pre.permission_decision {
+            Some(PermissionRule::Allow) => Some(Effect::Allow),
+            Some(PermissionRule::Deny) => Some(Effect::Deny),
+            Some(PermissionRule::Ask) => Some(Effect::Ask),
+            Some(PermissionRule::Unset) | None => None,
+        },
+        _ => None,
+    }
+}
+
 fn is_ask_decision(output: &HookOutput) -> bool {
-    matches!(
-        &output.hook_specific_output,
-        Some(HookSpecificOutput::PreToolUse(pre))
-        if pre.permission_decision == Some(PermissionRule::Ask)
-    )
+    matches!(extract_effect(output), Some(Effect::Ask))
 }

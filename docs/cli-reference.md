@@ -270,7 +270,7 @@ clash explain [OPTIONS] <TOOL> [ARGS]...
 
 | Arg | Description |
 |-----|-------------|
-| `<TOOL>` | Tool type: `bash`, `read`, `write`, `edit` (or full name like `Bash`, `Read`) |
+| `<TOOL>` | Tool type: `bash`, `read`, `write`, `edit`, `tool` (or full name like `Bash`, `Read`) |
 | `[ARGS]...` | The command, file path, or noun to check (remaining args joined) |
 
 **Options:**
@@ -295,6 +295,9 @@ clash explain --json bash rm -rf /
 
 # Quoting still works
 clash explain bash "git push origin main"
+
+# Check a tool capability
+clash explain tool "ExitPlanMode"
 
 # Pipe JSON input (via policy explain)
 echo '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | clash policy explain
