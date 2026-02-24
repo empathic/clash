@@ -19,6 +19,8 @@ Clash operates on three capability domains, not individual tools. Tool invocatio
 | `Glob`/`Grep` | `fs(read)` | path = `path` or `pattern` |
 | Unknown tools | — | no capability match → default effect |
 
+> **Enforcement scope:** This capability mapping applies to top-level tool calls intercepted by Claude Code hooks. When a Bash command spawns child processes, those child processes are *not* re-evaluated against exec rules — only the top-level command is matched. Filesystem and network restrictions from sandbox policies are enforced at the kernel level and apply to all descendant processes. See [#136](https://github.com/empathic/clash/issues/136) for tracking exec-level enforcement of child processes.
+
 ---
 
 ## Compilation Pipeline
@@ -122,6 +124,8 @@ evaluate(tool_name, tool_input, cwd):
     6. Build PolicyDecision with effect, reason, and trace
 ```
 
+> **Note:** This evaluation runs once per Claude Code tool call via the PreToolUse hook. It does not run for child processes spawned by allowed Bash commands. Child processes inherit kernel-level sandbox restrictions (fs/net) but are not checked against exec rules.
+
 ### First-Match Semantics
 
 Within a capability domain, the first matching rule wins. This is safe because:
@@ -161,6 +165,8 @@ The sandbox policy is enforced at the kernel level:
 - **macOS**: Seatbelt sandbox profiles restrict file and network access
 
 When no `:sandbox` is specified on an exec allow, the spawned process gets a deny-all sandbox by default.
+
+Sandbox enforcement covers filesystem and network access only. Exec-level argument matching (e.g., distinguishing `git push` from `git status`) is not enforced on child processes within the sandbox — only the top-level command is checked against exec rules. See [#136](https://github.com/empathic/clash/issues/136) for the tracking issue.
 
 *(Note: Kernel-level sandbox enforcement is a future PR. Currently the sandbox reference is validated and compiled but not yet enforced.)*
 
