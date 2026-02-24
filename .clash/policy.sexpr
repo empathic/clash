@@ -2,6 +2,7 @@
 
 (policy "main"
   (allow (exec))
+  (allow (exec "clash" "bug" *) :sandbox (allow (net *)))
   (allow (fs (or read write create delete) (subpath (env PWD))))
   (allow (fs (or read write create delete) (subpath "/var/folders")))
   (allow (exec "ls" "-lha")))

@@ -141,7 +141,28 @@ Include inlines the referenced policy's rules. Circular includes are rejected at
 
 ## Sandbox Policies
 
-Exec rules can reference a **sandbox policy** using the `:sandbox` keyword. The sandbox policy defines what filesystem and network access a spawned process gets:
+Exec rules can attach a **sandbox policy** using the `:sandbox` keyword. The sandbox policy defines what filesystem and network access a spawned process gets.
+
+### Inline sandbox
+
+For simple cases, define sandbox rules directly on the exec rule:
+
+```
+(allow (exec "clash" "bug" *) :sandbox (allow (net *)))
+```
+
+Multiple inline rules are supported:
+
+```
+(allow (exec "cargo" "build" *) :sandbox
+  (allow (fs read (subpath (env PWD))))
+  (allow (fs write (subpath "./target")))
+  (allow (net "crates.io")))
+```
+
+### Named sandbox
+
+For sandbox policies reused across multiple exec rules, define a named policy and reference it by name:
 
 ```
 (default deny "main")
@@ -164,9 +185,11 @@ Exec rules can reference a **sandbox policy** using the `:sandbox` keyword. The 
 
 When `cargo build` matches the exec rule, the `"cargo-env"` policy defines the sandbox: the process can read the project, write to `./target`, and access `crates.io`. When `git status` matches, it gets only read access to the project via `"git-env"`.
 
-When no `:sandbox` is specified on an exec allow, the spawned process gets no filesystem/network access beyond bare minimum (deny-all sandbox by default).
+Named sandbox references must point to a policy defined with `(policy "name" ...)` in the same file. A compile error is raised if the referenced policy doesn't exist.
 
-The `:sandbox` keyword must reference a policy name defined with `(policy "name" ...)` in the same file. A compile error is raised if the referenced policy doesn't exist.
+### Default behavior
+
+When no `:sandbox` is specified on an exec allow, the spawned process gets no filesystem/network access beyond bare minimum (deny-all sandbox by default).
 
 ---
 
@@ -247,7 +270,7 @@ All user-provided names must be **quoted strings**:
 (default deny "main")             ; policy name is a string
 (policy "cwd-access" ...)         ; policy name is a string
 (include "cwd-access")            ; include target is a string
-(allow (exec "cargo" *) :sandbox "cargo-env")  ; sandbox ref is a string
+(allow (exec "cargo" *) :sandbox "cargo-env")  ; named sandbox ref is a string
 ```
 
 Bare atoms (`allow`, `deny`, `exec`, `fs`, `net`, `or`, `not`, `subpath`, `env`, `include`, `default`, `policy`) are reserved for language keywords.

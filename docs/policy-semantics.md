@@ -10,7 +10,7 @@ Clash operates on three capability domains, not individual tools. Tool invocatio
 
 | Tool | Capability | Fields |
 |------|-----------|--------|
-| `Bash` | `exec` | bin = first word of command, args = rest |
+| `Bash` | `exec` | bin = first non-env-assignment word of command, args = rest |
 | `Read` | `fs(read)` | path = `file_path` |
 | `Write` | `fs(write)` | path = `file_path` |
 | `Edit` | `fs(write)` | path = `file_path` |
@@ -49,12 +49,12 @@ DecisionTree (IR)               ← compile.rs
 2. **Find default** — extract the `(default effect "name")` declaration
 3. **Build policy map** — index all `(policy "name" ...)` blocks by name
 4. **Flatten** — recursively resolve `(include ...)` into a flat rule list
-5. **Validate sandbox references** — verify each `:sandbox "name"` points to an existing policy
+5. **Validate sandbox references** — verify each named `:sandbox "name"` points to an existing policy; compile inline `:sandbox (rule ...)` rules immediately
 6. **Group** — split rules by capability domain (exec/fs/net)
 7. **Compile matchers** — convert AST patterns to IR with pre-compiled regexes, resolve `(env NAME)` references
 8. **Sort by specificity** — most specific rules first within each domain
 9. **Detect conflicts** — reject rules with equal specificity but different effects that could match the same request
-10. **Compile sandbox policies** — for each sandbox reference, compile the referenced policy's rules into standalone rule sets
+10. **Compile sandbox policies** — for each named sandbox reference, compile the referenced policy's rules into standalone rule sets (inline sandbox rules are compiled in step 5)
 
 ---
 
@@ -101,7 +101,7 @@ Conflicts are compile-time errors. This guarantees that specificity ordering is 
 ```
 evaluate(tool_name, tool_input, cwd):
     1. Map tool invocation to capability queries
-       (e.g., Bash "git push" → Exec { bin: "git", args: ["push"] })
+       (e.g., Bash "git push" → Exec { bin: "git", args: ["push"] }, Bash "FOO=1 cargo build" → Exec { bin: "cargo", args: ["build"] })
 
     2. For each query, select the rule list:
        - Exec query → exec_rules
@@ -149,7 +149,12 @@ This enables the `clash explain` command and structured audit logging.
 
 ## Sandbox Generation
 
-When an exec allow rule matches with `:sandbox "name"`, the referenced policy's rules are pre-compiled in `sandbox_policies`. These rules define the filesystem and network permissions for the spawned process.
+When an exec allow rule matches with a `:sandbox` annotation, the sandbox rules define the filesystem and network permissions for the spawned process. Sandbox rules can be specified two ways:
+
+- **Named**: `:sandbox "name"` references a `(policy "name" ...)` block whose rules are pre-compiled into `sandbox_policies`.
+- **Inline**: `:sandbox (allow (net *)) (allow (fs ...))` compiles the inline rules directly into `sandbox_policies` under a synthetic key.
+
+Both forms produce the same compiled representation — downstream evaluation is identical.
 
 The sandbox policy is enforced at the kernel level:
 - **Linux**: Landlock LSM restricts file and network access
