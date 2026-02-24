@@ -141,6 +141,7 @@ impl DecisionTree {
     ) -> Option<SandboxPolicy> {
         let mut sandbox_rules: Vec<SandboxRule> = Vec::new();
         let mut network = NetworkPolicy::Deny;
+        let mut has_net_rules = false;
 
         for rule in rules {
             let effect = match rule.effect {
@@ -167,9 +168,31 @@ impl DecisionTree {
                         }
                     }
                 }
-                CompiledMatcher::Net(_) => {
+                CompiledMatcher::Net(net) => {
+                    has_net_rules = true;
                     if rule.effect == Effect::Allow {
-                        network = NetworkPolicy::Allow;
+                        match &net.domain {
+                            CompiledPattern::Any => {
+                                // Wildcard (allow (net)) → unrestricted network.
+                                network = NetworkPolicy::Allow;
+                            }
+                            _ => {
+                                // Domain-specific rules → collect domains for
+                                // proxy-based filtering. The OS sandbox allows
+                                // only localhost; an HTTP proxy enforces the
+                                // domain allowlist.
+                                if network != NetworkPolicy::Allow {
+                                    let mut domains = match network {
+                                        NetworkPolicy::AllowDomains(ref d) => d.clone(),
+                                        _ => Vec::new(),
+                                    };
+                                    Self::extract_domains_from_pattern(&net.domain, &mut domains);
+                                    if !domains.is_empty() {
+                                        network = NetworkPolicy::AllowDomains(domains);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 CompiledMatcher::Exec(_) | CompiledMatcher::Tool(_) => {
@@ -178,7 +201,7 @@ impl DecisionTree {
             }
         }
 
-        if sandbox_rules.is_empty() && network == NetworkPolicy::Deny {
+        if sandbox_rules.is_empty() && network == NetworkPolicy::Deny && !has_net_rules {
             return None;
         }
 
@@ -187,6 +210,37 @@ impl DecisionTree {
             rules: sandbox_rules,
             network,
         })
+    }
+
+    /// Extract literal domain strings from a `CompiledPattern` into a flat list.
+    ///
+    /// Recursively walks `Literal`, `Or`, and `Regex` variants. `Any` and `Not`
+    /// are skipped (handled at a higher level). Regex patterns are included
+    /// as-is — the proxy will attempt to match them.
+    fn extract_domains_from_pattern(pattern: &CompiledPattern, domains: &mut Vec<String>) {
+        match pattern {
+            CompiledPattern::Literal(s) => {
+                if !domains.contains(s) {
+                    domains.push(s.clone());
+                }
+            }
+            CompiledPattern::Or(pats) => {
+                for p in pats {
+                    Self::extract_domains_from_pattern(p, domains);
+                }
+            }
+            CompiledPattern::Regex(re) => {
+                // Include the regex source so the proxy can match against it.
+                let src = re.as_str().to_string();
+                if !domains.contains(&src) {
+                    domains.push(src);
+                }
+            }
+            CompiledPattern::Any | CompiledPattern::Not(_) => {
+                // Any is handled upstream (→ NetworkPolicy::Allow).
+                // Not is too complex for domain extraction — skip.
+            }
+        }
     }
 
     /// Reconstruct the source text from the preserved AST nodes.
@@ -540,8 +594,11 @@ mod tests {
         assert_eq!(deny_rule.path, "/home/user/project/.git");
         assert_eq!(deny_rule.path_match, PathMatch::Literal);
 
-        // Net: allow (because we have an allow net rule)
-        assert_eq!(sandbox.network, NetworkPolicy::Allow);
+        // Net: domain-specific → proxy-based filtering
+        assert_eq!(
+            sandbox.network,
+            NetworkPolicy::AllowDomains(vec!["crates.io".into()])
+        );
     }
 
     #[test]
@@ -803,5 +860,75 @@ mod tests {
         let implicit = tree.build_implicit_sandbox().expect("implicit sandbox");
         assert_eq!(implicit.rules.len(), 1);
         assert_eq!(implicit.rules[0].path, "/home/user/project");
+    }
+
+    /// Regression test for GitHub issue #113: domain-specific net rules
+    /// must NOT enable unrestricted sandbox networking.
+    #[test]
+    fn domain_specific_net_rule_denies_sandbox_network() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec))
+  (allow (net "github.com")))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let sandbox = tree
+            .build_implicit_sandbox()
+            .expect("net rule should produce implicit sandbox");
+        // Domain-specific net rules produce AllowDomains for proxy-based filtering.
+        assert_eq!(
+            sandbox.network,
+            NetworkPolicy::AllowDomains(vec!["github.com".into()])
+        );
+    }
+
+    #[test]
+    fn multiple_domain_specific_net_rules_deny_sandbox_network() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec))
+  (allow (net (or "github.com" "crates.io"))))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let sandbox = tree
+            .build_implicit_sandbox()
+            .expect("net rule should produce implicit sandbox");
+        assert_eq!(
+            sandbox.network,
+            NetworkPolicy::AllowDomains(vec!["github.com".into(), "crates.io".into()])
+        );
+    }
+
+    #[test]
+    fn wildcard_net_rule_allows_sandbox_network() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec))
+  (allow (net)))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let sandbox = tree
+            .build_implicit_sandbox()
+            .expect("net rule should produce implicit sandbox");
+        // Wildcard (allow (net)) enables unrestricted sandbox networking.
+        assert_eq!(sandbox.network, NetworkPolicy::Allow);
     }
 }

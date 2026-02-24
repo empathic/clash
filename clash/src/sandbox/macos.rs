@@ -84,12 +84,20 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     }
 
     // Network
-    match policy.network {
+    match &policy.network {
         NetworkPolicy::Deny => {
             p += "(deny network*)\n";
         }
         NetworkPolicy::Allow => {
             p += "(allow network*)\n";
+        }
+        NetworkPolicy::AllowDomains(_) => {
+            // Allow only localhost connections (to reach the domain-filtering proxy).
+            // Seatbelt's (remote ip) filter only accepts "localhost" or "*" as
+            // host — raw IPs like "127.0.0.1" are not valid. "localhost" covers
+            // both IPv4 (127.0.0.1) and IPv6 (::1) loopback.
+            p += "(allow network-outbound (remote ip \"localhost:*\"))\n";
+            p += "(deny network*)\n";
         }
     }
 

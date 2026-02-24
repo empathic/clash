@@ -187,8 +187,7 @@ fn parse_bash_bin_args(parts: &[&str]) -> (String, Vec<String>) {
 
         // Check for transparent prefix commands (time, nice, nohup, etc.).
         if i < parts.len()
-            && let Some(skip) =
-                transparent_prefix_skip(parts[i], parts.get(i + 1..).unwrap_or(&[]))
+            && let Some(skip) = transparent_prefix_skip(parts[i], parts.get(i + 1..).unwrap_or(&[]))
         {
             i += 1 + skip;
             continue;
@@ -872,7 +871,7 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_with_allow_net_sets_network_allow() {
+    fn sandbox_with_domain_specific_net_denies_network() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
             r#"
@@ -893,14 +892,15 @@ mod tests {
             "/home/user/project",
         );
         let sandbox = decision.sandbox.expect("sandbox should be present");
+        // Domain-specific net rules produce AllowDomains for proxy-based filtering
         assert_eq!(
             sandbox.network,
-            crate::policy::sandbox_types::NetworkPolicy::Allow
+            crate::policy::sandbox_types::NetworkPolicy::AllowDomains(vec!["crates.io".into()])
         );
     }
 
     #[test]
-    fn sandbox_net_only_allows_network() {
+    fn sandbox_net_only_domain_specific_denies_network() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
             r#"
@@ -922,7 +922,11 @@ mod tests {
         let sandbox = decision
             .sandbox
             .expect("net-only sandbox should be present");
-        assert_eq!(sandbox.network, NetworkPolicy::Allow);
+        // Domain-specific net rules produce AllowDomains for proxy-based filtering
+        assert_eq!(
+            sandbox.network,
+            NetworkPolicy::AllowDomains(vec!["crates.io".into()])
+        );
         assert!(sandbox.rules.is_empty());
     }
 

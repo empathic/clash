@@ -32,9 +32,21 @@ pub fn exec_sandboxed(
     // 1. Set NO_NEW_PRIVS (must come before seccomp and landlock)
     set_no_new_privs()?;
 
-    // 2. Install seccomp network filter if network is denied
-    if policy.network == NetworkPolicy::Deny {
-        install_seccomp_network_filter()?;
+    // 2. Install seccomp network filter based on network policy
+    match &policy.network {
+        NetworkPolicy::Deny => {
+            install_seccomp_network_filter()?;
+        }
+        NetworkPolicy::AllowDomains(_) => {
+            // On Linux, seccomp cannot filter connect() by destination address
+            // (the address arg is a pointer seccomp can't dereference). We allow
+            // outbound connections and rely on the HTTP proxy for domain filtering.
+            // This is advisory: programs that bypass HTTP_PROXY can reach any host.
+            install_seccomp_advisory_network_filter()?;
+        }
+        NetworkPolicy::Allow => {
+            // No filter needed
+        }
     }
 
     // 3. Apply Landlock filesystem rules
@@ -239,16 +251,55 @@ fn install_seccomp_network_filter() -> Result<(), SandboxError> {
     rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
     rules.insert(libc::SYS_socketpair, vec![unix_only_rule]);
 
-    let arch = if cfg!(target_arch = "x86_64") {
-        TargetArch::x86_64
-    } else if cfg!(target_arch = "aarch64") {
-        TargetArch::aarch64
-    } else {
-        return Err(SandboxError::Apply(
-            "seccomp: unsupported architecture".into(),
-        ));
-    };
+    let arch = seccomp_arch()?;
+    apply_seccomp_filter(rules, arch)
+}
 
+/// Install a permissive seccomp filter for `AllowDomains` on Linux.
+///
+/// Allows socket creation for AF_INET/AF_INET6 (needed for proxy connection)
+/// and outbound connections, but blocks bind/listen/accept to prevent the
+/// sandboxed process from running a server. Domain filtering is handled by
+/// the HTTP proxy, not seccomp.
+#[instrument(level = Level::TRACE)]
+fn install_seccomp_advisory_network_filter() -> Result<(), SandboxError> {
+    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
+
+    // Block server-side operations and ptrace
+    let deny_syscalls = [
+        libc::SYS_accept,
+        libc::SYS_accept4,
+        libc::SYS_bind,
+        libc::SYS_listen,
+        libc::SYS_ptrace,
+    ];
+
+    for &syscall in &deny_syscalls {
+        rules.insert(syscall, vec![]);
+    }
+
+    let arch = seccomp_arch()?;
+    apply_seccomp_filter(rules, arch)
+}
+
+/// Detect the target architecture for seccomp.
+fn seccomp_arch() -> Result<TargetArch, SandboxError> {
+    if cfg!(target_arch = "x86_64") {
+        Ok(TargetArch::x86_64)
+    } else if cfg!(target_arch = "aarch64") {
+        Ok(TargetArch::aarch64)
+    } else {
+        Err(SandboxError::Apply(
+            "seccomp: unsupported architecture".into(),
+        ))
+    }
+}
+
+/// Build and apply a seccomp-BPF filter from the given rules.
+fn apply_seccomp_filter(
+    rules: BTreeMap<i64, Vec<SeccompRule>>,
+    arch: TargetArch,
+) -> Result<(), SandboxError> {
     let filter = SeccompFilter::new(
         rules,
         SeccompAction::Allow,    // default: allow all syscalls
