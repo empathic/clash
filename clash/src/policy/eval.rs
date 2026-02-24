@@ -36,10 +36,7 @@ pub fn tool_to_queries(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let parts: Vec<&str> = command.split_whitespace().collect();
-            let (bin, args) = match parts.split_first() {
-                Some((b, rest)) => (b.to_string(), rest.iter().map(|s| s.to_string()).collect()),
-                None => (String::new(), vec![]),
-            };
+            let (bin, args) = parse_bash_bin_args(&parts);
             vec![CapQuery::Exec { bin, args }]
         }
         "Read" => {
@@ -135,6 +132,56 @@ pub(crate) fn extract_domain(url: &str) -> String {
         .next()
         .unwrap_or("")
         .to_string()
+}
+
+/// Check whether a token looks like a shell environment variable assignment (`KEY=value`).
+///
+/// Matches the POSIX pattern: a name (letter/underscore followed by letters, digits, or
+/// underscores) immediately followed by `=` and an optional value.
+fn is_env_assignment(token: &str) -> bool {
+    match token.find('=') {
+        Some(0) | None => false,
+        Some(pos) => {
+            let name = &token[..pos];
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+                }
+                _ => false,
+            }
+        }
+    }
+}
+
+/// Extract the binary name and arguments from whitespace-split Bash command tokens,
+/// skipping leading environment variable assignments (`VAR=value ...`).
+///
+/// Also handles the `env` utility: `env VAR=val ... cmd args` is parsed as `cmd args`.
+/// Note: `env` flags (e.g. `env -i`, `env -u VAR`) are not handled — the flag would be
+/// treated as the binary name, which fails safe to the default policy.
+fn parse_bash_bin_args(parts: &[&str]) -> (String, Vec<String>) {
+    // Skip leading VAR=value assignments.
+    let mut i = 0;
+    while i < parts.len() && is_env_assignment(parts[i]) {
+        i += 1;
+    }
+
+    // If the first non-assignment token is "env", skip it and any further assignments.
+    if i < parts.len() && parts[i] == "env" {
+        i += 1;
+        while i < parts.len() && is_env_assignment(parts[i]) {
+            i += 1;
+        }
+    }
+
+    match parts.get(i) {
+        Some(bin) => (
+            bin.to_string(),
+            parts[i + 1..].iter().map(|s| s.to_string()).collect(),
+        ),
+        None => (String::new(), vec![]),
+    }
 }
 
 impl DecisionTree {
@@ -817,5 +864,152 @@ mod tests {
             decision.sandbox.is_none(),
             "denied exec should not produce sandbox"
         );
+    }
+
+    #[test]
+    fn is_env_assignment_valid() {
+        assert!(super::is_env_assignment("FOO=bar"));
+        assert!(super::is_env_assignment("_VAR=123"));
+        assert!(super::is_env_assignment("A="));
+        assert!(super::is_env_assignment("MY_VAR_2=some=value"));
+    }
+
+    #[test]
+    fn is_env_assignment_invalid() {
+        assert!(!super::is_env_assignment("cargo"));
+        assert!(!super::is_env_assignment("=foo"));
+        assert!(!super::is_env_assignment("123=bar"));
+        assert!(!super::is_env_assignment(""));
+        assert!(!super::is_env_assignment("git"));
+    }
+
+    #[test]
+    fn parse_bash_bin_args_no_env() {
+        let parts = vec!["cargo", "build", "--release"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build", "--release"]);
+    }
+
+    #[test]
+    fn parse_bash_bin_args_single_env() {
+        let parts = vec!["SOME_ENV=foo", "cargo", "check"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["check"]);
+    }
+
+    #[test]
+    fn parse_bash_bin_args_multiple_env() {
+        let parts = vec!["A=1", "B=2", "C=3", "cargo", "build"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["build"]);
+    }
+
+    #[test]
+    fn parse_bash_bin_args_env_utility() {
+        let parts = vec!["env", "FOO=bar", "cargo", "test"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["test"]);
+    }
+
+    #[test]
+    fn parse_bash_bin_args_env_utility_no_vars() {
+        let parts = vec!["env", "cargo", "test"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "cargo");
+        assert_eq!(args, vec!["test"]);
+    }
+
+    #[test]
+    fn parse_bash_bin_args_only_env_vars() {
+        let parts = vec!["FOO=bar", "BAZ=qux"];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn parse_bash_bin_args_empty() {
+        let parts: Vec<&str> = vec![];
+        let (bin, args) = super::parse_bash_bin_args(&parts);
+        assert_eq!(bin, "");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn bash_env_var_prefix_recognized() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "cargo" *)))
+"#,
+        );
+
+        // Single env var prefix
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "SOME_ENV=foo cargo check"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn bash_multiple_env_var_prefixes() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "cargo" *)))
+"#,
+        );
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "RUST_LOG=debug TERM=xterm cargo build"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn bash_env_utility_prefix() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "cargo" *)))
+"#,
+        );
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "env RUST_BACKTRACE=1 cargo test"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn bash_env_prefix_deny_still_works() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny  (exec "git" "push" *))
+  (allow (exec "git" *)))
+"#,
+        );
+
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "GIT_SSH_COMMAND=ssh git push origin main"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
     }
 }

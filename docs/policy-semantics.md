@@ -10,7 +10,7 @@ Clash operates on three capability domains, not individual tools. Tool invocatio
 
 | Tool | Capability | Fields |
 |------|-----------|--------|
-| `Bash` | `exec` | bin = first word of command, args = rest |
+| `Bash` | `exec` | bin = first non-env-assignment word of command, args = rest |
 | `Read` | `fs(read)` | path = `file_path` |
 | `Write` | `fs(write)` | path = `file_path` |
 | `Edit` | `fs(write)` | path = `file_path` |
@@ -101,7 +101,7 @@ Conflicts are compile-time errors. This guarantees that specificity ordering is 
 ```
 evaluate(tool_name, tool_input, cwd):
     1. Map tool invocation to capability queries
-       (e.g., Bash "git push" → Exec { bin: "git", args: ["push"] })
+       (e.g., Bash "git push" → Exec { bin: "git", args: ["push"] }, Bash "FOO=1 cargo build" → Exec { bin: "cargo", args: ["build"] })
 
     2. For each query, select the rule list:
        - Exec query → exec_rules
