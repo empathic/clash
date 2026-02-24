@@ -9,7 +9,7 @@ use crate::style;
 
 /// Show policy status: layers, rules with shadowing, and potential issues.
 #[instrument(level = Level::TRACE)]
-pub fn run(_json: bool) -> Result<()> {
+pub fn run(_json: bool, verbose: bool) -> Result<()> {
     let settings = ClashSettings::load_or_create()?;
     let tree = match settings.decision_tree() {
         Some(t) => t,
@@ -84,12 +84,54 @@ pub fn run(_json: bool) -> Result<()> {
             if rules.is_empty() {
                 return;
             }
+
+            // Count builtin vs non-builtin rules
+            let builtin_count = rules
+                .iter()
+                .filter(|r| {
+                    r.origin_policy
+                        .as_ref()
+                        .is_some_and(|p| p.starts_with("__internal_"))
+                })
+                .count();
+            let non_builtin_count = rules.len() - builtin_count;
+
+            // When not verbose and there are only builtin rules, show just the summary
+            if !verbose && non_builtin_count == 0 && builtin_count > 0 {
+                println!("  {}:", style::bold(label));
+                println!(
+                    "    {}",
+                    style::dim(&format!(
+                        "{} builtin rules (clash status --verbose to show)",
+                        builtin_count
+                    ))
+                );
+                return;
+            }
+
             println!("  {}:", style::bold(label));
+
+            // When not verbose, show builtin summary first, then non-builtin rules
+            if !verbose && builtin_count > 0 {
+                println!(
+                    "    {}",
+                    style::dim(&format!(
+                        "{} builtin rules (clash status --verbose to show)",
+                        builtin_count
+                    ))
+                );
+            }
+
             for (i, rule) in rules.iter().enumerate() {
                 let builtin = rule
                     .origin_policy
                     .as_ref()
                     .is_some_and(|p| p.starts_with("__internal_"));
+
+                // Skip builtin rules in non-verbose mode
+                if !verbose && builtin {
+                    continue;
+                }
 
                 // Source tag: [builtin], [user], [project], [session]
                 let tag = if builtin {
