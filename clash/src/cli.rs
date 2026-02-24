@@ -121,7 +121,7 @@ pub enum PolicyCmd {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
         json: bool,
-        /// Tool type: bash, read, write, edit (or full tool name like Bash, Read, etc.)
+        /// Tool type: bash, read, write, edit, tool (or full tool name like Bash, Read, etc.)
         tool: Option<String>,
         /// The command, file path, or noun to check (remaining args joined)
         #[arg(trailing_var_arg = true)]
@@ -253,7 +253,7 @@ pub enum Commands {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
         json: bool,
-        /// Tool type: bash, read, write, edit (or full tool name like Bash, Read, etc.)
+        /// Tool type: bash, read, write, edit, tool (or full tool name like Bash, Read, etc.)
         tool: String,
         /// The command, file path, or noun to check (remaining args joined)
         #[arg(trailing_var_arg = true)]
