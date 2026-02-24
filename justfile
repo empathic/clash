@@ -116,23 +116,23 @@ release version:
     echo "  git push origin main --follow-tags"
     echo ""
 
-# Launch a Claude session for a Linear issue in a new tmux window.
-# Usage: just work EMP-123
-#        just work https://linear.app/empathic/issue/EMP-123/title-slug
-#        just work EMP-123 plugin=true
+# Launch a Claude session for a GitHub issue in a new tmux window.
+# Usage: just work 123
+#        just work https://github.com/empathic/clash/issues/123
+#        just work 123 plugin=true
 work issue plugin="":
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Extract issue ID from URL or use as-is
+    # Extract issue number from URL or use as-is
     input="{{issue}}"
     if [[ "$input" == http* ]]; then
-        id=$(echo "$input" | grep -oE '[A-Z]+-[0-9]+')
+        id=$(echo "$input" | grep -oE '[0-9]+$')
     else
         id="$input"
     fi
 
-    branch=$(echo "$id" | tr '[:upper:]' '[:lower:]')
+    branch="gh-$id"
     dir="{{wt_root}}/$branch"
 
     # Create worktree + branch
@@ -145,10 +145,15 @@ work issue plugin="":
         plugin_args="--plugin-dir {{plugin_dir}}"
     fi
 
+    # Write the prompt to a temp file to avoid shell escaping issues
+    prompt_file=$(mktemp)
+    cat > "$prompt_file" <<PROMPT
+    Look up GitHub issue #$id using \`gh issue view $id\`. Read the issue description, understand the requirements. /improve-as-expert execute on issue #$id.
+    PROMPT
+
     # Launch Claude in a new tmux window
     tmux new-window -n "$branch" -c "$dir" \
-        "claude $plugin_args --dangerously-skip-permissions \
-        'Look up Linear issue $id using the linear MCP server. Read the issue description, understand the requirements. /improve-as-expert execute on $id.'"
+        "claude $plugin_args --dangerously-skip-permissions < $prompt_file"
 
 # Remove all worktrees under clash-wt/ and prune
 wt-clean:
