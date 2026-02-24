@@ -57,6 +57,8 @@ tool_matcher    = "(" "tool" pattern? ")"
 
 Matches command execution. The first pattern matches the binary name. Arguments can be matched positionally (default) or in any order using `:has`.
 
+> **Scope:** Exec matching applies to the top-level command that Claude Code invokes. Child processes spawned by the command are not matched against exec rules. See [policy-semantics.md](./policy-semantics.md#capability-model) for details.
+
 #### Positional matching (default)
 
 Subsequent patterns match positional arguments left-to-right.

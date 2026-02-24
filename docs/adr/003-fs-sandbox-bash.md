@@ -38,3 +38,4 @@ In v2, this maps to:
 - Sandbox is one-way — once applied, the process cannot gain additional permissions
 - Filter expression semantics differ slightly: `And(a, b)` / `Or(a, b)` both collect rules from both sides in sandbox generation (the boolean logic is approximated by the union of sandbox rules)
 - Regex-based filters have limited support on some platforms
+- Kernel-level sandbox enforcement covers filesystem and network access only. Exec-level argument matching (e.g., `(deny (exec "git" "push" *))`) operates at the hook level and only evaluates the top-level command — child processes within the sandbox are not checked against exec rules ([#136](https://github.com/empathic/clash/issues/136))
