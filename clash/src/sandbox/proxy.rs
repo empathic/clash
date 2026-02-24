@@ -7,8 +7,8 @@
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -390,7 +390,10 @@ fn resolve_host(reader: &mut BufReader<TcpStream>, uri: &str) -> io::Result<Stri
         if n == 0 || line == "\r\n" || line == "\n" {
             break;
         }
-        if let Some(value) = line.strip_prefix("Host:").or_else(|| line.strip_prefix("host:")) {
+        if let Some(value) = line
+            .strip_prefix("Host:")
+            .or_else(|| line.strip_prefix("host:"))
+        {
             let value = value.trim();
             let host = value.split(':').next().unwrap_or(value);
             return Ok(host.to_string());
@@ -518,8 +521,7 @@ mod tests {
         };
         let handle = start_proxy(config).expect("failed to start proxy");
 
-        let mut stream =
-            TcpStream::connect(handle.addr).expect("failed to connect to proxy");
+        let mut stream = TcpStream::connect(handle.addr).expect("failed to connect to proxy");
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
@@ -528,8 +530,11 @@ mod tests {
             .unwrap();
 
         // Send a CONNECT to an unlisted domain.
-        write!(stream, "CONNECT evil.com:443 HTTP/1.1\r\nHost: evil.com\r\n\r\n")
-            .expect("failed to write request");
+        write!(
+            stream,
+            "CONNECT evil.com:443 HTTP/1.1\r\nHost: evil.com\r\n\r\n"
+        )
+        .expect("failed to write request");
         stream.flush().unwrap();
 
         let mut reader = BufReader::new(&stream);
@@ -550,8 +555,7 @@ mod tests {
     fn test_proxy_allows_listed_domain_connect() {
         // Spin up a small TCP "upstream" server on localhost that echoes back
         // a greeting then closes.
-        let upstream_listener =
-            TcpListener::bind("127.0.0.1:0").expect("failed to bind upstream");
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind upstream");
         let upstream_addr = upstream_listener.local_addr().unwrap();
 
         let upstream_thread = thread::spawn(move || {
@@ -570,8 +574,7 @@ mod tests {
         };
         let handle = start_proxy(config).expect("failed to start proxy");
 
-        let mut stream =
-            TcpStream::connect(handle.addr).expect("failed to connect to proxy");
+        let mut stream = TcpStream::connect(handle.addr).expect("failed to connect to proxy");
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();

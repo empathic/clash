@@ -187,10 +187,7 @@ fn exec_with_proxy(
             let pid = unsafe { libc::fork() };
             match pid {
                 -1 => {
-                    anyhow::bail!(
-                        "fork failed: {}",
-                        std::io::Error::last_os_error()
-                    );
+                    anyhow::bail!("fork failed: {}", std::io::Error::last_os_error());
                 }
                 0 => {
                     // Child: set proxy env vars, then apply sandbox + exec.
