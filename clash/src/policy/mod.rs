@@ -20,8 +20,8 @@ pub mod sexpr;
 pub mod specificity;
 
 pub use compile::{
-    AllShadows, ShadowInfo, compile_multi_level, compile_policy, compile_policy_with_internals,
-    detect_all_shadows,
+    AllShadows, ShadowInfo, compile_multi_level, compile_multi_level_with_internals,
+    compile_policy, compile_policy_with_internals, detect_all_shadows,
 };
 pub use decision_tree::DecisionTree;
 pub use error::{CompileError, PolicyError, PolicyParseError};

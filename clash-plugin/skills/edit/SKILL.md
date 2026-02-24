@@ -42,7 +42,20 @@ Show the preview to the user. After confirmation, apply:
 clash policy allow '(exec "git" *)'
 ```
 
-To target a specific profile, add `--profile NAME`.
+## Scope selection
+
+By default, `clash edit` and `clash policy` commands target the project-level policy if one exists, otherwise the user-level policy. To target a specific scope, add `--scope`:
+
+- `--scope user` — edit `~/.clash/policy.sexpr`, applies everywhere
+- `--scope project` — edit `<project>/.clash/policy.sexpr`, persists across sessions
+- `--scope session` — edit the temporary session policy, lasts only for the current Claude Code session
+
+Example — editing the user-level policy:
+
+```bash
+clash policy allow '(exec "git" *)' --scope user --dry-run
+clash policy allow '(exec "git" *)' --scope user
+```
 
 ## Removing a rule
 

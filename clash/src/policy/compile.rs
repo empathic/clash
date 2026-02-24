@@ -20,11 +20,33 @@ pub trait EnvResolver {
 }
 
 /// Default resolver that reads from `std::env`.
+///
+/// Session-level variables (e.g. `TRANSCRIPT_DIR`) that are normally provided
+/// by hook context fall back to a sentinel path when not set, so that internal
+/// policies always compile even outside a hook invocation.
 pub struct StdEnvResolver;
+
+/// Sentinel path for session variables not available outside a hook context.
+/// Points under `/dev/null` which cannot be a real directory, so `(subpath ...)`
+/// rules referencing it effectively match nothing.
+pub const UNAVAILABLE_SESSION_PATH: &str = "/dev/null/.clash-no-session";
+
+/// Session-level variables with safe defaults for when no hook context exists.
+const SESSION_VAR_DEFAULTS: &[(&str, &str)] = &[("TRANSCRIPT_DIR", UNAVAILABLE_SESSION_PATH)];
 
 impl EnvResolver for StdEnvResolver {
     fn resolve(&self, name: &str) -> Result<String> {
-        std::env::var(name).map_err(|_| anyhow::anyhow!("environment variable not set: {name}"))
+        match std::env::var(name) {
+            Ok(val) => Ok(val),
+            Err(_) => {
+                for &(var, default) in SESSION_VAR_DEFAULTS {
+                    if name == var {
+                        return Ok(default.to_string());
+                    }
+                }
+                anyhow::bail!("environment variable not set: {name}")
+            }
+        }
     }
 }
 

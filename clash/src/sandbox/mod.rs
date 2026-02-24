@@ -9,13 +9,14 @@
 
 use std::path::Path;
 
-use crate::policy::sandbox_types::SandboxPolicy;
-use tracing::{Level, instrument};
+use crate::policy::sandbox_types::{NetworkPolicy, SandboxPolicy};
+use tracing::{Level, info, instrument};
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+pub mod proxy;
 
 /// Result of checking platform sandbox support.
 #[derive(Debug)]
@@ -189,6 +190,8 @@ pub fn compile_sandbox_profile(policy: &SandboxPolicy, cwd: &Path) -> Result<Str
 /// Spawn an interactive shell under the sandbox policy.
 ///
 /// On macOS, uses `sandbox-exec -p <profile> -- /bin/bash -i`.
+/// If the policy uses `AllowDomains`, a local HTTP proxy is started for
+/// domain-level filtering and `HTTP_PROXY`/`HTTPS_PROXY` env vars are set.
 /// Returns when the shell exits.
 pub fn spawn_sandboxed_shell(
     policy: &SandboxPolicy,
@@ -196,16 +199,24 @@ pub fn spawn_sandboxed_shell(
 ) -> Result<std::process::ExitStatus, SandboxError> {
     let profile = compile_sandbox_profile(policy, cwd)?;
 
+    // Start domain-filtering proxy if needed. The handle keeps it alive
+    // until the shell exits; dropping it shuts down the proxy.
+    let _proxy_handle = maybe_start_proxy(&policy.network)?;
+
     #[cfg(target_os = "macos")]
     {
-        let status = std::process::Command::new("sandbox-exec")
-            .args(["-p", &profile, "--", "/bin/bash", "-i"])
+        let mut cmd = std::process::Command::new("sandbox-exec");
+        cmd.args(["-p", &profile, "--", "/bin/bash", "-i"])
             .current_dir(cwd)
             .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .status()
-            .map_err(SandboxError::Exec)?;
+            .stderr(std::process::Stdio::inherit());
+
+        if let Some(ref handle) = _proxy_handle {
+            set_proxy_env(&mut cmd, handle.addr);
+        }
+
+        let status = cmd.status().map_err(SandboxError::Exec)?;
         Ok(status)
     }
 
@@ -216,6 +227,35 @@ pub fn spawn_sandboxed_shell(
             "interactive sandboxed shell only supported on macOS".into(),
         ))
     }
+}
+
+/// Start a domain-filtering proxy if the network policy is `AllowDomains`.
+/// Returns `None` for `Deny` or `Allow` (no proxy needed).
+fn maybe_start_proxy(
+    network: &NetworkPolicy,
+) -> Result<Option<proxy::ProxyHandle>, SandboxError> {
+    match network {
+        NetworkPolicy::AllowDomains(domains) => {
+            let config = proxy::ProxyConfig {
+                allowed_domains: domains.clone(),
+            };
+            let handle = proxy::start_proxy(config)
+                .map_err(|e| SandboxError::Apply(format!("failed to start proxy: {}", e)))?;
+            info!(addr = %handle.addr, domains = ?domains, "started domain-filtering proxy");
+            Ok(Some(handle))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Set `HTTP_PROXY` / `HTTPS_PROXY` env vars on a `Command` so the sandboxed
+/// process routes traffic through the domain-filtering proxy.
+fn set_proxy_env(cmd: &mut std::process::Command, addr: std::net::SocketAddr) {
+    let proxy_url = format!("http://{}", addr);
+    cmd.env("HTTP_PROXY", &proxy_url)
+        .env("HTTPS_PROXY", &proxy_url)
+        .env("http_proxy", &proxy_url)
+        .env("https_proxy", &proxy_url);
 }
 
 /// Check whether sandboxing is supported on the current platform.

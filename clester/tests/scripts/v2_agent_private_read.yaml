@@ -1,0 +1,44 @@
+meta:
+  name: v2 agent private read via internal policy
+  description: >
+    Reads from the agent's private output directories (the session transcript
+    directory) are always allowed via the __internal_claude__ policy which
+    references (env TRANSCRIPT_DIR), even under a deny-all user policy.
+    The ~/.claude/ reads are also covered by __internal_claude__.
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (deny (fs read)))
+
+steps:
+  # Baseline: reads from arbitrary absolute paths are denied
+  - name: read /etc/passwd denied
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: "/etc/passwd"
+    expect:
+      decision: deny
+
+  # Read from the transcript directory is always allowed.
+  # In clester, transcript_path = <project_dir>/transcript.jsonl,
+  # so a relative path resolves under project_dir = transcript parent.
+  - name: read from transcript directory allowed
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: "agent-output.txt"
+    expect:
+      decision: allow
+
+  # Write to the transcript directory is NOT bypassed (only reads)
+  - name: write to transcript directory still denied
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: "output.txt"
+      content: "hello"
+    expect:
+      decision: deny

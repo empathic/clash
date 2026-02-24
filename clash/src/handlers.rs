@@ -188,7 +188,8 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
     // Ensure the user has a policy file — create one with safe defaults if not.
     let created_policy = ClashSettings::ensure_user_policy_exists()?;
 
-    let _settings = ClashSettings::load_or_create_with_session(Some(&input.session_id))?;
+    let hook_ctx = crate::settings::HookContext::from_transcript_path(&input.transcript_path);
+    let _settings = ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx))?;
 
     let mut lines = Vec::new();
 

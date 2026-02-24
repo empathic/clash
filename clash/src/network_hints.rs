@@ -73,17 +73,18 @@ pub fn check_for_sandbox_network_hint(
     let tree = settings.decision_tree()?;
     let decision = tree.evaluate(&input.tool_name, &input.tool_input, &input.cwd);
 
-    let network_denied = decision
-        .sandbox
-        .as_ref()
-        .is_some_and(|s| s.network == NetworkPolicy::Deny);
+    let network_policy = decision.sandbox.as_ref().map(|s| &s.network);
 
-    if !network_denied {
+    let network_denied = matches!(network_policy, Some(NetworkPolicy::Deny));
+    let network_domain_filtered = matches!(network_policy, Some(NetworkPolicy::AllowDomains(_)));
+
+    if !network_denied && !network_domain_filtered {
         return None;
     }
 
     info!(
         tool = "Bash",
+        domain_filtered = network_domain_filtered,
         "Detected network error in sandboxed command output"
     );
 
@@ -345,7 +346,31 @@ mod tests {
 
     #[test]
     fn test_check_returns_none_with_sandbox_network_allow() {
-        // Explicit sandbox with (net allow) → network errors aren't from sandbox
+        // Explicit sandbox with wildcard (net) → network errors aren't from sandbox
+        let mut settings = ClashSettings::default();
+        settings.set_policy_source(
+            r#"
+(default deny "main")
+(policy "with-net"
+  (allow (fs read (subpath "/tmp")))
+  (allow (net)))
+(policy "main"
+  (allow (exec "curl" *) :sandbox "with-net"))
+"#,
+        );
+        let input = ToolUseHookInput {
+            tool_name: "Bash".into(),
+            tool_input: json!({"command": "curl example.com"}),
+            tool_response: Some(json!("Could not resolve host")),
+            cwd: "/tmp".into(),
+            ..Default::default()
+        };
+        assert!(check_for_sandbox_network_hint(&input, &settings).is_none());
+    }
+
+    #[test]
+    fn test_check_returns_hint_with_domain_specific_net_rule() {
+        // Domain-specific net rules deny sandbox network → hint should fire
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
             r#"
@@ -364,6 +389,6 @@ mod tests {
             cwd: "/tmp".into(),
             ..Default::default()
         };
-        assert!(check_for_sandbox_network_hint(&input, &settings).is_none());
+        assert!(check_for_sandbox_network_hint(&input, &settings).is_some());
     }
 }
