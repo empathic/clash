@@ -175,6 +175,11 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
         );
     }
 
+    // Install the status line so the user gets ambient policy visibility.
+    if let Err(e) = super::statusline::install() {
+        warn!(error = %e, "Could not install status line");
+    }
+
     println!(
         "{} Clash initialized at {}\n",
         style::green_bold("✓"),
