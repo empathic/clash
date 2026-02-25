@@ -106,8 +106,10 @@ fn run_log(
 ) -> Result<()> {
     use crate::debug::log;
 
-    let session_id = log::resolve_session_id(session.as_deref())?;
-    let entries = log::read_session_log(&session_id)?;
+    let entries = match log::resolve_session_id(session.as_deref())? {
+        Some(id) => log::read_session_log(&id)?,
+        None => log::read_all_session_logs()?,
+    };
 
     let since_ts = if let Some(ref dur) = since {
         let duration_secs = log::parse_duration(dur)?;

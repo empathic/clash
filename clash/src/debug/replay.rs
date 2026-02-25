@@ -248,11 +248,13 @@ pub fn replay_from_args(tool: &str, input: Option<&str>, cwd: &str) -> Result<Re
 
 /// Replay the last entry from the active session's audit log.
 pub fn replay_last(session_id: Option<&str>) -> Result<ReplayResult> {
-    let sid = crate::debug::log::resolve_session_id(session_id)?;
-    let entries = crate::debug::log::read_session_log(&sid)?;
+    let entries = match crate::debug::log::resolve_session_id(session_id)? {
+        Some(sid) => crate::debug::log::read_session_log(&sid)?,
+        None => crate::debug::log::read_all_session_logs()?,
+    };
     let last = entries
         .last()
-        .ok_or_else(|| anyhow::anyhow!("no entries in session {sid} audit log"))?;
+        .ok_or_else(|| anyhow::anyhow!("no audit log entries found"))?;
 
     // Re-evaluate the last tool invocation against current policy.
     let cwd = std::env::current_dir()

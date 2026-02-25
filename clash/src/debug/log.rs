@@ -72,11 +72,55 @@ pub fn read_global_log() -> Result<Vec<AuditLogEntry>> {
 }
 
 /// Resolve the session ID: use explicit value, or fall back to active session.
-pub fn resolve_session_id(explicit: Option<&str>) -> Result<String> {
+///
+/// Returns `Ok(Some(id))` when a session is found, `Ok(None)` when no
+/// explicit session was given and no active session exists (caller should
+/// fall back to all sessions).
+pub fn resolve_session_id(explicit: Option<&str>) -> Result<Option<String>> {
     if let Some(id) = explicit {
-        return Ok(id.to_string());
+        return Ok(Some(id.to_string()));
     }
-    ClashSettings::active_session_id()
+    match ClashSettings::active_session_id() {
+        Ok(id) => Ok(Some(id)),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Read audit log entries from all known sessions, sorted by timestamp.
+pub fn read_all_session_logs() -> Result<Vec<AuditLogEntry>> {
+    let tmp = std::env::temp_dir();
+    let mut all_entries = Vec::new();
+
+    if let Ok(readdir) = std::fs::read_dir(&tmp) {
+        for entry in readdir.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("clash-") {
+                let log_path = entry.path().join("audit.jsonl");
+                if log_path.exists() {
+                    match read_log_file(&log_path) {
+                        Ok(entries) => all_entries.extend(entries),
+                        Err(e) => {
+                            tracing::debug!(
+                                path = %log_path.display(),
+                                error = %e,
+                                "skipping unreadable session log"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by timestamp so entries from different sessions interleave correctly.
+    all_entries.sort_by(|a, b| {
+        a.timestamp_secs()
+            .partial_cmp(&b.timestamp_secs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Ok(all_entries)
 }
 
 /// Filter audit log entries by the given criteria.
