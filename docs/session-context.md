@@ -152,6 +152,18 @@ Suggest one of these fixes:
 
 **Do NOT retry the command** — it will fail again until the sandbox policy is updated.
 
+### Disabling Clash
+
+Set `CLASH_DISABLE=1` in the environment to temporarily disable all clash hooks for a session.
+When disabled, clash becomes a complete pass-through — no policy evaluation, no sandbox enforcement,
+no permission decisions. All tool calls proceed as if clash were not installed.
+
+```bash
+CLASH_DISABLE=1 claude          # disable for this session only
+```
+
+Set `CLASH_DISABLE=0` or unset the variable to re-enable clash.
+
 ### Important Behaviors
 
 - Deny rules ALWAYS take precedence over allow rules, regardless of specificity

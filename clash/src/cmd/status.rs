@@ -10,6 +10,22 @@ use crate::style;
 /// Show policy status: layers, rules with shadowing, and potential issues.
 #[instrument(level = Level::TRACE)]
 pub fn run(_json: bool, verbose: bool) -> Result<()> {
+    if crate::settings::is_disabled() {
+        println!("{}", style::banner());
+        println!();
+        println!(
+            "  {} Clash is {}",
+            style::yellow_bold("!"),
+            style::yellow_bold("DISABLED")
+        );
+        println!(
+            "  {} is set — all hooks are pass-through, no policy enforcement is active.",
+            style::cyan("CLASH_DISABLE")
+        );
+        println!("  Unset the variable to re-enable clash.");
+        return Ok(());
+    }
+
     let settings = ClashSettings::load_or_create()?;
     let tree = match settings.decision_tree() {
         Some(t) => t,
