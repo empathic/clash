@@ -604,7 +604,7 @@ fn compile_pattern(pattern: &Pattern) -> Result<CompiledPattern> {
         Pattern::Literal(s) => Ok(CompiledPattern::Literal(s.clone())),
         Pattern::Regex(r) => {
             let regex = Regex::new(r).map_err(|e| anyhow::anyhow!("invalid regex /{r}/: {e}"))?;
-            Ok(CompiledPattern::Regex(regex))
+            Ok(CompiledPattern::Regex(std::sync::Arc::new(regex)))
         }
         Pattern::Or(ps) => {
             let compiled = ps.iter().map(compile_pattern).collect::<Result<_>>()?;
@@ -627,7 +627,7 @@ fn compile_path_filter(pf: &PathFilter, env: &dyn EnvResolver) -> Result<Compile
         PathFilter::Regex(r) => {
             let regex =
                 Regex::new(r).map_err(|e| anyhow::anyhow!("invalid path regex /{r}/: {e}"))?;
-            Ok(CompiledPathFilter::Regex(regex))
+            Ok(CompiledPathFilter::Regex(std::sync::Arc::new(regex)))
         }
         PathFilter::Or(fs) => {
             let compiled = fs

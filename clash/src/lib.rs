@@ -31,6 +31,7 @@
 pub mod audit;
 pub mod cli;
 pub mod cmd;
+pub mod debug;
 pub mod errors;
 pub mod handlers;
 pub mod hooks;

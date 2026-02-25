@@ -9,7 +9,6 @@ use std::convert::Infallible;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use bytes::Bytes;
