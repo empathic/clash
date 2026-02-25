@@ -90,6 +90,18 @@ pub fn compile_multi_level_with_internals(
         bail!("no policy levels to compile");
     }
 
+    // Collect user-defined policy names across all levels for override checks.
+    let mut user_policy_names = std::collections::HashSet::new();
+    for (_level, source) in levels {
+        if let Ok(ast) = super::parse::parse(source) {
+            for tl in &ast {
+                if let TopLevel::Policy { name, .. } = tl {
+                    user_policy_names.insert(name.clone());
+                }
+            }
+        }
+    }
+
     // Compile each level independently (no internal policies yet).
     let mut level_trees: Vec<(PolicyLevel, DecisionTree)> = Vec::new();
     for (level, source) in levels {
@@ -162,7 +174,7 @@ pub fn compile_multi_level_with_internals(
 
     // Inject internal policies into the merged tree.
     inject_internals(&mut merged, env, internals)?;
-    inject_worktree_rules(&mut merged);
+    inject_worktree_rules(&mut merged, &user_policy_names);
 
     Ok(merged)
 }
@@ -227,14 +239,30 @@ fn inject_internals(
     Ok(())
 }
 
+/// The policy name for automatic git worktree rules.
+///
+/// Users can override this by defining `(policy "__worktree__")` in their
+/// policy file, which disables automatic worktree access.
+const WORKTREE_POLICY_NAME: &str = "__worktree__";
+
 /// Inject filesystem rules for git worktree directories into the decision tree.
 ///
 /// When the working directory is inside a git worktree, tools like Read/Write
 /// need access to the backing repository's `.git/` directory for git operations.
 /// This adds allow rules for both the worktree-specific git dir and the shared
 /// common dir, following the same pattern as internal policy injection.
-fn inject_worktree_rules(tree: &mut DecisionTree) {
+///
+/// Skipped if the user defines a `(policy "__worktree__")` block — the user's
+/// version takes precedence, just like `__internal_clash__` overrides.
+fn inject_worktree_rules(
+    tree: &mut DecisionTree,
+    user_policy_names: &std::collections::HashSet<String>,
+) {
     use std::path::Path;
+
+    if user_policy_names.contains(WORKTREE_POLICY_NAME) {
+        return;
+    }
 
     let pwd = match std::env::var("PWD") {
         Ok(p) => p,
@@ -263,7 +291,7 @@ fn inject_worktree_rules(tree: &mut DecisionTree) {
             source: rule,
             specificity,
             sandbox: None,
-            origin_policy: Some("__worktree__".to_string()),
+            origin_policy: Some(WORKTREE_POLICY_NAME.to_string()),
             origin_level: None,
         });
     }
@@ -334,7 +362,7 @@ pub fn compile_policy_with_internals(
     }
 
     let mut tree = compile_ast(&ast, env)?;
-    inject_worktree_rules(&mut tree);
+    inject_worktree_rules(&mut tree, &user_policies);
     Ok(tree)
 }
 
@@ -1152,6 +1180,21 @@ mod tests {
         let wt = auto_worktree_rule_count();
         assert_eq!(tree.exec_rules.len(), 1);
         assert_eq!(tree.fs_rules.len(), wt);
+    }
+
+    #[test]
+    fn worktree_rules_suppressed_by_user_policy() {
+        let user_source = r#"
+(default deny "main")
+(policy "__worktree__")
+(policy "main"
+  (allow (exec "git" *)))
+"#;
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_internals(user_source, &env, &[]).unwrap();
+        assert_eq!(tree.exec_rules.len(), 1);
+        // User defined __worktree__, so no worktree rules should be injected.
+        assert_eq!(tree.fs_rules.len(), 0);
     }
 
     #[test]

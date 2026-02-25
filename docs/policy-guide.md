@@ -202,7 +202,7 @@ Sandbox policies constrain **filesystem and network access** at the kernel level
 Sandboxes automatically grant access to:
 
 - **Temp directories**: `/tmp`, `/var/tmp` (Linux) or `/private/tmp`, `/private/var/folders` (macOS), plus `$TMPDIR`
-- **Git worktree directories**: When the working directory is inside a git worktree, the backing repository's git directories (both the worktree-specific dir and the shared common dir) are automatically included so git operations work correctly. To disable this, set `CLASH_NO_WORKTREE_ACCESS=1`
+- **Git worktree directories**: When the working directory is inside a git worktree, the backing repository's git directories (both the worktree-specific dir and the shared common dir) are automatically included so git operations work correctly. To disable, define an empty `(policy "__worktree__")` in your policy file
 
 ### Sandbox network restrictions
 
