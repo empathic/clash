@@ -231,6 +231,9 @@ pub enum Commands {
         scope: Option<String>,
     },
 
+    /// Full-screen TUI policy tree viewer
+    Tui,
+
     /// View and edit policy rules
     #[command(subcommand)]
     Policy(PolicyCmd),
