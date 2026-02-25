@@ -59,6 +59,8 @@ flate2 = "1"
 tar = "0.4"
 
 nu-ansi-term = "0.50"
+ratatui = "0.30"
+crossterm = "0.29"
 reedline = "0.45"
 shlex = "1"
 similar = "2"

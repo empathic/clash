@@ -39,6 +39,8 @@ bytes = { workspace = true }
 base64 = { workspace = true }
 console = { workspace = true }
 nu-ansi-term = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
 reedline = { workspace = true }
 similar = { workspace = true }
 dialoguer = { workspace = true }
