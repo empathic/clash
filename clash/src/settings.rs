@@ -9,6 +9,22 @@ use tracing::{Level, info, instrument, warn};
 use crate::audit::AuditConfig;
 use crate::notifications::NotificationConfig;
 
+/// The environment variable that disables all clash hooks.
+///
+/// When set to any non-empty value (except `"0"` or `"false"`), clash becomes a
+/// pass-through — all hooks return immediately without evaluating policy.
+/// This is naturally session-scoped when set in the shell that launches Claude Code.
+pub const CLASH_DISABLE_ENV: &str = "CLASH_DISABLE";
+
+/// Check whether clash is disabled via the [`CLASH_DISABLE`](CLASH_DISABLE_ENV) environment variable.
+///
+/// Returns `true` when the variable is set to any non-empty value except `"0"` or `"false"`.
+pub fn is_disabled() -> bool {
+    std::env::var(CLASH_DISABLE_ENV)
+        .ok()
+        .is_some_and(|v| !v.is_empty() && v != "0" && v != "false")
+}
+
 /// Policy level — where a policy file lives in the precedence hierarchy.
 ///
 /// Higher-precedence levels override lower ones: Session > Project > User.
@@ -1018,5 +1034,73 @@ mod test {
             "internal_claude.sexpr should compile with sentinel: {:?}",
             result.err()
         );
+    }
+
+    // --- is_disabled tests ---
+
+    /// Helper that temporarily sets/unsets CLASH_DISABLE for one test.
+    /// Tests using this MUST NOT run in parallel (cargo test runs in parallel by
+    /// default but each test gets its own thread — `env::set_var` is process-wide).
+    /// We use `serial_test` style by restoring the original value.
+    fn with_clash_disable<F: FnOnce()>(value: Option<&str>, f: F) {
+        let prev = std::env::var(CLASH_DISABLE_ENV).ok();
+        match value {
+            Some(v) => unsafe { std::env::set_var(CLASH_DISABLE_ENV, v) },
+            None => unsafe { std::env::remove_var(CLASH_DISABLE_ENV) },
+        }
+        f();
+        match prev {
+            Some(v) => unsafe { std::env::set_var(CLASH_DISABLE_ENV, v) },
+            None => unsafe { std::env::remove_var(CLASH_DISABLE_ENV) },
+        }
+    }
+
+    #[test]
+    fn is_disabled_unset() {
+        with_clash_disable(None, || {
+            assert!(!is_disabled());
+        });
+    }
+
+    #[test]
+    fn is_disabled_empty_string() {
+        with_clash_disable(Some(""), || {
+            assert!(!is_disabled());
+        });
+    }
+
+    #[test]
+    fn is_disabled_zero() {
+        with_clash_disable(Some("0"), || {
+            assert!(!is_disabled());
+        });
+    }
+
+    #[test]
+    fn is_disabled_false_string() {
+        with_clash_disable(Some("false"), || {
+            assert!(!is_disabled());
+        });
+    }
+
+    #[test]
+    fn is_disabled_one() {
+        with_clash_disable(Some("1"), || {
+            assert!(is_disabled());
+        });
+    }
+
+    #[test]
+    fn is_disabled_true_string() {
+        with_clash_disable(Some("true"), || {
+            assert!(is_disabled());
+        });
+    }
+
+    #[test]
+    fn is_disabled_arbitrary_value() {
+        with_clash_disable(Some("yes"), || {
+            assert!(is_disabled());
+        });
     }
 }
