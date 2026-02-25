@@ -197,6 +197,12 @@ When no `:sandbox` is specified on an exec allow, the spawned process gets no fi
 
 Sandbox policies constrain **filesystem and network access** at the kernel level — these restrictions are inherited by all child processes and cannot be bypassed. However, sandboxes do not enforce **exec-level argument matching** on child processes. If a sandboxed command spawns a subprocess, the subprocess inherits the filesystem and network restrictions but is not checked against exec rules. Tracking issue: [#136](https://github.com/empathic/clash/issues/136).
 
+### Automatic sandbox inclusions
+
+Sandboxes automatically grant access to:
+
+- **Temp directories**: `/tmp`, `/var/tmp` (Linux) or `/private/tmp`, `/private/var/folders` (macOS), plus `$TMPDIR`
+
 ### Sandbox network restrictions
 
 Sandbox network access has three modes:
@@ -261,6 +267,16 @@ Match a directory and everything beneath it:
 (subpath (env PWD))     ; current working directory tree
 (subpath "/home/user")   ; fixed path
 ```
+
+### Worktree-Aware Subpath
+
+When working in a git worktree, git operations write to the backing repository's `.git/` directory — which is outside the worktree's directory tree. The `:worktree` flag on `subpath` tells the compiler to detect this and automatically extend access:
+
+```
+(subpath :worktree (env PWD))   ; CWD + git worktree dirs (if applicable)
+```
+
+The default policy uses `:worktree` on `(env PWD)` rules so git commands work out of the box in worktrees. If you override the default policy, add `:worktree` to your CWD subpath rules if you need git operations to work in worktrees.
 
 ### Environment Variables
 

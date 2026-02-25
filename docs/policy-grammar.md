@@ -205,7 +205,7 @@ fs_op           = "read" | "write" | "create" | "delete"
 Used in `(fs ...)` to constrain which paths match.
 
 ```ebnf
-path_filter     = "(" "subpath" path_expr ")"  ; recursive subtree match
+path_filter     = "(" "subpath" ":worktree"? path_expr ")"  ; recursive subtree match
                 | QUOTED_STRING                ; exact path match
                 | "/" REGEX "/"                ; regex on resolved path
                 | "(" "or" path_filter+ ")"    ; match any of
@@ -227,13 +227,26 @@ path_expr       = QUOTED_STRING                ; static path
   rejects: /home/user/other
 ```
 
+### Worktree-Aware Subpath
+
+Adding `:worktree` before the path expression causes the compiler to detect git worktrees and automatically extend access to the backing repository's git directories:
+
+```
+(subpath :worktree (env PWD))
+```
+
+When the resolved path is inside a git worktree, this expands at compile time to an `or` covering the original path plus the worktree-specific git directory and the shared common directory. When the path is not inside a worktree, it behaves identically to a plain `(subpath ...)`.
+
+This is primarily useful for CWD rules — without `:worktree`, git operations (commit, push, etc.) would be denied because they write to the backing repository's `.git/` directory, which lives outside the worktree.
+
 ### Environment Variables
 
 `(env NAME)` is resolved at compile time to the value of the environment variable:
 
 ```
-(subpath (env PWD))    ; expands to the current working directory
-(subpath (env HOME))   ; expands to the user's home directory
+(subpath (env PWD))              ; expands to the current working directory
+(subpath :worktree (env PWD))    ; same, plus git worktree dirs if applicable
+(subpath (env HOME))             ; expands to the user's home directory
 ```
 
 ### Path Concatenation
@@ -290,9 +303,10 @@ effect          = "allow" | "deny" | "ask"
 
 ## Keyword Arguments
 
-Keywords are atoms starting with `:`. They appear in two positions:
+Keywords are atoms starting with `:`. They appear in three positions:
 
 - **Inside exec matchers:** `:has` (see [Exec Matcher](#exec-matcher) above)
+- **Inside subpath filters:** `:worktree` (see [Worktree-Aware Subpath](#worktree-aware-subpath) above)
 - **After capability matchers:** `:sandbox` (see below)
 
 ### `:sandbox`

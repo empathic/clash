@@ -119,9 +119,9 @@ fn describe_pattern(p: &Pattern) -> String {
 
 fn describe_path_filter(pf: &PathFilter) -> String {
     match pf {
-        PathFilter::Subpath(PathExpr::Env(name)) => format!("files under ${name}"),
-        PathFilter::Subpath(PathExpr::Static(s)) => format!("files under {s}"),
-        PathFilter::Subpath(PathExpr::Join(parts)) => {
+        PathFilter::Subpath(PathExpr::Env(name), _) => format!("files under ${name}"),
+        PathFilter::Subpath(PathExpr::Static(s), _) => format!("files under {s}"),
+        PathFilter::Subpath(PathExpr::Join(parts), _) => {
             let desc: Vec<String> = parts
                 .iter()
                 .map(|p| match p {
@@ -214,7 +214,7 @@ mod tests {
             effect: Effect::Allow,
             matcher: CapMatcher::Fs(FsMatcher {
                 op: OpPattern::Single(FsOp::Read),
-                path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+                path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), false)),
             }),
             sandbox: None,
         };
@@ -227,7 +227,7 @@ mod tests {
             effect: Effect::Allow,
             matcher: CapMatcher::Fs(FsMatcher {
                 op: OpPattern::Or(vec![FsOp::Write, FsOp::Create]),
-                path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+                path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), false)),
             }),
             sandbox: None,
         };

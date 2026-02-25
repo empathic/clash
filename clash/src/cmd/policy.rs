@@ -151,7 +151,7 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
                             FsOp::Create,
                             FsOp::Delete,
                         ]),
-                        path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+                        path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), true)),
                     }),
                     sandbox: None,
                 },
@@ -160,7 +160,7 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
                 effect,
                 matcher: CapMatcher::Fs(FsMatcher {
                     op: OpPattern::Or(vec![FsOp::Write, FsOp::Create]),
-                    path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+                    path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), true)),
                 }),
                 sandbox: None,
             }]),
@@ -168,7 +168,7 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
                 effect,
                 matcher: CapMatcher::Fs(FsMatcher {
                     op: OpPattern::Single(FsOp::Read),
-                    path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+                    path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), true)),
                 }),
                 sandbox: None,
             }]),
