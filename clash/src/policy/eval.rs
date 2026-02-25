@@ -827,7 +827,8 @@ mod tests {
         );
         assert_eq!(decision.effect, Effect::Allow);
         let sandbox = decision.sandbox.expect("sandbox should be present");
-        assert_eq!(sandbox.rules.len(), 1);
+        let temp_count = crate::policy::decision_tree::DecisionTree::temp_directory_paths().len();
+        assert_eq!(sandbox.rules.len(), 1 + temp_count);
         assert_eq!(sandbox.rules[0].path, "/home/user/project");
         assert_eq!(
             sandbox.rules[0].path_match,
@@ -927,7 +928,9 @@ mod tests {
             sandbox.network,
             NetworkPolicy::AllowDomains(vec!["crates.io".into()])
         );
-        assert!(sandbox.rules.is_empty());
+        // Only temp directory rules (no explicit fs rules in this sandbox)
+        let temp_count = crate::policy::decision_tree::DecisionTree::temp_directory_paths().len();
+        assert_eq!(sandbox.rules.len(), temp_count);
     }
 
     #[test]
@@ -953,7 +956,9 @@ mod tests {
             .sandbox
             .expect("inline sandbox should produce SandboxPolicy");
         assert_eq!(sandbox.network, NetworkPolicy::Allow);
-        assert!(sandbox.rules.is_empty());
+        // Only temp directory rules (no explicit fs rules in this sandbox)
+        let temp_count = crate::policy::decision_tree::DecisionTree::temp_directory_paths().len();
+        assert_eq!(sandbox.rules.len(), temp_count);
     }
 
     #[test]

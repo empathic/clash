@@ -549,11 +549,7 @@ impl ClashSettings {
         // Compile (single-level or multi-level).
         let result = if level_sources.len() == 1 {
             let (_, source) = &level_sources[0];
-            crate::policy::compile_policy_with_internals(
-                source,
-                &resolver,
-                INTERNAL_POLICIES,
-            )
+            crate::policy::compile_policy_with_internals(source, &resolver, INTERNAL_POLICIES)
         } else {
             let level_refs: Vec<(PolicyLevel, &str)> = level_sources
                 .iter()
@@ -1000,8 +996,7 @@ mod test {
             "(default deny \"main\")\n(policy \"main\")\n{}",
             include_str!("internal_claude.sexpr")
         );
-        let result =
-            crate::policy::compile::compile_policy_with_env(&source, &resolver);
+        let result = crate::policy::compile::compile_policy_with_env(&source, &resolver);
         assert!(
             result.is_ok(),
             "internal_claude.sexpr should compile with session resolver: {:?}",
@@ -1017,8 +1012,7 @@ mod test {
             "(default deny \"main\")\n(policy \"main\")\n{}",
             include_str!("internal_claude.sexpr")
         );
-        let result =
-            crate::policy::compile::compile_policy_with_env(&source, &resolver);
+        let result = crate::policy::compile::compile_policy_with_env(&source, &resolver);
         assert!(
             result.is_ok(),
             "internal_claude.sexpr should compile with sentinel: {:?}",

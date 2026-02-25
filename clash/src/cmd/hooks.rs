@@ -17,7 +17,10 @@ impl HooksCmd {
             Self::PreToolUse => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
                 let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
-                let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx))?;
+                let settings = ClashSettings::load_or_create_with_session(
+                    Some(&input.session_id),
+                    Some(&hook_ctx),
+                )?;
                 let output = check_permission(&input, &settings)?;
 
                 // Update session stats for the status line (only here, not in
@@ -73,8 +76,11 @@ impl HooksCmd {
                 // and provide a hint about sandbox network restrictions.
                 let network_context = {
                     let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
-                    let settings =
-                        ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx)).ok();
+                    let settings = ClashSettings::load_or_create_with_session(
+                        Some(&input.session_id),
+                        Some(&hook_ctx),
+                    )
+                    .ok();
                     settings.and_then(|s| {
                         crate::network_hints::check_for_sandbox_network_hint(&input, &s)
                     })
@@ -93,7 +99,10 @@ impl HooksCmd {
             Self::PermissionRequest => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
                 let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
-                let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx))?;
+                let settings = ClashSettings::load_or_create_with_session(
+                    Some(&input.session_id),
+                    Some(&hook_ctx),
+                )?;
                 crate::handlers::handle_permission_request(&input, &settings)?
             }
             Self::SessionStart => {
