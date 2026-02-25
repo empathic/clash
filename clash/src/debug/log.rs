@@ -253,10 +253,9 @@ pub fn format_table(entries: &[AuditLogEntry]) -> String {
     // When single session, print which one.
     if !multi_session {
         let sid = entries[0].session_id.as_str();
-        if !sid.is_empty() {
-            lines.push(format!("  {} {}", style::dim("session:"), style::dim(sid)));
-            lines.push(String::new());
-        }
+        let label = if sid.is_empty() { "unknown" } else { sid };
+        lines.push(format!("  {} {}", style::dim("session:"), style::dim(label)));
+        lines.push(String::new());
     }
 
     // Pad a string to exactly `width` visible characters, then apply styling.
