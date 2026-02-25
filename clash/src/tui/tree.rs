@@ -86,19 +86,29 @@ impl TreeNode {
     pub fn rule_count(&self) -> usize {
         match &self.kind {
             TreeNodeKind::Leaf { .. } => 1,
-            _ => self.children.iter().map(|c| c.rule_count()).count_rules(),
+            _ => self.children.iter().map(|c| c.rule_count()).sum(),
         }
     }
-}
 
-/// Helper trait for counting rules.
-trait CountRules: Iterator<Item = usize> {
-    fn count_rules(self) -> usize;
-}
-
-impl<I: Iterator<Item = usize>> CountRules for I {
-    fn count_rules(self) -> usize {
-        self.sum()
+    /// Count leaf effects: (allow, deny, ask).
+    pub fn effect_counts(&self) -> (usize, usize, usize) {
+        match &self.kind {
+            TreeNodeKind::Leaf { effect, .. } => match effect {
+                Effect::Allow => (1, 0, 0),
+                Effect::Deny => (0, 1, 0),
+                Effect::Ask => (0, 0, 1),
+            },
+            _ => {
+                let (mut a, mut d, mut k) = (0, 0, 0);
+                for child in &self.children {
+                    let (ca, cd, ck) = child.effect_counts();
+                    a += ca;
+                    d += cd;
+                    k += ck;
+                }
+                (a, d, k)
+            }
+        }
     }
 }
 

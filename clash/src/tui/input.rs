@@ -88,7 +88,9 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> InputResult {
         KeyCode::Char('u') => app.undo(),
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => app.redo(),
 
-        // Collapse/expand all
+        // Fold level / subtree / all
+        KeyCode::Char('z') => app.toggle_fold_level(),
+        KeyCode::Char('Z') => app.toggle_fold_recursive(),
         KeyCode::Char('[') => app.collapse_all(),
         KeyCode::Char(']') => app.expand_all(),
 
