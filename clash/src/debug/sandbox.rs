@@ -34,11 +34,7 @@ impl SandboxReport {
         let mut lines = Vec::new();
 
         lines.push(style::bold("Sandbox inspection:").to_string());
-        lines.push(format!(
-            "  {}   {}",
-            style::cyan("tool:"),
-            self.tool_name
-        ));
+        lines.push(format!("  {}   {}", style::cyan("tool:"), self.tool_name));
         lines.push(format!("  {}   {}", style::cyan("noun:"), self.noun));
         lines.push(format!(
             "  {} {}",
@@ -119,9 +115,7 @@ impl SandboxReport {
                 } else {
                     lines.push(format!(
                         "  {}",
-                        style::dim(
-                            "This command is denied by policy — sandbox does not apply."
-                        )
+                        style::dim("This command is denied by policy — sandbox does not apply.")
                     ));
                 }
             }
@@ -169,9 +163,9 @@ pub fn inspect(tool: &str, input: Option<&str>) -> Result<SandboxReport> {
     let cwd_path = Path::new(&cwd);
 
     // Compile platform-specific profile if sandbox is present.
-    let compiled_profile = sandbox.as_ref().and_then(|s| {
-        crate::sandbox::compile_sandbox_profile(s, cwd_path).ok()
-    });
+    let compiled_profile = sandbox
+        .as_ref()
+        .and_then(|s| crate::sandbox::compile_sandbox_profile(s, cwd_path).ok());
 
     // Compute effective capabilities for notable paths.
     let path_caps = if let Some(ref s) = sandbox {
@@ -232,11 +226,7 @@ fn format_network(network: &NetworkPolicy) -> String {
         NetworkPolicy::Deny => style::red("denied (all network blocked)"),
         NetworkPolicy::Allow => style::green("allowed (unrestricted)"),
         NetworkPolicy::AllowDomains(domains) => {
-            format!(
-                "{}: {}",
-                style::yellow("filtered"),
-                domains.join(", ")
-            )
+            format!("{}: {}", style::yellow("filtered"), domains.join(", "))
         }
     }
 }

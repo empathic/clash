@@ -225,7 +225,6 @@ fn inject_internals(
     Ok(())
 }
 
-
 /// Compile with internal policies injected.
 ///
 /// 1. Parses user source
@@ -626,8 +625,7 @@ fn compile_path_filter(pf: &PathFilter, env: &dyn EnvResolver) -> Result<Compile
                 // When :worktree is set, expand to include git worktree directories.
                 // If the resolved path is inside a git worktree, produce an Or of
                 // the original path plus the backing git directories.
-                let wt_paths =
-                    crate::git::worktree_sandbox_paths(std::path::Path::new(&resolved));
+                let wt_paths = crate::git::worktree_sandbox_paths(std::path::Path::new(&resolved));
                 if wt_paths.is_empty() {
                     Ok(CompiledPathFilter::Subpath(resolved))
                 } else {

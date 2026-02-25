@@ -6,10 +6,10 @@
 
 use anyhow::{Context, Result};
 
+use crate::policy::DecisionTree;
 use crate::policy::eval::CapQuery;
 use crate::policy::ir::PolicyDecision;
 use crate::policy::sandbox_types::SandboxPolicy;
-use crate::policy::DecisionTree;
 use crate::settings::{ClashSettings, PolicyLevel};
 use crate::style;
 
@@ -34,11 +34,7 @@ impl ReplayResult {
 
         // Input summary
         lines.push(style::bold("Input:").to_string());
-        lines.push(format!(
-            "  {}   {}",
-            style::cyan("tool:"),
-            self.tool_name
-        ));
+        lines.push(format!("  {}   {}", style::cyan("tool:"), self.tool_name));
         lines.push(format!("  {}   {}", style::cyan("noun:"), self.noun));
         lines.push(String::new());
 
@@ -55,13 +51,14 @@ impl ReplayResult {
         // Level (if multi-level)
         if self.multi_level
             && let Some(first_match) = self.decision.trace.matched_rules.first()
-                && let Some(level) = self.find_origin_level(first_match) {
-                    lines.push(format!(
-                        "{} {}",
-                        style::bold("Level:   "),
-                        style::cyan(&level.to_string())
-                    ));
-                }
+            && let Some(level) = self.find_origin_level(first_match)
+        {
+            lines.push(format!(
+                "{} {}",
+                style::bold("Level:   "),
+                style::cyan(&level.to_string())
+            ));
+        }
         lines.push(String::new());
 
         // Matched rules
@@ -79,16 +76,10 @@ impl ReplayResult {
                             eff
                         ));
                     } else {
-                        lines.push(format!(
-                            "  [{}] {} -> {}",
-                            m.rule_index, m.description, eff
-                        ));
+                        lines.push(format!("  [{}] {} -> {}", m.rule_index, m.description, eff));
                     }
                 } else {
-                    lines.push(format!(
-                        "  [{}] {} -> {}",
-                        m.rule_index, m.description, eff
-                    ));
+                    lines.push(format!("  [{}] {} -> {}", m.rule_index, m.description, eff));
                 }
             }
             lines.push(String::new());
@@ -197,10 +188,7 @@ impl ReplayResult {
     }
 
     /// Look up the origin PolicyLevel for a matched rule.
-    fn find_origin_level(
-        &self,
-        m: &crate::policy::ir::RuleMatch,
-    ) -> Option<&PolicyLevel> {
+    fn find_origin_level(&self, m: &crate::policy::ir::RuleMatch) -> Option<&PolicyLevel> {
         use crate::policy::decision_tree::CompiledRule;
         let rule_lists: &[&[CompiledRule]] = &[
             &self.tree.exec_rules,
@@ -262,11 +250,7 @@ pub fn replay_last(session_filter: Option<&str>) -> Result<ReplayResult> {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    replay_from_args(
-        &last.tool_name,
-        Some(&last.tool_input_summary),
-        &cwd,
-    )
+    replay_from_args(&last.tool_name, Some(&last.tool_input_summary), &cwd)
 }
 
 /// Replay an audit log entry identified by its short hash.
@@ -276,11 +260,7 @@ pub fn replay_hash(hash: &str) -> Result<ReplayResult> {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    replay_from_args(
-        &entry.tool_name,
-        Some(&entry.tool_input_summary),
-        &cwd,
-    )
+    replay_from_args(&entry.tool_name, Some(&entry.tool_input_summary), &cwd)
 }
 
 /// Resolve tool name and input JSON from CLI arguments.

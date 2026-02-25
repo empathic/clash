@@ -145,26 +145,31 @@ pub fn filter_entries(entries: Vec<AuditLogEntry>, filter: &LogFilter) -> Vec<Au
         .into_iter()
         .filter(|e| {
             if let Some(ref effect) = filter.effect
-                && !e.decision.eq_ignore_ascii_case(effect) {
-                    return false;
-                }
+                && !e.decision.eq_ignore_ascii_case(effect)
+            {
+                return false;
+            }
             if let Some(ref tool) = filter.tool
-                && !e.tool_name.eq_ignore_ascii_case(tool) {
-                    return false;
-                }
+                && !e.tool_name.eq_ignore_ascii_case(tool)
+            {
+                return false;
+            }
             if let Some(ref session) = filter.session
-                && !e.session_id.contains(session.as_str()) {
-                    return false;
-                }
+                && !e.session_id.contains(session.as_str())
+            {
+                return false;
+            }
             if let Some(ref exclude) = filter.exclude_session
-                && e.session_id.contains(exclude.as_str()) {
-                    return false;
-                }
+                && e.session_id.contains(exclude.as_str())
+            {
+                return false;
+            }
             if let Some(since) = filter.since
                 && let Some(ts) = e.timestamp_secs()
-                    && ts < since {
-                        return false;
-                    }
+                && ts < since
+            {
+                return false;
+            }
             true
         })
         .collect();
@@ -254,7 +259,11 @@ pub fn format_table(entries: &[AuditLogEntry]) -> String {
     if !multi_session {
         let sid = entries[0].session_id.as_str();
         let label = if sid.is_empty() { "unknown" } else { sid };
-        lines.push(format!("  {} {}", style::dim("session:"), style::dim(label)));
+        lines.push(format!(
+            "  {} {}",
+            style::dim("session:"),
+            style::dim(label)
+        ));
         lines.push(String::new());
     }
 
@@ -304,7 +313,10 @@ pub fn format_table(entries: &[AuditLogEntry]) -> String {
         let hash = pad(&entry.short_hash(), 7);
         let when = pad_right(&format_timestamp(&entry.timestamp), 8);
         let subject_width = if multi_session { 44 } else { 50 };
-        let subject = pad(&truncate(&entry.tool_input_summary, subject_width), subject_width);
+        let subject = pad(
+            &truncate(&entry.tool_input_summary, subject_width),
+            subject_width,
+        );
         let resolution = truncate(&entry.resolution, 40);
         let tool = pad(&entry.tool_name, 6);
 
