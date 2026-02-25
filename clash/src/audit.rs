@@ -18,6 +18,8 @@ use crate::policy::ir::DecisionTrace;
 struct AuditEntry<'a> {
     /// Unix timestamp with millisecond precision (e.g. `1706123456.789`).
     timestamp: String,
+    /// The session that produced this entry.
+    session_id: &'a str,
     /// The tool that was invoked (e.g. "Bash", "Read").
     tool_name: &'a str,
     /// Summary of the tool input (truncated for large inputs).
@@ -245,6 +247,7 @@ pub fn log_decision(
 
     let entry = AuditEntry {
         timestamp: chrono_timestamp(),
+        session_id,
         tool_name,
         tool_input_summary,
         decision: effect_str(effect),

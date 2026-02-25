@@ -10,11 +10,15 @@ use tracing::{Level, instrument};
 /// Subcommands for `clash debug`.
 #[derive(Subcommand, Debug)]
 pub enum DebugCmd {
-    /// View audit log entries for a session
+    /// View audit log entries
     Log {
-        /// Session ID (default: active session)
+        /// Only show entries from sessions matching this substring
         #[arg(long)]
         session: Option<String>,
+
+        /// Exclude entries from sessions matching this substring
+        #[arg(long)]
+        exclude_session: Option<String>,
 
         /// Show entries from the last duration (e.g., "5m", "1h", "30s")
         #[arg(long)]
@@ -46,11 +50,11 @@ pub enum DebugCmd {
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
 
-        /// Replay the last logged command from the active session
+        /// Replay the last logged command
         #[arg(long)]
         last: bool,
 
-        /// Session ID for --last (default: active session)
+        /// Only consider entries from sessions matching this substring (for --last)
         #[arg(long)]
         session: Option<String>,
 
@@ -78,12 +82,13 @@ pub fn run(cmd: DebugCmd) -> Result<()> {
     match cmd {
         DebugCmd::Log {
             session,
+            exclude_session,
             since,
             effect,
             tool,
             limit,
             json,
-        } => run_log(session, since, effect, tool, limit, json),
+        } => run_log(session, exclude_session, since, effect, tool, limit, json),
         DebugCmd::Replay {
             tool,
             args,
@@ -98,6 +103,7 @@ pub fn run(cmd: DebugCmd) -> Result<()> {
 #[instrument(level = Level::TRACE)]
 fn run_log(
     session: Option<String>,
+    exclude_session: Option<String>,
     since: Option<String>,
     effect: Option<String>,
     tool: Option<String>,
@@ -106,18 +112,8 @@ fn run_log(
 ) -> Result<()> {
     use crate::debug::log;
 
-    let entries = if let Some(ref explicit) = session {
-        // User explicitly requested a session — error if not found.
-        log::read_session_log(explicit)?
-    } else {
-        // Try the active session first, fall back to all sessions.
-        match log::resolve_session_id(None)?
-            .and_then(|id| log::read_session_log(&id).ok())
-        {
-            Some(entries) if !entries.is_empty() => entries,
-            _ => log::read_all_session_logs()?,
-        }
-    };
+    // Always read all sessions — filtering happens via LogFilter.
+    let entries = log::read_all_session_logs()?;
 
     let since_ts = if let Some(ref dur) = since {
         let duration_secs = log::parse_duration(dur)?;
@@ -133,6 +129,8 @@ fn run_log(
     let filter = log::LogFilter {
         effect,
         tool,
+        session,
+        exclude_session,
         since: since_ts,
         limit,
     };

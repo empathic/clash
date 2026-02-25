@@ -23,6 +23,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditLogEntry {
     pub timestamp: String,
+    /// Session that produced this entry. May be empty for old entries
+    /// written before session_id was added to the audit format.
+    #[serde(default)]
+    pub session_id: String,
     pub tool_name: String,
     pub tool_input_summary: String,
     pub decision: String,

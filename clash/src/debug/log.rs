@@ -9,7 +9,6 @@ use anyhow::{Context, Result};
 
 use crate::audit;
 use crate::debug::AuditLogEntry;
-use crate::settings::ClashSettings;
 use crate::style;
 
 /// Filter criteria for audit log entries.
@@ -19,6 +18,10 @@ pub struct LogFilter {
     pub effect: Option<String>,
     /// Only include entries for this tool name.
     pub tool: Option<String>,
+    /// Only include entries whose session_id contains this substring.
+    pub session: Option<String>,
+    /// Exclude entries whose session_id contains this substring.
+    pub exclude_session: Option<String>,
     /// Only include entries after this timestamp (seconds since epoch).
     pub since: Option<f64>,
     /// Maximum number of entries to return.
@@ -54,7 +57,9 @@ pub fn read_session_log(session_id: &str) -> Result<Vec<AuditLogEntry>> {
             path.display()
         );
     }
-    read_log_file(&path)
+    let mut entries = read_log_file(&path)?;
+    backfill_session_id(&mut entries, session_id);
+    Ok(entries)
 }
 
 /// Read the global audit log.
@@ -71,21 +76,6 @@ pub fn read_global_log() -> Result<Vec<AuditLogEntry>> {
     read_log_file(&path)
 }
 
-/// Resolve the session ID: use explicit value, or fall back to active session.
-///
-/// Returns `Ok(Some(id))` when a session is found, `Ok(None)` when no
-/// explicit session was given and no active session exists (caller should
-/// fall back to all sessions).
-pub fn resolve_session_id(explicit: Option<&str>) -> Result<Option<String>> {
-    if let Some(id) = explicit {
-        return Ok(Some(id.to_string()));
-    }
-    match ClashSettings::active_session_id() {
-        Ok(id) => Ok(Some(id)),
-        Err(_) => Ok(None),
-    }
-}
-
 /// Read audit log entries from all known sessions, sorted by timestamp.
 pub fn read_all_session_logs() -> Result<Vec<AuditLogEntry>> {
     let tmp = std::env::temp_dir();
@@ -95,11 +85,14 @@ pub fn read_all_session_logs() -> Result<Vec<AuditLogEntry>> {
         for entry in readdir.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with("clash-") {
+            if let Some(session_id) = name.strip_prefix("clash-") {
                 let log_path = entry.path().join("audit.jsonl");
                 if log_path.exists() {
                     match read_log_file(&log_path) {
-                        Ok(entries) => all_entries.extend(entries),
+                        Ok(mut entries) => {
+                            backfill_session_id(&mut entries, session_id);
+                            all_entries.extend(entries);
+                        }
                         Err(e) => {
                             tracing::debug!(
                                 path = %log_path.display(),
@@ -121,6 +114,15 @@ pub fn read_all_session_logs() -> Result<Vec<AuditLogEntry>> {
     });
 
     Ok(all_entries)
+}
+
+/// Fill in `session_id` for entries that predate the field being written to disk.
+fn backfill_session_id(entries: &mut [AuditLogEntry], session_id: &str) {
+    for entry in entries.iter_mut() {
+        if entry.session_id.is_empty() {
+            entry.session_id = session_id.to_string();
+        }
+    }
 }
 
 /// Find an audit log entry by its short hash, searching all sessions.
@@ -148,6 +150,14 @@ pub fn filter_entries(entries: Vec<AuditLogEntry>, filter: &LogFilter) -> Vec<Au
                 }
             if let Some(ref tool) = filter.tool
                 && !e.tool_name.eq_ignore_ascii_case(tool) {
+                    return false;
+                }
+            if let Some(ref session) = filter.session
+                && !e.session_id.contains(session.as_str()) {
+                    return false;
+                }
+            if let Some(ref exclude) = filter.exclude_session
+                && e.session_id.contains(exclude.as_str()) {
                     return false;
                 }
             if let Some(since) = filter.since
@@ -235,33 +245,66 @@ pub fn format_table(entries: &[AuditLogEntry]) -> String {
 
     let mut lines = Vec::new();
 
+    // Show session column when entries span multiple sessions.
+    let sessions: std::collections::HashSet<&str> =
+        entries.iter().map(|e| e.session_id.as_str()).collect();
+    let multi_session = sessions.len() > 1;
+
     // Header
-    lines.push(format!(
-        "  {} {:<7}  {:>8}  {:<6}  {:<50}  {}",
-        style::dim(""),
-        style::dim("id"),
-        style::dim("when"),
-        style::dim("tool"),
-        style::dim("subject"),
-        style::dim("resolution"),
-    ));
+    if multi_session {
+        lines.push(format!(
+            "  {} {:<7}  {:>8}  {:<12}  {:<6}  {:<44}  {}",
+            style::dim(""),
+            style::dim("id"),
+            style::dim("when"),
+            style::dim("session"),
+            style::dim("tool"),
+            style::dim("subject"),
+            style::dim("resolution"),
+        ));
+    } else {
+        lines.push(format!(
+            "  {} {:<7}  {:>8}  {:<6}  {:<50}  {}",
+            style::dim(""),
+            style::dim("id"),
+            style::dim("when"),
+            style::dim("tool"),
+            style::dim("subject"),
+            style::dim("resolution"),
+        ));
+    }
 
     for entry in entries {
         let symbol = effect_symbol(&entry.decision);
         let hash = entry.short_hash();
         let when = format_timestamp(&entry.timestamp);
-        let subject = truncate(&entry.tool_input_summary, 50);
+        let subject_width = if multi_session { 44 } else { 50 };
+        let subject = truncate(&entry.tool_input_summary, subject_width);
         let resolution = truncate(&entry.resolution, 40);
 
-        lines.push(format!(
-            "  {} {:<7}  {:>8}  {:<6}  {:<50}  {}",
-            symbol,
-            style::dim(&hash),
-            style::dim(&when),
-            entry.tool_name,
-            subject,
-            style::dim(&resolution),
-        ));
+        if multi_session {
+            let session = truncate(&short_session_id(&entry.session_id), 12);
+            lines.push(format!(
+                "  {} {:<7}  {:>8}  {:<12}  {:<6}  {:<44}  {}",
+                symbol,
+                style::dim(&hash),
+                style::dim(&when),
+                style::dim(&session),
+                entry.tool_name,
+                subject,
+                style::dim(&resolution),
+            ));
+        } else {
+            lines.push(format!(
+                "  {} {:<7}  {:>8}  {:<6}  {:<50}  {}",
+                symbol,
+                style::dim(&hash),
+                style::dim(&when),
+                entry.tool_name,
+                subject,
+                style::dim(&resolution),
+            ));
+        }
     }
 
     let total = entries.len();
@@ -290,6 +333,24 @@ pub fn format_json(entries: &[AuditLogEntry]) -> Result<String> {
         })
         .collect();
     serde_json::to_string_pretty(&enriched).context("failed to serialize audit entries as JSON")
+}
+
+/// Shorten a session ID for display. Shows the first segment before `-`
+/// or the first 12 chars if no dash is found, to keep the table compact
+/// while still distinguishable (e.g. "test-session" stays, UUIDs shorten).
+fn short_session_id(id: &str) -> String {
+    // For IDs like "abc123-def456-...", show "abc123..".
+    // For short IDs like "test-session", show as-is.
+    if id.len() <= 12 {
+        return id.to_string();
+    }
+    // Try to cut at a dash boundary for readability.
+    if let Some(pos) = id[..12].rfind('-')
+        && pos >= 4
+    {
+        return format!("{}..", &id[..pos]);
+    }
+    format!("{}..", &id[..10])
 }
 
 /// Truncate a string with "..." if it exceeds max length.
@@ -347,6 +408,7 @@ mod tests {
         let entries = vec![
             AuditLogEntry {
                 timestamp: "1000.0".into(),
+                session_id: "test".into(),
                 tool_name: "Bash".into(),
                 tool_input_summary: "ls".into(),
                 decision: "allow".into(),
@@ -357,6 +419,7 @@ mod tests {
             },
             AuditLogEntry {
                 timestamp: "1001.0".into(),
+                session_id: "test".into(),
                 tool_name: "Bash".into(),
                 tool_input_summary: "rm -rf /".into(),
                 decision: "deny".into(),
@@ -381,6 +444,7 @@ mod tests {
         let entries = vec![
             AuditLogEntry {
                 timestamp: "1000.0".into(),
+                session_id: "test".into(),
                 tool_name: "Bash".into(),
                 tool_input_summary: "ls".into(),
                 decision: "allow".into(),
@@ -391,6 +455,7 @@ mod tests {
             },
             AuditLogEntry {
                 timestamp: "1001.0".into(),
+                session_id: "test".into(),
                 tool_name: "Read".into(),
                 tool_input_summary: "/tmp/file".into(),
                 decision: "allow".into(),
@@ -415,6 +480,7 @@ mod tests {
         let entries: Vec<AuditLogEntry> = (0..10)
             .map(|i| AuditLogEntry {
                 timestamp: format!("{}.0", 1000 + i),
+                session_id: "test".into(),
                 tool_name: "Bash".into(),
                 tool_input_summary: format!("cmd {i}"),
                 decision: "allow".into(),

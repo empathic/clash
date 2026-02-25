@@ -246,25 +246,18 @@ pub fn replay_from_args(tool: &str, input: Option<&str>, cwd: &str) -> Result<Re
     })
 }
 
-/// Replay the last entry from the active session's audit log.
-pub fn replay_last(session_id: Option<&str>) -> Result<ReplayResult> {
+/// Replay the most recent audit log entry, optionally filtered by session substring.
+pub fn replay_last(session_filter: Option<&str>) -> Result<ReplayResult> {
     use crate::debug::log;
 
-    let entries = if let Some(explicit) = session_id {
-        log::read_session_log(explicit)?
-    } else {
-        match log::resolve_session_id(None)?
-            .and_then(|id| log::read_session_log(&id).ok())
-        {
-            Some(entries) if !entries.is_empty() => entries,
-            _ => log::read_all_session_logs()?,
-        }
-    };
+    let mut entries = log::read_all_session_logs()?;
+    if let Some(filter) = session_filter {
+        entries.retain(|e| e.session_id.contains(filter));
+    }
     let last = entries
         .last()
         .ok_or_else(|| anyhow::anyhow!("no audit log entries found"))?;
 
-    // Re-evaluate the last tool invocation against current policy.
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
