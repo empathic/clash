@@ -197,6 +197,13 @@ When no `:sandbox` is specified on an exec allow, the spawned process gets no fi
 
 Sandbox policies constrain **filesystem and network access** at the kernel level — these restrictions are inherited by all child processes and cannot be bypassed. However, sandboxes do not enforce **exec-level argument matching** on child processes. If a sandboxed command spawns a subprocess, the subprocess inherits the filesystem and network restrictions but is not checked against exec rules. Tracking issue: [#136](https://github.com/empathic/clash/issues/136).
 
+### Automatic sandbox inclusions
+
+Sandboxes automatically grant access to:
+
+- **Temp directories**: `/tmp`, `/var/tmp` (Linux) or `/private/tmp`, `/private/var/folders` (macOS), plus `$TMPDIR`
+- **Git worktree directories**: When the working directory is inside a git worktree, the backing repository's git directories (both the worktree-specific dir and the shared common dir) are automatically included so git operations work correctly
+
 ### Sandbox network restrictions
 
 Sandbox network access has three modes:

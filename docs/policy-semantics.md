@@ -174,6 +174,8 @@ When no `:sandbox` is specified on an exec allow, the spawned process gets a den
 
 All sandbox policies automatically include read/write/create/delete/execute access to system temp directories, so sandboxed tools (compilers, package managers, etc.) can create temporary files without explicit policy rules. On macOS this covers `/private/tmp` and `/private/var/folders`; on Linux `/tmp` and `/var/tmp`; plus `$TMPDIR` if set to a non-standard location.
 
+When the working directory is inside a **git worktree**, sandbox policies and filesystem rules automatically include the backing repository's git directories. Git worktrees store their data (objects, refs, config) in the main repository's `.git/` directory, which is outside the worktree's own directory tree. Clash detects this by reading the `.git` file's `gitdir:` pointer and the `commondir` file, then grants access to both the worktree-specific git directory and the shared common directory. This ensures that git commands (commit, push, etc.) work correctly inside worktrees without requiring explicit policy rules.
+
 Sandbox enforcement covers filesystem and network access only. Exec-level argument matching (e.g., distinguishing `git push` from `git status`) is not enforced on child processes within the sandbox — only the top-level command is checked against exec rules. See [#136](https://github.com/empathic/clash/issues/136) for the tracking issue.
 
 *(Note: Kernel-level sandbox enforcement is a future PR. Currently the sandbox reference is validated and compiled but not yet enforced.)*
