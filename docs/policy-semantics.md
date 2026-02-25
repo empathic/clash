@@ -174,7 +174,17 @@ When no `:sandbox` is specified on an exec allow, the spawned process gets a den
 
 All sandbox policies automatically include read/write/create/delete/execute access to system temp directories, so sandboxed tools (compilers, package managers, etc.) can create temporary files without explicit policy rules. On macOS this covers `/private/tmp` and `/private/var/folders`; on Linux `/tmp` and `/var/tmp`; plus `$TMPDIR` if set to a non-standard location.
 
-When the working directory is inside a **git worktree**, sandbox policies and filesystem rules automatically include the backing repository's git directories. Git worktrees store their data (objects, refs, config) in the main repository's `.git/` directory, which is outside the worktree's own directory tree. Clash detects this by reading the `.git` file's `gitdir:` pointer and the `commondir` file, then grants access to both the worktree-specific git directory and the shared common directory. This ensures that git commands (commit, push, etc.) work correctly inside worktrees without requiring explicit policy rules. These rules are injected under the policy name `__worktree__` — to disable this behavior, define an empty `(policy "__worktree__")` in your policy file, following the same override mechanism as `__internal_clash__` and `__internal_claude__`.
+### Worktree-Aware Path Expansion
+
+The `(subpath :worktree <path>)` path filter supports git worktrees at compile time. When the resolved path is inside a git worktree, the compiler detects this by reading the `.git` file's `gitdir:` pointer and the `commondir` file, then expands the single `subpath` into an `or` filter covering:
+
+1. The original resolved path
+2. The worktree-specific git directory (e.g., `/path/to/repo/.git/worktrees/my-branch`)
+3. The shared common directory (e.g., `/path/to/repo/.git`)
+
+This ensures that git commands (commit, push, etc.) work correctly inside worktrees, since git stores its data (objects, refs, config) in the main repository's `.git/` directory outside the worktree's own directory tree.
+
+When the path is not inside a worktree, `:worktree` has no effect — the filter compiles to a plain `subpath`. The default policy uses `(subpath :worktree (env PWD))` for CWD access rules.
 
 Sandbox enforcement covers filesystem and network access only. Exec-level argument matching (e.g., distinguishing `git push` from `git status`) is not enforced on child processes within the sandbox — only the top-level command is checked against exec rules. See [#136](https://github.com/empathic/clash/issues/136) for the tracking issue.
 

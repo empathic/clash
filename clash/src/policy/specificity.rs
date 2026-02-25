@@ -106,7 +106,7 @@ fn pattern_rank(p: &Pattern) -> u8 {
 /// Rank a path filter by specificity.
 fn path_filter_rank(pf: &PathFilter) -> u8 {
     match pf {
-        PathFilter::Subpath(_) => 1,
+        PathFilter::Subpath(_, _) => 1,
         PathFilter::Regex(_) => 2,
         PathFilter::Literal(_) => 3,
         PathFilter::Or(fs) => {
@@ -171,7 +171,7 @@ mod tests {
         }));
         let b = Specificity::from_matcher(&CapMatcher::Fs(FsMatcher {
             op: OpPattern::Single(FsOp::Write),
-            path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+            path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), false)),
         }));
         assert!(a > b);
     }

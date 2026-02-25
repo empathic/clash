@@ -827,8 +827,7 @@ mod tests {
         );
         assert_eq!(decision.effect, Effect::Allow);
         let sandbox = decision.sandbox.expect("sandbox should be present");
-        let auto_count = crate::policy::decision_tree::DecisionTree::temp_directory_paths().len()
-            + crate::policy::decision_tree::DecisionTree::git_worktree_paths().len();
+        let auto_count = crate::policy::decision_tree::DecisionTree::temp_directory_paths().len();
         assert_eq!(sandbox.rules.len(), 1 + auto_count);
         assert_eq!(sandbox.rules[0].path, "/home/user/project");
         assert_eq!(
@@ -930,8 +929,7 @@ mod tests {
             NetworkPolicy::AllowDomains(vec!["crates.io".into()])
         );
         // Only temp directory rules (no explicit fs rules in this sandbox)
-        let auto_count = crate::policy::decision_tree::DecisionTree::temp_directory_paths().len()
-            + crate::policy::decision_tree::DecisionTree::git_worktree_paths().len();
+        let auto_count = crate::policy::decision_tree::DecisionTree::temp_directory_paths().len();
         assert_eq!(sandbox.rules.len(), auto_count);
     }
 
@@ -959,8 +957,7 @@ mod tests {
             .expect("inline sandbox should produce SandboxPolicy");
         assert_eq!(sandbox.network, NetworkPolicy::Allow);
         // Only temp directory rules (no explicit fs rules in this sandbox)
-        let auto_count = crate::policy::decision_tree::DecisionTree::temp_directory_paths().len()
-            + crate::policy::decision_tree::DecisionTree::git_worktree_paths().len();
+        let auto_count = crate::policy::decision_tree::DecisionTree::temp_directory_paths().len();
         assert_eq!(sandbox.rules.len(), auto_count);
     }
 

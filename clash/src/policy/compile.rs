@@ -90,18 +90,6 @@ pub fn compile_multi_level_with_internals(
         bail!("no policy levels to compile");
     }
 
-    // Collect user-defined policy names across all levels for override checks.
-    let mut user_policy_names = std::collections::HashSet::new();
-    for (_level, source) in levels {
-        if let Ok(ast) = super::parse::parse(source) {
-            for tl in &ast {
-                if let TopLevel::Policy { name, .. } = tl {
-                    user_policy_names.insert(name.clone());
-                }
-            }
-        }
-    }
-
     // Compile each level independently (no internal policies yet).
     let mut level_trees: Vec<(PolicyLevel, DecisionTree)> = Vec::new();
     for (level, source) in levels {
@@ -174,8 +162,6 @@ pub fn compile_multi_level_with_internals(
 
     // Inject internal policies into the merged tree.
     inject_internals(&mut merged, env, internals)?;
-    inject_worktree_rules(&mut merged, &user_policy_names);
-
     Ok(merged)
 }
 
@@ -239,63 +225,6 @@ fn inject_internals(
     Ok(())
 }
 
-/// The policy name for automatic git worktree rules.
-///
-/// Users can override this by defining `(policy "__worktree__")` in their
-/// policy file, which disables automatic worktree access.
-const WORKTREE_POLICY_NAME: &str = "__worktree__";
-
-/// Inject filesystem rules for git worktree directories into the decision tree.
-///
-/// When the working directory is inside a git worktree, tools like Read/Write
-/// need access to the backing repository's `.git/` directory for git operations.
-/// This adds allow rules for both the worktree-specific git dir and the shared
-/// common dir, following the same pattern as internal policy injection.
-///
-/// Skipped if the user defines a `(policy "__worktree__")` block — the user's
-/// version takes precedence, just like `__internal_clash__` overrides.
-fn inject_worktree_rules(
-    tree: &mut DecisionTree,
-    user_policy_names: &std::collections::HashSet<String>,
-) {
-    use std::path::Path;
-
-    if user_policy_names.contains(WORKTREE_POLICY_NAME) {
-        return;
-    }
-
-    let pwd = match std::env::var("PWD") {
-        Ok(p) => p,
-        Err(_) => return,
-    };
-
-    // Use worktree_sandbox_paths which canonicalizes (for macOS Seatbelt
-    // consistency) and deduplicates (git_dir may equal common_dir).
-    let paths = crate::git::worktree_sandbox_paths(Path::new(&pwd));
-    for path_str in paths {
-        let rule = Rule {
-            effect: crate::policy::Effect::Allow,
-            matcher: CapMatcher::Fs(FsMatcher {
-                op: OpPattern::Any,
-                path: Some(PathFilter::Subpath(PathExpr::Static(path_str.clone()))),
-            }),
-            sandbox: None,
-        };
-        let specificity = Specificity::from_matcher(&rule.matcher);
-        tree.fs_rules.push(CompiledRule {
-            effect: crate::policy::Effect::Allow,
-            matcher: CompiledMatcher::Fs(CompiledFs {
-                op: OpPattern::Any,
-                path: Some(CompiledPathFilter::Subpath(path_str)),
-            }),
-            source: rule,
-            specificity,
-            sandbox: None,
-            origin_policy: Some(WORKTREE_POLICY_NAME.to_string()),
-            origin_level: None,
-        });
-    }
-}
 
 /// Compile with internal policies injected.
 ///
@@ -361,8 +290,7 @@ pub fn compile_policy_with_internals(
         }
     }
 
-    let mut tree = compile_ast(&ast, env)?;
-    inject_worktree_rules(&mut tree, &user_policies);
+    let tree = compile_ast(&ast, env)?;
     Ok(tree)
 }
 
@@ -692,9 +620,26 @@ fn compile_pattern(pattern: &Pattern) -> Result<CompiledPattern> {
 
 fn compile_path_filter(pf: &PathFilter, env: &dyn EnvResolver) -> Result<CompiledPathFilter> {
     match pf {
-        PathFilter::Subpath(expr) => {
+        PathFilter::Subpath(expr, worktree) => {
             let resolved = resolve_path_expr(expr, env)?;
-            Ok(CompiledPathFilter::Subpath(resolved))
+            if *worktree {
+                // When :worktree is set, expand to include git worktree directories.
+                // If the resolved path is inside a git worktree, produce an Or of
+                // the original path plus the backing git directories.
+                let wt_paths =
+                    crate::git::worktree_sandbox_paths(std::path::Path::new(&resolved));
+                if wt_paths.is_empty() {
+                    Ok(CompiledPathFilter::Subpath(resolved))
+                } else {
+                    let mut filters = vec![CompiledPathFilter::Subpath(resolved)];
+                    for p in wt_paths {
+                        filters.push(CompiledPathFilter::Subpath(p));
+                    }
+                    Ok(CompiledPathFilter::Or(filters))
+                }
+            } else {
+                Ok(CompiledPathFilter::Subpath(resolved))
+            }
         }
         PathFilter::Literal(s) => Ok(CompiledPathFilter::Literal(s.clone())),
         PathFilter::Regex(r) => {
@@ -823,13 +768,7 @@ pub fn detect_all_shadows(tree: &DecisionTree) -> AllShadows {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::decision_tree::DecisionTree;
     use crate::settings::PolicyLevel;
-
-    /// Number of fs rules automatically injected for git worktree support.
-    fn auto_worktree_rule_count() -> usize {
-        DecisionTree::git_worktree_paths().len()
-    }
 
     /// Test env resolver that returns fixed values.
     struct TestEnv(HashMap<String, String>);
@@ -1132,10 +1071,9 @@ mod tests {
         let tree =
             compile_policy_with_internals(user_source, &env, &[("__internal_test__", internal)])
                 .unwrap();
-        // User rule + internal rule + worktree rules.
-        let wt = auto_worktree_rule_count();
+        // User rule + internal rule.
         assert_eq!(tree.exec_rules.len(), 1);
-        assert_eq!(tree.fs_rules.len(), 1 + wt);
+        assert_eq!(tree.fs_rules.len(), 1);
         // Check provenance.
         assert_eq!(tree.exec_rules[0].origin_policy.as_deref(), Some("main"));
         assert_eq!(
@@ -1163,8 +1101,7 @@ mod tests {
             compile_policy_with_internals(user_source, &env, &[("__internal_test__", internal)])
                 .unwrap();
         // User override should win — deny instead of allow.
-        let wt = auto_worktree_rule_count();
-        assert_eq!(tree.fs_rules.len(), 1 + wt);
+        assert_eq!(tree.fs_rules.len(), 1);
         assert_eq!(tree.fs_rules[0].effect, Effect::Deny);
     }
 
@@ -1177,23 +1114,7 @@ mod tests {
 "#;
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_internals(user_source, &env, &[]).unwrap();
-        let wt = auto_worktree_rule_count();
         assert_eq!(tree.exec_rules.len(), 1);
-        assert_eq!(tree.fs_rules.len(), wt);
-    }
-
-    #[test]
-    fn worktree_rules_suppressed_by_user_policy() {
-        let user_source = r#"
-(default deny "main")
-(policy "__worktree__")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
-        let env = TestEnv::new(&[]);
-        let tree = compile_policy_with_internals(user_source, &env, &[]).unwrap();
-        assert_eq!(tree.exec_rules.len(), 1);
-        // User defined __worktree__, so no worktree rules should be injected.
         assert_eq!(tree.fs_rules.len(), 0);
     }
 
@@ -1414,10 +1335,9 @@ mod tests {
         )
         .unwrap();
         // Rules from both levels should be present in the merged tree.
-        let wt = auto_worktree_rule_count();
         assert_eq!(tree.exec_rules.len(), 2); // git * from user + rm * from project
         assert_eq!(tree.net_rules.len(), 1); // github.com from user
-        assert_eq!(tree.fs_rules.len(), 1 + wt); // /project from project + worktree
+        assert_eq!(tree.fs_rules.len(), 1); // /project from project
     }
 
     #[test]
@@ -1480,10 +1400,9 @@ mod tests {
         )
         .unwrap();
         // exec rules from both levels.
-        let wt = auto_worktree_rule_count();
         assert_eq!(tree.exec_rules.len(), 2);
-        // Internal fs rule injected once + worktree rules.
-        assert_eq!(tree.fs_rules.len(), 1 + wt);
+        // Internal fs rule injected once.
+        assert_eq!(tree.fs_rules.len(), 1);
         assert_eq!(
             tree.fs_rules[0].origin_policy.as_deref(),
             Some("__internal_test__")
@@ -1572,9 +1491,8 @@ mod tests {
         assert_eq!(tree.exec_rules[0].origin_level, Some(PolicyLevel::Session));
         // net rules: "evil.com" (session) + "github.com" (user) = 2.
         assert_eq!(tree.net_rules.len(), 2);
-        // fs rules: "/project" from project = 1 + worktree rules.
-        let wt = auto_worktree_rule_count();
-        assert_eq!(tree.fs_rules.len(), 1 + wt);
+        // fs rules: "/project" from project = 1.
+        assert_eq!(tree.fs_rules.len(), 1);
         assert_eq!(tree.fs_rules[0].origin_level, Some(PolicyLevel::Project));
     }
 

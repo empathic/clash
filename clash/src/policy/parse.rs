@@ -297,9 +297,27 @@ fn parse_path_filter(expr: &SExpr) -> Result<PathFilter> {
             let head = require_atom(&children[0], "path filter keyword")?;
             match head {
                 "subpath" => {
-                    ensure!(children.len() == 2, "(subpath) expects exactly 1 argument");
-                    let path_expr = parse_path_expr(&children[1])?;
-                    Ok(PathFilter::Subpath(path_expr))
+                    // (subpath path_expr) or (subpath :worktree path_expr)
+                    let (worktree, expr_idx) = if children.len() >= 2 {
+                        if let SExpr::Atom(s, _) = &children[1] {
+                            if s == ":worktree" {
+                                (true, 2)
+                            } else {
+                                (false, 1)
+                            }
+                        } else {
+                            (false, 1)
+                        }
+                    } else {
+                        (false, 1)
+                    };
+                    ensure!(
+                        children.len() == expr_idx + 1,
+                        "(subpath) expects exactly 1 path expression{}",
+                        if worktree { " after :worktree" } else { "" }
+                    );
+                    let path_expr = parse_path_expr(&children[expr_idx])?;
+                    Ok(PathFilter::Subpath(path_expr, worktree))
                 }
                 "or" => {
                     let fs = children[1..]
@@ -460,7 +478,7 @@ mod tests {
             CapMatcher::Fs(m) => {
                 assert_eq!(m.op, OpPattern::Or(vec![FsOp::Read, FsOp::Write]));
                 match &m.path {
-                    Some(PathFilter::Subpath(PathExpr::Env(name))) => {
+                    Some(PathFilter::Subpath(PathExpr::Env(name), false)) => {
                         assert_eq!(name, "PWD");
                     }
                     other => panic!("expected Subpath(Env(PWD)), got {other:?}"),
@@ -781,7 +799,7 @@ mod tests {
         };
         match &rule.matcher {
             CapMatcher::Fs(m) => match &m.path {
-                Some(PathFilter::Subpath(PathExpr::Join(parts))) => {
+                Some(PathFilter::Subpath(PathExpr::Join(parts), false)) => {
                     assert_eq!(parts.len(), 2);
                     assert_eq!(parts[0], PathExpr::Env("HOME".into()));
                     assert_eq!(parts[1], PathExpr::Static("/.clash".into()));
@@ -817,7 +835,7 @@ mod tests {
         };
         match &rule.matcher {
             CapMatcher::Fs(m) => match &m.path {
-                Some(PathFilter::Subpath(PathExpr::Join(parts))) => {
+                Some(PathFilter::Subpath(PathExpr::Join(parts), false)) => {
                     assert_eq!(parts.len(), 2);
                     assert!(matches!(&parts[0], PathExpr::Join(_)));
                 }
@@ -914,6 +932,63 @@ mod tests {
     #[test]
     fn round_trip_inline_sandbox() {
         let source = r#"(policy "p" (allow (exec "clash" *) :sandbox (allow (net *)) (deny (net /.*\.evil\.com/))))"#;
+        let ast1 = parse(source).unwrap();
+        let printed = ast1[0].to_string();
+        let ast2 = parse(&printed).unwrap();
+        assert_eq!(ast1, ast2, "round-trip failed:\n{printed}");
+    }
+
+    #[test]
+    fn parse_worktree_flag() {
+        let ast =
+            parse(r#"(policy "p" (allow (fs write (subpath :worktree (env PWD)))))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Fs(m) => match &m.path {
+                Some(PathFilter::Subpath(PathExpr::Env(name), worktree)) => {
+                    assert_eq!(name, "PWD");
+                    assert!(worktree, "expected worktree flag to be true");
+                }
+                other => panic!("expected Subpath with worktree, got {other:?}"),
+            },
+            _ => panic!("expected Fs"),
+        }
+    }
+
+    #[test]
+    fn parse_subpath_without_worktree() {
+        let ast =
+            parse(r#"(policy "p" (allow (fs read (subpath (env HOME)))))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Fs(m) => match &m.path {
+                Some(PathFilter::Subpath(PathExpr::Env(name), worktree)) => {
+                    assert_eq!(name, "HOME");
+                    assert!(!worktree, "expected worktree flag to be false");
+                }
+                other => panic!("expected Subpath without worktree, got {other:?}"),
+            },
+            _ => panic!("expected Fs"),
+        }
+    }
+
+    #[test]
+    fn round_trip_worktree() {
+        let source = r#"(policy "p" (allow (fs write (subpath :worktree (env PWD)))))"#;
         let ast1 = parse(source).unwrap();
         let printed = ast1[0].to_string();
         let ast2 = parse(&printed).unwrap();

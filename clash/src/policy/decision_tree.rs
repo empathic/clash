@@ -4,7 +4,6 @@
 //! The decision tree groups rules by capability domain for efficient lookup.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use regex::Regex;
 
@@ -218,18 +217,6 @@ impl DecisionTree {
             });
         }
 
-        // When running inside a git worktree, grant access to the backing
-        // repository's git directories so sandboxed git commands can read
-        // objects, update refs, and write the index.
-        for path in Self::git_worktree_paths() {
-            sandbox_rules.push(SandboxRule {
-                effect: RuleEffect::Allow,
-                caps: Cap::all(),
-                path,
-                path_match: PathMatch::Subpath,
-            });
-        }
-
         Some(SandboxPolicy {
             default: Cap::READ | Cap::EXECUTE,
             rules: sandbox_rules,
@@ -269,20 +256,6 @@ impl DecisionTree {
         }
 
         paths
-    }
-
-    /// Git worktree paths that sandboxed processes need access to.
-    ///
-    /// When the working directory is inside a git worktree, git operations
-    /// need read/write access to the backing repository's git directories
-    /// (objects, refs, index, etc.). Returns the worktree-specific git dir
-    /// and the shared common dir, or an empty vec if not in a worktree.
-    pub(crate) fn git_worktree_paths() -> Vec<String> {
-        let pwd = match std::env::var("PWD") {
-            Ok(p) => p,
-            Err(_) => return Vec::new(),
-        };
-        crate::git::worktree_sandbox_paths(Path::new(&pwd))
     }
 
     /// Extract literal domain strings from a `CompiledPattern` into a flat list.
@@ -606,9 +579,9 @@ mod tests {
     use super::*;
     use crate::policy::compile::{EnvResolver, compile_policy_with_env};
 
-    /// Number of sandbox rules automatically added (temp dirs + git worktree dirs).
+    /// Number of sandbox rules automatically added (temp dirs).
     fn auto_sandbox_rule_count() -> usize {
-        DecisionTree::temp_directory_paths().len() + DecisionTree::git_worktree_paths().len()
+        DecisionTree::temp_directory_paths().len()
     }
 
     struct TestEnv(HashMap<String, String>);

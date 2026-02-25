@@ -140,8 +140,10 @@ pub enum Pattern {
 /// A path filter used in `(fs ...)` position 2.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathFilter {
-    /// `(subpath expr)` — recursive subtree match.
-    Subpath(PathExpr),
+    /// `(subpath expr)` or `(subpath :worktree expr)` — recursive subtree match.
+    /// When `worktree` is true, the compiler expands to also include the backing
+    /// git worktree directories (if the resolved path is inside a worktree).
+    Subpath(PathExpr, bool),
     /// `"path"` or bare atom — exact file match.
     Literal(String),
     /// `/pattern/` — regex on resolved path.
@@ -328,7 +330,13 @@ impl fmt::Display for Pattern {
 impl fmt::Display for PathFilter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PathFilter::Subpath(expr) => write!(f, "(subpath {expr})"),
+            PathFilter::Subpath(expr, worktree) => {
+                if *worktree {
+                    write!(f, "(subpath :worktree {expr})")
+                } else {
+                    write!(f, "(subpath {expr})")
+                }
+            }
             PathFilter::Literal(s) => {
                 write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
             }
@@ -419,7 +427,7 @@ mod tests {
     fn display_fs_matcher() {
         let m = FsMatcher {
             op: OpPattern::Or(vec![FsOp::Read, FsOp::Write]),
-            path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+            path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), false)),
         };
         assert_eq!(m.to_string(), "(fs (or read write) (subpath (env PWD)))");
     }

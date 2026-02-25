@@ -202,7 +202,6 @@ Sandbox policies constrain **filesystem and network access** at the kernel level
 Sandboxes automatically grant access to:
 
 - **Temp directories**: `/tmp`, `/var/tmp` (Linux) or `/private/tmp`, `/private/var/folders` (macOS), plus `$TMPDIR`
-- **Git worktree directories**: When the working directory is inside a git worktree, the backing repository's git directories (both the worktree-specific dir and the shared common dir) are automatically included so git operations work correctly. To disable, define an empty `(policy "__worktree__")` in your policy file
 
 ### Sandbox network restrictions
 
@@ -268,6 +267,16 @@ Match a directory and everything beneath it:
 (subpath (env PWD))     ; current working directory tree
 (subpath "/home/user")   ; fixed path
 ```
+
+### Worktree-Aware Subpath
+
+When working in a git worktree, git operations write to the backing repository's `.git/` directory — which is outside the worktree's directory tree. The `:worktree` flag on `subpath` tells the compiler to detect this and automatically extend access:
+
+```
+(subpath :worktree (env PWD))   ; CWD + git worktree dirs (if applicable)
+```
+
+The default policy uses `:worktree` on `(env PWD)` rules so git commands work out of the box in worktrees. If you override the default policy, add `:worktree` to your CWD subpath rules if you need git operations to work in worktrees.
 
 ### Environment Variables
 
