@@ -154,8 +154,19 @@ fn handle_client(stream: TcpStream, config: &ProxyConfig) -> io::Result<()> {
     stream.set_read_timeout(Some(CLIENT_TIMEOUT))?;
     stream.set_write_timeout(Some(CLIENT_TIMEOUT))?;
 
+    // Keep a clone alive so the socket isn't fully closed when dispatch
+    // drops its copies.  After dispatch returns we drain remaining client
+    // data through this clone, giving the peer time to read our response
+    // before the socket is torn down (prevents RST-before-FIN on macOS).
+    let drain = stream.try_clone()?;
+
     let reader = BufReader::new(stream.try_clone()?);
-    dispatch(stream, reader, config)
+    let result = dispatch(stream, reader, config);
+
+    let _ = drain.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = io::copy(&mut &drain, &mut io::sink());
+
+    result
 }
 
 /// Read the first line, determine whether this is a CONNECT or plain HTTP
@@ -453,7 +464,153 @@ fn send_error(stream: &TcpStream, code: u16, reason: &str) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::time::Instant;
+
+    // -- Test helpers ------------------------------------------------------
+
+    /// Poll a condition with bounded retries.  Returns `true` if the
+    /// condition was met within `timeout`.
+    fn poll_until(timeout: Duration, interval: Duration, mut f: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if f() {
+                return true;
+            }
+            thread::sleep(interval);
+        }
+        false
+    }
+
+    /// A client connection to the proxy with graceful shutdown on drop.
+    ///
+    /// Owns both the stream and a buffered reader over a clone, so there is
+    /// no lifetime tangle between reads and writes.  The `Drop` impl sends
+    /// FIN (via `shutdown(Write)`) and drains outstanding data before the
+    /// socket is closed, preventing the kernel from sending RST.
+    struct ProxyClient {
+        stream: TcpStream,
+        reader: BufReader<TcpStream>,
+    }
+
+    impl ProxyClient {
+        fn connect(addr: SocketAddr) -> Self {
+            let stream = TcpStream::connect(addr).expect("failed to connect to proxy");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let reader = BufReader::new(stream.try_clone().unwrap());
+            Self { stream, reader }
+        }
+
+        fn send_connect(&mut self, authority: &str) {
+            let host = authority.split(':').next().unwrap_or(authority);
+            write!(
+                self.stream,
+                "CONNECT {authority} HTTP/1.1\r\nHost: {host}\r\n\r\n",
+            )
+            .expect("failed to write CONNECT");
+            self.stream.flush().unwrap();
+        }
+
+        fn read_line(&mut self) -> String {
+            let mut line = String::new();
+            self.reader
+                .read_line(&mut line)
+                .expect("failed to read line");
+            line
+        }
+
+        fn read_status_code(&mut self) -> u16 {
+            let line = self.read_line();
+            let code_str = line
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_else(|| panic!("malformed status line: {line}"));
+            code_str
+                .parse::<u16>()
+                .unwrap_or_else(|_| panic!("non-numeric status code in: {line}"))
+        }
+
+        fn close(self) {
+            drop(self);
+        }
+    }
+
+    impl Drop for ProxyClient {
+        fn drop(&mut self) {
+            // Send FIN to proxy.
+            let _ = self.stream.shutdown(Shutdown::Write);
+            // Drain any remaining data so close doesn't race pending writes.
+            let _ = self
+                .stream
+                .set_read_timeout(Some(Duration::from_millis(500)));
+            let mut discard = [0u8; 1024];
+            while let Ok(n) = self.reader.read(&mut discard) {
+                if n == 0 {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// A mock upstream TCP server for CONNECT tunnel tests.
+    ///
+    /// Accepts one connection, writes `greeting`, shuts down its write half
+    /// (so the relay sees EOF), then drains reads until the client closes.
+    struct UpstreamServer {
+        addr: SocketAddr,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl UpstreamServer {
+        fn with_greeting(greeting: &'static [u8]) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind upstream");
+            let addr = listener.local_addr().unwrap();
+
+            let handle = thread::spawn(move || {
+                let (mut conn, _) = listener.accept().expect("upstream accept");
+                conn.write_all(greeting).expect("upstream write");
+                conn.flush().unwrap();
+                // Signal EOF to the relay's upstream->client direction.
+                let _ = conn.shutdown(Shutdown::Write);
+                // Drain reads so the relay's client->upstream direction
+                // finishes cleanly when the client shuts down.
+                let mut buf = [0u8; 1024];
+                while let Ok(n) = conn.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                }
+            });
+
+            Self {
+                addr,
+                handle: Some(handle),
+            }
+        }
+
+        fn port(&self) -> u16 {
+            self.addr.port()
+        }
+
+        fn join(mut self) {
+            if let Some(h) = self.handle.take() {
+                h.join().expect("upstream thread panicked");
+            }
+        }
+    }
+
+    impl Drop for UpstreamServer {
+        fn drop(&mut self) {
+            if let Some(h) = self.handle.take() {
+                let _ = h.join();
+            }
+        }
+    }
 
     // -- Domain matching ---------------------------------------------------
 
@@ -496,17 +653,17 @@ mod tests {
         assert_ne!(addr.port(), 0);
 
         // Should be able to connect.
-        let conn = TcpStream::connect(addr);
-        assert!(conn.is_ok());
-        drop(conn);
+        let client = ProxyClient::connect(addr);
+        client.close();
 
         // Drop the handle -- proxy should shut down.
         drop(handle);
 
-        // After a brief pause, new connections should be refused.
-        thread::sleep(Duration::from_millis(200));
-        let conn = TcpStream::connect_timeout(&addr.into(), Duration::from_millis(200));
-        assert!(conn.is_err(), "proxy should have stopped accepting");
+        // Poll until connections are refused (replaces fixed sleep).
+        let stopped = poll_until(Duration::from_secs(2), Duration::from_millis(50), || {
+            TcpStream::connect_timeout(&addr.into(), Duration::from_millis(100)).is_err()
+        });
+        assert!(stopped, "proxy should have stopped accepting connections");
     }
 
     // -- Proxy blocks unlisted domains -------------------------------------
@@ -518,103 +675,44 @@ mod tests {
         };
         let handle = start_proxy(config).expect("failed to start proxy");
 
-        let mut stream =
-            TcpStream::connect(handle.addr).expect("failed to connect to proxy");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        stream
-            .set_write_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
+        let mut client = ProxyClient::connect(handle.addr);
+        client.send_connect("evil.com:443");
 
-        // Send a CONNECT to an unlisted domain.
-        write!(stream, "CONNECT evil.com:443 HTTP/1.1\r\nHost: evil.com\r\n\r\n")
-            .expect("failed to write request");
-        stream.flush().unwrap();
+        let code = client.read_status_code();
+        assert_eq!(code, 403, "expected 403 Forbidden");
 
-        let mut reader = BufReader::new(&stream);
-        let mut status_line = String::new();
-        reader
-            .read_line(&mut status_line)
-            .expect("failed to read response");
-
-        assert!(
-            status_line.contains("403"),
-            "expected 403 Forbidden, got: {status_line}",
-        );
+        client.close();
     }
 
     // -- Proxy allows listed domain via CONNECT ----------------------------
 
     #[test]
     fn test_proxy_allows_listed_domain_connect() {
-        // Spin up a small TCP "upstream" server on localhost that echoes back
-        // a greeting then closes.
-        let upstream_listener =
-            TcpListener::bind("127.0.0.1:0").expect("failed to bind upstream");
-        let upstream_addr = upstream_listener.local_addr().unwrap();
+        let upstream = UpstreamServer::with_greeting(b"HELLO FROM UPSTREAM\n");
 
-        let upstream_thread = thread::spawn(move || {
-            let (mut conn, _) = upstream_listener.accept().expect("upstream accept");
-            conn.write_all(b"HELLO FROM UPSTREAM\n")
-                .expect("upstream write");
-            conn.flush().unwrap();
-            // Read until client closes so relay completes cleanly.
-            let mut buf = Vec::new();
-            let _ = conn.read_to_end(&mut buf);
-        });
-
-        // Configure the proxy to allow "localhost" (the upstream).
         let config = ProxyConfig {
             allowed_domains: vec!["localhost".to_string()],
         };
         let handle = start_proxy(config).expect("failed to start proxy");
 
-        let mut stream =
-            TcpStream::connect(handle.addr).expect("failed to connect to proxy");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        stream
-            .set_write_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
+        let mut client = ProxyClient::connect(handle.addr);
+        let authority = format!("localhost:{}", upstream.port());
+        client.send_connect(&authority);
 
-        // CONNECT to the upstream address via the proxy.  We use the numeric
-        // form `127.0.0.1:<port>` in the authority but the proxy only checks
-        // the hostname.  Since the CONNECT authority uses an IP literal here,
-        // we instead write `localhost:<port>` which matches our allowlist.
-        let authority = format!("localhost:{}", upstream_addr.port());
-        write!(
-            stream,
-            "CONNECT {authority} HTTP/1.1\r\nHost: localhost\r\n\r\n"
-        )
-        .expect("failed to write CONNECT");
-        stream.flush().unwrap();
-
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut status_line = String::new();
-        reader
-            .read_line(&mut status_line)
-            .expect("failed to read status");
-
-        assert!(
-            status_line.contains("200"),
-            "expected 200 Connection Established, got: {status_line}",
-        );
+        let code = client.read_status_code();
+        assert_eq!(code, 200, "expected 200 Connection Established");
 
         // Consume the blank line after the status.
-        let mut blank = String::new();
-        reader.read_line(&mut blank).unwrap();
+        let blank = client.read_line();
+        assert_eq!(blank.trim(), "");
 
-        // Now we should be tunneled -- read the upstream greeting.
-        let mut greeting = String::new();
-        reader
-            .read_line(&mut greeting)
-            .expect("failed to read upstream greeting");
+        // Read the upstream greeting through the tunnel.
+        let greeting = client.read_line();
         assert_eq!(greeting, "HELLO FROM UPSTREAM\n");
 
-        // Shut down our end so the relay threads finish.
-        let _ = stream.shutdown(Shutdown::Both);
-        let _ = upstream_thread.join();
+        // Graceful close: client FIN → relay c2u EOF → upstream write shutdown
+        // → relay u2c EOF → client drain EOF.  No RSTs.
+        client.close();
+        upstream.join();
     }
 }
