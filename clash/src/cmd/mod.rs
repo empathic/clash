@@ -1,5 +1,6 @@
 pub mod bug;
 pub mod commands;
+pub mod doctor;
 pub mod explain;
 pub mod hooks;
 pub mod init;

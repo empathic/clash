@@ -149,6 +149,7 @@ clash allow web                              # allow web access
 clash deny '(exec "rm" *)'                   # deny rm commands
 clash ask bash                               # require approval for bash commands
 clash status                                 # see all layers, rules, and shadowing
+clash doctor                                 # diagnose common setup issues
 clash update                                 # update clash to the latest release
 clash update --check                         # check for updates without installing
 clash explain bash "git push"                # see which rule matches a command
@@ -197,6 +198,14 @@ After installing, the status line appears automatically in your next Claude Code
 ---
 
 ## Troubleshooting
+
+Run `clash doctor` to automatically diagnose common setup issues:
+
+```bash
+clash doctor
+```
+
+It checks policy files, plugin registration, PATH, file permissions, and sandbox support, reporting actionable fix instructions for each problem.
 
 ### "command not found: clash"
 
