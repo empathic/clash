@@ -106,9 +106,17 @@ fn run_log(
 ) -> Result<()> {
     use crate::debug::log;
 
-    let entries = match log::resolve_session_id(session.as_deref())? {
-        Some(id) => log::read_session_log(&id)?,
-        None => log::read_all_session_logs()?,
+    let entries = if let Some(ref explicit) = session {
+        // User explicitly requested a session — error if not found.
+        log::read_session_log(explicit)?
+    } else {
+        // Try the active session first, fall back to all sessions.
+        match log::resolve_session_id(None)?
+            .and_then(|id| log::read_session_log(&id).ok())
+        {
+            Some(entries) if !entries.is_empty() => entries,
+            _ => log::read_all_session_logs()?,
+        }
     };
 
     let since_ts = if let Some(ref dur) = since {

@@ -248,9 +248,17 @@ pub fn replay_from_args(tool: &str, input: Option<&str>, cwd: &str) -> Result<Re
 
 /// Replay the last entry from the active session's audit log.
 pub fn replay_last(session_id: Option<&str>) -> Result<ReplayResult> {
-    let entries = match crate::debug::log::resolve_session_id(session_id)? {
-        Some(sid) => crate::debug::log::read_session_log(&sid)?,
-        None => crate::debug::log::read_all_session_logs()?,
+    use crate::debug::log;
+
+    let entries = if let Some(explicit) = session_id {
+        log::read_session_log(explicit)?
+    } else {
+        match log::resolve_session_id(None)?
+            .and_then(|id| log::read_session_log(&id).ok())
+        {
+            Some(entries) if !entries.is_empty() => entries,
+            _ => log::read_all_session_logs()?,
+        }
     };
     let last = entries
         .last()
