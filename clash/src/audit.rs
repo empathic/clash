@@ -262,11 +262,9 @@ pub fn log_decision(
         }
     }
 
-    // Write to session-specific audit log if the session dir exists.
+    // Always write to session-specific audit log so `clash debug log` has data.
     let session_log = session_dir(session_id).join("audit.jsonl");
-    if session_log.parent().is_some_and(|p| p.exists())
-        && let Err(e) = append_entry(&session_log, &entry)
-    {
+    if let Err(e) = append_entry(&session_log, &entry) {
         warn!(error = %e, path = %session_log.display(), "Failed to write session audit entry");
     }
 }
@@ -477,9 +475,9 @@ mod tests {
     }
 
     #[test]
-    fn test_log_decision_skips_session_when_no_dir() {
-        let id = "nonexistent-session-12345";
-        let dir = session_dir(id);
+    fn test_log_decision_creates_session_dir_if_needed() {
+        let id = format!("test-autocreate-{}", std::process::id());
+        let dir = session_dir(&id);
         // Ensure no dir exists.
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -488,10 +486,9 @@ mod tests {
             path: None,
         };
 
-        // Should not panic or create the dir.
         log_decision(
             &config,
-            id,
+            &id,
             "Read",
             &serde_json::json!({"file_path": "/tmp/x"}),
             Effect::Ask,
@@ -499,9 +496,13 @@ mod tests {
             &mock_trace(0),
         );
 
+        let session_log = dir.join("audit.jsonl");
         assert!(
-            !dir.exists(),
-            "should not create session dir on log_decision"
+            session_log.exists(),
+            "session audit.jsonl should be created even without prior init"
         );
+
+        // Clean up.
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
