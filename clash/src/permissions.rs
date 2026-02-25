@@ -543,6 +543,56 @@ mod tests {
         }
     }
 
+    // --- interactive tool (AskUserQuestion) policy tests ---
+
+    #[test]
+    fn test_ask_user_question_allowed_by_blanket_tool_rule() -> Result<()> {
+        let settings = settings_with_policy(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (tool)))
+"#,
+        );
+        let input = ToolUseHookInput {
+            tool_name: "AskUserQuestion".into(),
+            tool_input: json!({"questions": [{"question": "Which approach?", "options": []}]}),
+            ..Default::default()
+        };
+        let result = check_permission(&input, &settings)?;
+        // Policy layer evaluates to Allow — the passthrough to preserve
+        // Claude Code's interactive UI happens in the hook handler layer.
+        assert_decision(
+            &result,
+            claude_settings::PermissionRule::Allow,
+            Some("policy: allowed"),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_ask_user_question_denied_by_explicit_deny() -> Result<()> {
+        let settings = settings_with_policy(
+            r#"
+(default deny "main")
+(policy "main"
+  (deny (tool "AskUserQuestion"))
+  (allow (tool)))
+"#,
+        );
+        let input = ToolUseHookInput {
+            tool_name: "AskUserQuestion".into(),
+            tool_input: json!({"questions": []}),
+            ..Default::default()
+        };
+        let result = check_permission(&input, &settings)?;
+        assert_eq!(
+            get_decision(&result),
+            Some(claude_settings::PermissionRule::Deny),
+        );
+        Ok(())
+    }
+
     // --- shell_escape tests ---
 
     #[test]

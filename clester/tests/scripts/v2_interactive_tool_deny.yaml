@@ -1,0 +1,31 @@
+meta:
+  name: v2 interactive tool deny — AskUserQuestion deny still enforced
+  description: >
+    When the policy explicitly denies AskUserQuestion, the deny decision
+    is returned even though it's an interactive tool.
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (deny (tool "AskUserQuestion"))
+      (allow (tool)))
+
+steps:
+  - name: AskUserQuestion denied by explicit deny rule
+    hook: pre-tool-use
+    tool_name: AskUserQuestion
+    tool_input:
+      questions:
+        - question: "Which approach?"
+          options: []
+    expect:
+      decision: deny
+
+  - name: Other tools still allowed
+    hook: pre-tool-use
+    tool_name: Task
+    tool_input:
+      prompt: "do something"
+    expect:
+      decision: allow
