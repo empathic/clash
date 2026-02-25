@@ -54,6 +54,7 @@ fn main() -> Result<()> {
             }
             Commands::Policy(policy_cmd) => cmd::policy::run(policy_cmd),
             Commands::Sandbox(sandbox_cmd) => run_sandbox(sandbox_cmd),
+            Commands::Doctor => cmd::doctor::run(),
             Commands::Hook(hook_cmd) => {
                 if let Err(e) = hook_cmd.run() {
                     error!(cmd=?hook_cmd, "Hook error: {:?}", e);
