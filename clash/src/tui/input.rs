@@ -3,7 +3,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::app::{
-    AddRuleStep, App, ConfirmAction, DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, Mode,
+    AddRuleStep, App, ConfirmAction, DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS, Mode,
 };
 
 /// Result of handling a key event.
@@ -147,119 +147,92 @@ fn handle_add_rule(app: &mut App, key: KeyEvent) -> InputResult {
         return InputResult::Continue;
     };
 
-    match form.step {
-        AddRuleStep::SelectDomain => match key.code {
-            KeyCode::Left | KeyCode::Char('h') => {
-                if form.domain_index > 0 {
-                    form.domain_index -= 1;
-                }
-            }
-            KeyCode::Right | KeyCode::Char('l') => {
-                if form.domain_index < DOMAIN_NAMES.len() - 1 {
-                    form.domain_index += 1;
-                }
-            }
-            KeyCode::Tab => {
-                form.domain_index = (form.domain_index + 1) % DOMAIN_NAMES.len();
-            }
-            KeyCode::Enter => app.advance_add_rule(),
-            KeyCode::Esc => app.mode = Mode::Normal,
-            _ => {}
-        },
+    // Determine what kind of step we're on and the selector count (if selector).
+    let action = match form.step {
+        AddRuleStep::SelectDomain => selector_key(key, &mut form.domain_index, DOMAIN_NAMES.len()),
+        AddRuleStep::SelectFsOp => selector_key(key, &mut form.fs_op_index, FS_OPS.len()),
+        AddRuleStep::SelectEffect => selector_key(key, &mut form.effect_index, EFFECT_NAMES.len()),
+        AddRuleStep::SelectLevel => {
+            let len = form.available_levels.len();
+            selector_key(key, &mut form.level_index, len)
+        }
+        AddRuleStep::EnterBinary
+        | AddRuleStep::EnterArgs
+        | AddRuleStep::EnterPath
+        | AddRuleStep::EnterNetDomain
+        | AddRuleStep::EnterToolName => text_input_key(key, form),
+    };
 
-        AddRuleStep::EnterMatcher => match key.code {
-            KeyCode::Enter => app.advance_add_rule(),
-            KeyCode::Esc => app.mode = Mode::Normal,
-            KeyCode::Backspace => {
-                let Mode::AddRule(form) = &mut app.mode else {
-                    return InputResult::Continue;
-                };
-                form.matcher_input.backspace();
-                form.error = None;
-            }
-            KeyCode::Delete => {
-                let Mode::AddRule(form) = &mut app.mode else {
-                    return InputResult::Continue;
-                };
-                form.matcher_input.delete();
-            }
-            KeyCode::Left => {
-                let Mode::AddRule(form) = &mut app.mode else {
-                    return InputResult::Continue;
-                };
-                form.matcher_input.move_left();
-            }
-            KeyCode::Right => {
-                let Mode::AddRule(form) = &mut app.mode else {
-                    return InputResult::Continue;
-                };
-                form.matcher_input.move_right();
-            }
-            KeyCode::Home => {
-                let Mode::AddRule(form) = &mut app.mode else {
-                    return InputResult::Continue;
-                };
-                form.matcher_input.home();
-            }
-            KeyCode::End => {
-                let Mode::AddRule(form) = &mut app.mode else {
-                    return InputResult::Continue;
-                };
-                form.matcher_input.end();
-            }
-            KeyCode::Char(c) => {
-                let Mode::AddRule(form) = &mut app.mode else {
-                    return InputResult::Continue;
-                };
-                form.matcher_input.insert_char(c);
-                form.error = None;
-            }
-            _ => {}
-        },
-
-        AddRuleStep::SelectEffect => match key.code {
-            KeyCode::Left | KeyCode::Char('h') => {
-                if form.effect_index > 0 {
-                    form.effect_index -= 1;
-                }
-            }
-            KeyCode::Right | KeyCode::Char('l') => {
-                if form.effect_index < EFFECT_NAMES.len() - 1 {
-                    form.effect_index += 1;
-                }
-            }
-            KeyCode::Tab => {
-                form.effect_index = (form.effect_index + 1) % EFFECT_NAMES.len();
-            }
-            KeyCode::Enter => app.advance_add_rule(),
-            KeyCode::Esc => app.mode = Mode::Normal,
-            _ => {}
-        },
-
-        AddRuleStep::SelectLevel => match key.code {
-            KeyCode::Left | KeyCode::Char('h') => {
-                if form.level_index > 0 {
-                    form.level_index -= 1;
-                }
-            }
-            KeyCode::Right | KeyCode::Char('l') => {
-                if form.level_index < form.available_levels.len().saturating_sub(1) {
-                    form.level_index += 1;
-                }
-            }
-            KeyCode::Tab => {
-                let len = form.available_levels.len();
-                if len > 0 {
-                    form.level_index = (form.level_index + 1) % len;
-                }
-            }
-            KeyCode::Enter => app.advance_add_rule(),
-            KeyCode::Esc => app.mode = Mode::Normal,
-            _ => {}
-        },
+    match action {
+        StepAction::Advance => app.advance_add_rule(),
+        StepAction::Cancel => app.mode = Mode::Normal,
+        StepAction::None => {}
     }
 
     InputResult::Continue
+}
+
+/// Action returned from a step's key handler.
+enum StepAction {
+    Advance,
+    Cancel,
+    None,
+}
+
+/// Handle key for a selector step. Returns whether to advance/cancel/stay.
+fn selector_key(key: KeyEvent, index: &mut usize, count: usize) -> StepAction {
+    match key.code {
+        KeyCode::Left | KeyCode::Char('h') => {
+            if *index > 0 {
+                *index -= 1;
+            }
+            StepAction::None
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            if *index < count.saturating_sub(1) {
+                *index += 1;
+            }
+            StepAction::None
+        }
+        KeyCode::Tab => {
+            if count > 0 {
+                *index = (*index + 1) % count;
+            }
+            StepAction::None
+        }
+        KeyCode::Enter => StepAction::Advance,
+        KeyCode::Esc => StepAction::Cancel,
+        _ => StepAction::None,
+    }
+}
+
+/// Handle key for a text input step.
+fn text_input_key(key: KeyEvent, form: &mut super::app::AddRuleForm) -> StepAction {
+    match key.code {
+        KeyCode::Enter => StepAction::Advance,
+        KeyCode::Esc => StepAction::Cancel,
+        _ => {
+            if let Some(input) = form.active_text_input() {
+                match key.code {
+                    KeyCode::Backspace => {
+                        input.backspace();
+                        form.error = None;
+                    }
+                    KeyCode::Delete => input.delete(),
+                    KeyCode::Left => input.move_left(),
+                    KeyCode::Right => input.move_right(),
+                    KeyCode::Home => input.home(),
+                    KeyCode::End => input.end(),
+                    KeyCode::Char(c) => {
+                        input.insert_char(c);
+                        form.error = None;
+                    }
+                    _ => {}
+                }
+            }
+            StepAction::None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

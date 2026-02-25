@@ -10,7 +10,7 @@ use crate::policy::Effect;
 use crate::wizard::describe_rule;
 
 use super::app::{
-    AddRuleStep, App, ConfirmAction, DOMAIN_HINTS, DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, Mode,
+    AddRuleStep, App, ConfirmAction, DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS, Mode,
 };
 use super::style as tui_style;
 use super::tree::{self, FlatRow, TreeNode, TreeNodeKind};
@@ -662,8 +662,13 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
 
-    let width = 56u16.min(area.width.saturating_sub(4));
-    let height = 16u16.min(area.height.saturating_sub(4));
+    let width = 58u16.min(area.width.saturating_sub(4));
+    // Dynamic height based on number of steps
+    let base_height: u16 = match form.domain_index {
+        1 => 26, // fs: cmd + args + domain + op + path + effect + level
+        _ => 23, // exec/net/tool: cmd + args + domain + permissions + effect + level
+    };
+    let height = base_height.min(area.height.saturating_sub(4));
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
     let overlay = Rect::new(x, y, width, height);
@@ -679,88 +684,212 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
 
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let dim = tui_style::DIM;
-    let active_step = form.step;
 
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Step 1: Domain
-    let domain_label = step_label(
-        "1. Domain",
-        matches!(active_step, AddRuleStep::SelectDomain),
-    );
-    let domain_choices = selector_line(
-        DOMAIN_NAMES,
-        form.domain_index,
-        matches!(active_step, AddRuleStep::SelectDomain),
-    );
-    lines.push(domain_label);
-    lines.push(domain_choices);
-    lines.push(Line::from(""));
-
-    // Step 2: Matcher
-    let matcher_label = step_label(
-        "2. Matcher",
-        matches!(active_step, AddRuleStep::EnterMatcher),
-    );
-    lines.push(matcher_label);
-    if matches!(active_step, AddRuleStep::EnterMatcher) {
-        lines.push(Line::from(vec![
-            Span::styled("   > ", dim),
-            Span::raw(form.matcher_input.value()),
-            Span::styled("_", bold),
-        ]));
-        lines.push(Line::from(Span::styled(
-            format!("   e.g. {}", DOMAIN_HINTS[form.domain_index]),
-            dim,
-        )));
-    } else {
-        let val = form.matcher_input.value();
-        let display = if val.is_empty() { "(empty)" } else { val };
-        lines.push(Line::from(Span::styled(format!("   {display}"), dim)));
-    }
-    lines.push(Line::from(""));
-
-    // Step 3: Effect
-    let effect_label = step_label(
-        "3. Effect",
-        matches!(active_step, AddRuleStep::SelectEffect),
-    );
-    let effect_choices = selector_line(
-        EFFECT_NAMES,
-        form.effect_index,
-        matches!(active_step, AddRuleStep::SelectEffect),
-    );
-    lines.push(effect_label);
-    lines.push(effect_choices);
-    lines.push(Line::from(""));
-
-    // Step 4: Level
-    let level_label = step_label("4. Level", matches!(active_step, AddRuleStep::SelectLevel));
+    // Copy all needed form data to avoid borrow issues with `app`
+    let step = form.step;
+    let domain_index = form.domain_index;
+    let effect_index = form.effect_index;
+    let level_index = form.level_index;
+    let fs_op_index = form.fs_op_index;
+    let binary_val = form.binary_input.value().to_string();
+    let args_val = form.args_input.value().to_string();
+    let path_val = form.path_input.value().to_string();
+    let net_domain_val = form.net_domain_input.value().to_string();
+    let tool_name_val = form.tool_name_input.value().to_string();
     let level_names: Vec<String> = form
         .available_levels
         .iter()
         .map(|l| l.to_string())
         .collect();
-    let level_strs: Vec<&str> = level_names.iter().map(|s| s.as_str()).collect();
-    let level_choices = selector_line(
-        &level_strs,
-        form.level_index,
-        matches!(active_step, AddRuleStep::SelectLevel),
+    let error = form.error.clone();
+
+    let mut lines: Vec<Line> = Vec::new();
+    let mut step_num = 1;
+
+    // 1. Command
+    lines.push(step_label(
+        &format!("{step_num}. Command"),
+        matches!(step, AddRuleStep::EnterBinary),
+    ));
+    render_text_step(
+        &mut lines,
+        &binary_val,
+        matches!(step, AddRuleStep::EnterBinary),
+        "e.g. cargo, *, blank=any command",
+        bold,
+        dim,
     );
-    lines.push(level_label);
-    lines.push(level_choices);
+    lines.push(Line::from(""));
+    step_num += 1;
+
+    // 2. Args
+    lines.push(step_label(
+        &format!("{step_num}. Args"),
+        matches!(step, AddRuleStep::EnterArgs),
+    ));
+    render_text_step(
+        &mut lines,
+        &args_val,
+        matches!(step, AddRuleStep::EnterArgs),
+        "space-separated, blank=any",
+        bold,
+        dim,
+    );
+    lines.push(Line::from(""));
+    step_num += 1;
+
+    // 3. Domain
+    lines.push(step_label(
+        &format!("{step_num}. Domain"),
+        matches!(step, AddRuleStep::SelectDomain),
+    ));
+    lines.push(selector_line(
+        DOMAIN_NAMES,
+        domain_index,
+        matches!(step, AddRuleStep::SelectDomain),
+    ));
+    lines.push(Line::from(""));
+    step_num += 1;
+
+    // 4. Permissions (domain-specific)
+    match domain_index {
+        0 => {
+            // Exec: command+args already cover it
+            lines.push(step_label(&format!("{step_num}. Permissions"), false));
+            lines.push(Line::from(Span::styled(
+                "   (covered by command + args)",
+                dim,
+            )));
+            lines.push(Line::from(""));
+            step_num += 1;
+        }
+        1 => {
+            // Fs: Operation, then Path
+            lines.push(step_label(
+                &format!("{step_num}. Operation"),
+                matches!(step, AddRuleStep::SelectFsOp),
+            ));
+            lines.push(selector_line(
+                FS_OPS,
+                fs_op_index,
+                matches!(step, AddRuleStep::SelectFsOp),
+            ));
+            lines.push(Line::from(""));
+            step_num += 1;
+
+            lines.push(step_label(
+                &format!("{step_num}. Path"),
+                matches!(step, AddRuleStep::EnterPath),
+            ));
+            render_text_step(
+                &mut lines,
+                &path_val,
+                matches!(step, AddRuleStep::EnterPath),
+                "e.g. (subpath (env PWD)), blank=any",
+                bold,
+                dim,
+            );
+            lines.push(Line::from(""));
+            step_num += 1;
+        }
+        2 => {
+            // Net: host
+            lines.push(step_label(
+                &format!("{step_num}. Host"),
+                matches!(step, AddRuleStep::EnterNetDomain),
+            ));
+            render_text_step(
+                &mut lines,
+                &net_domain_val,
+                matches!(step, AddRuleStep::EnterNetDomain),
+                "e.g. example.com, *, blank=any",
+                bold,
+                dim,
+            );
+            lines.push(Line::from(""));
+            step_num += 1;
+        }
+        _ => {
+            // Tool: name
+            lines.push(step_label(
+                &format!("{step_num}. Tool name"),
+                matches!(step, AddRuleStep::EnterToolName),
+            ));
+            render_text_step(
+                &mut lines,
+                &tool_name_val,
+                matches!(step, AddRuleStep::EnterToolName),
+                "e.g. Bash, *, blank=any",
+                bold,
+                dim,
+            );
+            lines.push(Line::from(""));
+            step_num += 1;
+        }
+    }
+
+    // Effect
+    lines.push(step_label(
+        &format!("{step_num}. Effect"),
+        matches!(step, AddRuleStep::SelectEffect),
+    ));
+    lines.push(selector_line(
+        EFFECT_NAMES,
+        effect_index,
+        matches!(step, AddRuleStep::SelectEffect),
+    ));
+    lines.push(Line::from(""));
+    step_num += 1;
+
+    // Level
+    lines.push(step_label(
+        &format!("{step_num}. Level"),
+        matches!(step, AddRuleStep::SelectLevel),
+    ));
+    let level_strs: Vec<&str> = level_names.iter().map(|s| s.as_str()).collect();
+    lines.push(selector_line(
+        &level_strs,
+        level_index,
+        matches!(step, AddRuleStep::SelectLevel),
+    ));
 
     // Error
-    if let Some(err) = &form.error {
+    if let Some(err) = error {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            err.as_str(),
+            err,
             tui_style::DENY.add_modifier(Modifier::BOLD),
         )));
     }
 
     let para = Paragraph::new(lines);
     f.render_widget(para, inner);
+}
+
+/// Render a text input step: shows the input value (with cursor when active) and a hint line.
+fn render_text_step(
+    lines: &mut Vec<Line<'static>>,
+    value: &str,
+    is_active: bool,
+    hint: &str,
+    bold: Style,
+    dim: Style,
+) {
+    if is_active {
+        lines.push(Line::from(vec![
+            Span::styled("   > ", dim),
+            Span::raw(value.to_string()),
+            Span::styled("_", bold),
+        ]));
+        lines.push(Line::from(Span::styled(format!("   {hint}"), dim)));
+    } else {
+        let display = if value.is_empty() {
+            "(empty)".to_string()
+        } else {
+            value.to_string()
+        };
+        lines.push(Line::from(Span::styled(format!("   {display}"), dim)));
+    }
 }
 
 fn step_label(label: &str, is_active: bool) -> Line<'static> {

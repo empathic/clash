@@ -48,15 +48,39 @@ pub struct AddRuleForm {
     pub domain_index: usize,
     pub effect_index: usize,
     pub level_index: usize,
-    pub matcher_input: TextInput,
+    pub fs_op_index: usize,
+    pub binary_input: TextInput,
+    pub args_input: TextInput,
+    pub path_input: TextInput,
+    pub net_domain_input: TextInput,
+    pub tool_name_input: TextInput,
     pub available_levels: Vec<PolicyLevel>,
     pub error: Option<String>,
+}
+
+impl AddRuleForm {
+    /// Returns a mutable reference to the text input for the current step, if any.
+    pub fn active_text_input(&mut self) -> Option<&mut TextInput> {
+        match self.step {
+            AddRuleStep::EnterBinary => Some(&mut self.binary_input),
+            AddRuleStep::EnterArgs => Some(&mut self.args_input),
+            AddRuleStep::EnterPath => Some(&mut self.path_input),
+            AddRuleStep::EnterNetDomain => Some(&mut self.net_domain_input),
+            AddRuleStep::EnterToolName => Some(&mut self.tool_name_input),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
 pub enum AddRuleStep {
     SelectDomain,
-    EnterMatcher,
+    EnterBinary,
+    EnterArgs,
+    SelectFsOp,
+    EnterPath,
+    EnterNetDomain,
+    EnterToolName,
     SelectEffect,
     SelectLevel,
 }
@@ -237,6 +261,31 @@ impl App {
             self.cursor = self.flat_rows.len() - 1;
         }
         self.update_search_matches();
+    }
+
+    /// Move cursor to a leaf matching the given rule text, expanding ancestors as needed.
+    fn cursor_to_rule(&mut self, rule_text: &str) {
+        // Search the tree (which is fully expanded after rebuild_tree) for a matching leaf.
+        let find = |rows: &[FlatRow]| -> Option<usize> {
+            rows.iter()
+                .position(|row| matches!(&row.kind, TreeNodeKind::Leaf { rule, .. } if rule.to_string() == rule_text))
+        };
+
+        let Some(i) = find(&self.flat_rows) else {
+            return;
+        };
+
+        // Ensure ancestors are expanded
+        let tree_path = self.flat_rows[i].tree_path.clone();
+        for prefix_len in 1..tree_path.len() {
+            if let Some(node) = tree::node_at_path_mut(&mut self.roots, &tree_path[..prefix_len]) {
+                node.expanded = true;
+            }
+        }
+        self.rebuild_flat();
+
+        // Re-find after re-flatten (indices may have shifted)
+        self.cursor = find(&self.flat_rows).unwrap_or(i);
     }
 
     /// Compute scroll offset to keep cursor visible.
@@ -753,28 +802,60 @@ impl App {
             return;
         }
         self.mode = Mode::AddRule(AddRuleForm {
-            step: AddRuleStep::SelectDomain,
+            step: AddRuleStep::EnterBinary,
             domain_index: 0,
             effect_index: 0,
             level_index: 0,
-            matcher_input: TextInput::new(DOMAIN_HINTS[0]),
+            fs_op_index: 0,
+            binary_input: TextInput::empty(),
+            args_input: TextInput::empty(),
+            path_input: TextInput::empty(),
+            net_domain_input: TextInput::empty(),
+            tool_name_input: TextInput::empty(),
             available_levels: available,
             error: None,
         });
     }
 
     /// Advance the add-rule form to the next step, or complete it.
+    ///
+    /// Flow: Command → Args → Domain → Permissions → Effect → Level
     pub fn advance_add_rule(&mut self) {
         let Mode::AddRule(form) = &mut self.mode else {
             return;
         };
+        form.error = None;
         match form.step {
-            AddRuleStep::SelectDomain => {
-                form.matcher_input = TextInput::new(DOMAIN_HINTS[form.domain_index]);
-                form.step = AddRuleStep::EnterMatcher;
+            AddRuleStep::EnterBinary => {
+                // Auto-select exec if user entered a specific command
+                let bin = form.binary_input.value().trim();
+                if !bin.is_empty() && bin != "*" {
+                    form.domain_index = 0; // exec
+                }
+                form.step = AddRuleStep::EnterArgs;
             }
-            AddRuleStep::EnterMatcher => {
-                form.error = None;
+            AddRuleStep::EnterArgs => {
+                form.step = AddRuleStep::SelectDomain;
+            }
+            AddRuleStep::SelectDomain => {
+                // Domain index: 0=exec, 1=fs, 2=net, 3=tool
+                form.step = match form.domain_index {
+                    0 => AddRuleStep::SelectEffect, // exec: no extra permissions
+                    1 => AddRuleStep::SelectFsOp,
+                    2 => AddRuleStep::EnterNetDomain,
+                    _ => AddRuleStep::EnterToolName,
+                };
+            }
+            AddRuleStep::SelectFsOp => {
+                form.step = AddRuleStep::EnterPath;
+            }
+            AddRuleStep::EnterPath => {
+                form.step = AddRuleStep::SelectEffect;
+            }
+            AddRuleStep::EnterNetDomain => {
+                form.step = AddRuleStep::SelectEffect;
+            }
+            AddRuleStep::EnterToolName => {
                 form.step = AddRuleStep::SelectEffect;
             }
             AddRuleStep::SelectEffect => {
@@ -786,30 +867,75 @@ impl App {
         }
     }
 
-    /// Complete the add-rule form: parse, validate, add.
+    /// Complete the add-rule form: build s-expression from structured fields, parse, validate, add.
     fn complete_add_rule(&mut self) {
         let Mode::AddRule(form) = &self.mode else {
             return;
         };
 
-        let domain = DOMAIN_NAMES[form.domain_index];
         let effect = EFFECT_NAMES[form.effect_index];
-        let matcher = form.matcher_input.value().to_string();
         let level = form.available_levels[form.level_index];
 
-        // Build rule text and parse
-        let matcher_part = if matcher.trim().is_empty() {
-            String::new()
-        } else {
-            format!(" {}", matcher.trim())
+        // Build the domain-specific matcher s-expression
+        let rule_text = match form.domain_index {
+            0 => {
+                // Exec: ({effect} (exec {binary} {args...}))
+                let binary_raw = form.binary_input.value().trim().to_string();
+                let binary = if binary_raw.is_empty() {
+                    "*"
+                } else {
+                    &binary_raw
+                };
+                let args = form.args_input.value().trim().to_string();
+                let binary_tok = quote_token_if_needed(binary);
+                let mut parts = vec![format!("({effect} (exec {binary_tok}")];
+                if !args.is_empty() {
+                    for arg in args.split_whitespace() {
+                        parts.push(format!(" {}", quote_token_if_needed(arg)));
+                    }
+                }
+                parts.push("))".to_string());
+                parts.join("")
+            }
+            1 => {
+                // Fs: ({effect} (fs {op} {path}))
+                let op = FS_OPS[form.fs_op_index];
+                let path = form.path_input.value().trim().to_string();
+                if op == "*" && path.is_empty() {
+                    format!("({effect} (fs))")
+                } else if path.is_empty() {
+                    format!("({effect} (fs {op}))")
+                } else {
+                    format!("({effect} (fs {op} {path}))")
+                }
+            }
+            2 => {
+                // Net: ({effect} (net {domain}))
+                let domain = form.net_domain_input.value().trim().to_string();
+                if domain.is_empty() || domain == "*" {
+                    format!("({effect} (net))")
+                } else {
+                    let tok = quote_token_if_needed(&domain);
+                    format!("({effect} (net {tok}))")
+                }
+            }
+            _ => {
+                // Tool: ({effect} (tool {name}))
+                let name = form.tool_name_input.value().trim().to_string();
+                if name.is_empty() || name == "*" {
+                    format!("({effect} (tool))")
+                } else {
+                    let tok = quote_token_if_needed(&name);
+                    format!("({effect} (tool {tok}))")
+                }
+            }
         };
-        let rule_text = format!("({effect} ({domain}{matcher_part}))");
+
         let rule = match parse_rule_text(&rule_text) {
             Ok(r) => r,
             Err(e) => {
                 if let Mode::AddRule(form) = &mut self.mode {
                     form.error = Some(format!("Parse error: {e}"));
-                    form.step = AddRuleStep::EnterMatcher;
                 }
                 return;
             }
@@ -849,20 +975,20 @@ impl App {
                     self.undo_stack.pop();
                     if let Mode::AddRule(form) = &mut self.mode {
                         form.error = Some(format!("Validation: {e}"));
-                        form.step = AddRuleStep::EnterMatcher;
                     }
                     return;
                 }
                 ls.source = new_source;
+                let rule_text = rule.to_string();
                 self.mode = Mode::Normal;
                 self.rebuild_tree();
+                self.cursor_to_rule(&rule_text);
                 self.set_status("Rule added", false);
             }
             Err(e) => {
                 self.undo_stack.pop();
                 if let Mode::AddRule(form) = &mut self.mode {
                     form.error = Some(format!("Failed: {e}"));
-                    form.step = AddRuleStep::EnterMatcher;
                 }
             }
         }
@@ -1100,6 +1226,7 @@ impl App {
 pub const DOMAIN_NAMES: &[&str] = &["exec", "fs", "net", "tool"];
 pub const EFFECT_NAMES: &[&str] = &["allow", "deny", "ask"];
 pub const EFFECT_DISPLAY: &[&str] = &["ask", "auto allow", "auto deny"];
+pub const FS_OPS: &[&str] = &["*", "read", "write", "create", "delete"];
 
 fn effect_from_display_index(index: usize) -> Effect {
     match index {
@@ -1117,12 +1244,14 @@ fn effect_to_display_index(effect: Effect) -> usize {
     }
 }
 
-pub const DOMAIN_HINTS: &[&str] = &[
-    r#""binary" "arg" *"#,
-    r#"read (subpath (env PWD))"#,
-    r#""example.com""#,
-    r#""tool-name""#,
-];
+/// Quote a token with double quotes if it's not `*` and not already a parenthesized expression.
+fn quote_token_if_needed(token: &str) -> String {
+    if token == "*" || token.starts_with('(') || token.starts_with('"') {
+        token.to_string()
+    } else {
+        format!("\"{token}\"")
+    }
+}
 
 /// Parse a single rule from its s-expression text.
 fn parse_rule_text(rule_text: &str) -> Result<Rule> {
