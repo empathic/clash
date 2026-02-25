@@ -1316,7 +1316,7 @@ fn parse_bare_verb(effect: Effect, verb: &str) -> Result<Vec<Rule>> {
                 effect,
                 matcher: CapMatcher::Fs(FsMatcher {
                     op: OpPattern::Or(vec![FsOp::Read, FsOp::Write, FsOp::Create, FsOp::Delete]),
-                    path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+                    path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), true)),
                 }),
                 sandbox: None,
             },
@@ -1325,7 +1325,7 @@ fn parse_bare_verb(effect: Effect, verb: &str) -> Result<Vec<Rule>> {
             effect,
             matcher: CapMatcher::Fs(FsMatcher {
                 op: OpPattern::Or(vec![FsOp::Write, FsOp::Create]),
-                path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+                path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), true)),
             }),
             sandbox: None,
         }]),
@@ -1333,7 +1333,7 @@ fn parse_bare_verb(effect: Effect, verb: &str) -> Result<Vec<Rule>> {
             effect,
             matcher: CapMatcher::Fs(FsMatcher {
                 op: OpPattern::Single(FsOp::Read),
-                path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()))),
+                path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), true)),
             }),
             sandbox: None,
         }]),

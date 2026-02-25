@@ -33,6 +33,7 @@ pub mod cli;
 pub mod cmd;
 pub mod debug;
 pub mod errors;
+pub mod git;
 pub mod handlers;
 pub mod hooks;
 pub mod network_hints;

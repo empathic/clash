@@ -162,7 +162,6 @@ pub fn compile_multi_level_with_internals(
 
     // Inject internal policies into the merged tree.
     inject_internals(&mut merged, env, internals)?;
-
     Ok(merged)
 }
 
@@ -225,6 +224,7 @@ fn inject_internals(
     }
     Ok(())
 }
+
 
 /// Compile with internal policies injected.
 ///
@@ -290,7 +290,8 @@ pub fn compile_policy_with_internals(
         }
     }
 
-    compile_ast(&ast, env)
+    let tree = compile_ast(&ast, env)?;
+    Ok(tree)
 }
 
 /// Compile a parsed AST into a decision tree.
@@ -619,9 +620,26 @@ fn compile_pattern(pattern: &Pattern) -> Result<CompiledPattern> {
 
 fn compile_path_filter(pf: &PathFilter, env: &dyn EnvResolver) -> Result<CompiledPathFilter> {
     match pf {
-        PathFilter::Subpath(expr) => {
+        PathFilter::Subpath(expr, worktree) => {
             let resolved = resolve_path_expr(expr, env)?;
-            Ok(CompiledPathFilter::Subpath(resolved))
+            if *worktree {
+                // When :worktree is set, expand to include git worktree directories.
+                // If the resolved path is inside a git worktree, produce an Or of
+                // the original path plus the backing git directories.
+                let wt_paths =
+                    crate::git::worktree_sandbox_paths(std::path::Path::new(&resolved));
+                if wt_paths.is_empty() {
+                    Ok(CompiledPathFilter::Subpath(resolved))
+                } else {
+                    let mut filters = vec![CompiledPathFilter::Subpath(resolved)];
+                    for p in wt_paths {
+                        filters.push(CompiledPathFilter::Subpath(p));
+                    }
+                    Ok(CompiledPathFilter::Or(filters))
+                }
+            } else {
+                Ok(CompiledPathFilter::Subpath(resolved))
+            }
         }
         PathFilter::Literal(s) => Ok(CompiledPathFilter::Literal(s.clone())),
         PathFilter::Regex(r) => {
@@ -1097,7 +1115,7 @@ mod tests {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_internals(user_source, &env, &[]).unwrap();
         assert_eq!(tree.exec_rules.len(), 1);
-        assert!(tree.fs_rules.is_empty());
+        assert_eq!(tree.fs_rules.len(), 0);
     }
 
     #[test]

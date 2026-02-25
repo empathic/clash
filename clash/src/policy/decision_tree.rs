@@ -580,6 +580,11 @@ mod tests {
     use super::*;
     use crate::policy::compile::{EnvResolver, compile_policy_with_env};
 
+    /// Number of sandbox rules automatically added (temp dirs).
+    fn auto_sandbox_rule_count() -> usize {
+        DecisionTree::temp_directory_paths().len()
+    }
+
     struct TestEnv(HashMap<String, String>);
 
     impl TestEnv {
@@ -627,8 +632,8 @@ mod tests {
         assert_eq!(sandbox.default, Cap::READ | Cap::EXECUTE);
 
         // Two explicit fs rules plus temp directory rules
-        let temp_count = DecisionTree::temp_directory_paths().len();
-        assert_eq!(sandbox.rules.len(), 2 + temp_count);
+        let auto_count = auto_sandbox_rule_count();
+        assert_eq!(sandbox.rules.len(), 2 + auto_count);
 
         let allow_rule = &sandbox.rules[0];
         assert_eq!(allow_rule.effect, RuleEffect::Allow);
@@ -832,8 +837,8 @@ mod tests {
             .expect("should produce implicit sandbox");
 
         // fs rule: allow write+create under PWD, plus temp directory rules
-        let temp_count = DecisionTree::temp_directory_paths().len();
-        assert_eq!(sandbox.rules.len(), 1 + temp_count);
+        let auto_count = auto_sandbox_rule_count();
+        assert_eq!(sandbox.rules.len(), 1 + auto_count);
         assert_eq!(sandbox.rules[0].effect, RuleEffect::Allow);
         assert_eq!(sandbox.rules[0].caps, Cap::WRITE | Cap::CREATE);
         assert_eq!(sandbox.rules[0].path, "/home/user/project");
@@ -863,8 +868,8 @@ mod tests {
             .build_implicit_sandbox()
             .expect("net-only implicit sandbox should be present");
         assert_eq!(sandbox.network, NetworkPolicy::Allow);
-        let temp_count = DecisionTree::temp_directory_paths().len();
-        assert_eq!(sandbox.rules.len(), temp_count);
+        let auto_count = auto_sandbox_rule_count();
+        assert_eq!(sandbox.rules.len(), auto_count);
     }
 
     #[test]
@@ -904,13 +909,13 @@ mod tests {
         let explicit = tree
             .build_sandbox_policy("custom-sandbox", "/home/user/project")
             .expect("explicit sandbox");
-        let temp_count = DecisionTree::temp_directory_paths().len();
-        assert_eq!(explicit.rules.len(), 1 + temp_count);
+        let auto_count = auto_sandbox_rule_count();
+        assert_eq!(explicit.rules.len(), 1 + auto_count);
         assert_eq!(explicit.rules[0].path, "/custom");
 
         // The implicit sandbox uses the policy's own fs rules.
         let implicit = tree.build_implicit_sandbox().expect("implicit sandbox");
-        assert_eq!(implicit.rules.len(), 1 + temp_count);
+        assert_eq!(implicit.rules.len(), 1 + auto_count);
         assert_eq!(implicit.rules[0].path, "/home/user/project");
     }
 

@@ -6,5 +6,8 @@
   ; TRANSCRIPT_DIR is provided by the hook context at runtime.
   (allow (fs read (subpath (env TRANSCRIPT_DIR))))
   ; Agent-internal tools (Skill, Task, AskUserQuestion, EnterPlanMode, etc.)
-  ; are always allowed — they have no external side effects.
-  (allow (tool)))
+  ; are always allowed — they have no external side effects. Interactive tools
+  ; like AskUserQuestion get passthrough treatment in the hook layer so
+  ; Claude Code's native UI is preserved.
+  (allow (tool))
+)

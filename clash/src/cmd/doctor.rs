@@ -64,6 +64,7 @@ pub fn run() -> Result<()> {
     println!();
 
     let checks = vec![
+        ("Disabled", check_disabled()),
         ("Policy files", check_policy_files()),
         ("Policy parsing", check_policy_parsing()),
         ("Plugin installed", check_plugin_installed()),
@@ -108,6 +109,18 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Check 0: Is clash disabled via environment variable?
+fn check_disabled() -> CheckResult {
+    if crate::settings::is_disabled() {
+        CheckResult::Warn(format!(
+            "{} is set — all hooks are pass-through. Unset to re-enable.",
+            crate::settings::CLASH_DISABLE_ENV,
+        ))
+    } else {
+        CheckResult::Pass("Clash is enabled.".into())
+    }
 }
 
 /// Check 1: Do policy files exist?

@@ -11,8 +11,36 @@ use crate::settings::{ClashSettings, HookContext};
 use claude_settings::PermissionRule;
 
 impl HooksCmd {
+    /// Handle hook when clash is disabled — drain stdin and return pass-through.
+    fn run_disabled(&self) -> Result<()> {
+        info!("Clash is disabled (CLASH_DISABLE), returning pass-through");
+        let output = match self {
+            Self::SessionStart => {
+                // Still read stdin to avoid broken pipe.
+                let _ = crate::hooks::SessionStartHookInput::from_reader(std::io::stdin().lock());
+                HookOutput::session_start(Some(
+                    "Clash is disabled (CLASH_DISABLE is set). \
+                     All hooks are pass-through — no policy enforcement is active. \
+                     Unset CLASH_DISABLE to re-enable."
+                        .into(),
+                ))
+            }
+            _ => {
+                // Drain stdin to avoid broken pipe, but skip parsing.
+                let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
+                HookOutput::continue_execution()
+            }
+        };
+        output.write_stdout()?;
+        Ok(())
+    }
+
     #[instrument(level = Level::TRACE, skip(self))]
     pub fn run(&self) -> Result<()> {
+        if crate::settings::is_disabled() {
+            return self.run_disabled();
+        }
+
         let output = match self {
             Self::PreToolUse => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
@@ -23,33 +51,41 @@ impl HooksCmd {
                 )?;
                 let output = check_permission(&input, &settings)?;
 
-                // Update session stats for the status line (only here, not in
-                // log_decision, to avoid double-counting PermissionRequest).
-                if let Some(effect) = extract_effect(&output) {
-                    crate::audit::update_session_stats(
-                        &input.session_id,
-                        &input.tool_name,
-                        &input.tool_input,
-                        effect,
-                        &input.cwd,
-                    );
-                }
+                // Interactive tools (e.g., AskUserQuestion) require user input
+                // via Claude Code's native UI. Returning "allow" would skip that
+                // UI entirely, so we pass through for any non-deny decision.
+                if is_interactive_tool(&input.tool_name) && !is_deny_decision(&output) {
+                    info!(tool = %input.tool_name, "Passthrough: interactive tool deferred to Claude Code");
+                    HookOutput::continue_execution()
+                } else {
+                    // Update session stats for the status line (only here, not in
+                    // log_decision, to avoid double-counting PermissionRequest).
+                    if let Some(effect) = extract_effect(&output) {
+                        crate::audit::update_session_stats(
+                            &input.session_id,
+                            &input.tool_name,
+                            &input.tool_input,
+                            effect,
+                            &input.cwd,
+                        );
+                    }
 
-                // If the decision is Ask, record it so PostToolUse can detect
-                // user approval and suggest a session policy rule.
-                if is_ask_decision(&output)
-                    && let Some(ref tool_use_id) = input.tool_use_id
-                {
-                    session_policy::record_pending_ask(
-                        &input.session_id,
-                        tool_use_id,
-                        &input.tool_name,
-                        &input.tool_input,
-                        &input.cwd,
-                    );
-                }
+                    // If the decision is Ask, record it so PostToolUse can detect
+                    // user approval and suggest a session policy rule.
+                    if is_ask_decision(&output)
+                        && let Some(ref tool_use_id) = input.tool_use_id
+                    {
+                        session_policy::record_pending_ask(
+                            &input.session_id,
+                            tool_use_id,
+                            &input.tool_name,
+                            &input.tool_input,
+                            &input.cwd,
+                        );
+                    }
 
-                output
+                    output
+                }
             }
             Self::PostToolUse => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
@@ -131,4 +167,15 @@ fn extract_effect(output: &HookOutput) -> Option<Effect> {
 
 fn is_ask_decision(output: &HookOutput) -> bool {
     matches!(extract_effect(output), Some(Effect::Ask))
+}
+
+fn is_deny_decision(output: &HookOutput) -> bool {
+    matches!(extract_effect(output), Some(Effect::Deny))
+}
+
+/// Tools that require user interaction via Claude Code's native UI.
+/// Auto-approving these would skip the interaction, so non-deny
+/// decisions are converted to passthrough.
+fn is_interactive_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "AskUserQuestion")
 }

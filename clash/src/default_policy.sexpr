@@ -7,7 +7,7 @@
 (default deny "main")
 
 (policy "cwd-access"
-  (allow (fs read (subpath (env PWD))))
+  (allow (fs read (subpath :worktree (env PWD))))
 )
 
 (policy "main"
