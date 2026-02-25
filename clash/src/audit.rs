@@ -64,8 +64,7 @@ impl AuditConfig {
 ///
 /// Pre-aggregated counters and last-decision metadata, serialized as JSON.
 /// Updated atomically on every policy decision.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionStats {
     pub allowed: u64,
     pub denied: u64,
@@ -78,7 +77,6 @@ pub struct SessionStats {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_deny_hint: Option<String>,
 }
-
 
 /// Return the session-specific temp directory for the given session ID.
 pub fn session_dir(session_id: &str) -> PathBuf {

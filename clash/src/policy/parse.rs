@@ -964,8 +964,7 @@ mod tests {
 
     #[test]
     fn parse_subpath_without_worktree() {
-        let ast =
-            parse(r#"(policy "p" (allow (fs read (subpath (env HOME)))))"#).unwrap();
+        let ast = parse(r#"(policy "p" (allow (fs read (subpath (env HOME)))))"#).unwrap();
         let body = match &ast[0] {
             TopLevel::Policy { body, .. } => body,
             _ => panic!(),
