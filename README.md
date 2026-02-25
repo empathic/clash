@@ -29,7 +29,7 @@ clash init
 claude
 ```
 
-`clash init` writes a default policy, installs the Claude Code plugin from GitHub, and walks you through initial configuration. After init, every `claude` session automatically loads clash.
+`clash init` writes a default policy, installs the Claude Code plugin from GitHub, installs the status line, and walks you through initial configuration. After init, every `claude` session automatically loads clash.
 
 If you have the repo checked out, you can also use `just install` which registers the plugin from the local source tree instead of GitHub.
 

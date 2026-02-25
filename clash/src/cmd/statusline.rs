@@ -131,7 +131,11 @@ fn effect_symbol(effect: Effect) -> String {
 }
 
 /// Install the clash status line into Claude Code user settings.
-fn install() -> Result<()> {
+///
+/// Idempotent: if clash's status line is already configured, prints a success
+/// message and returns. If a *different* status line is configured, prints a
+/// warning and returns without modifying the existing setting.
+pub fn install() -> Result<()> {
     let cs = claude_settings::ClaudeSettings::new();
 
     // Check if statusLine is already set.
