@@ -123,6 +123,20 @@ pub fn read_all_session_logs() -> Result<Vec<AuditLogEntry>> {
     Ok(all_entries)
 }
 
+/// Find an audit log entry by its short hash, searching all sessions.
+pub fn find_by_hash(hash: &str) -> Result<AuditLogEntry> {
+    let entries = read_all_session_logs()?;
+    let matches: Vec<_> = entries
+        .into_iter()
+        .filter(|e| e.short_hash().starts_with(hash))
+        .collect();
+    match matches.len() {
+        0 => anyhow::bail!("no audit log entry matching '{hash}'"),
+        1 => Ok(matches.into_iter().next().unwrap()),
+        n => anyhow::bail!("ambiguous hash '{hash}' matches {n} entries — use more characters"),
+    }
+}
+
 /// Filter audit log entries by the given criteria.
 pub fn filter_entries(entries: Vec<AuditLogEntry>, filter: &LogFilter) -> Vec<AuditLogEntry> {
     let mut filtered: Vec<AuditLogEntry> = entries
@@ -223,8 +237,9 @@ pub fn format_table(entries: &[AuditLogEntry]) -> String {
 
     // Header
     lines.push(format!(
-        "  {} {:>8}  {:<6}  {:<50}  {}",
+        "  {} {:<7}  {:>8}  {:<6}  {:<50}  {}",
         style::dim(""),
+        style::dim("id"),
         style::dim("when"),
         style::dim("tool"),
         style::dim("subject"),
@@ -233,13 +248,15 @@ pub fn format_table(entries: &[AuditLogEntry]) -> String {
 
     for entry in entries {
         let symbol = effect_symbol(&entry.decision);
+        let hash = entry.short_hash();
         let when = format_timestamp(&entry.timestamp);
         let subject = truncate(&entry.tool_input_summary, 50);
         let resolution = truncate(&entry.resolution, 40);
 
         lines.push(format!(
-            "  {} {:>8}  {:<6}  {:<50}  {}",
+            "  {} {:<7}  {:>8}  {:<6}  {:<50}  {}",
             symbol,
+            style::dim(&hash),
             style::dim(&when),
             entry.tool_name,
             subject,
@@ -252,19 +269,27 @@ pub fn format_table(entries: &[AuditLogEntry]) -> String {
     if denials > 0 {
         lines.push(String::new());
         lines.push(format!(
-            "  {} {total} entries, {} denied. Use {} to understand a denial.",
+            "  {} {total} entries, {} denied. Use {} to replay a denial.",
             style::dim("\u{2139}"),
             style::red(&denials.to_string()),
-            style::cyan("clash debug replay bash \"<command>\""),
+            style::cyan("clash debug replay <id>"),
         ));
     }
 
     lines.join("\n")
 }
 
-/// Format audit log entries as JSON.
+/// Format audit log entries as JSON (includes computed `id` field).
 pub fn format_json(entries: &[AuditLogEntry]) -> Result<String> {
-    serde_json::to_string_pretty(entries).context("failed to serialize audit entries as JSON")
+    let enriched: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| {
+            let mut v = serde_json::to_value(e).unwrap_or_default();
+            v["id"] = serde_json::Value::String(e.short_hash());
+            v
+        })
+        .collect();
+    serde_json::to_string_pretty(&enriched).context("failed to serialize audit entries as JSON")
 }
 
 /// Truncate a string with "..." if it exceeds max length.

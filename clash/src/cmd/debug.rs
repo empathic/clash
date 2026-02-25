@@ -164,18 +164,26 @@ fn run_replay(
         let tool = tool.ok_or_else(|| {
             anyhow::anyhow!(
                 "specify a tool to replay, e.g.: clash debug replay bash \"git push\"\n\
+                 or pass an id from `clash debug log`: clash debug replay <id>\n\
                  or use --last to replay the most recent logged command"
             )
         })?;
-        let input = if args.is_empty() {
-            None
+
+        // If the argument looks like a hex hash and there are no extra args,
+        // look it up in the audit log.
+        if args.is_empty() && tool.len() <= 7 && tool.chars().all(|c| c.is_ascii_hexdigit()) {
+            replay::replay_hash(&tool)?
         } else {
-            Some(args.join(" "))
-        };
-        let cwd = std::env::current_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        replay::replay_from_args(&tool, input.as_deref(), &cwd)?
+            let input = if args.is_empty() {
+                None
+            } else {
+                Some(args.join(" "))
+            };
+            let cwd = std::env::current_dir()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            replay::replay_from_args(&tool, input.as_deref(), &cwd)?
+        }
     };
 
     if json {

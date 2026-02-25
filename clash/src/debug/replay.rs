@@ -276,6 +276,20 @@ pub fn replay_last(session_id: Option<&str>) -> Result<ReplayResult> {
     )
 }
 
+/// Replay an audit log entry identified by its short hash.
+pub fn replay_hash(hash: &str) -> Result<ReplayResult> {
+    let entry = crate::debug::log::find_by_hash(hash)?;
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    replay_from_args(
+        &entry.tool_name,
+        Some(&entry.tool_input_summary),
+        &cwd,
+    )
+}
+
 /// Resolve tool name and input JSON from CLI arguments.
 ///
 /// Mirrors the logic in `cmd/explain.rs` for consistency.

@@ -12,6 +12,8 @@ pub mod log;
 pub mod replay;
 pub mod sandbox;
 
+use std::hash::{Hash, Hasher};
+
 use serde::{Deserialize, Serialize};
 
 /// A parsed audit log entry (owned, for deserialization from audit.jsonl).
@@ -34,5 +36,17 @@ impl AuditLogEntry {
     /// Parse the timestamp as seconds since epoch.
     pub fn timestamp_secs(&self) -> Option<f64> {
         self.timestamp.parse::<f64>().ok()
+    }
+
+    /// Stable 7-character hex identifier for this entry.
+    ///
+    /// Derived from the timestamp + tool name + input summary, so the
+    /// same invocation always produces the same hash across runs.
+    pub fn short_hash(&self) -> String {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.timestamp.hash(&mut hasher);
+        self.tool_name.hash(&mut hasher);
+        self.tool_input_summary.hash(&mut hasher);
+        format!("{:07x}", hasher.finish() & 0x0FFF_FFFF)
     }
 }
