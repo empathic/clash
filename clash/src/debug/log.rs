@@ -250,57 +250,84 @@ pub fn format_table(entries: &[AuditLogEntry]) -> String {
         entries.iter().map(|e| e.session_id.as_str()).collect();
     let multi_session = sessions.len() > 1;
 
-    // Header
+    // When single session, print which one.
+    if !multi_session {
+        let sid = entries[0].session_id.as_str();
+        if !sid.is_empty() {
+            lines.push(format!("  {} {}", style::dim("session:"), style::dim(sid)));
+            lines.push(String::new());
+        }
+    }
+
+    // Pad a string to exactly `width` visible characters, then apply styling.
+    // This avoids ANSI escapes breaking format-string alignment.
+    let pad = |s: &str, w: usize| -> String {
+        if s.len() >= w {
+            s[..w].to_string()
+        } else {
+            format!("{s:<w$}")
+        }
+    };
+    let pad_right = |s: &str, w: usize| -> String {
+        if s.len() >= w {
+            s[..w].to_string()
+        } else {
+            format!("{s:>w$}")
+        }
+    };
+
+    // Header — use a space for the symbol column so widths match data rows.
     if multi_session {
         lines.push(format!(
-            "  {} {:<7}  {:>8}  {:<12}  {:<6}  {:<44}  {}",
-            style::dim(""),
-            style::dim("id"),
-            style::dim("when"),
-            style::dim("session"),
-            style::dim("tool"),
-            style::dim("subject"),
+            "  {} {} {} {} {} {} {}",
+            " ",
+            style::dim(&pad("id", 7)),
+            style::dim(&pad_right("when", 8)),
+            style::dim(&pad("session", 12)),
+            style::dim(&pad("tool", 6)),
+            style::dim(&pad("subject", 44)),
             style::dim("resolution"),
         ));
     } else {
         lines.push(format!(
-            "  {} {:<7}  {:>8}  {:<6}  {:<50}  {}",
-            style::dim(""),
-            style::dim("id"),
-            style::dim("when"),
-            style::dim("tool"),
-            style::dim("subject"),
+            "  {} {} {} {} {} {}",
+            " ",
+            style::dim(&pad("id", 7)),
+            style::dim(&pad_right("when", 8)),
+            style::dim(&pad("tool", 6)),
+            style::dim(&pad("subject", 50)),
             style::dim("resolution"),
         ));
     }
 
     for entry in entries {
         let symbol = effect_symbol(&entry.decision);
-        let hash = entry.short_hash();
-        let when = format_timestamp(&entry.timestamp);
+        let hash = pad(&entry.short_hash(), 7);
+        let when = pad_right(&format_timestamp(&entry.timestamp), 8);
         let subject_width = if multi_session { 44 } else { 50 };
-        let subject = truncate(&entry.tool_input_summary, subject_width);
+        let subject = pad(&truncate(&entry.tool_input_summary, subject_width), subject_width);
         let resolution = truncate(&entry.resolution, 40);
+        let tool = pad(&entry.tool_name, 6);
 
         if multi_session {
-            let session = truncate(&short_session_id(&entry.session_id), 12);
+            let session = pad(&truncate(&short_session_id(&entry.session_id), 12), 12);
             lines.push(format!(
-                "  {} {:<7}  {:>8}  {:<12}  {:<6}  {:<44}  {}",
+                "  {} {} {} {} {} {} {}",
                 symbol,
                 style::dim(&hash),
                 style::dim(&when),
                 style::dim(&session),
-                entry.tool_name,
+                tool,
                 subject,
                 style::dim(&resolution),
             ));
         } else {
             lines.push(format!(
-                "  {} {:<7}  {:>8}  {:<6}  {:<50}  {}",
+                "  {} {} {} {} {} {}",
                 symbol,
                 style::dim(&hash),
                 style::dim(&when),
-                entry.tool_name,
+                tool,
                 subject,
                 style::dim(&resolution),
             ));
