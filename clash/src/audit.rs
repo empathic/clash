@@ -18,6 +18,8 @@ use crate::policy::ir::DecisionTrace;
 struct AuditEntry<'a> {
     /// Unix timestamp with millisecond precision (e.g. `1706123456.789`).
     timestamp: String,
+    /// The session that produced this entry.
+    session_id: &'a str,
     /// The tool that was invoked (e.g. "Bash", "Read").
     tool_name: &'a str,
     /// Summary of the tool input (truncated for large inputs).
@@ -63,6 +65,7 @@ impl AuditConfig {
 /// Pre-aggregated counters and last-decision metadata, serialized as JSON.
 /// Updated atomically on every policy decision.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct SessionStats {
     pub allowed: u64,
     pub denied: u64,
@@ -76,20 +79,6 @@ pub struct SessionStats {
     pub last_deny_hint: Option<String>,
 }
 
-impl Default for SessionStats {
-    fn default() -> Self {
-        Self {
-            allowed: 0,
-            denied: 0,
-            asked: 0,
-            last_tool: None,
-            last_input_summary: None,
-            last_effect: None,
-            last_at: None,
-            last_deny_hint: None,
-        }
-    }
-}
 
 /// Return the session-specific temp directory for the given session ID.
 pub fn session_dir(session_id: &str) -> PathBuf {
@@ -258,6 +247,7 @@ pub fn log_decision(
 
     let entry = AuditEntry {
         timestamp: chrono_timestamp(),
+        session_id,
         tool_name,
         tool_input_summary,
         decision: effect_str(effect),
@@ -275,11 +265,9 @@ pub fn log_decision(
         }
     }
 
-    // Write to session-specific audit log if the session dir exists.
+    // Always write to session-specific audit log so `clash debug log` has data.
     let session_log = session_dir(session_id).join("audit.jsonl");
-    if session_log.parent().is_some_and(|p| p.exists())
-        && let Err(e) = append_entry(&session_log, &entry)
-    {
+    if let Err(e) = append_entry(&session_log, &entry) {
         warn!(error = %e, path = %session_log.display(), "Failed to write session audit entry");
     }
 }
@@ -490,9 +478,9 @@ mod tests {
     }
 
     #[test]
-    fn test_log_decision_skips_session_when_no_dir() {
-        let id = "nonexistent-session-12345";
-        let dir = session_dir(id);
+    fn test_log_decision_creates_session_dir_if_needed() {
+        let id = format!("test-autocreate-{}", std::process::id());
+        let dir = session_dir(&id);
         // Ensure no dir exists.
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -501,10 +489,9 @@ mod tests {
             path: None,
         };
 
-        // Should not panic or create the dir.
         log_decision(
             &config,
-            id,
+            &id,
             "Read",
             &serde_json::json!({"file_path": "/tmp/x"}),
             Effect::Ask,
@@ -512,9 +499,13 @@ mod tests {
             &mock_trace(0),
         );
 
+        let session_log = dir.join("audit.jsonl");
         assert!(
-            !dir.exists(),
-            "should not create session dir on log_decision"
+            session_log.exists(),
+            "session audit.jsonl should be created even without prior init"
         );
+
+        // Clean up.
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

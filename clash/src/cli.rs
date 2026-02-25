@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+use crate::cmd::debug::DebugCmd;
 use crate::cmd::statusline::StatuslineCmd;
 use crate::sandbox_cmd::SandboxCmd;
 
@@ -242,6 +243,10 @@ pub enum Commands {
 
     /// Diagnose common setup issues and report fix instructions
     Doctor,
+
+    /// Debug policy enforcement: view logs, replay commands, inspect sandbox
+    #[command(subcommand)]
+    Debug(DebugCmd),
 
     // --- Hidden/internal commands ---
     /// Agent hook callbacks

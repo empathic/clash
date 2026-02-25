@@ -4,6 +4,7 @@
 //! The decision tree groups rules by capability domain for efficient lookup.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use regex::Regex;
 
@@ -16,7 +17,7 @@ use super::ast::{self, FsOp, OpPattern, Rule};
 use super::specificity::Specificity;
 
 /// A compiled policy decision tree, ready for evaluation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DecisionTree {
     /// The default effect when no rule matches.
     pub default: Effect,
@@ -36,7 +37,7 @@ pub struct DecisionTree {
 }
 
 /// A single compiled rule with pre-built regexes and a specificity rank.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompiledRule {
     /// The effect this rule produces.
     pub effect: Effect,
@@ -55,7 +56,7 @@ pub struct CompiledRule {
 }
 
 /// A pre-compiled capability matcher.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CompiledMatcher {
     Exec(CompiledExec),
     Fs(CompiledFs),
@@ -64,7 +65,7 @@ pub enum CompiledMatcher {
 }
 
 /// Pre-compiled exec matcher.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompiledExec {
     pub bin: CompiledPattern,
     /// Positional argument patterns.
@@ -74,40 +75,40 @@ pub struct CompiledExec {
 }
 
 /// Pre-compiled fs matcher.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompiledFs {
     pub op: ast::OpPattern,
     pub path: Option<CompiledPathFilter>,
 }
 
 /// Pre-compiled net matcher.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompiledNet {
     pub domain: CompiledPattern,
 }
 
 /// Pre-compiled tool matcher.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompiledTool {
     pub name: CompiledPattern,
 }
 
 /// A pattern with pre-compiled regex (if applicable).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CompiledPattern {
     Any,
     Literal(String),
-    Regex(Regex),
+    Regex(Arc<Regex>),
     Or(Vec<CompiledPattern>),
     Not(Box<CompiledPattern>),
 }
 
 /// A pre-compiled path filter.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CompiledPathFilter {
     Subpath(String), // resolved path (env vars expanded)
     Literal(String),
-    Regex(Regex),
+    Regex(Arc<Regex>),
     Or(Vec<CompiledPathFilter>),
     Not(Box<CompiledPathFilter>),
 }
