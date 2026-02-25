@@ -205,11 +205,57 @@ impl DecisionTree {
             return None;
         }
 
+        // Automatically grant full access to system temp directories so
+        // sandboxed tools (compilers, package managers, etc.) can create
+        // temporary files without needing explicit policy rules.
+        for path in Self::temp_directory_paths() {
+            sandbox_rules.push(SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::all(),
+                path,
+                path_match: PathMatch::Subpath,
+            });
+        }
+
         Some(SandboxPolicy {
             default: Cap::READ | Cap::EXECUTE,
             rules: sandbox_rules,
             network,
         })
+    }
+
+    /// System temp directory paths that sandboxed processes should always
+    /// be able to use. Includes platform-specific paths and $TMPDIR.
+    ///
+    /// On macOS: `/private/tmp`, `/private/var/folders` (the real paths
+    /// behind `/tmp` and `/var/folders` symlinks), plus `$TMPDIR`.
+    /// On Linux: `/tmp`, `/var/tmp`, plus `$TMPDIR`.
+    pub(crate) fn temp_directory_paths() -> Vec<String> {
+        let mut paths = Vec::new();
+
+        if cfg!(target_os = "macos") {
+            // macOS symlinks /tmp → /private/tmp and /var → /private/var.
+            // Seatbelt operates on real paths, so we use /private/* variants.
+            paths.push("/private/tmp".to_string());
+            paths.push("/private/var/folders".to_string());
+        } else {
+            paths.push("/tmp".to_string());
+            paths.push("/var/tmp".to_string());
+        }
+
+        // Also include $TMPDIR if set and not already covered by the
+        // platform defaults (e.g., macOS sets TMPDIR to a path under
+        // /var/folders which is already covered).
+        if let Ok(tmpdir) = std::env::var("TMPDIR") {
+            let resolved = std::fs::canonicalize(&tmpdir)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or(tmpdir);
+            if !paths.iter().any(|p| resolved.starts_with(p)) {
+                paths.push(resolved);
+            }
+        }
+
+        paths
     }
 
     /// Extract literal domain strings from a `CompiledPattern` into a flat list.
@@ -579,8 +625,9 @@ mod tests {
         // Default: read + execute
         assert_eq!(sandbox.default, Cap::READ | Cap::EXECUTE);
 
-        // Two fs rules: one allow subpath, one deny literal
-        assert_eq!(sandbox.rules.len(), 2);
+        // Two explicit fs rules plus temp directory rules
+        let temp_count = DecisionTree::temp_directory_paths().len();
+        assert_eq!(sandbox.rules.len(), 2 + temp_count);
 
         let allow_rule = &sandbox.rules[0];
         assert_eq!(allow_rule.effect, RuleEffect::Allow);
@@ -783,8 +830,9 @@ mod tests {
             .build_implicit_sandbox()
             .expect("should produce implicit sandbox");
 
-        // fs rule: allow write+create under PWD
-        assert_eq!(sandbox.rules.len(), 1);
+        // fs rule: allow write+create under PWD, plus temp directory rules
+        let temp_count = DecisionTree::temp_directory_paths().len();
+        assert_eq!(sandbox.rules.len(), 1 + temp_count);
         assert_eq!(sandbox.rules[0].effect, RuleEffect::Allow);
         assert_eq!(sandbox.rules[0].caps, Cap::WRITE | Cap::CREATE);
         assert_eq!(sandbox.rules[0].path, "/home/user/project");
@@ -808,12 +856,14 @@ mod tests {
         )
         .unwrap();
 
-        // No fs rules but net allowed → sandbox with network allow
+        // No explicit fs rules but net allowed → sandbox with network allow
+        // Temp directory rules are still added automatically.
         let sandbox = tree
             .build_implicit_sandbox()
             .expect("net-only implicit sandbox should be present");
         assert_eq!(sandbox.network, NetworkPolicy::Allow);
-        assert!(sandbox.rules.is_empty());
+        let temp_count = DecisionTree::temp_directory_paths().len();
+        assert_eq!(sandbox.rules.len(), temp_count);
     }
 
     #[test]
@@ -853,12 +903,13 @@ mod tests {
         let explicit = tree
             .build_sandbox_policy("custom-sandbox", "/home/user/project")
             .expect("explicit sandbox");
-        assert_eq!(explicit.rules.len(), 1);
+        let temp_count = DecisionTree::temp_directory_paths().len();
+        assert_eq!(explicit.rules.len(), 1 + temp_count);
         assert_eq!(explicit.rules[0].path, "/custom");
 
         // The implicit sandbox uses the policy's own fs rules.
         let implicit = tree.build_implicit_sandbox().expect("implicit sandbox");
-        assert_eq!(implicit.rules.len(), 1);
+        assert_eq!(implicit.rules.len(), 1 + temp_count);
         assert_eq!(implicit.rules[0].path, "/home/user/project");
     }
 
@@ -930,5 +981,106 @@ mod tests {
             .expect("net rule should produce implicit sandbox");
         // Wildcard (allow (net)) enables unrestricted sandbox networking.
         assert_eq!(sandbox.network, NetworkPolicy::Allow);
+    }
+
+    #[test]
+    fn sandbox_includes_temp_directory_rules() {
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec))
+  (allow (fs write (subpath (env PWD)))))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let sandbox = tree
+            .build_implicit_sandbox()
+            .expect("should produce implicit sandbox");
+
+        // The sandbox should contain temp directory rules in addition to
+        // the explicit PWD rule, so sandboxed processes can create temp files.
+        let temp_paths = DecisionTree::temp_directory_paths();
+        for temp_path in &temp_paths {
+            let has_rule = sandbox.rules.iter().any(|r| {
+                r.path == *temp_path
+                    && r.effect == RuleEffect::Allow
+                    && r.caps == Cap::all()
+                    && r.path_match == PathMatch::Subpath
+            });
+            assert!(
+                has_rule,
+                "sandbox should include allow-all rule for temp path: {}",
+                temp_path
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_sandbox_includes_temp_directory_rules() {
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "build-env"
+  (allow (fs write (subpath (env PWD)))))
+(policy "main"
+  (allow (exec "cargo" *) :sandbox "build-env"))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let sandbox = tree
+            .build_sandbox_policy("build-env", "/home/user/project")
+            .expect("should produce sandbox");
+
+        let temp_paths = DecisionTree::temp_directory_paths();
+        for temp_path in &temp_paths {
+            let has_rule = sandbox.rules.iter().any(|r| {
+                r.path == *temp_path
+                    && r.effect == RuleEffect::Allow
+                    && r.caps == Cap::all()
+                    && r.path_match == PathMatch::Subpath
+            });
+            assert!(
+                has_rule,
+                "explicit sandbox should include allow-all rule for temp path: {}",
+                temp_path
+            );
+        }
+    }
+
+    #[test]
+    fn temp_directory_paths_includes_platform_defaults() {
+        let paths = DecisionTree::temp_directory_paths();
+        // Every platform should have at least the standard temp paths
+        assert!(
+            !paths.is_empty(),
+            "temp_directory_paths should return at least one path"
+        );
+
+        if cfg!(target_os = "macos") {
+            assert!(
+                paths.contains(&"/private/tmp".to_string()),
+                "macOS should include /private/tmp"
+            );
+            assert!(
+                paths.contains(&"/private/var/folders".to_string()),
+                "macOS should include /private/var/folders"
+            );
+        } else {
+            assert!(
+                paths.contains(&"/tmp".to_string()),
+                "Linux should include /tmp"
+            );
+            assert!(
+                paths.contains(&"/var/tmp".to_string()),
+                "Linux should include /var/tmp"
+            );
+        }
     }
 }

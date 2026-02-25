@@ -49,6 +49,13 @@ fn render(format: &str) -> Result<()> {
     // so the console crate would suppress them. Force colors on.
     console::set_colors_enabled(true);
 
+    if crate::settings::is_disabled() {
+        // Drain stdin to avoid broken pipe.
+        let _ = serde_json::from_reader::<_, serde_json::Value>(std::io::stdin().lock());
+        print!("{}clash {}", style::cyan("⚡"), style::yellow("disabled"));
+        return Ok(());
+    }
+
     let payload: StdinPayload = serde_json::from_reader(std::io::stdin().lock())
         .context("Failed to read JSON from stdin")?;
 

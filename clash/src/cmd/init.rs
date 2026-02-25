@@ -73,6 +73,14 @@ fn prompt_scope() -> Result<&'static str> {
 /// - Otherwise, writes the default policy, installs the plugin, configures
 ///   bypassPermissions, and launches the wizard.
 fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
+    // Always ensure settings.json records clash as an enabled plugin.
+    // The `claude plugin install` command updates Claude Code's internal registry
+    // but does not write to the settings JSON that `clash doctor` inspects.
+    let claude = claude_settings::ClaudeSettings::new();
+    if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true) {
+        warn!(error = %e, "Could not set enabledPlugins in Claude Code settings");
+    }
+
     let sexpr_path = ClashSettings::policy_file()?;
 
     if sexpr_path.exists() && sexpr_path.is_dir() {

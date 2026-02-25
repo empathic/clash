@@ -110,6 +110,35 @@ clash status --verbose  # all rules including builtin rules expanded
 
 ---
 
+## clash doctor
+
+Diagnose common setup issues and report fix instructions. Runs a series of checks and reports pass/warn/fail status for each.
+
+```
+clash doctor
+```
+
+**Checks performed:**
+
+| Check | Description |
+|-------|-------------|
+| Policy files | Verifies user and project policy files exist |
+| Policy parsing | Attempts to parse and compile each policy file, reporting syntax errors |
+| Plugin installed | Checks if clash is registered as a Claude Code plugin with hooks configured |
+| Binary on PATH | Verifies the `clash` binary is findable on `$PATH` |
+| File permissions | Checks policy files are not world/group readable (Unix) |
+| Sandbox support | Checks if the platform supports sandboxing (Seatbelt on macOS, Landlock on Linux) |
+
+Each check outputs a status (**PASS**, **WARN**, or **FAIL**) with a message. Failures include concrete fix commands or instructions.
+
+**Examples:**
+
+```bash
+clash doctor
+```
+
+---
+
 ## clash policy shell
 
 Transactional policy editor. Accumulates changes in memory and applies them atomically. Works as a pipe-friendly protocol (for Claude via stdin), an interactive REPL (for humans), or a one-liner (via `-c`).

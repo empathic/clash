@@ -11,13 +11,44 @@ use crate::settings::{ClashSettings, HookContext};
 use claude_settings::PermissionRule;
 
 impl HooksCmd {
+    /// Handle hook when clash is disabled — drain stdin and return pass-through.
+    fn run_disabled(&self) -> Result<()> {
+        info!("Clash is disabled (CLASH_DISABLE), returning pass-through");
+        let output = match self {
+            Self::SessionStart => {
+                // Still read stdin to avoid broken pipe.
+                let _ = crate::hooks::SessionStartHookInput::from_reader(std::io::stdin().lock());
+                HookOutput::session_start(Some(
+                    "Clash is disabled (CLASH_DISABLE is set). \
+                     All hooks are pass-through — no policy enforcement is active. \
+                     Unset CLASH_DISABLE to re-enable."
+                        .into(),
+                ))
+            }
+            _ => {
+                // Drain stdin to avoid broken pipe, but skip parsing.
+                let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
+                HookOutput::continue_execution()
+            }
+        };
+        output.write_stdout()?;
+        Ok(())
+    }
+
     #[instrument(level = Level::TRACE, skip(self))]
     pub fn run(&self) -> Result<()> {
+        if crate::settings::is_disabled() {
+            return self.run_disabled();
+        }
+
         let output = match self {
             Self::PreToolUse => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
                 let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
-                let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx))?;
+                let settings = ClashSettings::load_or_create_with_session(
+                    Some(&input.session_id),
+                    Some(&hook_ctx),
+                )?;
                 let output = check_permission(&input, &settings)?;
 
                 // Interactive tools (e.g., AskUserQuestion) require user input
@@ -81,8 +112,11 @@ impl HooksCmd {
                 // and provide a hint about sandbox network restrictions.
                 let network_context = {
                     let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
-                    let settings =
-                        ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx)).ok();
+                    let settings = ClashSettings::load_or_create_with_session(
+                        Some(&input.session_id),
+                        Some(&hook_ctx),
+                    )
+                    .ok();
                     settings.and_then(|s| {
                         crate::network_hints::check_for_sandbox_network_hint(&input, &s)
                     })
@@ -101,7 +135,10 @@ impl HooksCmd {
             Self::PermissionRequest => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
                 let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
-                let settings = ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx))?;
+                let settings = ClashSettings::load_or_create_with_session(
+                    Some(&input.session_id),
+                    Some(&hook_ctx),
+                )?;
                 crate::handlers::handle_permission_request(&input, &settings)?
             }
             Self::SessionStart => {

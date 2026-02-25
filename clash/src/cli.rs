@@ -240,6 +240,9 @@ pub enum Commands {
     #[command(subcommand)]
     Sandbox(SandboxCmd),
 
+    /// Diagnose common setup issues and report fix instructions
+    Doctor,
+
     // --- Hidden/internal commands ---
     /// Agent hook callbacks
     #[command(subcommand, hide = true)]
