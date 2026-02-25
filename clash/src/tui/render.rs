@@ -13,7 +13,7 @@ use super::app::{
     AddRuleStep, App, ConfirmAction, DOMAIN_HINTS, DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, Mode,
 };
 use super::style as tui_style;
-use super::tree::{FlatRow, TreeNodeKind};
+use super::tree::{self, FlatRow, TreeNode, TreeNodeKind};
 
 /// Format an effect for display: "ask", "auto allow", "auto deny".
 fn effect_display(effect: Effect) -> &'static str {
@@ -131,7 +131,12 @@ fn render_tree(f: &mut Frame, app: &App, area: Rect) {
         let is_selected = i == app.cursor;
         let is_match = app.search_matches.contains(&i);
         let inline_select = if is_selected { selecting } else { None };
-        let line = render_row(row, is_selected, is_match, inline_select);
+        let summary = if !row.expanded && row.has_children {
+            collapsed_summary(&app.roots, &row.tree_path)
+        } else {
+            Vec::new()
+        };
+        let line = render_row(row, is_selected, is_match, inline_select, &summary);
         lines.push(line);
     }
 
@@ -139,11 +144,43 @@ fn render_tree(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(tree_widget, inner);
 }
 
+fn collapsed_summary(roots: &[TreeNode], tree_path: &[usize]) -> Vec<Span<'static>> {
+    let Some(node) = tree::node_at_path(roots, tree_path) else {
+        return Vec::new();
+    };
+    let (allow, deny, ask) = node.effect_counts();
+    let mut spans = Vec::new();
+    spans.push(Span::styled("  ", tui_style::DIM));
+    let mut first = true;
+    if allow > 0 {
+        spans.push(Span::styled(
+            format!("{allow} auto allow"),
+            tui_style::ALLOW,
+        ));
+        first = false;
+    }
+    if deny > 0 {
+        if !first {
+            spans.push(Span::styled(" · ", tui_style::DIM));
+        }
+        spans.push(Span::styled(format!("{deny} auto deny"), tui_style::DENY));
+        first = false;
+    }
+    if ask > 0 {
+        if !first {
+            spans.push(Span::styled(" · ", tui_style::DIM));
+        }
+        spans.push(Span::styled(format!("{ask} ask"), tui_style::ASK));
+    }
+    spans
+}
+
 fn render_row(
     row: &FlatRow,
     is_selected: bool,
     is_search_match: bool,
     inline_select: Option<usize>,
+    summary: &[Span<'static>],
 ) -> Line<'static> {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -169,10 +206,6 @@ fn render_row(
     match &row.kind {
         TreeNodeKind::Domain(domain) => {
             spans.push(Span::styled(domain.to_string(), tui_style::DOMAIN));
-            if !row.expanded {
-                let count = count_display(row);
-                spans.push(Span::styled(count, tui_style::DIM));
-            }
         }
         TreeNodeKind::PolicyBlock { name, level } => {
             spans.push(Span::styled(format!("{name} "), tui_style::BINARY));
@@ -234,6 +267,11 @@ fn render_row(
         }
     }
 
+    // Append collapsed summary for any non-leaf collapsed node
+    if !row.expanded && row.has_children {
+        spans.extend(summary.iter().cloned());
+    }
+
     let style = if is_selected {
         tui_style::SELECTED
     } else if is_search_match {
@@ -243,18 +281,6 @@ fn render_row(
     };
 
     Line::from(spans).style(style)
-}
-
-fn count_display(row: &FlatRow) -> String {
-    // We estimate rule count from children info. Since we only show this
-    // for collapsed nodes, use the tree_path to look up the actual node.
-    // However we don't have access to roots here, so we just show a
-    // generic indicator. The breadcrumb covers detailed info.
-    if row.has_children && !row.expanded {
-        "  ...".to_string()
-    } else {
-        String::new()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +493,7 @@ fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
                         } else {
                             hints.push(("l", "expand"));
                         }
+                        hints.push(("z/Z", "fold"));
                     }
                 }
                 TreeNodeKind::Leaf { .. } => {
@@ -530,7 +557,7 @@ fn render_search_bar(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_help_overlay(f: &mut Frame, area: Rect) {
     let width = 50u16.min(area.width.saturating_sub(4));
-    let height = 31u16.min(area.height.saturating_sub(4));
+    let height = 33u16.min(area.height.saturating_sub(4));
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
     let overlay = Rect::new(x, y, width, height);
@@ -566,6 +593,8 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         help_line(bold, "  u           ", "Undo last edit"),
         help_line(bold, "  Ctrl+r      ", "Redo"),
         Line::from(""),
+        help_line(bold, "  z           ", "Fold/unfold children"),
+        help_line(bold, "  Z           ", "Fold/unfold subtree"),
         help_line(bold, "  [           ", "Collapse all"),
         help_line(bold, "  ]           ", "Expand all"),
         Line::from(""),

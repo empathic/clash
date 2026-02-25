@@ -167,7 +167,17 @@ impl App {
             .collect();
 
         let loaded = Self::to_loaded_policies(&levels);
-        let roots = tree::build_tree(&loaded);
+        let mut roots = tree::build_tree(&loaded);
+        // Start fully collapsed
+        fn collapse(node: &mut TreeNode) {
+            node.expanded = false;
+            for child in &mut node.children {
+                collapse(child);
+            }
+        }
+        for root in &mut roots {
+            collapse(root);
+        }
         let flat_rows = tree::flatten(&roots);
 
         Self {
@@ -401,6 +411,51 @@ impl App {
         }
 
         Some(parts.join(" > "))
+    }
+
+    /// Toggle fold on the current node.
+    pub fn toggle_fold_level(&mut self) {
+        let Some(row) = self.flat_rows.get(self.cursor) else {
+            return;
+        };
+        if !row.has_children {
+            return;
+        }
+        let path = row.tree_path.clone();
+        let Some(node) = tree::node_at_path_mut(&mut self.roots, &path) else {
+            return;
+        };
+        node.expanded = !node.expanded;
+        self.rebuild_flat();
+    }
+
+    /// Toggle fold on the entire subtree under the current node.
+    pub fn toggle_fold_recursive(&mut self) {
+        let Some(row) = self.flat_rows.get(self.cursor) else {
+            return;
+        };
+        if !row.has_children {
+            return;
+        }
+        let path = row.tree_path.clone();
+        let Some(node) = tree::node_at_path_mut(&mut self.roots, &path) else {
+            return;
+        };
+        // If the node or any descendant is expanded, collapse all; otherwise expand all
+        fn any_expanded(node: &TreeNode) -> bool {
+            (node.expanded && !node.children.is_empty()) || node.children.iter().any(any_expanded)
+        }
+        fn set_recursive(node: &mut TreeNode, expanded: bool) {
+            if !node.children.is_empty() {
+                node.expanded = expanded;
+            }
+            for child in &mut node.children {
+                set_recursive(child, expanded);
+            }
+        }
+        let expand = !any_expanded(node);
+        set_recursive(node, expand);
+        self.rebuild_flat();
     }
 
     /// Toggle expand/collapse on the current node.
