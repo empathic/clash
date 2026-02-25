@@ -146,9 +146,15 @@ fn normalize_path(path: &Path) -> PathBuf {
 
 /// Return the git directories that need sandbox access for a worktree.
 ///
-/// Returns an empty vec if not in a worktree. Paths are canonicalized when
-/// possible (needed for macOS Seatbelt which operates on real paths).
+/// Returns an empty vec if not in a worktree or if worktree access is
+/// disabled via `CLASH_NO_WORKTREE_ACCESS=1`. Paths are canonicalized
+/// when possible (needed for macOS Seatbelt which operates on real paths).
 pub fn worktree_sandbox_paths(cwd: &Path) -> Vec<String> {
+    if std::env::var("CLASH_NO_WORKTREE_ACCESS").is_ok_and(|v| v == "1" || v == "true") {
+        debug!("git worktree access disabled via CLASH_NO_WORKTREE_ACCESS");
+        return Vec::new();
+    }
+
     let info = match detect_worktree(cwd) {
         Some(info) => info,
         None => return Vec::new(),
@@ -277,6 +283,19 @@ mod tests {
         for p in &paths {
             assert!(!p.is_empty());
         }
+    }
+
+    #[test]
+    fn worktree_sandbox_paths_disabled_by_env_var() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (worktree, _git_dir) = setup_worktree(tmp.path());
+
+        // SAFETY: this test runs single-threaded and we restore the var immediately.
+        unsafe { std::env::set_var("CLASH_NO_WORKTREE_ACCESS", "1") };
+        let paths = worktree_sandbox_paths(&worktree);
+        unsafe { std::env::remove_var("CLASH_NO_WORKTREE_ACCESS") };
+
+        assert!(paths.is_empty());
     }
 
     #[test]
