@@ -124,10 +124,56 @@ pub struct FlatRow {
 // ---------------------------------------------------------------------------
 
 /// A rule with provenance info.
+#[derive(Clone)]
 struct ProvenanceRule {
     rule: Rule,
     level: PolicyLevel,
     policy_name: String,
+}
+
+// ---------------------------------------------------------------------------
+// Or-expansion helpers
+// ---------------------------------------------------------------------------
+
+/// Expand a Pattern::Or into individual alternatives (recursive).
+fn expand_pattern(pat: &Pattern) -> Vec<String> {
+    match pat {
+        Pattern::Or(ps) => ps.iter().flat_map(expand_pattern).collect(),
+        other => vec![other.to_string()],
+    }
+}
+
+/// Expand an OpPattern::Or into individual operations.
+fn expand_op(op: &OpPattern) -> Vec<String> {
+    match op {
+        OpPattern::Or(ops) => ops.iter().map(|o| o.to_string()).collect(),
+        other => vec![other.to_string()],
+    }
+}
+
+/// Expand a PathFilter::Or into individual paths (recursive).
+fn expand_path_filter(pf: &PathFilter) -> Vec<String> {
+    match pf {
+        PathFilter::Or(fs) => fs.iter().flat_map(expand_path_filter).collect(),
+        other => vec![other.to_string()],
+    }
+}
+
+/// Cartesian product of expanded pattern alternatives.
+fn cartesian(sets: &[Vec<String>]) -> Vec<Vec<String>> {
+    if sets.is_empty() {
+        return vec![vec![]];
+    }
+    let rest = cartesian(&sets[1..]);
+    let mut result = Vec::new();
+    for item in &sets[0] {
+        for r in &rest {
+            let mut combo = vec![item.clone()];
+            combo.extend(r.iter().cloned());
+            result.push(combo);
+        }
+    }
+    result
 }
 
 /// Build the full visual tree from loaded policies.
@@ -195,18 +241,20 @@ pub fn build_tree(policies: &[LoadedPolicy]) -> Vec<TreeNode> {
 // ---------------------------------------------------------------------------
 
 fn build_exec_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
-    // Group by binary pattern Display text
+    // Group by binary pattern, expanding Or into individual alternatives
     let mut by_bin: Vec<(String, Vec<ProvenanceRule>)> = Vec::new();
 
     for pr in rules {
-        let bin_text = match &pr.rule.matcher {
-            CapMatcher::Exec(m) => m.bin.to_string(),
+        let bin_texts = match &pr.rule.matcher {
+            CapMatcher::Exec(m) => expand_pattern(&m.bin),
             _ => continue,
         };
-        if let Some(entry) = by_bin.iter_mut().find(|(k, _)| *k == bin_text) {
-            entry.1.push(pr);
-        } else {
-            by_bin.push((bin_text, vec![pr]));
+        for bin_text in bin_texts {
+            if let Some(entry) = by_bin.iter_mut().find(|(k, _)| *k == bin_text) {
+                entry.1.push(pr.clone());
+            } else {
+                by_bin.push((bin_text, vec![pr.clone()]));
+            }
         }
     }
 
@@ -221,58 +269,66 @@ fn build_exec_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
 }
 
 fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
-    // For each rule, create a subtree of its args, terminating in a leaf
     let mut children = Vec::new();
 
     for pr in rules {
         let (args, has_args) = match &pr.rule.matcher {
-            CapMatcher::Exec(m) => (m.args.clone(), m.has_args.clone()),
+            CapMatcher::Exec(m) => (&m.args, &m.has_args),
             _ => continue,
         };
 
-        // Wrap leaf in Domain(Exec) so the domain label sits just above the effect
-        let leaf = TreeNode::new(TreeNodeKind::Leaf {
-            effect: pr.rule.effect,
-            rule: pr.rule.clone(),
-            level: pr.level,
-            policy: pr.policy_name,
-        });
-        let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Exec));
-        domain.children.push(leaf);
-
         if args.is_empty() && has_args.is_empty() {
-            // No args — domain directly under binary
+            let leaf = TreeNode::new(TreeNodeKind::Leaf {
+                effect: pr.rule.effect,
+                rule: pr.rule.clone(),
+                level: pr.level,
+                policy: pr.policy_name.clone(),
+            });
+            let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Exec));
+            domain.children.push(leaf);
             children.push(domain);
             continue;
         }
 
-        // Build a chain: arg0 → arg1 → ... → [:has → has0 → has1 → ...] → domain → leaf
-        let mut chain_nodes: Vec<TreeNode> = Vec::new();
+        // Expand Or patterns into all combinations
+        let arg_sets: Vec<Vec<String>> = args.iter().map(expand_pattern).collect();
+        let has_sets: Vec<Vec<String>> = has_args.iter().map(expand_pattern).collect();
+        let arg_combos = cartesian(&arg_sets);
+        let has_combos = cartesian(&has_sets);
 
-        for arg in &args {
-            chain_nodes.push(TreeNode::new(TreeNodeKind::Arg(arg.to_string())));
-        }
+        for arg_combo in &arg_combos {
+            for has_combo in &has_combos {
+                let leaf = TreeNode::new(TreeNodeKind::Leaf {
+                    effect: pr.rule.effect,
+                    rule: pr.rule.clone(),
+                    level: pr.level,
+                    policy: pr.policy_name.clone(),
+                });
+                let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Exec));
+                domain.children.push(leaf);
 
-        if !has_args.is_empty() {
-            chain_nodes.push(TreeNode::new(TreeNodeKind::HasMarker));
-            for ha in &has_args {
-                chain_nodes.push(TreeNode::new(TreeNodeKind::HasArg(ha.to_string())));
+                let mut chain_nodes: Vec<TreeNode> = Vec::new();
+                for text in arg_combo {
+                    chain_nodes.push(TreeNode::new(TreeNodeKind::Arg(text.clone())));
+                }
+                if !has_combo.is_empty() {
+                    chain_nodes.push(TreeNode::new(TreeNodeKind::HasMarker));
+                    for text in has_combo {
+                        chain_nodes.push(TreeNode::new(TreeNodeKind::HasArg(text.clone())));
+                    }
+                }
+
+                let mut current = domain;
+                for mut node in chain_nodes.into_iter().rev() {
+                    node.children.push(current);
+                    current = node;
+                }
+                children.push(current);
             }
         }
-
-        // Link chain: last node gets domain as child, each prior gets the next as child
-        let mut current = domain;
-        for mut node in chain_nodes.into_iter().rev() {
-            node.children.push(current);
-            current = node;
-        }
-
-        children.push(current);
     }
 
-    // Try to merge children that share the same kind at the top level
     merge_nodes(&mut children);
-
     children
 }
 
@@ -323,30 +379,40 @@ fn build_fs_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
     let mut children = Vec::new();
 
     for pr in rules {
-        let (op, path) = match &pr.rule.matcher {
-            CapMatcher::Fs(m) => (m.op.to_string(), m.path.as_ref().map(|p| p.to_string())),
+        let (ops, paths) = match &pr.rule.matcher {
+            CapMatcher::Fs(m) => (expand_op(&m.op), m.path.as_ref().map(expand_path_filter)),
             _ => continue,
         };
 
-        let leaf = TreeNode::new(TreeNodeKind::Leaf {
-            effect: pr.rule.effect,
-            rule: pr.rule.clone(),
-            level: pr.level,
-            policy: pr.policy_name,
-        });
-        let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Filesystem));
-        domain.children.push(leaf);
+        for op in &ops {
+            let leaf = TreeNode::new(TreeNodeKind::Leaf {
+                effect: pr.rule.effect,
+                rule: pr.rule.clone(),
+                level: pr.level,
+                policy: pr.policy_name.clone(),
+            });
+            let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Filesystem));
+            domain.children.push(leaf);
 
-        if let Some(path_text) = path {
-            let mut path_node = TreeNode::new(TreeNodeKind::PathNode(path_text));
-            let mut op_node = TreeNode::new(TreeNodeKind::FsOp(op));
-            op_node.children.push(domain);
-            path_node.children.push(op_node);
-            children.push(path_node);
-        } else {
-            let mut op_node = TreeNode::new(TreeNodeKind::FsOp(op));
-            op_node.children.push(domain);
-            children.push(op_node);
+            if let Some(path_texts) = &paths {
+                for path_text in path_texts {
+                    let mut path_node = TreeNode::new(TreeNodeKind::PathNode(path_text.clone()));
+                    if op == "*" {
+                        path_node.children.push(domain.clone());
+                    } else {
+                        let mut op_node = TreeNode::new(TreeNodeKind::FsOp(op.clone()));
+                        op_node.children.push(domain.clone());
+                        path_node.children.push(op_node);
+                    }
+                    children.push(path_node);
+                }
+            } else if op == "*" {
+                children.push(domain);
+            } else {
+                let mut op_node = TreeNode::new(TreeNodeKind::FsOp(op.clone()));
+                op_node.children.push(domain);
+                children.push(op_node);
+            }
         }
     }
 
@@ -362,23 +428,29 @@ fn build_net_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
     let mut children = Vec::new();
 
     for pr in rules {
-        let domain_text = match &pr.rule.matcher {
-            CapMatcher::Net(m) => m.domain.to_string(),
+        let domain_texts = match &pr.rule.matcher {
+            CapMatcher::Net(m) => expand_pattern(&m.domain),
             _ => continue,
         };
 
-        let leaf = TreeNode::new(TreeNodeKind::Leaf {
-            effect: pr.rule.effect,
-            rule: pr.rule.clone(),
-            level: pr.level,
-            policy: pr.policy_name,
-        });
-        let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Network));
-        domain.children.push(leaf);
+        for domain_text in domain_texts {
+            let leaf = TreeNode::new(TreeNodeKind::Leaf {
+                effect: pr.rule.effect,
+                rule: pr.rule.clone(),
+                level: pr.level,
+                policy: pr.policy_name.clone(),
+            });
+            let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Network));
+            domain.children.push(leaf);
 
-        let mut domain_node = TreeNode::new(TreeNodeKind::NetDomain(domain_text));
-        domain_node.children.push(domain);
-        children.push(domain_node);
+            if domain_text == "*" {
+                children.push(domain);
+            } else {
+                let mut domain_node = TreeNode::new(TreeNodeKind::NetDomain(domain_text));
+                domain_node.children.push(domain);
+                children.push(domain_node);
+            }
+        }
     }
 
     merge_nodes(&mut children);
@@ -393,23 +465,29 @@ fn build_tool_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
     let mut children = Vec::new();
 
     for pr in rules {
-        let name_text = match &pr.rule.matcher {
-            CapMatcher::Tool(m) => m.name.to_string(),
+        let name_texts = match &pr.rule.matcher {
+            CapMatcher::Tool(m) => expand_pattern(&m.name),
             _ => continue,
         };
 
-        let leaf = TreeNode::new(TreeNodeKind::Leaf {
-            effect: pr.rule.effect,
-            rule: pr.rule.clone(),
-            level: pr.level,
-            policy: pr.policy_name,
-        });
-        let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Tool));
-        domain.children.push(leaf);
+        for name_text in name_texts {
+            let leaf = TreeNode::new(TreeNodeKind::Leaf {
+                effect: pr.rule.effect,
+                rule: pr.rule.clone(),
+                level: pr.level,
+                policy: pr.policy_name.clone(),
+            });
+            let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Tool));
+            domain.children.push(leaf);
 
-        let mut name_node = TreeNode::new(TreeNodeKind::ToolName(name_text));
-        name_node.children.push(domain);
-        children.push(name_node);
+            if name_text == "*" {
+                children.push(domain);
+            } else {
+                let mut name_node = TreeNode::new(TreeNodeKind::ToolName(name_text));
+                name_node.children.push(domain);
+                children.push(name_node);
+            }
+        }
     }
 
     merge_nodes(&mut children);
