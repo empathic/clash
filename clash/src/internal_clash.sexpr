@@ -3,6 +3,9 @@
   ; Read clash config
   (allow (fs read (subpath (join (env HOME) "/.clash"))))
 
+  ; Bug reporting (needs network to reach Linear API)
+  (allow (exec "clash" "bug" *) :sandbox (allow (net)))
+
   ; Read-only commands
   (allow (exec "clash" "status" *))
   (allow (exec "clash" "policy" "list" *))

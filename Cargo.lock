@@ -965,9 +965,9 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hotln"
-version = "0.1.1"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f641ff18588c6cb6f6c7a35f612d9c9fd119d0028ed333d7b61947f279a5b8f"
+checksum = "8c4f26b248e2a2dd017e7aefcd477a6b4cafb4353eb3967bd6e1cddd0df0b746"
 dependencies = [
  "serde_json",
  "thiserror 2.0.18",

@@ -51,35 +51,20 @@ pub fn run(
         ("Version", env!("CARGO_PKG_VERSION")),
     ];
 
-    let url = if let Some(api_key) = option_env!("CLASH_HOTLINE_LINEAR_KEY") {
-        let Some(team_id) = option_env!("CLASH_HOTLINE_LINEAR_TEAM") else {
-            bail!("CLASH_HOTLINE_LINEAR_KEY is set but CLASH_HOTLINE_LINEAR_TEAM is missing");
-        };
-        let Some(project_id) = option_env!("CLASH_HOTLINE_LINEAR_PROJECT") else {
-            bail!("CLASH_HOTLINE_LINEAR_KEY is set but CLASH_HOTLINE_LINEAR_PROJECT is missing");
-        };
-        hotln::direct(api_key, team_id, project_id)
-            .create_issue(&title, full_description.as_deref(), &system_info)
-            .context("failed to file bug report")?
-    } else {
-        let Some(hotline_url) = option_env!("CLASH_HOTLINE_PROXY_URL") else {
-            bail!(
-                "Bug reporting is not configured in this build.\n\
-                 Set CLASH_HOTLINE_LINEAR_KEY or CLASH_HOTLINE_PROXY_URL to enable it."
-            );
-        };
-        let Some(hotline_token) = option_env!("CLASH_HOTLINE_PROXY_TOKEN") else {
-            bail!("CLASH_HOTLINE_PROXY_URL is set but CLASH_HOTLINE_PROXY_TOKEN is missing");
-        };
-        hotln::proxy(hotline_url)
-            .with_token(hotline_token)
-            .create_issue(&title, full_description.as_deref(), &system_info)
-            .context("failed to file bug report")?
-    };
+    const HOTLINE_PROXY_URL: &str = "https://clash-hotline.emv.workers.dev/";
+    const HOTLINE_PROXY_TOKEN: &str = "nkCk16ewj5YDPqhZ7FSBHM44+3y5F5HpH0FdvVrIO8A=";
 
-    println!("{} Filed bug: {}", style::green_bold("✓"), url);
+    let result = hotln::proxy(HOTLINE_PROXY_URL)
+        .with_token(HOTLINE_PROXY_TOKEN)
+        .create_issue(&title, full_description.as_deref(), &system_info);
 
-    Ok(())
+    match result {
+        Ok(url) => {
+            println!("{} Filed bug: {}", style::green_bold("✓"), url);
+            Ok(())
+        }
+        Err(e) => bail!("failed to file bug report: {e}"),
+    }
 }
 
 /// Read the last `n` lines from the clash log file.

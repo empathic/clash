@@ -954,7 +954,7 @@ mod tests {
         assert_eq!(decision.effect, Effect::Allow);
         let sandbox = decision
             .sandbox
-            .expect("inline sandbox should produce SandboxPolicy");
+            .expect("net-only sandbox should be present");
         assert_eq!(sandbox.network, NetworkPolicy::Allow);
         // Only temp directory rules (no explicit fs rules in this sandbox)
         let auto_count = crate::policy::decision_tree::DecisionTree::temp_directory_paths().len();
