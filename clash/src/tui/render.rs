@@ -123,7 +123,6 @@ fn render_tree(f: &mut Frame, app: &App, area: Rect) {
 
     let selecting = match &app.mode {
         Mode::SelectEffect(state) => Some(state.effect_index),
-        Mode::SelectSandboxEffect(state) => Some(state.effect_index),
         _ => None,
     };
 
@@ -338,8 +337,13 @@ fn render_description(f: &mut Frame, app: &App, area: Rect) {
 
     // In edit-rule or edit-sandbox-rule mode, show the editor
     let edit_state = match &app.mode {
-        Mode::EditRule(state) => Some(("Edit rule: ", &state.input, &state.error)),
-        Mode::EditSandboxRule(state) => Some(("Edit sandbox rule: ", &state.input, &state.error)),
+        Mode::EditRule(state) => {
+            let label = match &state.target {
+                super::app::RuleTarget::Regular { .. } => "Edit rule: ",
+                super::app::RuleTarget::Sandbox { .. } => "Edit sandbox rule: ",
+            };
+            Some((label, &state.input, &state.error))
+        }
         _ => None,
     };
     if let Some((label, input, error)) = edit_state {

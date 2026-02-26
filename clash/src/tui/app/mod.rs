@@ -1,16 +1,15 @@
 //! App state, main event loop, dispatch input.
 
-use std::fs;
+mod edit;
+mod search;
+
 use std::path::PathBuf;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, MouseEvent, MouseEventKind};
 
-use crate::policy::Effect;
-use crate::policy::ast::{PolicyItem, Rule, SandboxRef, TopLevel};
-use crate::policy::compile::compile_policy;
-use crate::policy::edit;
-use crate::policy::parse;
+use crate::policy::ast::Rule;
+use crate::policy::edit as policy_edit;
 use crate::settings::{LoadedPolicy, PolicyLevel};
 
 use super::editor::TextInput;
@@ -18,23 +17,39 @@ use super::input::{self, InputResult};
 use super::render;
 use super::tree::{self, FlatRow, TreeNode, TreeNodeKind};
 
+// Re-export constants used by input.rs and render.rs
+pub(crate) use self::edit::{DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS};
+// Re-export helpers used only by tests in other modules
+#[cfg(test)]
+pub(crate) use self::edit::{
+    build_rule_text, next_add_rule_step, parse_rule_text, quote_token_if_needed,
+};
+
 // ---------------------------------------------------------------------------
-// Mode and related types
+// Mode and form types
 // ---------------------------------------------------------------------------
 
-/// Current interaction mode.
 pub enum Mode {
     Normal,
     Confirm(ConfirmAction),
     AddRule(AddRuleForm),
     EditRule(EditRuleState),
     SelectEffect(SelectEffectState),
-    SelectSandboxEffect(SelectSandboxEffectState),
-    EditSandboxRule(EditSandboxRuleState),
     Search,
 }
 
-/// What a confirmation dialog is confirming.
+pub enum RuleTarget {
+    Regular {
+        level: PolicyLevel,
+        policy: String,
+    },
+    Sandbox {
+        level: PolicyLevel,
+        policy: String,
+        parent_rule: Rule,
+    },
+}
+
 pub enum ConfirmAction {
     DeleteRule {
         level: PolicyLevel,
@@ -50,7 +65,6 @@ pub enum ConfirmAction {
     QuitUnsaved,
 }
 
-/// Step-by-step add-rule form.
 pub struct AddRuleForm {
     pub step: AddRuleStep,
     pub domain_index: usize,
@@ -67,7 +81,7 @@ pub struct AddRuleForm {
 }
 
 impl AddRuleForm {
-    /// Returns a mutable reference to the text input for the current step, if any.
+    /// Return the currently active text input for the current step, if any.
     pub fn active_text_input(&mut self) -> Option<&mut TextInput> {
         match self.step {
             AddRuleStep::EnterBinary => Some(&mut self.binary_input),
@@ -80,11 +94,11 @@ impl AddRuleForm {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddRuleStep {
-    SelectDomain,
     EnterBinary,
     EnterArgs,
+    SelectDomain,
     SelectFsOp,
     EnterPath,
     EnterNetDomain,
@@ -93,58 +107,33 @@ pub enum AddRuleStep {
     SelectLevel,
 }
 
-/// State for inline rule editing.
 pub struct EditRuleState {
     pub input: TextInput,
-    pub original_rule_text: String,
-    pub level: PolicyLevel,
-    pub policy: String,
+    pub original_rule: Rule,
+    pub target: RuleTarget,
     pub error: Option<String>,
 }
 
-/// State for the effect selector dropdown.
 pub struct SelectEffectState {
     pub effect_index: usize,
     pub rule: Rule,
-    pub level: PolicyLevel,
-    pub policy: String,
+    pub target: RuleTarget,
 }
 
-/// State for sandbox effect selector dropdown.
-pub struct SelectSandboxEffectState {
-    pub effect_index: usize,
-    pub sandbox_rule: Rule,
-    pub parent_rule: Rule,
-    pub level: PolicyLevel,
-    pub policy: String,
-}
-
-/// State for inline sandbox rule editing.
-pub struct EditSandboxRuleState {
-    pub input: TextInput,
-    pub original_sandbox_rule: Rule,
-    pub parent_rule: Rule,
-    pub level: PolicyLevel,
-    pub policy: String,
-    pub error: Option<String>,
-}
-
-/// How to mutate a sandbox sub-rule within its parent.
 enum SandboxMutation {
     Delete,
     Replace(Rule),
 }
 
 // ---------------------------------------------------------------------------
-// Per-level editing state
+// Level state
 // ---------------------------------------------------------------------------
 
-/// Editing state for a single policy level.
 pub struct LevelState {
     pub level: PolicyLevel,
     pub path: PathBuf,
-    pub source: String,
     pub original_source: String,
+    pub source: String,
 }
 
 impl LevelState {
@@ -154,10 +143,10 @@ impl LevelState {
 }
 
 // ---------------------------------------------------------------------------
-// Undo/redo
+// Undo entry
 // ---------------------------------------------------------------------------
 
-struct UndoEntry {
+pub(super) struct UndoEntry {
     sources: Vec<(PolicyLevel, String)>,
     cursor: usize,
 }
@@ -172,31 +161,20 @@ pub struct StatusMessage {
 }
 
 // ---------------------------------------------------------------------------
-// App
+// App state
 // ---------------------------------------------------------------------------
 
-/// Application state for the TUI.
 pub struct App {
-    /// The visual tree roots.
     pub roots: Vec<TreeNode>,
-    /// Flattened rows for rendering.
     pub flat_rows: Vec<FlatRow>,
-    /// Current cursor position (index into flat_rows).
     pub cursor: usize,
-    /// Per-level editing state.
     pub levels: Vec<LevelState>,
-    /// Viewport height (updated each frame).
     pub viewport_height: usize,
-    /// Whether to show the help overlay.
     pub show_help: bool,
-    /// Current interaction mode.
     pub mode: Mode,
-    /// Transient status message.
     pub status_message: Option<StatusMessage>,
-    /// Undo stack.
-    undo_stack: Vec<UndoEntry>,
-    /// Redo stack.
-    redo_stack: Vec<UndoEntry>,
+    pub(super) undo_stack: Vec<UndoEntry>,
+    pub(super) redo_stack: Vec<UndoEntry>,
     /// Search text input.
     pub search_input: TextInput,
     /// Active search query (after Enter).
@@ -213,7 +191,7 @@ impl App {
         let levels: Vec<LevelState> = policies
             .iter()
             .map(|p| {
-                let source = edit::normalize(&p.source).unwrap_or_else(|_| p.source.clone());
+                let source = policy_edit::normalize(&p.source).unwrap_or_else(|_| p.source.clone());
                 LevelState {
                     level: p.level,
                     path: p.path.clone(),
@@ -374,19 +352,15 @@ impl App {
     }
 
     pub fn page_up(&mut self) {
-        let page = self.viewport_height.max(1);
-        self.cursor = self.cursor.saturating_sub(page);
+        self.cursor = self.cursor.saturating_sub(self.viewport_height);
     }
 
     pub fn page_down(&mut self) {
-        if self.flat_rows.is_empty() {
-            return;
+        if !self.flat_rows.is_empty() {
+            self.cursor = (self.cursor + self.viewport_height).min(self.flat_rows.len() - 1);
         }
-        let page = self.viewport_height.max(1);
-        self.cursor = (self.cursor + page).min(self.flat_rows.len() - 1);
     }
 
-    /// Collapse the current node, or move to its parent.
     pub fn collapse_or_parent(&mut self) {
         let Some(row) = self.flat_rows.get(self.cursor) else {
             return;
@@ -576,837 +550,6 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // Editing
-    // -----------------------------------------------------------------------
-
-    /// Snapshot current sources for undo.
-    fn push_undo(&mut self) {
-        let sources: Vec<(PolicyLevel, String)> = self
-            .levels
-            .iter()
-            .map(|ls| (ls.level, ls.source.clone()))
-            .collect();
-        self.undo_stack.push(UndoEntry {
-            sources,
-            cursor: self.cursor,
-        });
-        self.redo_stack.clear();
-    }
-
-    /// Undo the last editing action.
-    pub fn undo(&mut self) {
-        let Some(entry) = self.undo_stack.pop() else {
-            self.set_status("Nothing to undo", true);
-            return;
-        };
-        // Save current state to redo
-        let current: Vec<(PolicyLevel, String)> = self
-            .levels
-            .iter()
-            .map(|ls| (ls.level, ls.source.clone()))
-            .collect();
-        self.redo_stack.push(UndoEntry {
-            sources: current,
-            cursor: self.cursor,
-        });
-        // Restore
-        for (level, source) in &entry.sources {
-            if let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == *level) {
-                ls.source = source.clone();
-            }
-        }
-        self.cursor = entry.cursor;
-        self.rebuild_tree();
-        self.set_status("Undone", false);
-    }
-
-    /// Redo the last undone action.
-    pub fn redo(&mut self) {
-        let Some(entry) = self.redo_stack.pop() else {
-            self.set_status("Nothing to redo", true);
-            return;
-        };
-        let current: Vec<(PolicyLevel, String)> = self
-            .levels
-            .iter()
-            .map(|ls| (ls.level, ls.source.clone()))
-            .collect();
-        self.undo_stack.push(UndoEntry {
-            sources: current,
-            cursor: self.cursor,
-        });
-        for (level, source) in &entry.sources {
-            if let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == *level) {
-                ls.source = source.clone();
-            }
-        }
-        self.cursor = entry.cursor;
-        self.rebuild_tree();
-        self.set_status("Redone", false);
-    }
-
-    fn set_status(&mut self, text: &str, is_error: bool) {
-        self.status_message = Some(StatusMessage {
-            text: text.to_string(),
-            is_error,
-        });
-    }
-
-    /// Open the effect selector dropdown on the focused leaf or sandbox leaf.
-    pub fn start_select_effect(&mut self) {
-        let Some(row) = self.flat_rows.get(self.cursor) else {
-            return;
-        };
-        match &row.kind {
-            TreeNodeKind::Leaf {
-                effect,
-                rule,
-                level,
-                policy,
-            } => {
-                self.mode = Mode::SelectEffect(SelectEffectState {
-                    effect_index: effect_to_display_index(*effect),
-                    rule: rule.clone(),
-                    level: *level,
-                    policy: policy.clone(),
-                });
-            }
-            TreeNodeKind::SandboxLeaf {
-                effect,
-                sandbox_rule,
-                parent_rule,
-                level,
-                policy,
-            } => {
-                self.mode = Mode::SelectSandboxEffect(SelectSandboxEffectState {
-                    effect_index: effect_to_display_index(*effect),
-                    sandbox_rule: sandbox_rule.clone(),
-                    parent_rule: parent_rule.clone(),
-                    level: *level,
-                    policy: policy.clone(),
-                });
-            }
-            _ => {
-                self.set_status("Not a rule leaf", true);
-            }
-        }
-    }
-
-    /// Apply the selected effect from the dropdown.
-    pub fn confirm_select_effect(&mut self) {
-        let Mode::SelectEffect(state) = &self.mode else {
-            return;
-        };
-
-        let effect_index = state.effect_index;
-        let new_effect = effect_from_display_index(effect_index);
-        let old_rule = state.rule.clone();
-        let level = state.level;
-        let policy = state.policy.clone();
-
-        if new_effect == old_rule.effect {
-            self.mode = Mode::Normal;
-            return;
-        }
-
-        let new_rule = Rule {
-            effect: new_effect,
-            matcher: old_rule.matcher.clone(),
-            sandbox: old_rule.sandbox.clone(),
-        };
-        let old_rule_text = old_rule.to_string();
-        let display_name = EFFECT_DISPLAY[effect_index].to_string();
-
-        self.mode = Mode::Normal;
-        self.push_undo();
-
-        let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == level) else {
-            self.undo_stack.pop();
-            self.set_status("Policy level not found", true);
-            return;
-        };
-
-        let result = edit::remove_rule(&ls.source, &policy, &old_rule_text)
-            .and_then(|s| edit::add_rule(&s, &policy, &new_rule));
-
-        match result {
-            Ok(new_source) => {
-                if let Err(e) = compile_policy(&new_source) {
-                    self.undo_stack.pop();
-                    self.set_status(&format!("Invalid: {e}"), true);
-                    return;
-                }
-                ls.source = new_source;
-                self.rebuild_tree();
-                self.set_status(&format!("Changed to {display_name}"), false);
-            }
-            Err(e) => {
-                self.undo_stack.pop();
-                self.set_status(&format!("Edit failed: {e}"), true);
-            }
-        }
-    }
-
-    /// Apply the selected effect from the sandbox dropdown.
-    pub fn confirm_select_sandbox_effect(&mut self) {
-        let Mode::SelectSandboxEffect(state) = &self.mode else {
-            return;
-        };
-
-        let new_effect = effect_from_display_index(state.effect_index);
-        let old_sandbox_rule = state.sandbox_rule.clone();
-        let parent_rule = state.parent_rule.clone();
-        let level = state.level;
-        let policy = state.policy.clone();
-
-        if new_effect == old_sandbox_rule.effect {
-            self.mode = Mode::Normal;
-            return;
-        }
-
-        let new_sandbox_rule = Rule {
-            effect: new_effect,
-            ..old_sandbox_rule.clone()
-        };
-
-        self.mode = Mode::Normal;
-        self.mutate_sandbox_rule(
-            level,
-            &policy,
-            &parent_rule,
-            &old_sandbox_rule,
-            SandboxMutation::Replace(new_sandbox_rule),
-            "Effect changed",
-        );
-    }
-
-    /// Initiate deletion of the focused rule or sandbox sub-rule (enters Confirm mode).
-    pub fn start_delete(&mut self) {
-        let Some(row) = self.flat_rows.get(self.cursor) else {
-            return;
-        };
-        match &row.kind {
-            TreeNodeKind::Leaf {
-                rule,
-                level,
-                policy,
-                ..
-            } => {
-                self.mode = Mode::Confirm(ConfirmAction::DeleteRule {
-                    level: *level,
-                    policy: policy.clone(),
-                    rule_text: rule.to_string(),
-                });
-            }
-            TreeNodeKind::SandboxLeaf {
-                sandbox_rule,
-                parent_rule,
-                level,
-                policy,
-                ..
-            } => {
-                self.mode = Mode::Confirm(ConfirmAction::DeleteSandboxRule {
-                    level: *level,
-                    policy: policy.clone(),
-                    sandbox_rule_text: sandbox_rule.to_string(),
-                    parent_rule: parent_rule.clone(),
-                });
-            }
-            _ => {
-                self.set_status("Not a rule leaf", true);
-            }
-        }
-    }
-
-    /// Execute a confirmed delete.
-    pub fn confirm_delete(&mut self, level: PolicyLevel, policy: String, rule_text: String) {
-        // Push undo before borrowing levels mutably
-        self.push_undo();
-
-        let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == level) else {
-            self.undo_stack.pop();
-            self.set_status("Policy level not found", true);
-            return;
-        };
-
-        match edit::remove_rule(&ls.source, &policy, &rule_text) {
-            Ok(new_source) => {
-                if let Err(e) = compile_policy(&new_source) {
-                    self.undo_stack.pop();
-                    self.set_status(&format!("Invalid after delete: {e}"), true);
-                    return;
-                }
-                ls.source = new_source;
-                self.rebuild_tree();
-                self.set_status("Rule deleted", false);
-            }
-            Err(e) => {
-                self.undo_stack.pop();
-                self.set_status(&format!("Delete failed: {e}"), true);
-            }
-        }
-    }
-
-    /// Execute a confirmed sandbox sub-rule delete.
-    pub fn confirm_delete_sandbox_rule(
-        &mut self,
-        level: PolicyLevel,
-        policy: String,
-        sandbox_rule_text: String,
-        parent_rule: Rule,
-    ) {
-        // Parse the sandbox sub-rule text to find the rule to remove
-        let sandbox_rule = match parse_rule_text(&sandbox_rule_text) {
-            Ok(r) => r,
-            Err(e) => {
-                self.set_status(&format!("Parse error: {e}"), true);
-                return;
-            }
-        };
-        self.mutate_sandbox_rule(
-            level,
-            &policy,
-            &parent_rule,
-            &sandbox_rule,
-            SandboxMutation::Delete,
-            "Sandbox rule deleted",
-        );
-    }
-
-    /// Shared helper: modify a sandbox sub-rule within its parent rule.
-    ///
-    /// Removes the old parent rule and adds the new one with the sandbox
-    /// mutation applied.
-    fn mutate_sandbox_rule(
-        &mut self,
-        level: PolicyLevel,
-        policy: &str,
-        parent_rule: &Rule,
-        target_sandbox_rule: &Rule,
-        mutation: SandboxMutation,
-        success_msg: &str,
-    ) {
-        self.push_undo();
-
-        let Some(SandboxRef::Inline(sandbox_rules)) = &parent_rule.sandbox else {
-            self.undo_stack.pop();
-            self.set_status("Parent rule has no inline sandbox", true);
-            return;
-        };
-
-        // Build new sandbox rules list with the mutation applied
-        let mut new_sandbox_rules: Vec<Rule> = Vec::new();
-        let target_text = target_sandbox_rule.to_string();
-        let mut found = false;
-
-        for r in sandbox_rules {
-            if r.to_string() == target_text && !found {
-                found = true;
-                match &mutation {
-                    SandboxMutation::Delete => {} // skip it
-                    SandboxMutation::Replace(new_rule) => {
-                        new_sandbox_rules.push(new_rule.clone());
-                    }
-                }
-            } else {
-                new_sandbox_rules.push(r.clone());
-            }
-        }
-
-        if !found {
-            self.undo_stack.pop();
-            self.set_status("Sandbox sub-rule not found in parent", true);
-            return;
-        }
-
-        // Build the new parent rule
-        let new_parent = Rule {
-            effect: parent_rule.effect,
-            matcher: parent_rule.matcher.clone(),
-            sandbox: if new_sandbox_rules.is_empty() {
-                None
-            } else {
-                Some(SandboxRef::Inline(new_sandbox_rules))
-            },
-        };
-
-        let old_parent_text = parent_rule.to_string();
-
-        let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == level) else {
-            self.undo_stack.pop();
-            self.set_status("Policy level not found", true);
-            return;
-        };
-
-        let result = edit::remove_rule(&ls.source, policy, &old_parent_text)
-            .and_then(|s| edit::add_rule(&s, policy, &new_parent));
-
-        match result {
-            Ok(new_source) => {
-                if let Err(e) = compile_policy(&new_source) {
-                    self.undo_stack.pop();
-                    self.set_status(&format!("Invalid: {e}"), true);
-                    return;
-                }
-                ls.source = new_source;
-                self.rebuild_tree();
-                self.set_status(success_msg, false);
-            }
-            Err(e) => {
-                self.undo_stack.pop();
-                self.set_status(&format!("Edit failed: {e}"), true);
-            }
-        }
-    }
-
-    /// Save all modified levels to disk.
-    pub fn save_all(&mut self) {
-        if !self.has_unsaved_changes() {
-            self.set_status("No changes to save", false);
-            return;
-        }
-
-        let mut saved = 0;
-        for ls in &mut self.levels {
-            if !ls.is_modified() {
-                continue;
-            }
-            // Validate before writing
-            if let Err(e) = compile_policy(&ls.source) {
-                self.status_message = Some(StatusMessage {
-                    text: format!("Validation failed for {}: {e}", ls.level),
-                    is_error: true,
-                });
-                return;
-            }
-            if let Some(parent) = ls.path.parent()
-                && let Err(e) = fs::create_dir_all(parent)
-            {
-                self.status_message = Some(StatusMessage {
-                    text: format!("Failed to create directory: {e}"),
-                    is_error: true,
-                });
-                return;
-            }
-            if let Err(e) = fs::write(&ls.path, &ls.source) {
-                self.status_message = Some(StatusMessage {
-                    text: format!("Failed to write {}: {e}", ls.path.display()),
-                    is_error: true,
-                });
-                return;
-            }
-            ls.original_source = ls.source.clone();
-            saved += 1;
-        }
-
-        self.set_status(
-            &format!(
-                "Saved {saved} policy file{}",
-                if saved == 1 { "" } else { "s" }
-            ),
-            false,
-        );
-    }
-
-    /// Start quit flow — enters Confirm if unsaved, otherwise returns Quit.
-    pub fn start_quit(&mut self) -> InputResult {
-        if self.has_unsaved_changes() {
-            self.mode = Mode::Confirm(ConfirmAction::QuitUnsaved);
-            InputResult::Continue
-        } else {
-            InputResult::Quit
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Add rule
-    // -----------------------------------------------------------------------
-
-    /// Enter add-rule mode with step-by-step form.
-    pub fn start_add_rule(&mut self) {
-        let available = self.available_levels();
-        if available.is_empty() {
-            self.set_status("No policy levels available", true);
-            return;
-        }
-        self.mode = Mode::AddRule(AddRuleForm {
-            step: AddRuleStep::EnterBinary,
-            domain_index: 0,
-            effect_index: 0,
-            level_index: 0,
-            fs_op_index: 0,
-            binary_input: TextInput::empty(),
-            args_input: TextInput::empty(),
-            path_input: TextInput::empty(),
-            net_domain_input: TextInput::empty(),
-            tool_name_input: TextInput::empty(),
-            available_levels: available,
-            error: None,
-        });
-    }
-
-    /// Advance the add-rule form to the next step, or complete it.
-    ///
-    /// Flow: Command → Args → Domain → Permissions → Effect → Level
-    pub fn advance_add_rule(&mut self) {
-        let Mode::AddRule(form) = &mut self.mode else {
-            return;
-        };
-        form.error = None;
-
-        // Auto-select exec if user entered a specific command
-        if form.step == AddRuleStep::EnterBinary {
-            let bin = form.binary_input.value().trim();
-            if !bin.is_empty() && bin != "*" {
-                form.domain_index = 0; // exec
-            }
-        }
-
-        let next = next_add_rule_step(form.step, form.domain_index);
-        if let Some(step) = next {
-            form.step = step;
-        } else {
-            self.complete_add_rule();
-        }
-    }
-
-    /// Complete the add-rule form: build s-expression from structured fields, parse, validate, add.
-    fn complete_add_rule(&mut self) {
-        let Mode::AddRule(form) = &self.mode else {
-            return;
-        };
-
-        let level = form.available_levels[form.level_index];
-        let rule_text = build_rule_text(form);
-
-        let rule = match parse_rule_text(&rule_text) {
-            Ok(r) => r,
-            Err(e) => {
-                if let Mode::AddRule(form) = &mut self.mode {
-                    form.error = Some(format!("Parse error: {e}"));
-                }
-                return;
-            }
-        };
-
-        // Find the level and its active policy
-        let Some(ls) = self.levels.iter().find(|ls| ls.level == level) else {
-            self.mode = Mode::Normal;
-            self.set_status("Level not found", true);
-            return;
-        };
-        let policy_name = match edit::active_policy(&ls.source) {
-            Ok(name) => name,
-            Err(_) => "main".to_string(),
-        };
-
-        self.push_undo();
-
-        let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == level) else {
-            self.undo_stack.pop();
-            self.mode = Mode::Normal;
-            self.set_status("Level not found", true);
-            return;
-        };
-
-        // Check for a conflicting rule (same matcher, different effect) — replace it
-        let conflicting = edit::find_conflicting_rule(&ls.source, &policy_name, &rule)
-            .ok()
-            .flatten();
-        let replaced = conflicting.is_some();
-
-        // Build the edit pipeline: optionally remove conflicting rule, ensure policy block, add
-        let result = if let Some(ref old_text) = conflicting {
-            edit::remove_rule(&ls.source, &policy_name, old_text)
-                .and_then(|s| {
-                    edit::ensure_policy_block(
-                        &s,
-                        &policy_name,
-                        &format!("(policy \"{policy_name}\")"),
-                    )
-                })
-                .and_then(|s| edit::add_rule(&s, &policy_name, &rule))
-        } else {
-            edit::ensure_policy_block(
-                &ls.source,
-                &policy_name,
-                &format!("(policy \"{policy_name}\")"),
-            )
-            .and_then(|s| edit::add_rule(&s, &policy_name, &rule))
-        };
-
-        match result {
-            Ok(new_source) => {
-                if let Err(e) = compile_policy(&new_source) {
-                    self.undo_stack.pop();
-                    if let Mode::AddRule(form) = &mut self.mode {
-                        form.error = Some(format!("Validation: {e}"));
-                    }
-                    return;
-                }
-                ls.source = new_source;
-                let rule_text = rule.to_string();
-                self.mode = Mode::Normal;
-                self.rebuild_tree();
-                if !self.cursor_to_rule(&rule_text, level, &policy_name) {
-                    // Fallback: try matching by rule text alone (ignoring level/policy)
-                    let fallback = self.flat_rows.iter().position(|row| {
-                        matches!(&row.kind, TreeNodeKind::Leaf { rule: r, .. } if r.to_string() == rule_text)
-                    });
-                    if let Some(idx) = fallback {
-                        self.cursor = idx;
-                    }
-                }
-                self.set_status(
-                    if replaced {
-                        "Rule replaced"
-                    } else {
-                        "Rule added"
-                    },
-                    false,
-                );
-            }
-            Err(e) => {
-                self.undo_stack.pop();
-                if let Mode::AddRule(form) = &mut self.mode {
-                    form.error = Some(format!("Failed: {e}"));
-                }
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Edit rule (inline)
-    // -----------------------------------------------------------------------
-
-    /// Enter edit mode for the focused leaf rule or sandbox sub-rule.
-    pub fn start_edit_rule(&mut self) {
-        let Some(row) = self.flat_rows.get(self.cursor) else {
-            return;
-        };
-        match &row.kind {
-            TreeNodeKind::Leaf {
-                rule,
-                level,
-                policy,
-                ..
-            } => {
-                self.mode = Mode::EditRule(EditRuleState {
-                    input: TextInput::new(&rule.to_string()),
-                    original_rule_text: rule.to_string(),
-                    level: *level,
-                    policy: policy.clone(),
-                    error: None,
-                });
-            }
-            TreeNodeKind::SandboxLeaf {
-                sandbox_rule,
-                parent_rule,
-                level,
-                policy,
-                ..
-            } => {
-                self.mode = Mode::EditSandboxRule(EditSandboxRuleState {
-                    input: TextInput::new(&sandbox_rule.to_string()),
-                    original_sandbox_rule: sandbox_rule.clone(),
-                    parent_rule: parent_rule.clone(),
-                    level: *level,
-                    policy: policy.clone(),
-                    error: None,
-                });
-            }
-            _ => {
-                self.set_status("Not a rule leaf", true);
-            }
-        }
-    }
-
-    /// Complete inline edit: parse new text, remove old, add new.
-    pub fn complete_edit_rule(&mut self) {
-        let Mode::EditRule(state) = &self.mode else {
-            return;
-        };
-
-        let new_text = state.input.value().to_string();
-        let original = state.original_rule_text.clone();
-        let level = state.level;
-        let policy = state.policy.clone();
-
-        // Parse the new rule
-        let new_rule = match parse_rule_text(&new_text) {
-            Ok(r) => r,
-            Err(e) => {
-                if let Mode::EditRule(state) = &mut self.mode {
-                    state.error = Some(format!("Parse error: {e}"));
-                }
-                return;
-            }
-        };
-
-        self.push_undo();
-
-        let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == level) else {
-            self.undo_stack.pop();
-            self.mode = Mode::Normal;
-            self.set_status("Level not found", true);
-            return;
-        };
-
-        let result = edit::remove_rule(&ls.source, &policy, &original)
-            .and_then(|s| edit::add_rule(&s, &policy, &new_rule));
-
-        match result {
-            Ok(new_source) => {
-                if let Err(e) = compile_policy(&new_source) {
-                    self.undo_stack.pop();
-                    if let Mode::EditRule(state) = &mut self.mode {
-                        state.error = Some(format!("Validation: {e}"));
-                    }
-                    return;
-                }
-                ls.source = new_source;
-                self.mode = Mode::Normal;
-                self.rebuild_tree();
-                self.set_status("Rule updated", false);
-            }
-            Err(e) => {
-                self.undo_stack.pop();
-                if let Mode::EditRule(state) = &mut self.mode {
-                    state.error = Some(format!("Edit failed: {e}"));
-                }
-            }
-        }
-    }
-
-    /// Complete inline edit of a sandbox sub-rule.
-    pub fn complete_edit_sandbox_rule(&mut self) {
-        let Mode::EditSandboxRule(state) = &self.mode else {
-            return;
-        };
-
-        let new_text = state.input.value().to_string();
-        let original_sandbox_rule = state.original_sandbox_rule.clone();
-        let parent_rule = state.parent_rule.clone();
-        let level = state.level;
-        let policy = state.policy.clone();
-
-        // Parse the new sandbox sub-rule
-        let new_rule = match parse_rule_text(&new_text) {
-            Ok(r) => r,
-            Err(e) => {
-                if let Mode::EditSandboxRule(state) = &mut self.mode {
-                    state.error = Some(format!("Parse error: {e}"));
-                }
-                return;
-            }
-        };
-
-        self.mode = Mode::Normal;
-        self.mutate_sandbox_rule(
-            level,
-            &policy,
-            &parent_rule,
-            &original_sandbox_rule,
-            SandboxMutation::Replace(new_rule),
-            "Sandbox rule updated",
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Search
-    // -----------------------------------------------------------------------
-
-    /// Enter search mode.
-    pub fn start_search(&mut self) {
-        self.search_input.clear();
-        self.mode = Mode::Search;
-    }
-
-    /// Commit the search query and jump to first match.
-    pub fn commit_search(&mut self) {
-        let query = self.search_input.value().to_string();
-        if query.is_empty() {
-            self.search_query = None;
-            self.search_matches.clear();
-        } else {
-            self.search_query = Some(query);
-            self.update_search_matches();
-            // Jump to first match
-            if let Some(&idx) = self.search_matches.first() {
-                self.cursor = idx;
-                self.search_match_cursor = 0;
-            }
-        }
-        self.mode = Mode::Normal;
-    }
-
-    /// Cancel search mode without applying.
-    pub fn cancel_search(&mut self) {
-        self.mode = Mode::Normal;
-    }
-
-    /// Clear the active search.
-    pub fn clear_search(&mut self) {
-        self.search_query = None;
-        self.search_matches.clear();
-        self.search_match_cursor = 0;
-    }
-
-    /// Jump to the next search match.
-    pub fn next_search_match(&mut self) {
-        if self.search_matches.is_empty() {
-            return;
-        }
-        self.search_match_cursor = (self.search_match_cursor + 1) % self.search_matches.len();
-        self.cursor = self.search_matches[self.search_match_cursor];
-    }
-
-    /// Jump to the previous search match.
-    pub fn prev_search_match(&mut self) {
-        if self.search_matches.is_empty() {
-            return;
-        }
-        if self.search_match_cursor == 0 {
-            self.search_match_cursor = self.search_matches.len() - 1;
-        } else {
-            self.search_match_cursor -= 1;
-        }
-        self.cursor = self.search_matches[self.search_match_cursor];
-    }
-
-    /// Live-update search matches as the user types.
-    pub fn update_search_live(&mut self) {
-        let query = self.search_input.value().to_string();
-        if query.is_empty() {
-            self.search_query = None;
-            self.search_matches.clear();
-        } else {
-            self.search_query = Some(query);
-            self.update_search_matches();
-        }
-    }
-
-    fn update_search_matches(&mut self) {
-        self.search_matches.clear();
-        self.search_match_cursor = 0;
-
-        let Some(query) = &self.search_query else {
-            return;
-        };
-        let query_lower = query.to_lowercase();
-        if query_lower.is_empty() {
-            return;
-        }
-
-        for (i, row) in self.flat_rows.iter().enumerate() {
-            let text = row_search_text(&row.kind);
-            if text.to_lowercase().contains(&query_lower) {
-                self.search_matches.push(i);
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // Event loop
     // -----------------------------------------------------------------------
 
@@ -1451,181 +594,12 @@ impl App {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Constants for the add-rule form
-// ---------------------------------------------------------------------------
-
-pub const DOMAIN_NAMES: &[&str] = &["exec", "fs", "net", "tool"];
-pub const EFFECT_NAMES: &[&str] = &["allow", "deny", "ask"];
-pub const EFFECT_DISPLAY: &[&str] = &["ask", "auto allow", "auto deny"];
-pub const FS_OPS: &[&str] = &["*", "read", "write", "create", "delete"];
-
-fn effect_from_display_index(index: usize) -> Effect {
-    match index {
-        0 => Effect::Ask,
-        1 => Effect::Allow,
-        _ => Effect::Deny,
-    }
-}
-
-fn effect_to_display_index(effect: Effect) -> usize {
-    match effect {
-        Effect::Ask => 0,
-        Effect::Allow => 1,
-        Effect::Deny => 2,
-    }
-}
-
-/// Compute the next step in the add-rule flow, or `None` if the form is complete.
-pub(crate) fn next_add_rule_step(step: AddRuleStep, domain_index: usize) -> Option<AddRuleStep> {
-    match step {
-        AddRuleStep::EnterBinary => Some(AddRuleStep::EnterArgs),
-        AddRuleStep::EnterArgs => Some(AddRuleStep::SelectDomain),
-        AddRuleStep::SelectDomain => Some(match domain_index {
-            0 => AddRuleStep::SelectEffect,
-            1 => AddRuleStep::SelectFsOp,
-            2 => AddRuleStep::EnterNetDomain,
-            _ => AddRuleStep::EnterToolName,
-        }),
-        AddRuleStep::SelectFsOp => Some(AddRuleStep::EnterPath),
-        AddRuleStep::EnterPath => Some(AddRuleStep::SelectEffect),
-        AddRuleStep::EnterNetDomain => Some(AddRuleStep::SelectEffect),
-        AddRuleStep::EnterToolName => Some(AddRuleStep::SelectEffect),
-        AddRuleStep::SelectEffect => Some(AddRuleStep::SelectLevel),
-        AddRuleStep::SelectLevel => None,
-    }
-}
-
-/// Build the capability-specific part of the rule (without effect or exec wrapper).
-fn build_cap_text(form: &AddRuleForm) -> String {
-    match form.domain_index {
-        1 => {
-            let op = FS_OPS[form.fs_op_index];
-            let path = form.path_input.value().trim().to_string();
-            if op == "*" && path.is_empty() {
-                "(fs)".to_string()
-            } else if path.is_empty() {
-                format!("(fs {op})")
-            } else {
-                format!("(fs {op} {path})")
-            }
-        }
-        2 => {
-            let domain = form.net_domain_input.value().trim().to_string();
-            if domain.is_empty() || domain == "*" {
-                "(net)".to_string()
-            } else {
-                let tok = quote_token_if_needed(&domain);
-                format!("(net {tok})")
-            }
-        }
-        _ => {
-            let name = form.tool_name_input.value().trim().to_string();
-            if name.is_empty() || name == "*" {
-                "(tool)".to_string()
-            } else {
-                let tok = quote_token_if_needed(&name);
-                format!("(tool {tok})")
-            }
-        }
-    }
-}
-
-/// Build the rule s-expression text from an add-rule form.
-pub(crate) fn build_rule_text(form: &AddRuleForm) -> String {
-    let effect = EFFECT_NAMES[form.effect_index];
-    let binary_raw = form.binary_input.value().trim().to_string();
-    let has_command = !binary_raw.is_empty() && binary_raw != "*";
-
-    if has_command && form.domain_index != 0 {
-        // Sandboxed exec: ({effect} (exec {binary} {args} :sandbox (allow {cap})))
-        let binary_tok = quote_token_if_needed(&binary_raw);
-        let args = form.args_input.value().trim().to_string();
-        let mut exec_part = format!("({effect} (exec {binary_tok}");
-        for arg in args.split_whitespace() {
-            exec_part.push_str(&format!(" {}", quote_token_if_needed(arg)));
-        }
-        let cap = build_cap_text(form);
-        format!("{exec_part}) :sandbox (allow {cap}))")
-    } else if form.domain_index == 0 {
-        // Plain exec: ({effect} (exec {binary} {args...}))
-        let binary = if binary_raw.is_empty() {
-            "*"
-        } else {
-            &binary_raw
-        };
-        let args = form.args_input.value().trim().to_string();
-        let binary_tok = quote_token_if_needed(binary);
-        let mut parts = vec![format!("({effect} (exec {binary_tok}")];
-        if !args.is_empty() {
-            for arg in args.split_whitespace() {
-                parts.push(format!(" {}", quote_token_if_needed(arg)));
-            }
-        }
-        parts.push("))".to_string());
-        parts.join("")
-    } else {
-        // Standalone capability rule (no command): ({effect} {cap})
-        let cap = build_cap_text(form);
-        format!("({effect} {cap})")
-    }
-}
-
-/// Quote a token with double quotes if it's not `*` and not already a parenthesized expression.
-pub(crate) fn quote_token_if_needed(token: &str) -> String {
-    if token == "*" || token.starts_with('(') || token.starts_with('"') {
-        token.to_string()
-    } else {
-        format!("\"{token}\"")
-    }
-}
-
-/// Parse a single rule from its s-expression text.
-pub(crate) fn parse_rule_text(rule_text: &str) -> Result<Rule> {
-    let source = format!("(policy \"_tmp\" {rule_text})");
-    let top_levels = parse::parse(&source)?;
-    for tl in top_levels {
-        if let TopLevel::Policy { body, .. } = tl {
-            for item in body {
-                if let PolicyItem::Rule(rule) = item {
-                    return Ok(rule);
-                }
-            }
-        }
-    }
-    anyhow::bail!("no rule found in input")
-}
-
-/// Extract searchable text from a node kind.
-pub(crate) fn row_search_text(kind: &TreeNodeKind) -> String {
-    match kind {
-        TreeNodeKind::Domain(d) => d.to_string(),
-        TreeNodeKind::PolicyBlock { name, level } => format!("{name} {level}"),
-        TreeNodeKind::Binary(s)
-        | TreeNodeKind::Arg(s)
-        | TreeNodeKind::HasArg(s)
-        | TreeNodeKind::PathNode(s)
-        | TreeNodeKind::FsOp(s)
-        | TreeNodeKind::NetDomain(s)
-        | TreeNodeKind::ToolName(s) => s.clone(),
-        TreeNodeKind::HasMarker => ":has".into(),
-        TreeNodeKind::Leaf {
-            effect,
-            rule,
-            policy,
-            ..
-        } => format!("{effect} {rule} {policy}"),
-        TreeNodeKind::SandboxLeaf { sandbox_rule, .. } => format!("sandbox {sandbox_rule}"),
-        TreeNodeKind::SandboxGroup => "sandbox".into(),
-        TreeNodeKind::SandboxName(name) => format!("sandbox {name}"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::policy::Effect;
     use crate::settings::{LoadedPolicy, PolicyLevel};
 
     fn test_policy(level: PolicyLevel, source: &str) -> LoadedPolicy {
@@ -2134,7 +1108,8 @@ mod tests {
     #[test]
     fn search_finds_matches() {
         let mut app = make_app(r#"(policy "main" (allow (exec "git")) (deny (exec "cargo")))"#);
-        app.expand_all();
+        // App starts fully collapsed — search should auto-expand ancestors
+        let initial_rows = app.flat_rows.len();
 
         app.start_search();
         app.search_input = TextInput::new("git");
@@ -2143,39 +1118,43 @@ mod tests {
         assert!(!app.search_matches.is_empty());
         // Cursor should be on first match
         assert!(app.search_matches.contains(&app.cursor));
+        // Ancestors should have been expanded, revealing more rows
+        assert!(
+            app.flat_rows.len() > initial_rows,
+            "search should auto-expand ancestors"
+        );
     }
 
     #[test]
-    fn row_search_text_leaf() {
+    fn node_search_text_leaf() {
         let kind = TreeNodeKind::Leaf {
             effect: Effect::Allow,
             rule: parse_rule_text("(allow (exec \"git\"))").unwrap(),
             level: PolicyLevel::User,
             policy: "main".to_string(),
         };
-        let text = row_search_text(&kind);
+        let text = tree::node_search_text(&kind);
         assert!(text.contains("allow"));
         assert!(text.contains("main"));
     }
 
     #[test]
-    fn row_search_text_binary() {
-        let text = row_search_text(&TreeNodeKind::Binary("git".to_string()));
+    fn node_search_text_binary() {
+        let text = tree::node_search_text(&TreeNodeKind::Binary("git".to_string()));
         assert_eq!(text, "git");
     }
 
     #[test]
     fn search_finds_sandbox_content() {
         let mut app = make_app(r#"(policy "main" (ask (exec "ls" "-lha") :sandbox (allow (fs))))"#);
-        app.expand_all();
-
-        // Search for "sandbox"
-        app.search_query = Some("sandbox".to_string());
-        app.update_search_matches();
+        // App starts fully collapsed — search should auto-expand to find matches
+        app.start_search();
+        app.search_input = TextInput::new("sandbox");
+        app.commit_search();
 
         assert!(
             !app.search_matches.is_empty(),
-            "search for 'sandbox' should find sandbox nodes"
+            "search for 'sandbox' should find sandbox nodes even when collapsed"
         );
     }
 
@@ -2192,9 +1171,10 @@ mod tests {
             .unwrap_or_else(|e| panic!("parse_rule_text failed for '{rule_text}': {e}"));
         let display = rule.to_string();
 
-        let new_source = edit::ensure_policy_block(existing_source, "main", r#"(policy "main")"#)
-            .and_then(|s| edit::add_rule(&s, "main", &rule))
-            .unwrap_or_else(|e| panic!("add_rule failed: {e}"));
+        let new_source =
+            policy_edit::ensure_policy_block(existing_source, "main", r#"(policy "main")"#)
+                .and_then(|s| policy_edit::add_rule(&s, "main", &rule))
+                .unwrap_or_else(|e| panic!("add_rule failed: {e}"));
 
         let loaded = LoadedPolicy {
             level: PolicyLevel::User,
@@ -3215,21 +2195,21 @@ mod tests {
         // Start effect select on sandbox leaf
         app.start_select_effect();
         assert!(
-            matches!(app.mode, Mode::SelectSandboxEffect(_)),
-            "should enter SelectSandboxEffect mode"
+            matches!(app.mode, Mode::SelectEffect(_)),
+            "should enter SelectEffect mode for sandbox leaf"
         );
 
         // Change to deny (index 2)
-        if let Mode::SelectSandboxEffect(state) = &mut app.mode {
+        if let Mode::SelectEffect(state) = &mut app.mode {
             state.effect_index = 2; // auto deny
         }
-        app.confirm_select_sandbox_effect();
+        app.confirm_select_effect();
 
         assert!(matches!(app.mode, Mode::Normal));
 
         // Verify the sandbox sub-rule effect changed
         let status = app.status_message.as_ref().map(|s| s.text.as_str());
-        assert_eq!(status, Some("Effect changed"));
+        assert_eq!(status, Some("Changed to auto deny"));
 
         // The source should now contain "deny" in the sandbox
         let source = &app.levels[0].source;
@@ -3316,18 +2296,18 @@ mod tests {
         // Start edit on sandbox leaf
         app.start_edit_rule();
         assert!(
-            matches!(app.mode, Mode::EditSandboxRule(_)),
-            "should enter EditSandboxRule mode"
+            matches!(app.mode, Mode::EditRule(_)),
+            "should enter EditRule mode for sandbox leaf"
         );
 
         // Change the rule text to (deny (net *))
-        if let Mode::EditSandboxRule(state) = &mut app.mode {
+        if let Mode::EditRule(state) = &mut app.mode {
             state.input.clear();
             for c in "(deny (net *))".chars() {
                 state.input.insert_char(c);
             }
         }
-        app.complete_edit_sandbox_rule();
+        app.complete_edit_rule();
 
         assert!(matches!(app.mode, Mode::Normal));
         let status = app.status_message.as_ref().map(|s| s.text.as_str());
@@ -3344,15 +2324,55 @@ mod tests {
     #[test]
     fn search_finds_sandbox_leaf_content() {
         let mut app = make_app(r#"(policy "main" (ask (exec "ls") :sandbox (allow (fs))))"#);
-        app.expand_all();
-
-        // Search for "sandbox" should find SandboxLeaf nodes
-        app.search_query = Some("sandbox".to_string());
-        app.update_search_matches();
+        // App starts fully collapsed — search should auto-expand
+        app.start_search();
+        app.search_input = TextInput::new("sandbox");
+        app.commit_search();
 
         assert!(
             !app.search_matches.is_empty(),
-            "search for 'sandbox' should find sandbox leaf nodes"
+            "search for 'sandbox' should find sandbox leaf nodes even when collapsed"
+        );
+    }
+
+    #[test]
+    fn search_expands_collapsed_ancestors() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")) (deny (exec "cargo")))"#);
+        // App starts fully collapsed
+        let initial_rows = app.flat_rows.len();
+
+        // Search for something deep in the tree
+        app.start_search();
+        app.search_input = TextInput::new("allow");
+        app.commit_search();
+
+        assert!(!app.search_matches.is_empty(), "should find 'allow' leaf");
+        // More rows should now be visible due to auto-expansion
+        assert!(
+            app.flat_rows.len() > initial_rows,
+            "search should expand ancestors: had {initial_rows} rows, now {}",
+            app.flat_rows.len()
+        );
+    }
+
+    #[test]
+    fn search_live_expands_ancestors() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+        // App starts fully collapsed
+        let initial_rows = app.flat_rows.len();
+
+        app.start_search();
+        app.search_input = TextInput::new("git");
+        app.update_search_live();
+
+        // Live search should also expand ancestors
+        assert!(
+            !app.search_matches.is_empty(),
+            "live search should find 'git'"
+        );
+        assert!(
+            app.flat_rows.len() > initial_rows,
+            "live search should expand ancestors"
         );
     }
 }

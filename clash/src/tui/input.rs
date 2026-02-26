@@ -5,6 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::app::{
     AddRuleStep, App, ConfirmAction, DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS, Mode,
 };
+use super::editor::TextInputAction;
 
 /// Result of handling a key event.
 pub enum InputResult {
@@ -25,7 +26,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputResult {
     // Clear status message on any keypress (except in text-input modes)
     if matches!(
         app.mode,
-        Mode::Normal | Mode::Confirm(_) | Mode::SelectEffect(_) | Mode::SelectSandboxEffect(_)
+        Mode::Normal | Mode::Confirm(_) | Mode::SelectEffect(_)
     ) {
         app.status_message = None;
     }
@@ -36,8 +37,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputResult {
         Mode::AddRule(_) => handle_add_rule(app, key),
         Mode::EditRule(_) => handle_edit_rule(app, key),
         Mode::SelectEffect(_) => handle_select_effect(app, key),
-        Mode::SelectSandboxEffect(_) => handle_select_sandbox_effect(app, key),
-        Mode::EditSandboxRule(_) => handle_edit_sandbox_rule(app, key),
         Mode::Search => handle_search(app, key),
     }
 }
@@ -219,30 +218,18 @@ fn selector_key(key: KeyEvent, index: &mut usize, count: usize) -> StepAction {
 
 /// Handle key for a text input step.
 fn text_input_key(key: KeyEvent, form: &mut super::app::AddRuleForm) -> StepAction {
-    match key.code {
-        KeyCode::Enter => StepAction::Advance,
-        KeyCode::Esc => StepAction::Cancel,
-        _ => {
-            if let Some(input) = form.active_text_input() {
-                match key.code {
-                    KeyCode::Backspace => {
-                        input.backspace();
-                        form.error = None;
-                    }
-                    KeyCode::Delete => input.delete(),
-                    KeyCode::Left => input.move_left(),
-                    KeyCode::Right => input.move_right(),
-                    KeyCode::Home => input.home(),
-                    KeyCode::End => input.end(),
-                    KeyCode::Char(c) => {
-                        input.insert_char(c);
-                        form.error = None;
-                    }
-                    _ => {}
-                }
+    if let Some(input) = form.active_text_input() {
+        match input.handle_key(key) {
+            TextInputAction::Submit => StepAction::Advance,
+            TextInputAction::Cancel => StepAction::Cancel,
+            TextInputAction::Changed => {
+                form.error = None;
+                StepAction::None
             }
-            StepAction::None
+            _ => StepAction::None,
         }
+    } else {
+        StepAction::None
     }
 }
 
@@ -251,43 +238,14 @@ fn text_input_key(key: KeyEvent, form: &mut super::app::AddRuleForm) -> StepActi
 // ---------------------------------------------------------------------------
 
 fn handle_edit_rule(app: &mut App, key: KeyEvent) -> InputResult {
-    match key.code {
-        KeyCode::Enter => app.complete_edit_rule(),
-        KeyCode::Esc => app.mode = Mode::Normal,
-        KeyCode::Backspace => {
+    let Mode::EditRule(state) = &mut app.mode else {
+        return InputResult::Continue;
+    };
+    match state.input.handle_key(key) {
+        TextInputAction::Submit => app.complete_edit_rule(),
+        TextInputAction::Cancel => app.mode = Mode::Normal,
+        TextInputAction::Changed => {
             if let Mode::EditRule(state) = &mut app.mode {
-                state.input.backspace();
-                state.error = None;
-            }
-        }
-        KeyCode::Delete => {
-            if let Mode::EditRule(state) = &mut app.mode {
-                state.input.delete();
-            }
-        }
-        KeyCode::Left => {
-            if let Mode::EditRule(state) = &mut app.mode {
-                state.input.move_left();
-            }
-        }
-        KeyCode::Right => {
-            if let Mode::EditRule(state) = &mut app.mode {
-                state.input.move_right();
-            }
-        }
-        KeyCode::Home => {
-            if let Mode::EditRule(state) = &mut app.mode {
-                state.input.home();
-            }
-        }
-        KeyCode::End => {
-            if let Mode::EditRule(state) = &mut app.mode {
-                state.input.end();
-            }
-        }
-        KeyCode::Char(c) => {
-            if let Mode::EditRule(state) = &mut app.mode {
-                state.input.insert_char(c);
                 state.error = None;
             }
         }
@@ -326,108 +284,14 @@ fn handle_select_effect(app: &mut App, key: KeyEvent) -> InputResult {
 }
 
 // ---------------------------------------------------------------------------
-// Select sandbox effect mode
-// ---------------------------------------------------------------------------
-
-fn handle_select_sandbox_effect(app: &mut App, key: KeyEvent) -> InputResult {
-    let Mode::SelectSandboxEffect(state) = &mut app.mode else {
-        return InputResult::Continue;
-    };
-    match key.code {
-        KeyCode::Left | KeyCode::Char('h') => {
-            if state.effect_index > 0 {
-                state.effect_index -= 1;
-            }
-        }
-        KeyCode::Right | KeyCode::Char('l') => {
-            if state.effect_index < EFFECT_DISPLAY.len() - 1 {
-                state.effect_index += 1;
-            }
-        }
-        KeyCode::Tab => {
-            state.effect_index = (state.effect_index + 1) % EFFECT_DISPLAY.len();
-        }
-        KeyCode::Enter => app.confirm_select_sandbox_effect(),
-        KeyCode::Esc => app.mode = Mode::Normal,
-        _ => {}
-    }
-    InputResult::Continue
-}
-
-// ---------------------------------------------------------------------------
-// Edit sandbox rule mode
-// ---------------------------------------------------------------------------
-
-fn handle_edit_sandbox_rule(app: &mut App, key: KeyEvent) -> InputResult {
-    match key.code {
-        KeyCode::Enter => app.complete_edit_sandbox_rule(),
-        KeyCode::Esc => app.mode = Mode::Normal,
-        KeyCode::Backspace => {
-            if let Mode::EditSandboxRule(state) = &mut app.mode {
-                state.input.backspace();
-                state.error = None;
-            }
-        }
-        KeyCode::Delete => {
-            if let Mode::EditSandboxRule(state) = &mut app.mode {
-                state.input.delete();
-            }
-        }
-        KeyCode::Left => {
-            if let Mode::EditSandboxRule(state) = &mut app.mode {
-                state.input.move_left();
-            }
-        }
-        KeyCode::Right => {
-            if let Mode::EditSandboxRule(state) = &mut app.mode {
-                state.input.move_right();
-            }
-        }
-        KeyCode::Home => {
-            if let Mode::EditSandboxRule(state) = &mut app.mode {
-                state.input.home();
-            }
-        }
-        KeyCode::End => {
-            if let Mode::EditSandboxRule(state) = &mut app.mode {
-                state.input.end();
-            }
-        }
-        KeyCode::Char(c) => {
-            if let Mode::EditSandboxRule(state) = &mut app.mode {
-                state.input.insert_char(c);
-                state.error = None;
-            }
-        }
-        _ => {}
-    }
-    InputResult::Continue
-}
-
-// ---------------------------------------------------------------------------
 // Search mode
 // ---------------------------------------------------------------------------
 
 fn handle_search(app: &mut App, key: KeyEvent) -> InputResult {
-    match key.code {
-        KeyCode::Enter => app.commit_search(),
-        KeyCode::Esc => app.cancel_search(),
-        KeyCode::Backspace => {
-            app.search_input.backspace();
-            app.update_search_live();
-        }
-        KeyCode::Delete => {
-            app.search_input.delete();
-            app.update_search_live();
-        }
-        KeyCode::Left => app.search_input.move_left(),
-        KeyCode::Right => app.search_input.move_right(),
-        KeyCode::Home => app.search_input.home(),
-        KeyCode::End => app.search_input.end(),
-        KeyCode::Char(c) => {
-            app.search_input.insert_char(c);
-            app.update_search_live();
-        }
+    match app.search_input.handle_key(key) {
+        TextInputAction::Submit => app.commit_search(),
+        TextInputAction::Cancel => app.cancel_search(),
+        TextInputAction::Changed => app.update_search_live(),
         _ => {}
     }
     InputResult::Continue
