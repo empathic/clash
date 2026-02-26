@@ -300,6 +300,9 @@ pub(crate) fn render_row(
             }
             spans.push(Span::styled("  [sandbox]", tui_style::TAG));
         }
+        TreeNodeKind::SandboxGroup => {
+            spans.push(Span::styled("Sandbox", tui_style::DOMAIN));
+        }
         TreeNodeKind::SandboxName(name) => {
             spans.push(Span::styled("sandbox: ", tui_style::DIM));
             spans.push(Span::styled(format!("\"{name}\""), tui_style::PATTERN));
@@ -516,6 +519,12 @@ pub(crate) fn description_for_row(row: &FlatRow) -> Vec<Line<'static>> {
                 ]),
             ]
         }
+        TreeNodeKind::SandboxGroup => {
+            vec![Line::from(Span::styled(
+                "Sandbox permissions for this exec rule",
+                tui_style::DOMAIN,
+            ))]
+        }
         TreeNodeKind::SandboxName(name) => {
             vec![Line::from(vec![
                 Span::styled("Named sandbox policy: ", tui_style::DIM),
@@ -591,6 +600,16 @@ pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
                     hints.push(("Tab", "effect"));
                     hints.push(("e", "edit"));
                     hints.push(("d", "delete"));
+                }
+                TreeNodeKind::SandboxGroup => {
+                    if row.has_children {
+                        if row.expanded {
+                            hints.push(("h", "collapse"));
+                        } else {
+                            hints.push(("l", "expand"));
+                        }
+                        hints.push(("z/Z", "fold"));
+                    }
                 }
                 TreeNodeKind::HasMarker | TreeNodeKind::SandboxName(_) => {}
             }

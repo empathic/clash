@@ -504,6 +504,7 @@ impl App {
                 TreeNodeKind::SandboxLeaf { effect, .. } => {
                     format!("{effect} [sandbox]")
                 }
+                TreeNodeKind::SandboxGroup => "Sandbox".into(),
                 TreeNodeKind::SandboxName(name) => format!("sandbox: \"{name}\""),
             };
             parts.push(label);
@@ -1615,6 +1616,7 @@ pub(crate) fn row_search_text(kind: &TreeNodeKind) -> String {
             ..
         } => format!("{effect} {rule} {policy}"),
         TreeNodeKind::SandboxLeaf { sandbox_rule, .. } => format!("sandbox {sandbox_rule}"),
+        TreeNodeKind::SandboxGroup => "sandbox".into(),
         TreeNodeKind::SandboxName(name) => format!("sandbox {name}"),
     }
 }
