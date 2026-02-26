@@ -974,7 +974,7 @@ fn build_net_matcher_from_form(form: &AddRuleForm) -> NetMatcher {
     } else {
         Pattern::Literal(domain_raw)
     };
-    NetMatcher { domain }
+    NetMatcher { domain, path: None }
 }
 
 /// Build a ToolMatcher from form fields.
