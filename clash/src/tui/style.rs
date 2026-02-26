@@ -49,6 +49,11 @@ pub const CONNECTOR: Style = Style::new().add_modifier(Modifier::DIM);
 /// Style for the border.
 pub const BORDER: Style = Style::new().add_modifier(Modifier::DIM);
 
+/// Style for shadowed rules (overridden by a higher-precedence level).
+pub const SHADOWED: Style = Style::new()
+    .add_modifier(Modifier::DIM)
+    .add_modifier(Modifier::ITALIC);
+
 /// Return the style for an effect.
 pub fn effect_style(effect: Effect) -> Style {
     match effect {

@@ -244,6 +244,7 @@ pub(crate) fn render_row(
             rule,
             level,
             policy,
+            is_shadowed,
         } => {
             if let Some(sel_idx) = inline_select {
                 for (i, &name) in EFFECT_DISPLAY.iter().enumerate() {
@@ -261,7 +262,12 @@ pub(crate) fn render_row(
                 }
             } else {
                 let effect_text = format!("{:<10}", effect_display(*effect));
-                spans.push(Span::styled(effect_text, tui_style::effect_style(*effect)));
+                let style = if *is_shadowed {
+                    tui_style::SHADOWED
+                } else {
+                    tui_style::effect_style(*effect)
+                };
+                spans.push(Span::styled(effect_text, style));
             }
 
             spans.push(Span::styled(
@@ -280,6 +286,10 @@ pub(crate) fn render_row(
                     spans.push(Span::styled("  sandboxed", tui_style::DIM));
                 }
                 None => {}
+            }
+
+            if *is_shadowed {
+                spans.push(Span::styled("  [shadowed]", tui_style::SHADOWED));
             }
         }
         TreeNodeKind::SandboxLeaf { effect, .. } => {
@@ -417,10 +427,11 @@ pub(crate) fn description_for_row(row: &FlatRow) -> Vec<Line<'static>> {
             rule,
             level,
             policy,
+            is_shadowed,
         } => {
             let desc = describe_rule(rule);
             let rule_text = rule.to_string();
-            vec![
+            let mut lines = vec![
                 Line::from(vec![
                     Span::styled(
                         effect_display(*effect).to_uppercase(),
@@ -443,7 +454,14 @@ pub(crate) fn description_for_row(row: &FlatRow) -> Vec<Line<'static>> {
                             .trim_end_matches(')')
                     )),
                 ]),
-            ]
+            ];
+            if *is_shadowed {
+                lines.push(Line::from(Span::styled(
+                    "This rule is shadowed by a higher-precedence rule at another level.",
+                    tui_style::SHADOWED,
+                )));
+            }
+            lines
         }
         TreeNodeKind::Domain(domain) => {
             vec![Line::from(Span::styled(
@@ -1151,6 +1169,7 @@ mod tests {
                 rule,
                 level,
                 policy: policy.to_string(),
+                is_shadowed: false,
             },
             depth: 2,
             expanded: false,
@@ -1509,6 +1528,7 @@ mod tests {
                 rule,
                 level: PolicyLevel::User,
                 policy: "main".to_string(),
+                is_shadowed: false,
             },
             depth: 2,
             expanded: false,
@@ -1652,6 +1672,32 @@ mod tests {
         );
         let mut app = App::new(&[user, project]);
         app.expand_all();
+        let output = render_to_string(&app, 80, 24);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_shadowed_rule() {
+        let user = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (allow (exec "git" *)))"#,
+        );
+        let project = test_policy(
+            PolicyLevel::Project,
+            r#"(policy "main" (deny (exec "git" *)))"#,
+        );
+        let mut app = App::new(&[user, project]);
+        app.expand_all();
+        // Move cursor to the shadowed User leaf
+        for (i, row) in app.flat_rows.iter().enumerate() {
+            if let TreeNodeKind::Leaf {
+                is_shadowed: true, ..
+            } = &row.kind
+            {
+                app.cursor = i;
+                break;
+            }
+        }
         let output = render_to_string(&app, 80, 24);
         insta::assert_snapshot!(output);
     }
