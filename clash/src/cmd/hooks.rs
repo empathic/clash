@@ -108,26 +108,33 @@ impl HooksCmd {
                     Some(advice.as_context())
                 });
 
-                // Check if a sandboxed Bash command failed with network errors
-                // and provide a hint about sandbox network restrictions.
-                let network_context = {
+                // Check if a sandboxed Bash command failed with network or
+                // filesystem errors, and provide hints about sandbox restrictions.
+                let (network_context, fs_context) = {
                     let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
                     let settings = ClashSettings::load_or_create_with_session(
                         Some(&input.session_id),
                         Some(&hook_ctx),
                     )
                     .ok();
-                    settings.and_then(|s| {
-                        crate::network_hints::check_for_sandbox_network_hint(&input, &s)
-                    })
+                    let net = settings.as_ref().and_then(|s| {
+                        crate::network_hints::check_for_sandbox_network_hint(&input, s)
+                    });
+                    let fs = settings.as_ref().and_then(|s| {
+                        crate::sandbox_fs_hints::check_for_sandbox_fs_hint(&input, s)
+                    });
+                    (net, fs)
                 };
 
-                // Combine contexts (session policy advice + network hints).
-                let context = match (session_context, network_context) {
-                    (Some(s), Some(n)) => Some(format!("{s}\n\n{n}")),
-                    (Some(s), None) => Some(s),
-                    (None, Some(n)) => Some(n),
-                    (None, None) => None,
+                // Combine contexts (session policy advice + sandbox hints).
+                let context = [session_context, network_context, fs_context]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>();
+                let context = if context.is_empty() {
+                    None
+                } else {
+                    Some(context.join("\n\n"))
                 };
 
                 HookOutput::post_tool_use(context)

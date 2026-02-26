@@ -95,7 +95,7 @@ pub fn check_for_sandbox_network_hint(
 ///
 /// Claude Code tool responses can be structured in various ways — this handles
 /// common shapes (string, object with content/stdout/stderr fields, arrays).
-fn extract_response_text(response: &serde_json::Value) -> Option<String> {
+pub(crate) fn extract_response_text(response: &serde_json::Value) -> Option<String> {
     match response {
         serde_json::Value::String(s) => Some(s.clone()),
         serde_json::Value::Object(obj) => {
