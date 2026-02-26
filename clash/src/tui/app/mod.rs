@@ -65,6 +65,7 @@ pub enum ConfirmAction {
     QuitUnsaved,
 }
 
+#[derive(Debug)]
 pub struct AddRuleForm {
     pub step: AddRuleStep,
     pub domain_index: usize,
@@ -2496,5 +2497,94 @@ mod tests {
             app.flat_rows.len() > initial_rows,
             "live search should expand ancestors"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Property-based tests: build_rule equivalence
+    // -----------------------------------------------------------------------
+
+    use proptest::prelude::*;
+
+    /// Generate an arbitrary valid AddRuleForm.
+    fn arb_add_rule_form() -> impl Strategy<Value = AddRuleForm> {
+        (
+            0..4usize,           // domain_index
+            0..3usize,           // effect_index
+            0..5usize,           // fs_op_index
+            "[a-z]{1,8}",        // binary (may be empty for wildcard)
+            "[a-z]{0,6}",        // args
+            "[a-z]{0,6}",        // path
+            "[a-z.]{0,10}",      // net domain
+            "[A-Za-z]{0,8}",     // tool name
+            proptest::bool::ANY, // has command
+        )
+            .prop_map(
+                |(
+                    domain_index,
+                    effect_index,
+                    fs_op_index,
+                    binary,
+                    args,
+                    path,
+                    net_domain,
+                    tool_name,
+                    has_command,
+                )| {
+                    let binary_input = if has_command {
+                        TextInput::new(&binary)
+                    } else {
+                        TextInput::empty()
+                    };
+                    AddRuleForm {
+                        step: AddRuleStep::SelectLevel,
+                        domain_index,
+                        effect_index,
+                        level_index: 0,
+                        fs_op_index,
+                        binary_input,
+                        args_input: if args.is_empty() {
+                            TextInput::empty()
+                        } else {
+                            TextInput::new(&args)
+                        },
+                        path_input: if path.is_empty() {
+                            TextInput::empty()
+                        } else {
+                            TextInput::new(&path)
+                        },
+                        net_domain_input: if net_domain.is_empty() {
+                            TextInput::empty()
+                        } else {
+                            TextInput::new(&net_domain)
+                        },
+                        tool_name_input: if tool_name.is_empty() {
+                            TextInput::empty()
+                        } else {
+                            TextInput::new(&tool_name)
+                        },
+                        available_levels: vec![PolicyLevel::User],
+                        error: None,
+                    }
+                },
+            )
+    }
+
+    proptest! {
+        /// build_rule(form).to_string() should parse and re-display identically
+        /// to the old build_rule_text(form) roundtrip.
+        #[test]
+        fn build_rule_matches_text_roundtrip(form in arb_add_rule_form()) {
+            let direct_rule = build_rule(&form);
+            let direct_display = direct_rule.to_string();
+
+            // The direct rule should always parse back
+            let reparsed = parse_rule_text(&direct_display);
+            prop_assert!(reparsed.is_ok(),
+                "build_rule produced unparseable rule: {}\n  error: {:?}",
+                direct_display, reparsed.err());
+            let reparsed = reparsed.unwrap();
+            prop_assert_eq!(&direct_display, &reparsed.to_string(),
+                "build_rule round-trip should be stable");
+        }
     }
 }

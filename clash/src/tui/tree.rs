@@ -1272,4 +1272,76 @@ mod tests {
             "search_tree should find nodes regardless of collapsed state"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Property-based tests
+    // -----------------------------------------------------------------------
+
+    use proptest::prelude::*;
+
+    use crate::policy::ast::strategies::arb_rule;
+
+    /// Generate a policy source from arbitrary rules.
+    fn arb_policy_source() -> impl Strategy<Value = String> {
+        prop::collection::vec(arb_rule(), 1..=8).prop_map(|rules| {
+            let mut s = String::from("(policy \"main\"");
+            for rule in &rules {
+                s.push_str(&format!("\n  {rule}"));
+            }
+            s.push_str("\n)");
+            s
+        })
+    }
+
+    proptest! {
+        /// Every FlatRow's tree_path resolves to a valid node via node_at_path.
+        #[test]
+        fn flat_row_paths_resolve(source in arb_policy_source()) {
+            let policy = test_policy(PolicyLevel::User, &source);
+            let roots = build_tree(&[policy]);
+            let rows = flatten(&roots);
+
+            for row in &rows {
+                let node = node_at_path(&roots, &row.tree_path);
+                prop_assert!(node.is_some(),
+                    "tree_path {:?} should resolve to a valid node\n  source: {}",
+                    row.tree_path, source);
+            }
+        }
+
+        /// expand_all + flatten is deterministic regardless of prior collapsed state.
+        #[test]
+        fn flatten_expand_all_idempotent(source in arb_policy_source()) {
+            let policy = test_policy(PolicyLevel::User, &source);
+
+            // Build tree and expand all, flatten
+            let mut roots1 = build_tree(&[policy.clone()]);
+            fn expand_all(node: &mut TreeNode) {
+                node.expanded = true;
+                for c in &mut node.children { expand_all(c); }
+            }
+            for root in &mut roots1 { expand_all(root); }
+            let rows1 = flatten(&roots1);
+
+            // Build fresh tree, collapse all, then expand all, flatten
+            let mut roots2 = build_tree(&[policy]);
+            fn collapse_all(node: &mut TreeNode) {
+                node.expanded = false;
+                for c in &mut node.children { collapse_all(c); }
+            }
+            for root in &mut roots2 { collapse_all(root); }
+            for root in &mut roots2 { expand_all(root); }
+            let rows2 = flatten(&roots2);
+
+            prop_assert_eq!(rows1.len(), rows2.len(),
+                "expand_all should produce same row count regardless of prior state");
+            for (i, (r1, r2)) in rows1.iter().zip(rows2.iter()).enumerate() {
+                prop_assert_eq!(r1.depth, r2.depth,
+                    "row {} depth mismatch after expand_all", i);
+                prop_assert!(r1.tree_path == r2.tree_path,
+                    "row {} tree_path mismatch after expand_all: {:?} vs {:?}",
+                    i, r1.tree_path, r2.tree_path);
+            }
+        }
+    }
 }
