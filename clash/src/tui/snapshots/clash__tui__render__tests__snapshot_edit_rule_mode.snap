@@ -1,0 +1,28 @@
+---
+source: clash/src/tui/render.rs
+expression: output
+---
+ clash tui  user  24/24                                                  ? help 
+│       ▼ Exec                                                                 │
+│           auto deny   [user:main]                                            │
+│ ▼ "sudo"                                                                     │
+│   ▼ *                                                                        │
+│     ▼ Exec                                                                   │
+│         ask         [user:main]                                              │
+│ ▼ *                                                                          │
+│ │ ▼ (subpath (env PWD))                                                      │
+│ │   ▼ read                                                                   │
+│ │     ▼ Filesystem                                                           │
+│ │         auto allow  [user:main]                                            │
+│ │ ▼ "evil.com"                                                               │
+│ │   ▼ Network                                                                │
+│ │       auto deny   [user:main]                                              │
+│   ▼ "Bash"                                                                   │
+│     ▼ Tool                                                                   │
+│         ask         [user:main]                                              │
+┌──────────────────────────────────────────────────────────────────────────────┐
+│Edit rule: Enter confirm  Esc cancel                                          │
+│> (ask (tool "Bash"))_                                                        │
+│                                                                              │
+│                                                                              │
+j/k move  Tab effect  e edit  d delete  [/] all  a add  / search  w save  ? help

@@ -1,0 +1,28 @@
+---
+source: clash/src/tui/render.rs
+expression: output
+---
+ clash tui  user  1/24                                                   ? help 
+│ ▼ "git"                                                                      │
+│   ▼ *                                                                        │
+│     ▼ Exec                                                                   │
+│         auto allow  [user:main]                                              │
+│ ▼ "rm"                                                                       │
+│   ▼ "-rf"                                                                    │
+│     ▼ *                                                                      │
+│       ▼ Exec                                                                 │
+│           auto deny   [user:main]                                            │
+│ ▼ "sudo"                                                                     │
+│   ▼ *                                                                        │
+│     ▼ Exec                                                                   │
+│         ask         [user:main]                                              │
+│ ▼ *                                                                          │
+│ │ ▼ (subpath (env PWD))                                                      │
+│ │   ▼ read                                                                   │
+│ │     ▼ Filesystem                                                           │
+┌──────────────────────────────────────────────────────────────────────────────┐
+│Binary: "git"                                                                 │
+│"git"                                                                         │
+│                                                                              │
+│                                                                              │
+j/k move  h collapse  z/Z fold  [/] all  a add  / search  w save  ? help  q quit

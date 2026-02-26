@@ -1,0 +1,44 @@
+---
+source: clash/src/tui/render.rs
+expression: output
+---
+ clash tui  user  1/4                                                    ? help 
+│ ▶ "git"  1 auto allow                                                        │
+│ ▶ "rm"  1 auto deny                                                          │
+│ ▶ "sudo"  1 ask                                                              │
+│ ▶ *  1 auto allow · 1 auto deny · 1 ask                                      │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│          ┌ Add Rule ──────────────────────────────────────────────┐          │
+│          │ 1. Command                                             │          │
+│          │   > _                                                  │          │
+│          │   e.g. cargo, *, blank=any command                     │          │
+│          │                                                        │          │
+│          │ 2. Args                                                │          │
+│          │   (empty)                                              │          │
+│          │                                                        │          │
+│          │ 3. Domain                                              │          │
+│          │    exec    fs    net    tool                           │          │
+│          │                                                        │          │
+│          │ 4. Permissions                                         │          │
+│          │   (covered by command + args)                          │          │
+│          │                                                        │          │
+│          │ 5. Effect                                              │          │
+│          │    allow    deny    ask                                │          │
+│          │                                                        │          │
+│          │ 6. Level                                               │          │
+│          │    user                                                │          │
+│          │                                                        │          │
+│          │                                                        │          │
+│          │                                                        │          │
+│          └────────────────────────────────────────────────────────┘          │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+┌──────────────────────────────────────────────────────────────────────────────┐
+│Binary: "git"                                                                 │
+│"git"                                                                         │
+│                                                                              │
+│                                                                              │
+j/k move  l expand  z/Z fold  [/] all  a add  / search  w save  ? help  q quit

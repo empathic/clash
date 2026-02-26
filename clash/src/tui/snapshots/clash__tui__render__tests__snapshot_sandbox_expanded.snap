@@ -1,0 +1,28 @@
+---
+source: clash/src/tui/render.rs
+expression: output
+---
+ clash tui  user  1/15                                                   ? help 
+│ ▼ "ls"                                                                       │
+│   ▼ "-lha"                                                                   │
+│     ▼ Exec                                                                   │
+│       ▼ ask         [user:main]  sandboxed                                   │
+│         ▼ Sandbox                                                            │
+│         │ ▼ read                                                             │
+│         │   ▼ Filesystem                                                     │
+│         │       auto allow  [sandbox]                                        │
+│           ▼ Network                                                          │
+│               auto deny   [sandbox]                                          │
+│ ▼ "cargo"                                                                    │
+│   ▼ *                                                                        │
+│     ▼ Exec                                                                   │
+│       ▼ auto allow  [user:main]  sandbox: "cargo-env"                        │
+│           sandbox: "cargo-env"                                               │
+│                                                                              │
+│                                                                              │
+┌──────────────────────────────────────────────────────────────────────────────┐
+│Binary: "ls"                                                                  │
+│"ls"                                                                          │
+│                                                                              │
+│                                                                              │
+j/k move  h collapse  z/Z fold  [/] all  a add  / search  w save  ? help  q quit

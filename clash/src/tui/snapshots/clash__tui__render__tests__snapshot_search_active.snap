@@ -1,0 +1,28 @@
+---
+source: clash/src/tui/render.rs
+expression: output
+---
+ clash tui  user  1/7                                                    ? help 
+│ ▼ "git"                                                                      │
+│   ▼ *                                                                        │
+│     ▼ Exec                                                                   │
+│         auto allow  [user:main]                                              │
+│ ▶ "rm"  1 auto deny                                                          │
+│ ▶ "sudo"  1 ask                                                              │
+│ ▶ *  1 auto allow · 1 auto deny · 1 ask                                      │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+┌──────────────────────────────────────────────────────────────────────────────┐
+│Binary: "git"                                                                 │
+│"git"                                                                         │
+│                                                                              │
+│                                                                              │
+/git_ (1/2)

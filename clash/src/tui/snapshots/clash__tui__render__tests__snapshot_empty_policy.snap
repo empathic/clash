@@ -1,0 +1,28 @@
+---
+source: clash/src/tui/render.rs
+expression: output
+---
+ clash tui  user                                                         ? help 
+│  No policy rules loaded. Run `clash init` to create a policy.                │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+┌──────────────────────────────────────────────────────────────────────────────┐
+│No selection                                                                  │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+j/k move  [/] all  a add  / search  w save  ? help  q quit
