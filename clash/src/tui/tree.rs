@@ -81,6 +81,26 @@ impl fmt::Display for DomainKind {
 }
 
 // ---------------------------------------------------------------------------
+// LeafInfo — used for batch operations on branch nodes
+// ---------------------------------------------------------------------------
+
+/// Information about a leaf node, used for batch operations (e.g. branch delete).
+#[derive(Debug, Clone)]
+pub enum LeafInfo {
+    Regular {
+        level: PolicyLevel,
+        policy: String,
+        rule_text: String,
+    },
+    Sandbox {
+        level: PolicyLevel,
+        policy: String,
+        sandbox_rule_text: String,
+        parent_rule: Rule,
+    },
+}
+
+// ---------------------------------------------------------------------------
 // NodeId and TreeArena
 // ---------------------------------------------------------------------------
 
@@ -225,6 +245,80 @@ impl TreeArena {
             f(rid, &self[rid]);
             self.walk(rid, f);
         }
+    }
+
+    /// Collect all `Leaf` and `SandboxLeaf` nodes under a node (recursive).
+    ///
+    /// Returns `(level, policy, rule_text)` for each leaf, suitable for batch
+    /// delete operations on branch nodes.
+    pub fn collect_leaves(&self, id: NodeId) -> Vec<LeafInfo> {
+        let mut leaves = Vec::new();
+        self.walk(id, &mut |_, node| match &node.kind {
+            TreeNodeKind::Leaf {
+                rule,
+                level,
+                policy,
+                ..
+            } => {
+                leaves.push(LeafInfo::Regular {
+                    level: *level,
+                    policy: policy.clone(),
+                    rule_text: rule.to_string(),
+                });
+            }
+            TreeNodeKind::SandboxLeaf {
+                sandbox_rule,
+                parent_rule,
+                level,
+                policy,
+                ..
+            } => {
+                leaves.push(LeafInfo::Sandbox {
+                    level: *level,
+                    policy: policy.clone(),
+                    sandbox_rule_text: sandbox_rule.to_string(),
+                    parent_rule: parent_rule.clone(),
+                });
+            }
+            _ => {}
+        });
+        // Also check the node itself if it's a leaf
+        match &self[id].kind {
+            TreeNodeKind::Leaf {
+                rule,
+                level,
+                policy,
+                ..
+            } => {
+                leaves.insert(
+                    0,
+                    LeafInfo::Regular {
+                        level: *level,
+                        policy: policy.clone(),
+                        rule_text: rule.to_string(),
+                    },
+                );
+            }
+            TreeNodeKind::SandboxLeaf {
+                sandbox_rule,
+                parent_rule,
+                level,
+                policy,
+                ..
+            } => {
+                leaves.insert(
+                    0,
+                    LeafInfo::Sandbox {
+                        level: *level,
+                        policy: policy.clone(),
+                        sandbox_rule_text: sandbox_rule.to_string(),
+                        parent_rule: parent_rule.clone(),
+                    },
+                );
+            }
+            _ => {}
+        }
+        leaves
     }
 }
 

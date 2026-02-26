@@ -18,7 +18,7 @@ use crate::settings::{LoadedPolicy, PolicyLevel};
 use super::editor::TextInput;
 use super::input::{self, InputResult};
 use super::render;
-use super::tree::{self, FlatRow, NodeId, TreeArena, TreeNodeKind};
+use super::tree::{self, FlatRow, LeafInfo, NodeId, TreeArena, TreeNodeKind};
 
 // Re-export constants used by input.rs and render.rs
 pub(crate) use self::edit::{DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS};
@@ -85,6 +85,10 @@ pub enum ConfirmAction {
         policy: String,
         sandbox_rule_text: String,
         parent_rule: Rule,
+    },
+    DeleteBranch {
+        label: String,
+        leaves: Vec<LeafInfo>,
     },
     QuitUnsaved,
 }

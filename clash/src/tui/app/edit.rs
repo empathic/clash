@@ -16,7 +16,7 @@ use crate::settings::PolicyLevel;
 
 use super::super::editor::TextInput;
 use super::super::input::InputResult;
-use super::super::tree::TreeNodeKind;
+use super::super::tree::{LeafInfo, TreeNodeKind};
 use super::{
     AddRuleForm, AddRuleStep, App, DiffHunk, DiffLine, EditRuleState, Mode, RuleTarget,
     SandboxMutation, SaveDiff, SelectEffectState, StatusMessage,
@@ -278,8 +278,108 @@ impl App {
                 });
             }
             _ => {
-                self.set_status("Not a rule leaf", true);
+                let node_id = row.node_id;
+                let leaves = self.tree.arena.collect_leaves(node_id);
+                if leaves.is_empty() {
+                    self.set_status("No rules to delete", true);
+                    return;
+                }
+                let label = self.tree.breadcrumb().unwrap_or_default();
+                self.mode = Mode::Confirm(super::ConfirmAction::DeleteBranch { label, leaves });
             }
+        }
+    }
+
+    /// Execute a confirmed branch delete (remove all leaves under a branch node).
+    pub fn confirm_delete_branch(&mut self, leaves: Vec<LeafInfo>) {
+        self.push_undo();
+        let mut deleted = 0;
+        let mut errors = Vec::new();
+
+        for leaf in &leaves {
+            let result = match leaf {
+                LeafInfo::Regular {
+                    level,
+                    policy,
+                    rule_text,
+                } => {
+                    let ls = self.levels.iter_mut().find(|ls| ls.level == *level);
+                    if let Some(ls) = ls {
+                        match edit::remove_rule(&ls.source, policy, rule_text) {
+                            Ok(new_source) => {
+                                ls.source = new_source;
+                                Ok(())
+                            }
+                            Err(e) => Err(format!("remove rule: {e}")),
+                        }
+                    } else {
+                        Err("level not found".into())
+                    }
+                }
+                LeafInfo::Sandbox {
+                    level,
+                    policy,
+                    sandbox_rule_text,
+                    parent_rule,
+                } => {
+                    let sandbox_rule = match parse_rule_text(sandbox_rule_text) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            errors.push(format!("parse: {e}"));
+                            continue;
+                        }
+                    };
+                    self.mutate_sandbox_rule_raw(
+                        *level,
+                        policy,
+                        parent_rule,
+                        &sandbox_rule,
+                        SandboxMutation::Delete,
+                    )
+                }
+            };
+            match result {
+                Ok(()) => deleted += 1,
+                Err(e) => errors.push(e),
+            }
+        }
+
+        // Validate all modified sources
+        let mut valid = true;
+        for ls in &self.levels {
+            if let Err(e) = compile_policy(&ls.source) {
+                errors.push(format!("validation: {e}"));
+                valid = false;
+            }
+        }
+
+        if !valid {
+            // Roll back
+            if let Some(entry) = self.history.undo_stack.pop() {
+                for (level, source) in &entry.sources {
+                    if let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == *level) {
+                        ls.source = source.clone();
+                    }
+                }
+            }
+            self.set_status(&format!("Delete failed: {}", errors.join("; ")), true);
+            return;
+        }
+
+        self.rebuild_tree();
+        if errors.is_empty() {
+            self.set_status(
+                &format!(
+                    "Deleted {deleted} rule{}",
+                    if deleted == 1 { "" } else { "s" }
+                ),
+                false,
+            );
+        } else {
+            self.set_status(
+                &format!("Deleted {deleted}, errors: {}", errors.join("; ")),
+                true,
+            );
         }
     }
 
@@ -380,6 +480,67 @@ impl App {
             Ok(()) => self.set_status(success_msg, false),
             Err(e) => self.set_status(&e, true),
         }
+    }
+
+    /// Modify a sandbox sub-rule without undo/rebuild — for batch operations.
+    ///
+    /// Returns Ok(()) on success, modifying `self.levels` in place.
+    fn mutate_sandbox_rule_raw(
+        &mut self,
+        level: PolicyLevel,
+        policy: &str,
+        parent_rule: &Rule,
+        target_sandbox_rule: &Rule,
+        mutation: SandboxMutation,
+    ) -> Result<(), String> {
+        let Some(SandboxRef::Inline(sandbox_rules)) = &parent_rule.sandbox else {
+            return Err("Parent rule has no inline sandbox".into());
+        };
+
+        let mut new_sandbox_rules: Vec<Rule> = Vec::new();
+        let target_text = target_sandbox_rule.to_string();
+        let mut found = false;
+
+        for r in sandbox_rules {
+            if r.to_string() == target_text && !found {
+                found = true;
+                match &mutation {
+                    SandboxMutation::Delete => {}
+                    SandboxMutation::Replace(new_rule) => {
+                        new_sandbox_rules.push(new_rule.clone());
+                    }
+                }
+            } else {
+                new_sandbox_rules.push(r.clone());
+            }
+        }
+
+        if !found {
+            return Err("Sandbox sub-rule not found in parent".into());
+        }
+
+        let new_parent = Rule {
+            effect: parent_rule.effect,
+            matcher: parent_rule.matcher.clone(),
+            sandbox: if new_sandbox_rules.is_empty() {
+                None
+            } else {
+                Some(SandboxRef::Inline(new_sandbox_rules))
+            },
+        };
+
+        let old_parent_text = parent_rule.to_string();
+        let ls = self
+            .levels
+            .iter_mut()
+            .find(|ls| ls.level == level)
+            .ok_or_else(|| "Level not found".to_string())?;
+
+        let new_source = edit::remove_rule(&ls.source, policy, &old_parent_text)
+            .and_then(|s| edit::add_rule(&s, policy, &new_parent))
+            .map_err(|e| format!("{e}"))?;
+        ls.source = new_source;
+        Ok(())
     }
 
     // -------------------------------------------------------------------

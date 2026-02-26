@@ -25,4 +25,4 @@ expression: output
 │"git"                                                                         │
 │                                                                              │
 │                                                                              │
-j/k move  h collapse  z/Z fold  [/] all  a add  / search  w save  ? help  q quit
+j/k move  h collapse  z/Z fold  d delete  [/] all  a add  / search  w save  ? he
