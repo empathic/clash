@@ -177,6 +177,7 @@ fn parse_cli_rule(effect: Effect, rule_str: &str) -> Result<Vec<AstRule>> {
                 effect,
                 matcher: CapMatcher::Net(NetMatcher {
                     domain: Pattern::Any,
+                    path: None,
                 }),
                 sandbox: None,
             }]),

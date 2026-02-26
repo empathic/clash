@@ -62,9 +62,13 @@ impl Specificity {
     }
 
     fn from_net(m: &NetMatcher) -> Self {
+        let secondary = match &m.path {
+            Some(pf) => path_filter_rank(pf),
+            None => 0,
+        };
         Self {
             primary: pattern_rank(&m.domain),
-            secondary: 0,
+            secondary,
         }
     }
 
@@ -193,9 +197,11 @@ mod tests {
     fn net_literal_more_specific_than_regex() {
         let a = Specificity::from_matcher(&CapMatcher::Net(NetMatcher {
             domain: Pattern::Literal("github.com".into()),
+            path: None,
         }));
         let b = Specificity::from_matcher(&CapMatcher::Net(NetMatcher {
             domain: Pattern::Regex(".*".into()),
+            path: None,
         }));
         assert!(a > b);
     }
@@ -250,5 +256,37 @@ mod tests {
             ],
         }));
         assert!(mixed > has_only);
+    }
+
+    #[test]
+    fn net_with_path_more_specific_than_without() {
+        let with_path = Specificity::from_matcher(&CapMatcher::Net(NetMatcher {
+            domain: Pattern::Literal("github.com".into()),
+            path: Some(PathFilter::Subpath(
+                PathExpr::Static("/owner/repo".into()),
+                false,
+            )),
+        }));
+        let without_path = Specificity::from_matcher(&CapMatcher::Net(NetMatcher {
+            domain: Pattern::Literal("github.com".into()),
+            path: None,
+        }));
+        assert!(with_path > without_path);
+    }
+
+    #[test]
+    fn net_literal_path_more_specific_than_subpath() {
+        let literal = Specificity::from_matcher(&CapMatcher::Net(NetMatcher {
+            domain: Pattern::Literal("github.com".into()),
+            path: Some(PathFilter::Literal("/owner/repo/issues".into())),
+        }));
+        let subpath = Specificity::from_matcher(&CapMatcher::Net(NetMatcher {
+            domain: Pattern::Literal("github.com".into()),
+            path: Some(PathFilter::Subpath(
+                PathExpr::Static("/owner/repo".into()),
+                false,
+            )),
+        }));
+        assert!(literal > subpath);
     }
 }

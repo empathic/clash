@@ -553,7 +553,15 @@ fn matchers_may_overlap(a: &CapMatcher, b: &CapMatcher) -> bool {
                 _ => true,
             }
         }
-        (CapMatcher::Net(na), CapMatcher::Net(nb)) => patterns_may_overlap(&na.domain, &nb.domain),
+        (CapMatcher::Net(na), CapMatcher::Net(nb)) => {
+            if !patterns_may_overlap(&na.domain, &nb.domain) {
+                return false;
+            }
+            match (&na.path, &nb.path) {
+                (Some(pa), Some(pb)) => path_filters_may_overlap(pa, pb),
+                _ => true,
+            }
+        }
         (CapMatcher::Tool(ta), CapMatcher::Tool(tb)) => patterns_may_overlap(&ta.name, &tb.name),
         // Different capability domains never overlap.
         _ => false,
@@ -616,7 +624,11 @@ fn compile_matcher(matcher: &CapMatcher, env: &dyn EnvResolver) -> Result<Compil
         }
         CapMatcher::Net(m) => {
             let domain = compile_pattern(&m.domain)?;
-            Ok(CompiledMatcher::Net(CompiledNet { domain }))
+            let path = match &m.path {
+                Some(pf) => Some(compile_path_filter(pf, env)?),
+                None => None,
+            };
+            Ok(CompiledMatcher::Net(CompiledNet { domain, path }))
         }
         CapMatcher::Tool(m) => {
             let name = compile_pattern(&m.name)?;

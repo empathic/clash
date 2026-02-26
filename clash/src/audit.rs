@@ -294,9 +294,10 @@ fn deny_hint(tool_name: &str, tool_input: &serde_json::Value, cwd: &str) -> Resu
         CapQuery::Fs { op, path } => {
             format!("(fs {} \"{}\")", op, path)
         }
-        CapQuery::Net { domain } => {
-            format!("(net \"{}\")", domain)
-        }
+        CapQuery::Net { domain, path } => match path {
+            Some(p) => format!("(net \"{}\" (subpath \"{}\"))", domain, p),
+            None => format!("(net \"{}\")", domain),
+        },
         CapQuery::Tool { name } => {
             format!("(tool \"{}\")", name)
         }
@@ -319,7 +320,10 @@ fn tool_input_summary(tool_name: &str, input: &serde_json::Value, cwd: &str) -> 
             }
         }
         Some(CapQuery::Fs { path, .. }) => shorten_path(path),
-        Some(CapQuery::Net { domain }) => domain.clone(),
+        Some(CapQuery::Net { domain, path }) => match path {
+            Some(p) => format!("{domain}{p}"),
+            None => domain.clone(),
+        },
         Some(CapQuery::Tool { name }) => name.clone(),
         None => String::new(),
     };

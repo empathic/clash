@@ -1352,6 +1352,7 @@ fn parse_bare_verb(effect: Effect, verb: &str) -> Result<Vec<Rule>> {
             effect,
             matcher: CapMatcher::Net(NetMatcher {
                 domain: Pattern::Any,
+                path: None,
             }),
             sandbox: None,
         }]),

@@ -179,7 +179,10 @@ impl ReplayResult {
                 }
             }
             Some(CapQuery::Fs { op, path }) => format!("(fs {} \"{}\")", op, path),
-            Some(CapQuery::Net { domain }) => format!("(net \"{}\")", domain),
+            Some(CapQuery::Net { domain, path }) => match path {
+                Some(p) => format!("(net \"{}\" (subpath \"{}\"))", domain, p),
+                None => format!("(net \"{}\")", domain),
+            },
             Some(CapQuery::Tool { name }) => format!("(tool \"{}\")", name),
             None => return format!("clash allow '{}'", self.tool_name.to_lowercase()),
         };

@@ -96,7 +96,38 @@ fn describe_fs_op_gerund(op: FsOp) -> &'static str {
 
 fn describe_net(m: &NetMatcher) -> String {
     let domain = describe_pattern(&m.domain);
-    format!("network access to {domain}")
+    match &m.path {
+        None => format!("network access to {domain}"),
+        Some(pf) => format!(
+            "network access to {domain} path {}",
+            describe_net_path_filter(pf)
+        ),
+    }
+}
+
+fn describe_net_path_filter(pf: &PathFilter) -> String {
+    match pf {
+        PathFilter::Subpath(PathExpr::Static(s), _) => format!("under {s}"),
+        PathFilter::Subpath(PathExpr::Env(name), _) => format!("under ${name}"),
+        PathFilter::Subpath(PathExpr::Join(parts), _) => {
+            let desc: Vec<String> = parts
+                .iter()
+                .map(|p| match p {
+                    PathExpr::Env(name) => format!("${name}"),
+                    PathExpr::Static(s) => s.clone(),
+                    PathExpr::Join(_) => "(join ...)".into(),
+                })
+                .collect();
+            format!("under {}", desc.concat())
+        }
+        PathFilter::Literal(s) => format!("\"{s}\""),
+        PathFilter::Regex(r) => format!("matching /{r}/"),
+        PathFilter::Or(fs) => {
+            let parts: Vec<String> = fs.iter().map(describe_net_path_filter).collect();
+            parts.join(" or ")
+        }
+        PathFilter::Not(inner) => format!("not {}", describe_net_path_filter(inner)),
+    }
 }
 
 fn describe_tool(m: &ToolMatcher) -> String {
@@ -319,6 +350,7 @@ mod tests {
             effect: Effect::Allow,
             matcher: CapMatcher::Net(NetMatcher {
                 domain: Pattern::Any,
+                path: None,
             }),
             sandbox: None,
         };
@@ -331,6 +363,7 @@ mod tests {
             effect: Effect::Deny,
             matcher: CapMatcher::Net(NetMatcher {
                 domain: Pattern::Literal("evil.com".into()),
+                path: None,
             }),
             sandbox: None,
         };
@@ -387,6 +420,7 @@ mod tests {
                     Pattern::Literal("github.com".into()),
                     Pattern::Literal("crates.io".into()),
                 ]),
+                path: None,
             }),
             sandbox: None,
         };
@@ -430,6 +464,25 @@ mod tests {
         assert_eq!(
             describe_rule(&rule),
             "Deny running \"git\" \"push\" with \"--force\" (any order)"
+        );
+    }
+
+    #[test]
+    fn describe_net_with_path() {
+        let rule = Rule {
+            effect: Effect::Allow,
+            matcher: CapMatcher::Net(NetMatcher {
+                domain: Pattern::Literal("github.com".into()),
+                path: Some(PathFilter::Subpath(
+                    PathExpr::Static("/owner/repo".into()),
+                    false,
+                )),
+            }),
+            sandbox: None,
+        };
+        assert_eq!(
+            describe_rule(&rule),
+            r#"Allow network access to "github.com" path under /owner/repo"#
         );
     }
 }

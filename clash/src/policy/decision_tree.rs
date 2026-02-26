@@ -87,6 +87,8 @@ pub struct CompiledFs {
 #[derive(Debug, Clone)]
 pub struct CompiledNet {
     pub domain: CompiledPattern,
+    /// Optional URL path filter. `None` = match any path.
+    pub path: Option<CompiledPathFilter>,
 }
 
 /// Pre-compiled tool matcher.
@@ -492,9 +494,25 @@ impl CompiledFs {
 }
 
 impl CompiledNet {
-    /// Test if this net matcher matches a domain string.
-    pub fn matches(&self, domain: &str) -> bool {
-        self.domain.matches(domain)
+    /// Test if this net matcher matches a domain and optional URL path.
+    ///
+    /// When the rule has a path filter:
+    /// - If the query provides a path, both domain and path must match.
+    /// - If the query has no path (e.g. WebSearch), the rule does NOT match
+    ///   (a path-scoped rule is more specific than a pathless query).
+    ///
+    /// When the rule has no path filter, only the domain is checked.
+    pub fn matches(&self, domain: &str, path: Option<&str>) -> bool {
+        if !self.domain.matches(domain) {
+            return false;
+        }
+        match &self.path {
+            None => true,
+            Some(filter) => match path {
+                Some(p) => filter.matches(p),
+                None => false,
+            },
+        }
     }
 }
 

@@ -88,11 +88,13 @@ pub struct FsMatcher {
     pub path: Option<PathFilter>,
 }
 
-/// Matches network access: `(net [domain])`.
+/// Matches network access: `(net [domain] [path])`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetMatcher {
     /// Domain pattern. `Pattern::Any` if omitted.
     pub domain: Pattern,
+    /// Optional URL path filter. `None` = match any path.
+    pub path: Option<PathFilter>,
 }
 
 /// Matches Claude Code tools by name: `(tool [name])`.
@@ -267,8 +269,11 @@ impl fmt::Display for FsMatcher {
 impl fmt::Display for NetMatcher {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "(net")?;
-        if self.domain != Pattern::Any {
+        if self.domain != Pattern::Any || self.path.is_some() {
             write!(f, " {}", self.domain)?;
+        }
+        if let Some(path) = &self.path {
+            write!(f, " {path}")?;
         }
         write!(f, ")")
     }
@@ -440,8 +445,24 @@ mod tests {
     fn display_net_regex() {
         let m = NetMatcher {
             domain: Pattern::Regex(r".*\.evil\.com".into()),
+            path: None,
         };
         assert_eq!(m.to_string(), r"(net /.*\.evil\.com/)");
+    }
+
+    #[test]
+    fn display_net_with_path() {
+        let m = NetMatcher {
+            domain: Pattern::Literal("github.com".into()),
+            path: Some(PathFilter::Subpath(
+                PathExpr::Static("/owner/repo".into()),
+                false,
+            )),
+        };
+        assert_eq!(
+            m.to_string(),
+            r#"(net "github.com" (subpath "/owner/repo"))"#
+        );
     }
 
     #[test]
