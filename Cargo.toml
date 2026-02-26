@@ -65,6 +65,8 @@ reedline = "0.45"
 shlex = "1"
 similar = "2"
 
+nucleo-matcher = "0.3"
+
 # Dev dependencies
 tempfile = "3"
 proptest = "1"

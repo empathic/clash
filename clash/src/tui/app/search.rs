@@ -76,7 +76,8 @@ impl App {
         }
     }
 
-    /// Re-index search matches from the current flat rows.
+    /// Re-index search matches from the current flat rows using fuzzy matching.
+    /// Matches are sorted by score (best first), then by position.
     pub(super) fn update_search_matches(&mut self) {
         self.search.matches.clear();
         self.search.match_cursor = 0;
@@ -84,17 +85,20 @@ impl App {
         let Some(query) = &self.search.query else {
             return;
         };
-        let query_lower = query.to_lowercase();
-        if query_lower.is_empty() {
+        if query.is_empty() {
             return;
         }
 
+        let mut scored: Vec<(usize, u16)> = Vec::new();
         for (i, row) in self.tree.flat_rows.iter().enumerate() {
             let text = tree::node_search_text(&self.tree.arena[row.node_id].kind);
-            if text.to_lowercase().contains(&query_lower) {
-                self.search.matches.push(i);
+            if let Some(score) = tree::fuzzy_match(&text, query) {
+                scored.push((i, score));
             }
         }
+        // Sort by score descending, then by position ascending for stability
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        self.search.matches = scored.into_iter().map(|(i, _)| i).collect();
     }
 
     /// Search the full tree and expand ancestors of all matching nodes

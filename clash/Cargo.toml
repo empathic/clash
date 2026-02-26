@@ -43,6 +43,7 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 reedline = { workspace = true }
 similar = { workspace = true }
+nucleo-matcher = { workspace = true }
 dialoguer = { workspace = true }
 semver = { workspace = true }
 sha2 = { workspace = true }

@@ -703,7 +703,7 @@ fn render_search_bar(f: &mut Frame, app: &App, area: Rect) {
         }
     } else {
         format!(
-            " ({}/{})",
+            " ({}/{} fuzzy)",
             app.search.match_cursor + 1,
             app.search.matches.len()
         )
