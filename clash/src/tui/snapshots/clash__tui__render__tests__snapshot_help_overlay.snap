@@ -1,0 +1,44 @@
+---
+source: clash/src/tui/render.rs
+expression: output
+---
+ clash tui  user  1/4                                                    ? help 
+│ ▶ "git"  1 auto allow                                                        │
+│ ▶ "rm"  1 auto deny                                                          │
+│ ▶ "sudo"  1 a┌ Keyboard Shortcuts ────────────────────────────┐              │
+│ ▶ *  1 auto a│                                                │              │
+│              │  j / Down    Move cursor down                  │              │
+│              │  k / Up      Move cursor up                    │              │
+│              │  l / Right   Expand node or enter children     │              │
+│              │  h / Left    Collapse node or go to parent     │              │
+│              │  Enter       Expand node or enter children     │              │
+│              │  Space       Toggle expand/collapse            │              │
+│              │  g           Jump to top                       │              │
+│              │  G           Jump to bottom                    │              │
+│              │  PgUp/PgDn   Page up/down                      │              │
+│              │                                                │              │
+│              │  Tab         Select effect (dropdown)          │              │
+│              │  e           Edit rule at cursor               │              │
+│              │  a           Add a new rule                    │              │
+│              │  d           Delete rule at cursor             │              │
+│              │  w           Save all changes                  │              │
+│              │  u           Undo last edit                    │              │
+│              │  Ctrl+r      Redo                              │              │
+│              │                                                │              │
+│              │  z           Fold/unfold children              │              │
+│              │  Z           Fold/unfold subtree               │              │
+│              │  [           Collapse all                      │              │
+│              │  ]           Expand all                        │              │
+│              │                                                │              │
+│              │  /           Search                            │              │
+│              │  n / N       Next / previous match             │              │
+│              │  Esc         Clear search / quit               │              │
+│              │  ?           Toggle this help                  │              │
+│              │  q           Quit (confirms if unsaved)        │              │
+│              │                                                │              │
+┌──────────────│  Press any key to close                        │──────────────┐
+│Binary: "git" └────────────────────────────────────────────────┘              │
+│"git"                                                                         │
+│                                                                              │
+│                                                                              │
+j/k move  l expand  z/Z fold  [/] all  a add  / search  w save  ? help  q quit

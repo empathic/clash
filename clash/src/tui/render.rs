@@ -1451,4 +1451,117 @@ mod tests {
             "leaf with inline sandbox should show 'sandboxed': {text}"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Snapshot tests (insta)
+    // -----------------------------------------------------------------------
+
+    const REALISTIC_POLICY: &str = r#"(policy "main"
+  (allow (exec "git" *))
+  (deny (exec "rm" "-rf" *))
+  (ask (exec "sudo" *))
+  (allow (fs read (subpath (env PWD))))
+  (deny (net "evil.com"))
+  (ask (tool "Bash"))
+)"#;
+
+    const SANDBOX_POLICY: &str = r#"(policy "main"
+  (ask (exec "ls" "-lha") :sandbox (allow (fs read)) (deny (net *)))
+  (allow (exec "cargo" *) :sandbox "cargo-env")
+)"#;
+
+    #[test]
+    fn snapshot_collapsed_tree() {
+        let app = make_app(REALISTIC_POLICY);
+        let output = render_to_string(&app, 80, 24);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_expanded_tree() {
+        let mut app = make_app(REALISTIC_POLICY);
+        app.expand_all();
+        let output = render_to_string(&app, 80, 24);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_search_active() {
+        let mut app = make_app(REALISTIC_POLICY);
+        app.start_search();
+        app.search_input = super::super::editor::TextInput::new("git");
+        app.update_search_live();
+        app.mode = Mode::Search;
+        let output = render_to_string(&app, 80, 24);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_add_rule_overlay() {
+        let mut app = make_app(REALISTIC_POLICY);
+        app.start_add_rule();
+        let output = render_to_string(&app, 80, 40);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_confirm_delete_overlay() {
+        let mut app = make_app(REALISTIC_POLICY);
+        app.mode = Mode::Confirm(ConfirmAction::DeleteRule {
+            level: PolicyLevel::User,
+            policy: "main".to_string(),
+            rule_text: r#"(allow (exec "git" *))"#.to_string(),
+        });
+        let output = render_to_string(&app, 80, 24);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_help_overlay() {
+        let mut app = make_app(REALISTIC_POLICY);
+        app.show_help = true;
+        let output = render_to_string(&app, 80, 40);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_edit_rule_mode() {
+        let mut app = make_app(REALISTIC_POLICY);
+        app.expand_all();
+        app.cursor_to_bottom();
+        app.start_edit_rule();
+        let output = render_to_string(&app, 80, 24);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_sandbox_expanded() {
+        let mut app = make_app(SANDBOX_POLICY);
+        app.expand_all();
+        let output = render_to_string(&app, 80, 24);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_empty_policy() {
+        let app = make_app("");
+        let output = render_to_string(&app, 80, 24);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_multi_level() {
+        let user = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (allow (exec "git" *)))"#,
+        );
+        let project = test_policy(
+            PolicyLevel::Project,
+            r#"(policy "main" (deny (exec "git" "push" *)))"#,
+        );
+        let mut app = App::new(&[user, project]);
+        app.expand_all();
+        let output = render_to_string(&app, 80, 24);
+        insta::assert_snapshot!(output);
+    }
 }

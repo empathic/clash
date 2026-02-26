@@ -1,0 +1,28 @@
+---
+source: clash/src/tui/render.rs
+expression: output
+---
+ clash tui  user + project  1/8                                          ? help 
+│ ▼ "git"                                                                      │
+│ │ ▼ *                                                                        │
+│ │   ▼ Exec                                                                   │
+│ │       auto allow  [user:main]                                              │
+│   ▼ "push"                                                                   │
+│     ▼ *                                                                      │
+│       ▼ Exec                                                                 │
+│           auto deny   [project:main]                                         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+┌──────────────────────────────────────────────────────────────────────────────┐
+│Binary: "git"                                                                 │
+│"git"                                                                         │
+│                                                                              │
+│                                                                              │
+j/k move  h collapse  z/Z fold  [/] all  a add  / search  w save  ? help  q quit

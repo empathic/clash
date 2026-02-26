@@ -1,0 +1,28 @@
+---
+source: clash/src/tui/render.rs
+expression: output
+---
+ clash tui  user  1/4                                                    ? help 
+│ ▶ "git"  1 auto allow                                                        │
+│ ▶ "rm"  1 auto deny                                                          │
+│ ▶ "sudo"  1 ask                                                              │
+│ ▶ *  1 auto allow · 1 auto deny · 1 ask                                      │
+│                                                                              │
+│                                                                              │
+│              ┌ Confirm Delete ────────────────────────────────┐              │
+│              │Delete rule?                                    │              │
+│              │                                                │              │
+│              │  (allow (exec "git" *))                        │              │
+│              │                                                │              │
+│              │y/n                                             │              │
+│              │                                                │              │
+│              │                                                │              │
+│              └────────────────────────────────────────────────┘              │
+│                                                                              │
+│                                                                              │
+┌──────────────────────────────────────────────────────────────────────────────┐
+│Binary: "git"                                                                 │
+│"git"                                                                         │
+│                                                                              │
+│                                                                              │
+j/k move  l expand  z/Z fold  [/] all  a add  / search  w save  ? help  q quit
