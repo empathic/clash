@@ -23,8 +23,9 @@ Policy files use the `.policy` extension and contain s-expressions. Comments sta
 
 ```ebnf
 document        = top_level*
-top_level       = default_decl | policy_decl
+top_level       = version_decl | default_decl | policy_decl
 
+version_decl    = "(" "version" INTEGER ")"
 default_decl    = "(" "default" effect QUOTED_STRING ")"
 policy_decl     = "(" "policy" QUOTED_STRING policy_item* ")"
 
@@ -35,6 +36,18 @@ keyword_args    = ":sandbox" ( QUOTED_STRING | rule+ )
 ```
 
 Policy names, include targets, and keyword argument values must be quoted strings. Bare atoms are reserved for language keywords.
+
+### Version Declaration
+
+The optional `(version N)` form declares the policy language version. `N` must be a positive integer. If omitted, version 1 is assumed.
+
+```
+(version 1)
+(default deny "main")
+
+(policy "main"
+  (allow (exec "git" *)))
+```
 
 ---
 
@@ -386,6 +399,7 @@ If no default declaration is present, the compiler uses `deny` with the policy n
 QUOTED_STRING   = '"' (CHAR | ESCAPE)* '"'
 ESCAPE          = '\\' ('"' | '\\')
 REGEX           = '/' (CHAR_NO_SLASH)* '/'
+INTEGER         = [0-9]+
 ENV_NAME        = [A-Z_][A-Z0-9_]*
 KEYWORD         = ':' ATOM                     ; e.g. :sandbox
 COMMENT         = ';' (any char)* NEWLINE

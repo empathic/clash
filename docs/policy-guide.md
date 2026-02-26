@@ -409,6 +409,32 @@ Allow build tools with constrained sandbox environments:
 
 ---
 
+## Versioning
+
+Policies can declare a version at the top of the file using `(version N)`:
+
+```
+(version 1)
+(default deny "main")
+
+(policy "main"
+  (allow (exec "git" *)))
+```
+
+If the `(version N)` declaration is omitted, version 1 is assumed.
+
+When clash introduces backwards-incompatible changes to the policy language, the version number is bumped. Clash will warn if your policy uses an outdated version and guide you to upgrade.
+
+To add the version declaration and apply any migrations for deprecated syntax, run:
+
+```bash
+clash policy upgrade
+```
+
+This updates the `(version N)` declaration to the latest version and applies auto-fixes for any deprecated features. Use `--dry-run` to preview changes without writing to disk.
+
+---
+
 ## Debugging Policies
 
 ### Explain a Decision

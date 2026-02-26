@@ -4,6 +4,7 @@
 ; Use "clash allow edit", "clash allow bash", or
 ; "clash allow web" to unlock capabilities as you need them.
 
+(version 1)
 (default deny "main")
 
 (policy "cwd-access"

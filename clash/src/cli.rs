@@ -104,6 +104,15 @@ pub enum PolicyCmd {
         #[arg(short = 'c', long = "command")]
         command: Option<String>,
     },
+    /// Upgrade policy syntax to the latest version
+    Upgrade {
+        /// Print upgraded policy to stdout without writing
+        #[arg(long)]
+        dry_run: bool,
+        /// Policy level to upgrade: "user" or "project"
+        #[arg(long)]
+        scope: Option<String>,
+    },
     // --- Hidden/power-user subcommands ---
     /// Show policy summary: active policy, default effect, rule count
     #[command(hide = true)]

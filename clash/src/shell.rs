@@ -430,6 +430,17 @@ impl ShellSession {
 
         for tl in &top_levels {
             match tl {
+                TopLevel::Version(v) => {
+                    if self.interactive {
+                        output.push_str(&format!(
+                            "  {}: {}\n",
+                            style::bold("Version"),
+                            style::cyan(&v.to_string())
+                        ));
+                    } else {
+                        output.push_str(&format!("  Version: {v}\n"));
+                    }
+                }
                 TopLevel::Default { effect, policy } => {
                     if self.interactive {
                         output.push_str(&format!(

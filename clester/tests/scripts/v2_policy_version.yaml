@@ -1,0 +1,72 @@
+meta:
+  name: v2 policy — version declaration and upgrade
+  description: >
+    Test that (version N) is accepted by the parser, that policies without
+    a version declaration work (implicit v1), and that `clash policy upgrade`
+    adds the version declaration.
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *)))
+
+steps:
+  # Baseline: policy without version declaration works (implicit v1)
+  - name: git allowed without version declaration
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: curl denied without version declaration
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: curl https://example.com
+    expect:
+      decision: deny
+
+  # Dry-run upgrade: should add version declaration
+  - name: dry-run upgrade adds version
+    command: policy upgrade --dry-run
+    expect:
+      exit_code: 0
+      stdout_contains: "(version 1)"
+
+  # Policy still works after upgrade (rules unchanged)
+  - name: actually upgrade the policy
+    command: policy upgrade
+    expect:
+      exit_code: 0
+
+  - name: git still allowed after upgrade
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: curl still denied after upgrade
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: curl https://example.com
+    expect:
+      decision: deny
+
+  # Second upgrade is a no-op
+  - name: upgrade again is no-op
+    command: policy upgrade
+    expect:
+      exit_code: 0
+      stdout_contains: "already at version"
+
+  # Validate still passes with version declaration
+  - name: validate passes with versioned policy
+    command: policy validate
+    expect:
+      exit_code: 0

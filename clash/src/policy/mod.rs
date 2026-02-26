@@ -18,6 +18,7 @@ pub mod print;
 pub mod sandbox_types;
 pub mod sexpr;
 pub mod specificity;
+pub mod version;
 
 pub use compile::{
     AllShadows, ShadowInfo, compile_multi_level, compile_multi_level_with_internals,

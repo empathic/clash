@@ -20,10 +20,24 @@ fn parse_top_level(expr: &SExpr) -> Result<TopLevel> {
     let list = require_list(expr, "top-level form")?;
     let head = require_atom(&list[0], "top-level keyword")?;
     match head {
+        "version" => parse_version(list),
         "default" => parse_default(list),
         "policy" => parse_policy(list),
         other => bail!("unknown top-level form: {other}"),
     }
+}
+
+fn parse_version(list: &[SExpr]) -> Result<TopLevel> {
+    ensure!(
+        list.len() == 2,
+        "(version) expects exactly 1 argument: version number"
+    );
+    let atom = require_atom(&list[1], "version number")?;
+    let v: u32 = atom
+        .parse()
+        .map_err(|_| anyhow::anyhow!("(version) expects an integer, got: {atom}"))?;
+    ensure!(v >= 1, "(version) must be at least 1, got: {v}");
+    Ok(TopLevel::Version(v))
 }
 
 fn parse_default(list: &[SExpr]) -> Result<TopLevel> {

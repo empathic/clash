@@ -49,6 +49,13 @@
 * The policy speaks in capabilities, not Claude Code tool names — the eval layer maps tools to capabilities
 * See `docs/policy-grammar.md` for the formal grammar
 
+## Backwards Compatibility
+
+* All backwards-incompatible changes to the policy language MUST bump the version number in `clash/src/policy/version.rs` (`CURRENT_VERSION`)
+* Each version bump MUST include deprecation entries in `all_deprecations()` describing what changed
+* Auto-fix functions SHOULD be provided when possible so `clash policy upgrade` can migrate users automatically
+* The `(version N)` declaration in policy files allows clash to detect outdated syntax and guide users to upgrade
+
 ## Layout
 
 - *clash* Clash binary + library
