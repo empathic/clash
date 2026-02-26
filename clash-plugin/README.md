@@ -2,6 +2,8 @@
 
 The Claude Code plugin that integrates clash into your agent sessions. It registers hooks to intercept tool calls and provides slash-command skills for managing your policy interactively.
 
+> Clash is designed to be agent-agnostic. This is the Claude Code integration — see the [main README](../README.md#agent-support) for the full list of supported and planned agent integrations.
+
 For general usage and policy documentation, see the [project README](../README.md).
 
 ## Building

@@ -2,16 +2,30 @@
 
 **C**ommand **L**ine **A**gent **S**afety **H**arness
 
-Stop babysitting Claude, go touch grass.
+Stop babysitting your coding agent, go touch grass.
 
 ---
 > [!IMPORTANT]
 > Clash is under heavy development. It's being used by engineers at Empathic and is quite productive, but the API is not stable and is subject to change. Please report bugs!
 
+## Agent Support
+
+Clash is designed to be **agent-agnostic** — a universal safety harness for any coding agent that executes tools on your behalf. The policy language and capability model are agent-independent; only the integration layer is specific to each agent.
+
+| Agent | Status | Tracking |
+|-------|--------|----------|
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | **Supported** | — |
+| [Codex CLI](https://github.com/openai/codex) | Planned | [#195](https://github.com/empathic/clash/issues/195) |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Planned | [#196](https://github.com/empathic/clash/issues/196) |
+| [OpenCode](https://github.com/opencode-ai/opencode) | Planned | [#197](https://github.com/empathic/clash/issues/197) |
+
+Currently, the Claude Code integration is the most mature. If you'd like to help bring Clash to another agent, contributions are welcome!
+
+---
 
 ## The Problem
 
-Claude Code's default permission model is all-or-nothing: either you allow a tool entirely or get prompted every time. You end up clicking "yes" hundreds of times a session, or giving blanket approval and hoping for the best.
+Coding agents operate with broad tool access — executing commands, editing files, and making network requests on your behalf. Their permission models tend to be all-or-nothing: either you allow a tool entirely or get prompted every time. You end up clicking "yes" hundreds of times a session, or giving blanket approval and hoping for the best.
 
 Clash gives you granular control. Write policy rules that decide what to **allow**, **deny**, or **ask** about — then let the agent work freely on safe operations while blocking dangerous ones. On Linux, rules can generate kernel-enforced filesystem sandboxes so even allowed commands can only touch the files you specify.
 
@@ -191,7 +205,7 @@ After installing, the status line appears automatically in your next Claude Code
 ## Requirements
 
 - **macOS** (Apple Silicon or Intel) or **Linux** (x86_64 or aarch64)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
+- A [supported coding agent](#agent-support) installed
 - Rust toolchain (for building from source)
 - Windows is **not** supported
 
@@ -264,13 +278,13 @@ clash init
 
 ### How it works
 
-Clash is a Claude Code **plugin**. The plugin registers hooks that intercept every tool call and evaluate it against your policy before Claude Code executes it.
+Clash integrates with coding agents via their plugin or extension system. For each supported agent, an integration layer intercepts tool calls and evaluates them against your policy before the agent executes them.
 
 ```
-Claude Code → hook (PreToolUse) → clash binary → policy evaluation → allow / deny / ask
+Agent → integration hook → clash binary → policy evaluation → allow / deny / ask
 ```
 
-The plugin lives in `clash-plugin/` and consists of hook definitions, skill definitions (slash commands), and the `clash` binary. In dev mode, `just dev` symlinks the freshly-built binary into `clash-plugin/bin/` and points Claude Code at the source directory. In install mode, `just install` stages a self-contained copy and registers it via the marketplace.
+**Claude Code** (current integration): The plugin lives in `clash-plugin/` and registers hooks that intercept every tool call. It consists of hook definitions, skill definitions (slash commands), and the `clash` binary. In dev mode, `just dev` symlinks the freshly-built binary into `clash-plugin/bin/` and points Claude Code at the source directory. In install mode, `just install` stages a self-contained copy and registers it via the marketplace.
 
 ### Recipes
 
