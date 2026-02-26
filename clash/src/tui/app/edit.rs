@@ -430,32 +430,51 @@ impl App {
     }
 
     /// Actually write all modified levels to disk (called after user confirms).
+    ///
+    /// Uses two-phase write: first write all changes to temp files, then
+    /// atomically rename them into place. On failure, temp files are cleaned up
+    /// and no policy files are left partially written.
     pub fn confirm_save(&mut self) {
-        let mut saved = 0;
-        for ls in &mut self.levels {
+        // Phase 1: ensure directories exist and write temp files.
+        let mut temp_files: Vec<(usize, std::path::PathBuf)> = Vec::new();
+
+        for (i, ls) in self.levels.iter().enumerate() {
             if !ls.is_modified() {
                 continue;
             }
             if let Some(parent) = ls.path.parent()
                 && let Err(e) = fs::create_dir_all(parent)
             {
-                self.status_message = Some(StatusMessage {
-                    text: format!("Failed to create directory: {e}"),
-                    is_error: true,
-                    created_at: std::time::Instant::now(),
-                });
+                Self::cleanup_temp_files(&temp_files);
+                self.set_status(&format!("Failed to create directory: {e}"), true);
                 return;
             }
-            if let Err(e) = fs::write(&ls.path, &ls.source) {
-                self.status_message = Some(StatusMessage {
-                    text: format!("Failed to write {}: {e}", ls.path.display()),
-                    is_error: true,
-                    created_at: std::time::Instant::now(),
-                });
+            let temp_path = ls.path.with_extension(format!("clash-save-{i}.tmp"));
+            if let Err(e) = fs::write(&temp_path, &ls.source) {
+                Self::cleanup_temp_files(&temp_files);
+                self.set_status(
+                    &format!("Failed to write temp file {}: {e}", temp_path.display()),
+                    true,
+                );
                 return;
             }
-            ls.original_source = ls.source.clone();
-            saved += 1;
+            temp_files.push((i, temp_path));
+        }
+
+        // Phase 2: rename all temp files into place (atomic on same filesystem).
+        for &(i, ref temp_path) in &temp_files {
+            let target = &self.levels[i].path;
+            if let Err(e) = fs::rename(temp_path, target) {
+                Self::cleanup_temp_files(&temp_files);
+                self.set_status(&format!("Failed to rename {}: {e}", target.display()), true);
+                return;
+            }
+        }
+
+        // Phase 3: mark all saved levels as clean.
+        let saved = temp_files.len();
+        for &(i, _) in &temp_files {
+            self.levels[i].original_source = self.levels[i].source.clone();
         }
 
         self.set_status(
@@ -465,6 +484,13 @@ impl App {
             ),
             false,
         );
+    }
+
+    /// Remove temp files left from a failed save attempt.
+    fn cleanup_temp_files(temp_files: &[(usize, std::path::PathBuf)]) {
+        for (_, path) in temp_files {
+            let _ = fs::remove_file(path);
+        }
     }
 
     /// Start quit flow — enters Confirm if unsaved, otherwise returns Quit.
