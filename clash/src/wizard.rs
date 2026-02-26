@@ -119,9 +119,23 @@ fn describe_pattern(p: &Pattern) -> String {
 
 fn describe_path_filter(pf: &PathFilter) -> String {
     match pf {
-        PathFilter::Subpath(PathExpr::Env(name), _) => format!("files under ${name}"),
-        PathFilter::Subpath(PathExpr::Static(s), _) => format!("files under {s}"),
-        PathFilter::Subpath(PathExpr::Join(parts), _) => {
+        PathFilter::Subpath(PathExpr::Env(name), worktree) => {
+            let wt = if *worktree {
+                " (and git worktree paths)"
+            } else {
+                ""
+            };
+            format!("files under ${name}{wt}")
+        }
+        PathFilter::Subpath(PathExpr::Static(s), worktree) => {
+            let wt = if *worktree {
+                " (and git worktree paths)"
+            } else {
+                ""
+            };
+            format!("files under {s}{wt}")
+        }
+        PathFilter::Subpath(PathExpr::Join(parts), worktree) => {
             let desc: Vec<String> = parts
                 .iter()
                 .map(|p| match p {
@@ -130,7 +144,12 @@ fn describe_path_filter(pf: &PathFilter) -> String {
                     PathExpr::Join(_) => "(join ...)".into(),
                 })
                 .collect();
-            format!("files under {}", desc.concat())
+            let wt = if *worktree {
+                " (and git worktree paths)"
+            } else {
+                ""
+            };
+            format!("files under {}{wt}", desc.concat())
         }
         PathFilter::Literal(s) => format!("\"{s}\""),
         PathFilter::Regex(r) => format!("paths matching /{r}/"),
@@ -219,6 +238,63 @@ mod tests {
             sandbox: None,
         };
         assert_eq!(describe_rule(&rule), "Allow reading files under $PWD");
+    }
+
+    #[test]
+    fn describe_fs_read_cwd_worktree() {
+        let rule = Rule {
+            effect: Effect::Allow,
+            matcher: CapMatcher::Fs(FsMatcher {
+                op: OpPattern::Single(FsOp::Read),
+                path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), true)),
+            }),
+            sandbox: None,
+        };
+        assert_eq!(
+            describe_rule(&rule),
+            "Allow reading files under $PWD (and git worktree paths)"
+        );
+    }
+
+    #[test]
+    fn describe_fs_write_static_worktree() {
+        let rule = Rule {
+            effect: Effect::Allow,
+            matcher: CapMatcher::Fs(FsMatcher {
+                op: OpPattern::Single(FsOp::Write),
+                path: Some(PathFilter::Subpath(
+                    PathExpr::Static("/tmp/project".into()),
+                    true,
+                )),
+            }),
+            sandbox: None,
+        };
+        assert_eq!(
+            describe_rule(&rule),
+            "Allow writing files under /tmp/project (and git worktree paths)"
+        );
+    }
+
+    #[test]
+    fn describe_fs_join_worktree() {
+        let rule = Rule {
+            effect: Effect::Allow,
+            matcher: CapMatcher::Fs(FsMatcher {
+                op: OpPattern::Single(FsOp::Read),
+                path: Some(PathFilter::Subpath(
+                    PathExpr::Join(vec![
+                        PathExpr::Env("HOME".into()),
+                        PathExpr::Static("/projects".into()),
+                    ]),
+                    true,
+                )),
+            }),
+            sandbox: None,
+        };
+        assert_eq!(
+            describe_rule(&rule),
+            "Allow reading files under $HOME/projects (and git worktree paths)"
+        );
     }
 
     #[test]

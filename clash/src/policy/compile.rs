@@ -200,7 +200,27 @@ fn inject_internals(
                         let compiled_matcher = compile_matcher(&rule.matcher, env)?;
                         let sandbox_key = match &rule.sandbox {
                             Some(SandboxRef::Named(n)) => Some(n.clone()),
-                            _ => None,
+                            Some(SandboxRef::Inline(inline_rules)) => {
+                                let key = format!("__internal_inline_sandbox_{name}__");
+                                let mut compiled_sandbox_rules = Vec::new();
+                                for r in inline_rules {
+                                    let sp = Specificity::from_matcher(&r.matcher);
+                                    let cm = compile_matcher(&r.matcher, env)?;
+                                    compiled_sandbox_rules.push(CompiledRule {
+                                        effect: r.effect,
+                                        matcher: cm,
+                                        source: r.clone(),
+                                        specificity: sp,
+                                        sandbox: None,
+                                        origin_policy: None,
+                                        origin_level: None,
+                                    });
+                                }
+                                tree.sandbox_policies
+                                    .insert(key.clone(), compiled_sandbox_rules);
+                                Some(key)
+                            }
+                            None => None,
                         };
                         let compiled = CompiledRule {
                             effect: rule.effect,
@@ -382,23 +402,6 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
         }
     }
 
-    // Sort by specificity (most specific first).
-    let sort_fn = |a: &CompiledRule, b: &CompiledRule| {
-        b.specificity
-            .partial_cmp(&a.specificity)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    };
-    exec_rules.sort_by(sort_fn);
-    fs_rules.sort_by(sort_fn);
-    net_rules.sort_by(sort_fn);
-    tool_rules.sort_by(sort_fn);
-
-    // Detect conflicts: same specificity, different effects.
-    detect_conflicts(&exec_rules, "exec")?;
-    detect_conflicts(&fs_rules, "fs")?;
-    detect_conflicts(&net_rules, "net")?;
-    detect_conflicts(&tool_rules, "tool")?;
-
     // Compile named sandbox policies: for each named sandbox reference,
     // compile the referenced policy's rules into a standalone rule set.
     // (Inline sandbox policies were already compiled above.)
@@ -430,6 +433,23 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
             sandbox_policies.insert(sandbox_name.clone(), sandbox_rules);
         }
     }
+
+    // Sort by specificity (most specific first).
+    let sort_fn = |a: &CompiledRule, b: &CompiledRule| {
+        b.specificity
+            .partial_cmp(&a.specificity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    };
+    exec_rules.sort_by(sort_fn);
+    fs_rules.sort_by(sort_fn);
+    net_rules.sort_by(sort_fn);
+    tool_rules.sort_by(sort_fn);
+
+    // Detect conflicts: same specificity, different effects.
+    detect_conflicts(&exec_rules, "exec")?;
+    detect_conflicts(&fs_rules, "fs")?;
+    detect_conflicts(&net_rules, "net")?;
+    detect_conflicts(&tool_rules, "tool")?;
 
     Ok(DecisionTree {
         default: default_effect,
