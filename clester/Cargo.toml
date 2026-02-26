@@ -2,6 +2,7 @@
 name = "clester"
 version = "0.3.4"
 edition = "2024"
+publish = false
 description = "End-to-end testing tool for clash - simulates Claude Code hook invocations"
 license.workspace = true
 repository.workspace = true
