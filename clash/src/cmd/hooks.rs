@@ -2,7 +2,7 @@ use anyhow::Result;
 use tracing::{Level, info, instrument};
 
 use crate::cli::HooksCmd;
-use crate::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput};
+use crate::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput, is_interactive_tool};
 use crate::permissions::check_permission;
 use crate::policy::Effect;
 use crate::session_policy;
@@ -171,18 +171,4 @@ fn is_ask_decision(output: &HookOutput) -> bool {
 
 fn is_deny_decision(output: &HookOutput) -> bool {
     matches!(extract_effect(output), Some(Effect::Deny))
-}
-
-/// Tools that require user interaction via Claude Code's native UI.
-/// Auto-approving these would skip the interaction, so non-deny
-/// decisions are converted to passthrough.
-///
-/// - `AskUserQuestion`: prompts the user for input
-/// - `EnterPlanMode`: requires user consent to enter plan mode
-/// - `ExitPlanMode`: requires user review/approval of the plan before implementation
-fn is_interactive_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "AskUserQuestion" | "EnterPlanMode" | "ExitPlanMode"
-    )
 }

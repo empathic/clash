@@ -37,6 +37,13 @@ steps:
     expect:
       decision: deny
 
+  - name: ExitPlanMode denied on permission-request too
+    hook: permission-request
+    tool_name: ExitPlanMode
+    tool_input: {}
+    expect:
+      decision: deny
+
   - name: Other tools still allowed
     hook: pre-tool-use
     tool_name: Task

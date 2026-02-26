@@ -41,6 +41,32 @@ steps:
     expect:
       no_decision: true
 
+  - name: EnterPlanMode passthrough on permission-request too
+    hook: permission-request
+    tool_name: EnterPlanMode
+    tool_input: {}
+    expect:
+      no_decision: true
+
+  - name: ExitPlanMode passthrough on permission-request too
+    hook: permission-request
+    tool_name: ExitPlanMode
+    tool_input: {}
+    expect:
+      no_decision: true
+
+  - name: AskUserQuestion passthrough on permission-request too
+    hook: permission-request
+    tool_name: AskUserQuestion
+    tool_input:
+      questions:
+        - question: "Which approach?"
+          options:
+            - label: "Option A"
+              description: "First option"
+    expect:
+      no_decision: true
+
   - name: Other tools still get allow decision
     hook: pre-tool-use
     tool_name: Task
