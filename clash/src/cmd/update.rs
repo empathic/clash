@@ -164,7 +164,7 @@ fn fetch_release(version: &str) -> Result<Release> {
 fn fetch_release_from(url: &str) -> Result<Release> {
     let resp = ureq::get(url)
         .set("Accept", "application/vnd.github+json")
-        .set("User-Agent", concat!("clash/", env!("CARGO_PKG_VERSION")))
+        .set("User-Agent", crate::version::user_agent())
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(404, _) => anyhow::anyhow!("release not found"),
@@ -225,7 +225,7 @@ const MAX_DOWNLOAD_BYTES: u64 = 500 * 1024 * 1024;
 
 fn download_bytes(url: &str) -> Result<Vec<u8>> {
     let resp = ureq::get(url)
-        .set("User-Agent", concat!("clash/", env!("CARGO_PKG_VERSION")))
+        .set("User-Agent", crate::version::user_agent())
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(code, resp) => {
@@ -245,7 +245,7 @@ fn download_bytes(url: &str) -> Result<Vec<u8>> {
 
 fn download_text(url: &str) -> Result<String> {
     let resp = ureq::get(url)
-        .set("User-Agent", concat!("clash/", env!("CARGO_PKG_VERSION")))
+        .set("User-Agent", crate::version::user_agent())
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(code, resp) => {

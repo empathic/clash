@@ -48,7 +48,7 @@ pub fn run(
     let system_info = [
         ("OS", std::env::consts::OS),
         ("Arch", std::env::consts::ARCH),
-        ("Version", env!("CARGO_PKG_VERSION")),
+        ("Version", crate::version::version_long()),
     ];
 
     const HOTLINE_PROXY_URL: &str = "https://clash-hotline.emv.workers.dev/";
