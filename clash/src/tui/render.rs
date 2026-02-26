@@ -11,7 +11,8 @@ use crate::policy::ast::SandboxRef;
 use crate::wizard::describe_rule;
 
 use super::app::{
-    AddRuleStep, App, ConfirmAction, DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS, Mode,
+    AddRuleStep, App, ConfirmAction, DOMAIN_NAMES, DiffLine, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS,
+    Mode,
 };
 use super::style as tui_style;
 use super::tree::{self, FlatRow, TreeNode, TreeNodeKind};
@@ -56,6 +57,9 @@ pub fn render(f: &mut Frame, app: &App) {
     }
     if matches!(app.mode, Mode::AddRule(_)) {
         render_add_rule_overlay(f, app, f.area());
+    }
+    if matches!(app.mode, Mode::ConfirmSave(_)) {
+        render_save_diff_overlay(f, app, f.area());
     }
 }
 
@@ -770,6 +774,74 @@ fn render_confirm_overlay(f: &mut Frame, area: Rect, action: &ConfirmAction) {
     f.render_widget(block, overlay);
 
     let para = Paragraph::new(message).wrap(Wrap { trim: false });
+    f.render_widget(para, inner);
+}
+
+// ---------------------------------------------------------------------------
+// Save diff overlay
+// ---------------------------------------------------------------------------
+
+fn render_save_diff_overlay(f: &mut Frame, app: &App, area: Rect) {
+    let Mode::ConfirmSave(diff) = &app.mode else {
+        return;
+    };
+
+    let width = 64u16.min(area.width.saturating_sub(4));
+    let height = (area.height - 4).max(10).min(area.height.saturating_sub(2));
+    let x = (area.width.saturating_sub(width)) / 2;
+    let y = (area.height.saturating_sub(height)) / 2;
+    let overlay = Rect::new(x, y, width, height);
+
+    f.render_widget(Clear, overlay);
+
+    let block = Block::default()
+        .title(" Review Changes ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    let inner = block.inner(overlay);
+    f.render_widget(block, overlay);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for hunk in &diff.hunks {
+        lines.push(Line::from(Span::styled(
+            format!("  {} policy:", hunk.level),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for dl in &hunk.lines {
+            let (prefix, text, style) = match dl {
+                DiffLine::Context(t) => ("  ", t.as_str(), tui_style::DIM),
+                DiffLine::Added(t) => ("+ ", t.as_str(), Style::default().fg(Color::Green)),
+                DiffLine::Removed(t) => ("- ", t.as_str(), Style::default().fg(Color::Red)),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {prefix}"), style),
+                Span::styled(text.to_string(), style),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+    lines.push(Line::from(vec![
+        Span::styled("  Save? ", tui_style::DIM),
+        Span::styled("y", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(" confirm  ", tui_style::DIM),
+        Span::styled("n", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled("/", tui_style::DIM),
+        Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(" cancel  ", tui_style::DIM),
+        Span::styled("j/k", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(" scroll", tui_style::DIM),
+    ]));
+
+    let total = lines.len();
+    let visible = inner.height as usize;
+    let max_scroll = total.saturating_sub(visible);
+    let scroll = diff.scroll.min(max_scroll);
+
+    let para = Paragraph::new(lines)
+        .scroll((scroll as u16, 0))
+        .wrap(Wrap { trim: false });
     f.render_widget(para, inner);
 }
 
@@ -1546,6 +1618,25 @@ mod tests {
     fn snapshot_empty_policy() {
         let app = make_app("");
         let output = render_to_string(&app, 80, 24);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_save_diff_overlay() {
+        let mut app = make_app(REALISTIC_POLICY);
+        // Make a change so save_all produces a diff
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = super::super::editor::TextInput::new("cargo");
+        }
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.save_all();
+        assert!(matches!(app.mode, Mode::ConfirmSave(_)));
+        let output = render_to_string(&app, 80, 30);
         insta::assert_snapshot!(output);
     }
 

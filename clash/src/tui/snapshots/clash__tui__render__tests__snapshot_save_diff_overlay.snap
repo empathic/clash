@@ -1,0 +1,34 @@
+---
+source: clash/src/tui/render.rs
+expression: output
+---
+ clash tui  user [modified]  16/27                                       ? help 
+│ ▼ "rm"                                                                       │
+│   ▼ "-┌ Review Changes ──────────────────────────────────────────────┐       │
+│     ▼ │  user policy:                                                │       │
+│       │    (policy "main"                                            │       │
+│       │      (allow (exec "git" *))                                  │       │
+│ ▼ "sud│      (deny (exec "rm" "-rf" *))                              │       │
+│   ▼ * │      (ask (exec "sudo" *))                                   │       │
+│     ▼ │      (allow (fs read (subpath (env PWD))))                   │       │
+│       │      (deny (net "evil.com"))                                 │       │
+│ ▼ "car│      (ask (tool "Bash"))                                     │       │
+│   ▼ Ex│  +   (allow (exec "cargo"))                                  │       │
+│       │    )                                                         │       │
+│ ▼ *   │                                                              │       │
+│ │ ▼ (s│  Save? y confirm  n/Esc cancel  j/k scroll                   │       │
+│ │   ▼ │                                                              │       │
+│ │     │                                                              │       │
+│ │     │                                                              │       │
+│ │ ▼ "e│                                                              │       │
+│ │   ▼ │                                                              │       │
+│ │     │                                                              │       │
+│   ▼ "B│                                                              │       │
+│     ▼ │                                                              │       │
+│       │                                                              │       │
+┌───────│                                                              │───────┐
+│AUTO AL│                                                              │       │
+│Source:│                                                              │       │
+│Rule: (└──────────────────────────────────────────────────────────────┘       │
+│"cargo" > Exec > allow                                                        │
+j/k move  Tab effect  e edit  d delete  [/] all  a add  / search  w save  ? help
