@@ -22,7 +22,14 @@ pub const CLASH_DISABLE_ENV: &str = "CLASH_DISABLE";
 pub fn is_disabled() -> bool {
     std::env::var(CLASH_DISABLE_ENV)
         .ok()
-        .is_some_and(|v| !v.is_empty() && v != "0" && v != "false")
+        .is_some_and(|v| is_truthy_disable_value(&v))
+}
+
+/// Returns `true` when `value` should be interpreted as "disabled".
+///
+/// A non-empty string that is not `"0"` or `"false"` means disabled.
+fn is_truthy_disable_value(value: &str) -> bool {
+    !value.is_empty() && value != "0" && value != "false"
 }
 
 /// Policy level — where a policy file lives in the precedence hierarchy.
@@ -1037,70 +1044,28 @@ mod test {
     }
 
     // --- is_disabled tests ---
+    //
+    // These test `is_truthy_disable_value` directly to avoid env var races.
+    // `env::set_var` is process-wide and Rust runs tests on parallel threads,
+    // so multiple tests mutating the same env var is inherently racy.
 
-    /// Helper that temporarily sets/unsets CLASH_DISABLE for one test.
-    /// Tests using this MUST NOT run in parallel (cargo test runs in parallel by
-    /// default but each test gets its own thread — `env::set_var` is process-wide).
-    /// We use `serial_test` style by restoring the original value.
-    fn with_clash_disable<F: FnOnce()>(value: Option<&str>, f: F) {
-        let prev = std::env::var(CLASH_DISABLE_ENV).ok();
-        match value {
-            Some(v) => unsafe { std::env::set_var(CLASH_DISABLE_ENV, v) },
-            None => unsafe { std::env::remove_var(CLASH_DISABLE_ENV) },
-        }
-        f();
-        match prev {
-            Some(v) => unsafe { std::env::set_var(CLASH_DISABLE_ENV, v) },
-            None => unsafe { std::env::remove_var(CLASH_DISABLE_ENV) },
-        }
+    #[test]
+    fn is_truthy_disable_value_not_set() {
+        // Empty string = not disabled (matches env var missing or empty).
+        assert!(!is_truthy_disable_value(""));
     }
 
     #[test]
-    fn is_disabled_unset() {
-        with_clash_disable(None, || {
-            assert!(!is_disabled());
-        });
+    fn is_truthy_disable_value_falsy() {
+        assert!(!is_truthy_disable_value("0"));
+        assert!(!is_truthy_disable_value("false"));
     }
 
     #[test]
-    fn is_disabled_empty_string() {
-        with_clash_disable(Some(""), || {
-            assert!(!is_disabled());
-        });
-    }
-
-    #[test]
-    fn is_disabled_zero() {
-        with_clash_disable(Some("0"), || {
-            assert!(!is_disabled());
-        });
-    }
-
-    #[test]
-    fn is_disabled_false_string() {
-        with_clash_disable(Some("false"), || {
-            assert!(!is_disabled());
-        });
-    }
-
-    #[test]
-    fn is_disabled_one() {
-        with_clash_disable(Some("1"), || {
-            assert!(is_disabled());
-        });
-    }
-
-    #[test]
-    fn is_disabled_true_string() {
-        with_clash_disable(Some("true"), || {
-            assert!(is_disabled());
-        });
-    }
-
-    #[test]
-    fn is_disabled_arbitrary_value() {
-        with_clash_disable(Some("yes"), || {
-            assert!(is_disabled());
-        });
+    fn is_truthy_disable_value_truthy() {
+        assert!(is_truthy_disable_value("1"));
+        assert!(is_truthy_disable_value("true"));
+        assert!(is_truthy_disable_value("yes"));
+        assert!(is_truthy_disable_value("anything"));
     }
 }
