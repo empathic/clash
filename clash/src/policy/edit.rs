@@ -129,6 +129,12 @@ pub fn normalize(source: &str) -> Result<String> {
 }
 
 /// Serialize `Vec<TopLevel>` back to source text.
+///
+/// Also available as `serialize_ast` for external callers.
+pub fn serialize_ast(items: &[TopLevel]) -> String {
+    serialize_top_levels(items)
+}
+
 fn serialize_top_levels(items: &[TopLevel]) -> String {
     items
         .iter()

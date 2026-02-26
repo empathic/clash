@@ -43,6 +43,23 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     println!("{}", style::banner());
     println!();
 
+    // Policy syntax version
+    println!(
+        "{} {}",
+        style::header("Policy version"),
+        style::dim(&format!("(syntax v{})", tree.version))
+    );
+    if tree.version < crate::policy::version::CURRENT_VERSION {
+        println!(
+            "  {} Policy uses version {}, latest is {}. Run {} to upgrade.",
+            style::yellow_bold("!"),
+            tree.version,
+            crate::policy::version::CURRENT_VERSION,
+            style::bold("clash policy upgrade")
+        );
+    }
+    println!();
+
     let loaded = settings.loaded_policies();
     let multi_level = loaded.len() > 1;
 

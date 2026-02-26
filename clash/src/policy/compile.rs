@@ -102,6 +102,7 @@ pub fn compile_multi_level_with_internals(
     // Sort in precedence order (highest first).
     level_trees.sort_by(|a, b| b.0.cmp(&a.0));
 
+    let version = level_trees[0].1.version;
     let default_effect = level_trees[0].1.default;
     let policy_name = level_trees[0].1.policy_name.clone();
 
@@ -151,6 +152,7 @@ pub fn compile_multi_level_with_internals(
     tool_rules.sort_by(sort_fn);
 
     let mut merged = DecisionTree {
+        version,
         default: default_effect,
         policy_name,
         exec_rules,
@@ -295,6 +297,10 @@ pub fn compile_policy_with_internals(
 
 /// Compile a parsed AST into a decision tree.
 fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<DecisionTree> {
+    // Validate the declared policy syntax version.
+    let version = super::version::extract_version(top_levels)?;
+    super::version::validate_version(version)?;
+
     // Find the default declaration.
     let default_decl = top_levels
         .iter()
@@ -432,6 +438,7 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
     }
 
     Ok(DecisionTree {
+        version,
         default: default_effect,
         policy_name: active_policy.to_string(),
         exec_rules,

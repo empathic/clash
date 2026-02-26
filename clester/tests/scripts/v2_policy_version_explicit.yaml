@@ -1,0 +1,49 @@
+meta:
+  name: v2 policy — explicit version declaration
+  description: >
+    Test that policies with an explicit (version 1) declaration compile
+    and evaluate correctly, and that the version appears in policy show.
+
+clash:
+  policy_sexpr: |
+    (version 1)
+    (default deny "main")
+    (policy "main"
+      (allow (exec "git" *))
+      (allow (fs read)))
+
+steps:
+  - name: git allowed with explicit version
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: read allowed with explicit version
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/test.txt
+    expect:
+      decision: allow
+
+  - name: curl denied with explicit version
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: curl https://example.com
+    expect:
+      decision: deny
+
+  - name: validate passes with explicit version
+    command: policy validate
+    expect:
+      exit_code: 0
+
+  - name: policy show includes version
+    command: policy show
+    expect:
+      exit_code: 0
+      stdout_contains: "version"

@@ -391,6 +391,42 @@ clash policy validate --file ~/.clash/policy.sexpr
 clash policy validate --json
 ```
 
+### clash policy upgrade
+
+Upgrade policy syntax to the latest version. Applies auto-fixes for deprecated features and adds or updates the `(version N)` declaration.
+
+```
+clash policy upgrade [OPTIONS]
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Print upgraded policy without writing to disk |
+| `--scope <LEVEL>` | Policy level to upgrade: `user` or `project` |
+
+When no `--scope` is given, upgrades all active policy levels. The command:
+
+1. Parses the existing policy file
+2. Checks for deprecated features based on the declared version
+3. Applies auto-fix migrations where available
+4. Adds or updates the `(version N)` declaration to the latest version
+5. Writes the upgraded policy back to disk (unless `--dry-run`)
+
+**Examples:**
+
+```bash
+# Preview what would change
+clash policy upgrade --dry-run
+
+# Upgrade user-level policy
+clash policy upgrade --scope user
+
+# Upgrade project-level policy
+clash policy upgrade --scope project
+```
+
 ---
 
 ## clash sandbox

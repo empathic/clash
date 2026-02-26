@@ -52,6 +52,7 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Validate { file, json } => handle_validate(file, json),
         PolicyCmd::Show { json } => handle_show(json),
+        PolicyCmd::Upgrade { dry_run, scope } => handle_upgrade(dry_run, scope.as_deref()),
     }
 }
 
@@ -771,6 +772,39 @@ fn validate_single_file(path: &std::path::Path, json: bool) -> Result<()> {
             std::process::exit(1);
         }
     }
+}
+
+/// Handle `clash policy upgrade` — upgrade policy syntax to latest version.
+fn handle_upgrade(dry_run: bool, scope: Option<&str>) -> Result<()> {
+    let level = resolve_scope(scope)?;
+    let (path, source) = load_policy_source(Some(level))?;
+
+    let (upgraded, changes) = crate::policy::version::upgrade_policy(&source)?;
+
+    if changes.is_empty() {
+        println!(
+            "{} Policy is already at version {} (no changes needed).",
+            style::green_bold("✓"),
+            crate::policy::version::CURRENT_VERSION
+        );
+        return Ok(());
+    }
+
+    if dry_run {
+        print!("{upgraded}");
+    } else {
+        write_policy(&path, &upgraded)?;
+        for change in &changes {
+            println!("{} {change}", style::green_bold("✓"));
+        }
+        println!(
+            "{} Updated {} policy at {}",
+            style::shield(),
+            style::cyan(&level.to_string()),
+            style::dim(&path.display().to_string())
+        );
+    }
+    Ok(())
 }
 
 /// Extract a help hint from an anyhow error chain.

@@ -31,6 +31,7 @@ S-expression source text
     ▼
 Vec<TopLevel> (AST)             ← parse.rs
     │
+    ├── Version { number }
     ├── Default { effect, policy }
     └── Policy { name, body: [Rule | Include] }
     │
@@ -48,15 +49,17 @@ DecisionTree (IR)               ← compile.rs
 ### Compilation Steps
 
 1. **Parse** — s-expression text → AST (`Vec<TopLevel>`)
-2. **Find default** — extract the `(default effect "name")` declaration
-3. **Build policy map** — index all `(policy "name" ...)` blocks by name
-4. **Flatten** — recursively resolve `(include ...)` into a flat rule list
-5. **Validate sandbox references** — verify each named `:sandbox "name"` points to an existing policy; compile inline `:sandbox (rule ...)` rules immediately
-6. **Group** — split rules by capability domain (exec/fs/net)
-7. **Compile matchers** — convert AST patterns to IR with pre-compiled regexes, resolve `(env NAME)` references
-8. **Sort by specificity** — most specific rules first within each domain
-9. **Detect conflicts** — reject rules with equal specificity but different effects that could match the same request
-10. **Compile sandbox policies** — for each named sandbox reference, compile the referenced policy's rules into standalone rule sets (inline sandbox rules are compiled in step 5)
+2. **Extract version** — read the `(version N)` declaration from the AST (default: 1 if absent)
+3. **Validate version** — verify the declared version is a known version (≤ `CURRENT_VERSION`); reject unknown future versions. Future: check for deprecated features based on the declared version.
+4. **Find default** — extract the `(default effect "name")` declaration
+5. **Build policy map** — index all `(policy "name" ...)` blocks by name
+6. **Flatten** — recursively resolve `(include ...)` into a flat rule list
+7. **Validate sandbox references** — verify each named `:sandbox "name"` points to an existing policy; compile inline `:sandbox (rule ...)` rules immediately
+8. **Group** — split rules by capability domain (exec/fs/net)
+9. **Compile matchers** — convert AST patterns to IR with pre-compiled regexes, resolve `(env NAME)` references
+10. **Sort by specificity** — most specific rules first within each domain
+11. **Detect conflicts** — reject rules with equal specificity but different effects that could match the same request
+12. **Compile sandbox policies** — for each named sandbox reference, compile the referenced policy's rules into standalone rule sets (inline sandbox rules are compiled in step 7)
 
 ---
 

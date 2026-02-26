@@ -30,6 +30,7 @@ Policies use s-expression syntax with three effects and four capability domains:
 ### Policy File Structure
 
 ```
+(version 1)                      ; policy language version (optional, default: 1)
 (default deny "main")           ; default effect + entry policy name
 
 (policy "helpers"

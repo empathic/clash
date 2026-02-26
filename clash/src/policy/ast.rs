@@ -9,6 +9,9 @@ use crate::policy::Effect;
 /// A top-level declaration in a policy file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TopLevel {
+    /// `(version 1)` — declares the policy syntax version.
+    /// Absent = implicit version 1 (backwards compatibility).
+    Version(u32),
     /// `(default deny "main")` — sets the default effect and active policy name.
     Default { effect: Effect, policy: String },
     /// `(policy name ...)` — a named policy containing rules and includes.
@@ -172,6 +175,7 @@ pub enum PathExpr {
 impl fmt::Display for TopLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            TopLevel::Version(v) => write!(f, "(version {v})"),
             TopLevel::Default { effect, policy } => {
                 write!(f, "(default {effect} \"{policy}\")")
             }

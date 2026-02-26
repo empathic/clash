@@ -19,6 +19,8 @@ use super::specificity::Specificity;
 /// A compiled policy decision tree, ready for evaluation.
 #[derive(Debug, Clone)]
 pub struct DecisionTree {
+    /// The declared policy syntax version (1 if absent).
+    pub version: u32,
     /// The default effect when no rule matches.
     pub default: Effect,
     /// The name of the active policy.
