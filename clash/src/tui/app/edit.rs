@@ -716,6 +716,17 @@ impl App {
         }
     }
 
+    /// Go back to the previous step in the add-rule form.
+    pub fn retreat_add_rule(&mut self) {
+        let Mode::AddRule(form) = &mut self.mode else {
+            return;
+        };
+        form.error = None;
+        if let Some(prev) = prev_add_rule_step(form.step, form.domain_index) {
+            form.step = prev;
+        }
+    }
+
     /// Complete the add-rule form: construct AST directly, validate, add.
     fn complete_add_rule(&mut self) {
         let Mode::AddRule(form) = &self.mode else {
@@ -916,6 +927,26 @@ pub(super) fn effect_to_display_index(effect: Effect) -> usize {
         Effect::Ask => 0,
         Effect::Allow => 1,
         Effect::Deny => 2,
+    }
+}
+
+/// Compute the previous step in the add-rule flow, or `None` if already at the first step.
+pub(crate) fn prev_add_rule_step(step: AddRuleStep, domain_index: usize) -> Option<AddRuleStep> {
+    match step {
+        AddRuleStep::EnterBinary => None,
+        AddRuleStep::EnterArgs => Some(AddRuleStep::EnterBinary),
+        AddRuleStep::SelectDomain => Some(AddRuleStep::EnterArgs),
+        AddRuleStep::SelectFsOp => Some(AddRuleStep::SelectDomain),
+        AddRuleStep::EnterPath => Some(AddRuleStep::SelectFsOp),
+        AddRuleStep::EnterNetDomain => Some(AddRuleStep::SelectDomain),
+        AddRuleStep::EnterToolName => Some(AddRuleStep::SelectDomain),
+        AddRuleStep::SelectEffect => Some(match domain_index {
+            0 => AddRuleStep::SelectDomain,
+            1 => AddRuleStep::EnterPath,
+            2 => AddRuleStep::EnterNetDomain,
+            _ => AddRuleStep::EnterToolName,
+        }),
+        AddRuleStep::SelectLevel => Some(AddRuleStep::SelectEffect),
     }
 }
 
