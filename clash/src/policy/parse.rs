@@ -220,11 +220,20 @@ fn parse_net_matcher(args: &[SExpr]) -> Result<NetMatcher> {
     if args.is_empty() {
         return Ok(NetMatcher {
             domain: Pattern::Any,
+            path: None,
         });
     }
-    ensure!(args.len() == 1, "(net) expects at most 1 argument");
+    ensure!(
+        args.len() <= 2,
+        "(net) expects at most 2 arguments (domain and optional path filter)"
+    );
     let domain = parse_pattern(&args[0])?;
-    Ok(NetMatcher { domain })
+    let path = if args.len() > 1 {
+        Some(parse_path_filter(&args[1])?)
+    } else {
+        None
+    };
+    Ok(NetMatcher { domain, path })
 }
 
 fn parse_tool_matcher(args: &[SExpr]) -> Result<ToolMatcher> {
@@ -1002,6 +1011,122 @@ mod tests {
     #[test]
     fn round_trip_worktree() {
         let source = r#"(policy "p" (allow (fs write (subpath :worktree (env PWD)))))"#;
+        let ast1 = parse(source).unwrap();
+        let printed = ast1[0].to_string();
+        let ast2 = parse(&printed).unwrap();
+        assert_eq!(ast1, ast2, "round-trip failed:\n{printed}");
+    }
+
+    #[test]
+    fn parse_net_with_subpath() {
+        let ast =
+            parse(r#"(policy "p" (allow (net "github.com" (subpath "/owner/repo"))))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Net(m) => {
+                assert_eq!(m.domain, Pattern::Literal("github.com".into()));
+                match &m.path {
+                    Some(PathFilter::Subpath(PathExpr::Static(s), false)) => {
+                        assert_eq!(s, "/owner/repo");
+                    }
+                    other => panic!("expected Subpath, got {other:?}"),
+                }
+            }
+            _ => panic!("expected Net"),
+        }
+    }
+
+    #[test]
+    fn parse_net_with_regex_path() {
+        let ast = parse(r#"(policy "p" (deny (net "api.github.com" /\/admin\/.*/)))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Net(m) => {
+                assert_eq!(m.domain, Pattern::Literal("api.github.com".into()));
+                match &m.path {
+                    Some(PathFilter::Regex(r)) => {
+                        assert_eq!(r, r"\/admin\/.*");
+                    }
+                    other => panic!("expected Regex path, got {other:?}"),
+                }
+            }
+            _ => panic!("expected Net"),
+        }
+    }
+
+    #[test]
+    fn parse_net_with_literal_path() {
+        let ast = parse(r#"(policy "p" (allow (net "github.com" "/owner/repo/pulls")))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Net(m) => {
+                assert_eq!(m.domain, Pattern::Literal("github.com".into()));
+                match &m.path {
+                    Some(PathFilter::Literal(s)) => {
+                        assert_eq!(s, "/owner/repo/pulls");
+                    }
+                    other => panic!("expected Literal path, got {other:?}"),
+                }
+            }
+            _ => panic!("expected Net"),
+        }
+    }
+
+    #[test]
+    fn parse_net_without_path_unchanged() {
+        let ast = parse(r#"(policy "p" (allow (net "github.com")))"#).unwrap();
+        let body = match &ast[0] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let rule = match &body[0] {
+            PolicyItem::Rule(r) => r,
+            _ => panic!(),
+        };
+        match &rule.matcher {
+            CapMatcher::Net(m) => {
+                assert_eq!(m.domain, Pattern::Literal("github.com".into()));
+                assert!(m.path.is_none());
+            }
+            _ => panic!("expected Net"),
+        }
+    }
+
+    #[test]
+    fn parse_net_too_many_args() {
+        let err =
+            parse(r#"(policy "p" (allow (net "github.com" (subpath "/a") extra)))"#).unwrap_err();
+        assert!(
+            err.to_string().contains("at most 2 arguments"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn round_trip_net_with_path() {
+        let source = r#"(policy "p" (allow (net "github.com" (subpath "/owner/repo"))))"#;
         let ast1 = parse(source).unwrap();
         let printed = ast1[0].to_string();
         let ast2 = parse(&printed).unwrap();

@@ -62,7 +62,7 @@ exec_matcher    = "(" "exec" pattern? args_spec ")"
 args_spec       = pattern*                         ; positional (default)
                 | ":has" pattern+                  ; orderless set-membership
 fs_matcher      = "(" "fs" op_pattern? path_filter? ")"
-net_matcher     = "(" "net" pattern? ")"
+net_matcher     = "(" "net" pattern? path_filter? ")"
 tool_matcher    = "(" "tool" pattern? ")"
 ```
 
@@ -155,13 +155,16 @@ Matches filesystem operations. Optional operation filter and path filter.
 
 ### Net Matcher
 
-Matches network access by domain.
+Matches network access by domain, optionally scoped to URL paths.
 
 ```
-(net)                          ; match any network access
-(net "github.com")             ; match github.com exactly
-(net /.*\.example\.com/)       ; match example.com subdomains
+(net)                                        ; match any network access
+(net "github.com")                           ; match github.com exactly
+(net "github.com" (subpath "/owner/repo"))   ; match github.com under /owner/repo
+(net /.*\.example\.com/ (regex "/api/.*"))   ; match example.com subdomains under /api/
 ```
+
+Path filters on net rules use the same syntax as filesystem path filters (`subpath`, `literal`, `regex`, `or`, `not`) but match against the URL path of the request rather than a filesystem path. Path filtering is enforced at the policy evaluation layer; the kernel sandbox proxy only performs domain-level filtering.
 
 ### Tool Matcher
 

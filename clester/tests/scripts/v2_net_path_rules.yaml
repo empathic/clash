@@ -1,0 +1,85 @@
+meta:
+  name: v2 sexpr policy — network rules with path filtering
+  description: Test net capability rules with subpath, regex, and literal path filters
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (net "github.com" (subpath "/owner/repo")))
+      (allow (net "api.example.com" /^\/v[0-9]+\//))
+      (allow (net "docs.example.com" "/exact/page"))
+      (deny  (net "evil.com")))
+
+steps:
+  - name: webfetch under allowed subpath
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://github.com/owner/repo/issues/42"
+    expect:
+      decision: allow
+
+  - name: webfetch exact allowed subpath
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://github.com/owner/repo"
+    expect:
+      decision: allow
+
+  - name: webfetch outside allowed subpath denied by default
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://github.com/other/repo"
+    expect:
+      decision: deny
+
+  - name: webfetch github root denied by default
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://github.com/"
+    expect:
+      decision: deny
+
+  - name: webfetch regex path match
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://api.example.com/v2/users"
+    expect:
+      decision: allow
+
+  - name: webfetch regex path no match
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://api.example.com/old/users"
+    expect:
+      decision: deny
+
+  - name: webfetch literal path match
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://docs.example.com/exact/page"
+    expect:
+      decision: allow
+
+  - name: webfetch literal path no match
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://docs.example.com/other/page"
+    expect:
+      decision: deny
+
+  - name: websearch does not match path-scoped rules
+    hook: pre-tool-use
+    tool_name: WebSearch
+    tool_input:
+      query: "github owner repo"
+    expect:
+      decision: deny

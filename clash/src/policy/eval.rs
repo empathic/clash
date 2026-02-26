@@ -14,10 +14,21 @@ use crate::policy::ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
 /// A capability-level query derived from a tool invocation.
 #[derive(Debug)]
 pub enum CapQuery {
-    Exec { bin: String, args: Vec<String> },
-    Fs { op: FsOp, path: String },
-    Net { domain: String },
-    Tool { name: String },
+    Exec {
+        bin: String,
+        args: Vec<String>,
+    },
+    Fs {
+        op: FsOp,
+        path: String,
+    },
+    Net {
+        domain: String,
+        path: Option<String>,
+    },
+    Tool {
+        name: String,
+    },
 }
 
 /// Map a tool invocation to capability queries.
@@ -71,13 +82,15 @@ pub fn tool_to_queries(
         }
         "WebFetch" => {
             let url = tool_input.get("url").and_then(|v| v.as_str()).unwrap_or("");
-            let domain = extract_domain(url);
-            vec![CapQuery::Net { domain }]
+            let (domain, path) = extract_domain_and_path(url);
+            vec![CapQuery::Net { domain, path }]
         }
         "WebSearch" => {
             // WebSearch can hit any domain — match as wildcard.
+            // No URL path available for search queries.
             vec![CapQuery::Net {
                 domain: "*".to_string(),
+                path: None,
             }]
         }
         "Glob" | "Grep" => {
@@ -120,18 +133,35 @@ pub(crate) fn resolve_path(path: &str, cwd: &str) -> String {
 ///
 /// Simple extraction: strip scheme, take host portion before first `/` or `:`.
 pub(crate) fn extract_domain(url: &str) -> String {
+    let (domain, _) = extract_domain_and_path(url);
+    domain
+}
+
+/// Extract the domain and URL path from a URL string.
+///
+/// Returns `(domain, Some(path))` where path includes the leading `/`.
+/// If no path is present, returns `(domain, None)`.
+pub(crate) fn extract_domain_and_path(url: &str) -> (String, Option<String>) {
     let without_scheme = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
         .unwrap_or(url);
-    without_scheme
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_string()
+    let (host_port, path) = match without_scheme.find('/') {
+        Some(idx) => (&without_scheme[..idx], Some(&without_scheme[idx..])),
+        None => (without_scheme, None),
+    };
+    let domain = host_port.split(':').next().unwrap_or("").to_string();
+    // Strip query string and fragment from path.
+    let clean_path = path.map(|p| {
+        p.split('?')
+            .next()
+            .unwrap_or(p)
+            .split('#')
+            .next()
+            .unwrap_or(p)
+            .to_string()
+    });
+    (domain, clean_path)
 }
 
 /// Check whether a token looks like a shell environment variable assignment (`KEY=value`).
@@ -324,7 +354,9 @@ impl DecisionTree {
                         m.matches(bin, &arg_refs)
                     }
                     (CompiledMatcher::Fs(m), CapQuery::Fs { op, path }) => m.matches(*op, path),
-                    (CompiledMatcher::Net(m), CapQuery::Net { domain }) => m.matches(domain),
+                    (CompiledMatcher::Net(m), CapQuery::Net { domain, path }) => {
+                        m.matches(domain, path.as_deref())
+                    }
                     (CompiledMatcher::Tool(m), CapQuery::Tool { name }) => m.matches(name),
                     _ => false,
                 };
@@ -1498,5 +1530,225 @@ mod tests {
             super::transparent_prefix_skip("timeout", &["-s", "KILL", "30s", "cargo"]),
             Some(3)
         );
+    }
+
+    // ── Net path filter tests ───────────────────────────────────────────
+
+    #[test]
+    fn extract_domain_and_path_basic() {
+        let (domain, path) = super::extract_domain_and_path("https://github.com/owner/repo");
+        assert_eq!(domain, "github.com");
+        assert_eq!(path.as_deref(), Some("/owner/repo"));
+    }
+
+    #[test]
+    fn extract_domain_and_path_no_path() {
+        let (domain, path) = super::extract_domain_and_path("https://github.com");
+        assert_eq!(domain, "github.com");
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn extract_domain_and_path_with_port() {
+        let (domain, path) = super::extract_domain_and_path("https://localhost:8080/api/v1");
+        assert_eq!(domain, "localhost");
+        assert_eq!(path.as_deref(), Some("/api/v1"));
+    }
+
+    #[test]
+    fn extract_domain_and_path_strips_query() {
+        let (domain, path) =
+            super::extract_domain_and_path("https://github.com/owner/repo?tab=issues");
+        assert_eq!(domain, "github.com");
+        assert_eq!(path.as_deref(), Some("/owner/repo"));
+    }
+
+    #[test]
+    fn extract_domain_and_path_strips_fragment() {
+        let (domain, path) = super::extract_domain_and_path("https://github.com/owner/repo#readme");
+        assert_eq!(domain, "github.com");
+        assert_eq!(path.as_deref(), Some("/owner/repo"));
+    }
+
+    #[test]
+    fn extract_domain_and_path_root_path() {
+        let (domain, path) = super::extract_domain_and_path("https://github.com/");
+        assert_eq!(domain, "github.com");
+        assert_eq!(path.as_deref(), Some("/"));
+    }
+
+    #[test]
+    fn webfetch_with_net_path_subpath_allowed() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (net "github.com" (subpath "/owner/repo"))))
+"#,
+        );
+
+        // URL under /owner/repo → allow
+        let decision = tree.evaluate(
+            "WebFetch",
+            &json!({"url": "https://github.com/owner/repo/issues"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn webfetch_with_net_path_subpath_exact_match() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (net "github.com" (subpath "/owner/repo"))))
+"#,
+        );
+
+        // URL exactly at /owner/repo → allow
+        let decision = tree.evaluate(
+            "WebFetch",
+            &json!({"url": "https://github.com/owner/repo"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn webfetch_with_net_path_subpath_denied_different_path() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (net "github.com" (subpath "/owner/repo"))))
+"#,
+        );
+
+        // URL under different repo → deny (falls to default)
+        let decision = tree.evaluate(
+            "WebFetch",
+            &json!({"url": "https://github.com/other/project"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn webfetch_with_net_path_subpath_denied_no_path() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (net "github.com" (subpath "/owner/repo"))))
+"#,
+        );
+
+        // URL with no path → deny (path filter requires a path)
+        let decision = tree.evaluate(
+            "WebFetch",
+            &json!({"url": "https://github.com"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn webfetch_net_path_regex() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (net "api.github.com" /\/repos\/owner\/.*/)))
+"#,
+        );
+
+        let decision = tree.evaluate(
+            "WebFetch",
+            &json!({"url": "https://api.github.com/repos/owner/repo/pulls"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+
+        let decision = tree.evaluate(
+            "WebFetch",
+            &json!({"url": "https://api.github.com/repos/other/repo"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn webfetch_net_domain_only_still_works() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (net "github.com")))
+"#,
+        );
+
+        // Domain-only rule matches any path on that domain
+        let decision = tree.evaluate(
+            "WebFetch",
+            &json!({"url": "https://github.com/any/path/here"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+
+        // Also matches no-path URLs
+        let decision = tree.evaluate(
+            "WebFetch",
+            &json!({"url": "https://github.com"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn net_path_specificity_ordering() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (net "github.com"))
+  (deny  (net "github.com" (subpath "/evil-org"))))
+"#,
+        );
+
+        // Path-scoped deny should be more specific and win
+        let decision = tree.evaluate(
+            "WebFetch",
+            &json!({"url": "https://github.com/evil-org/malware"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+
+        // Other paths on github.com → allow
+        let decision = tree.evaluate(
+            "WebFetch",
+            &json!({"url": "https://github.com/good-org/project"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn websearch_unaffected_by_net_path_rules() {
+        let tree = compile(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (net "github.com" (subpath "/owner/repo"))))
+"#,
+        );
+
+        // WebSearch has no path — path-scoped rule should not match
+        let decision = tree.evaluate(
+            "WebSearch",
+            &json!({"query": "rust programming"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
     }
 }

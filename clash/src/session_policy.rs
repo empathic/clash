@@ -170,6 +170,7 @@ pub fn suggest_allow_rule(
             effect: Effect::Allow,
             matcher: CapMatcher::Net(NetMatcher {
                 domain: Pattern::Any,
+                path: None,
             }),
             sandbox: None,
         }),
@@ -273,6 +274,7 @@ fn suggest_net_rule(tool_input: &serde_json::Value) -> Option<Rule> {
         effect: Effect::Allow,
         matcher: CapMatcher::Net(NetMatcher {
             domain: Pattern::Literal(domain),
+            path: None,
         }),
         sandbox: None,
     })
