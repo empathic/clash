@@ -98,7 +98,7 @@ pub struct NetMatcher {
 /// Matches Claude Code tools by name: `(tool [name])`.
 ///
 /// This capability domain matches tools that don't map to exec/fs/net,
-/// such as `Skill`, `Task`, `AskUserQuestion`, `EnterPlanMode`, etc.
+/// such as `Skill`, `Task`, `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`, etc.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolMatcher {
     /// Tool name pattern. `Pattern::Any` if omitted.

@@ -1,10 +1,10 @@
 meta:
-  name: v2 interactive tool passthrough — AskUserQuestion bypasses policy allow
+  name: v2 interactive tool passthrough — interactive tools bypass policy allow
   description: >
-    Interactive tools like AskUserQuestion require Claude Code's native UI.
-    When the policy allows them, the hook returns no decision (passthrough)
-    so Claude Code presents the interactive prompt. Deny decisions are still
-    enforced.
+    Interactive tools (AskUserQuestion, EnterPlanMode, ExitPlanMode) require
+    Claude Code's native UI. When the policy allows them, the hook returns no
+    decision (passthrough) so Claude Code presents its native UI. Deny
+    decisions are still enforced.
 
 clash:
   policy_sexpr: |
@@ -24,6 +24,46 @@ steps:
               description: "First option"
             - label: "Option B"
               description: "Second option"
+    expect:
+      no_decision: true
+
+  - name: EnterPlanMode passthrough when allowed by policy
+    hook: pre-tool-use
+    tool_name: EnterPlanMode
+    tool_input: {}
+    expect:
+      no_decision: true
+
+  - name: ExitPlanMode passthrough when allowed by policy
+    hook: pre-tool-use
+    tool_name: ExitPlanMode
+    tool_input: {}
+    expect:
+      no_decision: true
+
+  - name: EnterPlanMode passthrough on permission-request too
+    hook: permission-request
+    tool_name: EnterPlanMode
+    tool_input: {}
+    expect:
+      no_decision: true
+
+  - name: ExitPlanMode passthrough on permission-request too
+    hook: permission-request
+    tool_name: ExitPlanMode
+    tool_input: {}
+    expect:
+      no_decision: true
+
+  - name: AskUserQuestion passthrough on permission-request too
+    hook: permission-request
+    tool_name: AskUserQuestion
+    tool_input:
+      questions:
+        - question: "Which approach?"
+          options:
+            - label: "Option A"
+              description: "First option"
     expect:
       no_decision: true
 

@@ -6,7 +6,9 @@
 
 use tracing::{Level, info, instrument, warn};
 
-use crate::hooks::{HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput};
+use crate::hooks::{
+    HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput, is_interactive_tool,
+};
 use crate::notifications;
 use crate::permissions::check_permission;
 use crate::settings::ClashSettings;
@@ -23,6 +25,30 @@ pub fn handle_permission_request(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
 ) -> anyhow::Result<HookOutput> {
+    // Interactive tools (AskUserQuestion, EnterPlanMode, ExitPlanMode) must be
+    // handled by Claude Code's native UI. If the policy doesn't deny them,
+    // pass through so the user sees the native prompt / plan review screen.
+    if is_interactive_tool(&input.tool_name) {
+        let pre_tool_result = check_permission(input, settings)?;
+        let is_deny = matches!(
+            pre_tool_result.hook_specific_output,
+            Some(HookSpecificOutput::PreToolUse(ref pre))
+                if matches!(pre.permission_decision, Some(PermissionRule::Deny))
+        );
+        if is_deny {
+            let reason = match &pre_tool_result.hook_specific_output {
+                Some(HookSpecificOutput::PreToolUse(pre)) => pre
+                    .permission_decision_reason
+                    .clone()
+                    .unwrap_or_else(|| "denied by policy".into()),
+                _ => "denied by policy".into(),
+            };
+            return Ok(HookOutput::deny_permission(reason, false));
+        }
+        info!(tool = %input.tool_name, "Passthrough: interactive tool deferred to Claude Code");
+        return Ok(HookOutput::continue_execution());
+    }
+
     let pre_tool_result = check_permission(input, settings)?;
 
     // Convert PreToolUse decision to PermissionRequest format.

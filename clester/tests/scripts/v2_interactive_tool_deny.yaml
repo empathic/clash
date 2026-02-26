@@ -1,14 +1,15 @@
 meta:
-  name: v2 interactive tool deny — AskUserQuestion deny still enforced
+  name: v2 interactive tool deny — deny still enforced for interactive tools
   description: >
-    When the policy explicitly denies AskUserQuestion, the deny decision
-    is returned even though it's an interactive tool.
+    When the policy explicitly denies interactive tools (AskUserQuestion,
+    EnterPlanMode, ExitPlanMode), the deny decision is returned even though
+    they would normally get passthrough treatment.
 
 clash:
   policy_sexpr: |
     (default deny "main")
     (policy "main"
-      (deny (tool "AskUserQuestion"))
+      (deny (tool (or "AskUserQuestion" "EnterPlanMode" "ExitPlanMode")))
       (allow (tool)))
 
 steps:
@@ -19,6 +20,27 @@ steps:
       questions:
         - question: "Which approach?"
           options: []
+    expect:
+      decision: deny
+
+  - name: EnterPlanMode denied by explicit deny rule
+    hook: pre-tool-use
+    tool_name: EnterPlanMode
+    tool_input: {}
+    expect:
+      decision: deny
+
+  - name: ExitPlanMode denied by explicit deny rule
+    hook: pre-tool-use
+    tool_name: ExitPlanMode
+    tool_input: {}
+    expect:
+      decision: deny
+
+  - name: ExitPlanMode denied on permission-request too
+    hook: permission-request
+    tool_name: ExitPlanMode
+    tool_input: {}
     expect:
       decision: deny
 
