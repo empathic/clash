@@ -1,0 +1,35 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Library crates (no workspace interdependencies).
+      # --no-verify skips redundant rebuild (CI already validates).
+      # Tolerate "already exists" so partial re-runs don't block the binary crate.
+      - name: Publish clash_notify
+        run: cargo publish -p clash_notify --no-verify || echo "clash_notify already published"
+
+      - name: Publish claude_settings
+        run: cargo publish -p claude_settings --no-verify || echo "claude_settings already published"
+
+      # Wait for crates.io index to propagate library crates
+      - name: Wait for crates.io index
+        run: sleep 60
+
+      # Binary crate (depends on clash_notify + claude_settings)
+      - name: Publish clash
+        run: cargo publish -p clash --no-verify
