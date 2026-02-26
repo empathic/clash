@@ -1,6 +1,6 @@
 [package]
 name = "claude_settings"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2024"
 description = "A library for reading and writing Claude Code settings on Unix-like systems"
 license.workspace = true
