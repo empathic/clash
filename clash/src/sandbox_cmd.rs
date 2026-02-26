@@ -434,6 +434,13 @@ fn exec_with_proxy(
     command: &[String],
 ) -> Result<()> {
     match &policy.network {
+        NetworkPolicy::Localhost => {
+            // Localhost-only: kernel enforces the restriction directly,
+            // no proxy needed. Exec the sandboxed command directly.
+            match sandbox::exec_sandboxed(policy, cwd, command, None) {
+                Err(e) => anyhow::bail!("sandbox exec failed: {}", e),
+            }
+        }
         NetworkPolicy::AllowDomains(domains) => {
             let proxy_handle = sandbox::proxy::start_proxy(sandbox::proxy::ProxyConfig {
                 allowed_domains: domains.clone(),
