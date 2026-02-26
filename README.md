@@ -265,6 +265,42 @@ clash init
 
 ---
 
+## Disabling & Uninstalling
+
+You're always in control of whether clash is active.
+
+### Disable for one session
+
+```bash
+CLASH_DISABLE=1 claude
+```
+
+Clash stays installed but becomes a complete pass-through — no policy enforcement, no sandbox, no prompts. `clash status` and the status line will reflect the disabled state. Set `CLASH_DISABLE=0` or unset the variable to re-enable.
+
+### Uninstall completely
+
+```bash
+# 1. Remove the Claude Code plugin
+claude plugin uninstall clash
+
+# 2. Remove the binary
+cargo uninstall clash
+
+# 3. (Optional) Remove the plugin marketplace entry
+claude plugin marketplace remove clash
+
+# 4. (Optional) Remove the status line — only needed if you skipped step 2
+clash statusline uninstall
+
+# 5. (Optional) Clean up configuration and logs
+rm -rf ~/.clash       # user-level policy and logs
+rm -rf .clash         # project-level policy (per repo)
+```
+
+After removing the plugin, Claude Code reverts to its built-in permission model. Policy files are left in place so you can pick up where you left off if you reinstall.
+
+---
+
 ## Documentation
 
 - [Policy Writing Guide](docs/policy-guide.md) — rules, profiles, constraints, and recipes
