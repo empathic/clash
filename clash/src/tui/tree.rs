@@ -601,6 +601,66 @@ fn build_tool_tree(
 }
 
 // ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+
+/// Extract searchable text from a node kind.
+pub fn node_search_text(kind: &TreeNodeKind) -> String {
+    match kind {
+        TreeNodeKind::Domain(d) => d.to_string(),
+        TreeNodeKind::PolicyBlock { name, level } => format!("{name} {level}"),
+        TreeNodeKind::Binary(s)
+        | TreeNodeKind::Arg(s)
+        | TreeNodeKind::HasArg(s)
+        | TreeNodeKind::PathNode(s)
+        | TreeNodeKind::FsOp(s)
+        | TreeNodeKind::NetDomain(s)
+        | TreeNodeKind::ToolName(s) => s.clone(),
+        TreeNodeKind::HasMarker => ":has".into(),
+        TreeNodeKind::Leaf {
+            effect,
+            rule,
+            policy,
+            ..
+        } => format!("{effect} {rule} {policy}"),
+        TreeNodeKind::SandboxLeaf { sandbox_rule, .. } => format!("sandbox {sandbox_rule}"),
+        TreeNodeKind::SandboxGroup => "sandbox".into(),
+        TreeNodeKind::SandboxName(name) => format!("sandbox {name}"),
+    }
+}
+
+/// Search the full tree for nodes matching a query (case-insensitive),
+/// regardless of collapsed state. Returns tree paths of all matching nodes.
+pub fn search_tree(roots: &[TreeNode], query: &str) -> Vec<Vec<usize>> {
+    let query_lower = query.to_lowercase();
+    if query_lower.is_empty() {
+        return Vec::new();
+    }
+    let mut matches = Vec::new();
+    for (i, root) in roots.iter().enumerate() {
+        search_node(root, &query_lower, &mut vec![i], &mut matches);
+    }
+    matches
+}
+
+fn search_node(
+    node: &TreeNode,
+    query_lower: &str,
+    path: &mut Vec<usize>,
+    matches: &mut Vec<Vec<usize>>,
+) {
+    let text = node_search_text(&node.kind);
+    if text.to_lowercase().contains(query_lower) {
+        matches.push(path.clone());
+    }
+    for (i, child) in node.children.iter().enumerate() {
+        path.push(i);
+        search_node(child, query_lower, path, matches);
+        path.pop();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Flatten tree for rendering
 // ---------------------------------------------------------------------------
 
@@ -1129,6 +1189,87 @@ mod tests {
             matches!(&leaf.children[0].kind, TreeNodeKind::SandboxName(name) if name == "cargo-env"),
             "sandbox child should be SandboxName(\"cargo-env\"), got {:?}",
             leaf.children[0].kind
+        );
+    }
+
+    #[test]
+    fn node_search_text_variants() {
+        assert_eq!(node_search_text(&TreeNodeKind::Binary("git".into())), "git");
+        assert_eq!(
+            node_search_text(&TreeNodeKind::Domain(DomainKind::Exec)),
+            "Exec"
+        );
+        assert_eq!(node_search_text(&TreeNodeKind::HasMarker), ":has");
+        assert_eq!(node_search_text(&TreeNodeKind::SandboxGroup), "sandbox");
+        assert_eq!(
+            node_search_text(&TreeNodeKind::SandboxName("test".into())),
+            "sandbox test"
+        );
+    }
+
+    #[test]
+    fn search_tree_finds_all_matches() {
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (allow (exec "git")) (deny (exec "cargo")))"#,
+        );
+        let roots = build_tree(&[policy]);
+
+        // Search for "Exec" should find Domain(Exec) nodes
+        let matches = search_tree(&roots, "Exec");
+        assert!(
+            matches.len() >= 2,
+            "should find at least 2 Exec domain nodes, got {}",
+            matches.len()
+        );
+    }
+
+    #[test]
+    fn search_tree_case_insensitive() {
+        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let roots = build_tree(&[policy]);
+
+        let upper = search_tree(&roots, "GIT");
+        let lower = search_tree(&roots, "git");
+        assert_eq!(upper.len(), lower.len());
+        assert!(!upper.is_empty());
+    }
+
+    #[test]
+    fn search_tree_empty_query() {
+        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let roots = build_tree(&[policy]);
+        assert!(search_tree(&roots, "").is_empty());
+    }
+
+    #[test]
+    fn search_tree_no_match() {
+        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let roots = build_tree(&[policy]);
+        assert!(search_tree(&roots, "zzzznotfound").is_empty());
+    }
+
+    #[test]
+    fn search_tree_finds_collapsed_nodes() {
+        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let mut roots = build_tree(&[policy]);
+
+        // Collapse everything
+        fn collapse(node: &mut TreeNode) {
+            node.expanded = false;
+            for child in &mut node.children {
+                collapse(child);
+            }
+        }
+        for root in &mut roots {
+            collapse(root);
+        }
+
+        // search_tree should still find nodes in collapsed tree
+        let matches = search_tree(&roots, "allow");
+        assert!(
+            !matches.is_empty(),
+            "search_tree should find nodes regardless of collapsed state"
         );
     }
 }

@@ -1,5 +1,22 @@
 //! Text input widget and form state for editing operations.
 
+use crossterm::event::{KeyCode, KeyEvent};
+
+/// Result of `TextInput::handle_key`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextInputAction {
+    /// Enter was pressed — caller should commit.
+    Submit,
+    /// Esc was pressed — caller should cancel.
+    Cancel,
+    /// Content was modified (char typed, backspace, delete).
+    Changed,
+    /// Cursor moved but content unchanged.
+    Moved,
+    /// Key was not handled by the text input.
+    Ignored,
+}
+
 /// A single-line text input with cursor.
 #[derive(Debug, Clone)]
 pub struct TextInput {
@@ -83,6 +100,43 @@ impl TextInput {
         self.cursor = 0;
     }
 
+    /// Handle a key event, returning what action the caller should take.
+    pub fn handle_key(&mut self, key: KeyEvent) -> TextInputAction {
+        match key.code {
+            KeyCode::Enter => TextInputAction::Submit,
+            KeyCode::Esc => TextInputAction::Cancel,
+            KeyCode::Backspace => {
+                self.backspace();
+                TextInputAction::Changed
+            }
+            KeyCode::Delete => {
+                self.delete();
+                TextInputAction::Changed
+            }
+            KeyCode::Left => {
+                self.move_left();
+                TextInputAction::Moved
+            }
+            KeyCode::Right => {
+                self.move_right();
+                TextInputAction::Moved
+            }
+            KeyCode::Home => {
+                self.home();
+                TextInputAction::Moved
+            }
+            KeyCode::End => {
+                self.end();
+                TextInputAction::Moved
+            }
+            KeyCode::Char(c) => {
+                self.insert_char(c);
+                TextInputAction::Changed
+            }
+            _ => TextInputAction::Ignored,
+        }
+    }
+
     /// Byte offset for the given char position.
     fn byte_offset(&self, char_pos: usize) -> usize {
         self.content
@@ -95,7 +149,18 @@ impl TextInput {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
     use super::*;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
 
     #[test]
     fn empty_input() {
@@ -221,5 +286,86 @@ mod tests {
         input.insert_char('b');
         assert_eq!(input.value(), "abc");
         assert_eq!(input.cursor_pos(), 2);
+    }
+
+    // -------------------------------------------------------------------
+    // handle_key tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn handle_key_enter_submits() {
+        let mut input = TextInput::new("hello");
+        assert_eq!(
+            input.handle_key(key(KeyCode::Enter)),
+            TextInputAction::Submit
+        );
+    }
+
+    #[test]
+    fn handle_key_esc_cancels() {
+        let mut input = TextInput::new("hello");
+        assert_eq!(input.handle_key(key(KeyCode::Esc)), TextInputAction::Cancel);
+    }
+
+    #[test]
+    fn handle_key_char_inserts_and_returns_changed() {
+        let mut input = TextInput::empty();
+        assert_eq!(
+            input.handle_key(key(KeyCode::Char('x'))),
+            TextInputAction::Changed
+        );
+        assert_eq!(input.value(), "x");
+    }
+
+    #[test]
+    fn handle_key_backspace_returns_changed() {
+        let mut input = TextInput::new("ab");
+        assert_eq!(
+            input.handle_key(key(KeyCode::Backspace)),
+            TextInputAction::Changed
+        );
+        assert_eq!(input.value(), "a");
+    }
+
+    #[test]
+    fn handle_key_delete_returns_changed() {
+        let mut input = TextInput::new("ab");
+        input.home();
+        assert_eq!(
+            input.handle_key(key(KeyCode::Delete)),
+            TextInputAction::Changed
+        );
+        assert_eq!(input.value(), "b");
+    }
+
+    #[test]
+    fn handle_key_arrows_return_moved() {
+        let mut input = TextInput::new("abc");
+        assert_eq!(input.handle_key(key(KeyCode::Left)), TextInputAction::Moved);
+        assert_eq!(input.cursor_pos(), 2);
+        assert_eq!(
+            input.handle_key(key(KeyCode::Right)),
+            TextInputAction::Moved
+        );
+        assert_eq!(input.cursor_pos(), 3);
+    }
+
+    #[test]
+    fn handle_key_home_end_return_moved() {
+        let mut input = TextInput::new("abc");
+        assert_eq!(input.handle_key(key(KeyCode::Home)), TextInputAction::Moved);
+        assert_eq!(input.cursor_pos(), 0);
+        assert_eq!(input.handle_key(key(KeyCode::End)), TextInputAction::Moved);
+        assert_eq!(input.cursor_pos(), 3);
+    }
+
+    #[test]
+    fn handle_key_unknown_returns_ignored() {
+        let mut input = TextInput::new("abc");
+        assert_eq!(
+            input.handle_key(key(KeyCode::F(1))),
+            TextInputAction::Ignored
+        );
+        assert_eq!(input.value(), "abc");
     }
 }
