@@ -48,6 +48,8 @@ pub enum TreeNodeKind {
         level: PolicyLevel,
         policy: String,
     },
+    /// Grouping node for sandbox sub-rules (child of a sandboxed Leaf).
+    SandboxGroup,
     /// A named sandbox reference (child of a sandboxed Leaf).
     SandboxName(String),
 }
@@ -339,10 +341,15 @@ fn append_sandbox_children(
                     CapMatcher::Exec(_) => {} // exec-in-sandbox not expected
                 }
             }
-            leaf.children.extend(build_fs_tree(fs_rules, &make_leaf));
-            leaf.children.extend(build_net_tree(net_rules, &make_leaf));
-            leaf.children
+            let mut group = TreeNode::new(TreeNodeKind::SandboxGroup);
+            group.children.extend(build_fs_tree(fs_rules, &make_leaf));
+            group.children.extend(build_net_tree(net_rules, &make_leaf));
+            group
+                .children
                 .extend(build_tool_tree(tool_rules, &make_leaf));
+            if !group.children.is_empty() {
+                leaf.children.push(group);
+            }
         }
         Some(SandboxRef::Named(name)) => {
             leaf.children
@@ -471,6 +478,7 @@ fn node_key(kind: &TreeNodeKind) -> String {
             parent_rule,
             ..
         } => format!("sbx-leaf:{sandbox_rule}:{parent_rule}"),
+        TreeNodeKind::SandboxGroup => "sbx-group".into(),
         TreeNodeKind::SandboxName(name) => format!("sbx-name:{name}"),
     }
 }
