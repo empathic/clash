@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::policy::Effect;
+use crate::policy::ast::SandboxRef;
 use crate::wizard::describe_rule;
 
 use super::app::{
@@ -120,10 +121,10 @@ fn render_tree(f: &mut Frame, app: &App, area: Rect) {
     let end = (scroll + visible_height).min(app.flat_rows.len());
     let mut lines: Vec<Line> = Vec::new();
 
-    let selecting = if let Mode::SelectEffect(state) = &app.mode {
-        Some(state.effect_index)
-    } else {
-        None
+    let selecting = match &app.mode {
+        Mode::SelectEffect(state) => Some(state.effect_index),
+        Mode::SelectSandboxEffect(state) => Some(state.effect_index),
+        _ => None,
     };
 
     for i in scroll..end {
@@ -237,9 +238,9 @@ pub(crate) fn render_row(
         }
         TreeNodeKind::Leaf {
             effect,
+            rule,
             level,
             policy,
-            ..
         } => {
             if let Some(sel_idx) = inline_select {
                 for (i, &name) in EFFECT_DISPLAY.iter().enumerate() {
@@ -264,6 +265,44 @@ pub(crate) fn render_row(
                 format!("  [{level}:{policy}]"),
                 tui_style::TAG,
             ));
+
+            match &rule.sandbox {
+                Some(SandboxRef::Named(name)) => {
+                    spans.push(Span::styled(
+                        format!("  sandbox: \"{name}\""),
+                        tui_style::DIM,
+                    ));
+                }
+                Some(SandboxRef::Inline(_)) => {
+                    spans.push(Span::styled("  sandboxed", tui_style::DIM));
+                }
+                None => {}
+            }
+        }
+        TreeNodeKind::SandboxLeaf { effect, .. } => {
+            if let Some(sel_idx) = inline_select {
+                for (i, &name) in EFFECT_DISPLAY.iter().enumerate() {
+                    if i > 0 {
+                        spans.push(Span::raw(" "));
+                    }
+                    let style = if i == sel_idx {
+                        Style::default()
+                            .add_modifier(Modifier::REVERSED)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        tui_style::DIM
+                    };
+                    spans.push(Span::styled(format!(" {name} "), style));
+                }
+            } else {
+                let effect_text = format!("{:<10}", effect_display(*effect));
+                spans.push(Span::styled(effect_text, tui_style::effect_style(*effect)));
+            }
+            spans.push(Span::styled("  [sandbox]", tui_style::TAG));
+        }
+        TreeNodeKind::SandboxName(name) => {
+            spans.push(Span::styled("sandbox: ", tui_style::DIM));
+            spans.push(Span::styled(format!("\"{name}\""), tui_style::PATTERN));
         }
     }
 
@@ -294,19 +333,24 @@ fn render_description(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // In edit-rule mode, show the editor
-    if let Mode::EditRule(state) = &app.mode {
+    // In edit-rule or edit-sandbox-rule mode, show the editor
+    let edit_state = match &app.mode {
+        Mode::EditRule(state) => Some(("Edit rule: ", &state.input, &state.error)),
+        Mode::EditSandboxRule(state) => Some(("Edit sandbox rule: ", &state.input, &state.error)),
+        _ => None,
+    };
+    if let Some((label, input, error)) = edit_state {
         let mut lines = vec![
             Line::from(vec![
-                Span::styled("Edit rule: ", tui_style::DIM),
+                Span::styled(label, tui_style::DIM),
                 Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(" confirm  ", tui_style::DIM),
                 Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(" cancel", tui_style::DIM),
             ]),
             {
-                let val = state.input.value();
-                let pos = state.input.cursor_pos();
+                let val = input.value();
+                let pos = input.cursor_pos();
                 let before: String = val.chars().take(pos).collect();
                 let after: String = val.chars().skip(pos).collect();
                 Line::from(vec![
@@ -317,7 +361,7 @@ fn render_description(f: &mut Frame, app: &App, area: Rect) {
                 ])
             },
         ];
-        if let Some(err) = &state.error {
+        if let Some(err) = error {
             lines.push(Line::from(Span::styled(
                 err.as_str(),
                 tui_style::DENY.add_modifier(Modifier::BOLD),
@@ -450,6 +494,34 @@ pub(crate) fn description_for_row(row: &FlatRow) -> Vec<Line<'static>> {
                 Span::styled(format!("{name} [{level}]"), tui_style::TAG),
             ])]
         }
+        TreeNodeKind::SandboxLeaf {
+            effect,
+            sandbox_rule,
+            parent_rule,
+            ..
+        } => {
+            vec![
+                Line::from(vec![
+                    Span::styled("Sandbox: ", tui_style::DIM),
+                    Span::styled(
+                        effect_display(*effect).to_uppercase(),
+                        tui_style::effect_style(*effect).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(sandbox_rule.to_string(), Style::default()),
+                ]),
+                Line::from(vec![
+                    Span::styled("Parent rule: ", tui_style::DIM),
+                    Span::raw(parent_rule.to_string()),
+                ]),
+            ]
+        }
+        TreeNodeKind::SandboxName(name) => {
+            vec![Line::from(vec![
+                Span::styled("Named sandbox policy: ", tui_style::DIM),
+                Span::styled(format!("\"{name}\""), tui_style::PATTERN),
+            ])]
+        }
     }
 }
 
@@ -504,11 +576,23 @@ pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
                     }
                 }
                 TreeNodeKind::Leaf { .. } => {
+                    if row.has_children {
+                        if row.expanded {
+                            hints.push(("h", "collapse"));
+                        } else {
+                            hints.push(("l", "expand"));
+                        }
+                    }
                     hints.push(("Tab", "effect"));
                     hints.push(("e", "edit"));
                     hints.push(("d", "delete"));
                 }
-                TreeNodeKind::HasMarker => {}
+                TreeNodeKind::SandboxLeaf { .. } => {
+                    hints.push(("Tab", "effect"));
+                    hints.push(("e", "edit"));
+                    hints.push(("d", "delete"));
+                }
+                TreeNodeKind::HasMarker | TreeNodeKind::SandboxName(_) => {}
             }
         }
         None => {
@@ -634,6 +718,12 @@ fn render_confirm_overlay(f: &mut Frame, area: Rect, action: &ConfirmAction) {
         ConfirmAction::DeleteRule { rule_text, .. } => (
             " Confirm Delete ",
             format!("Delete rule?\n\n  {rule_text}\n\ny/n"),
+        ),
+        ConfirmAction::DeleteSandboxRule {
+            sandbox_rule_text, ..
+        } => (
+            " Confirm Delete Sandbox Rule ",
+            format!("Delete sandbox sub-rule?\n\n  {sandbox_rule_text}\n\ny/n"),
         ),
         ConfirmAction::QuitUnsaved => (
             " Unsaved Changes ",
@@ -1150,6 +1240,26 @@ mod tests {
     }
 
     #[test]
+    fn context_hints_on_sandbox_leaf() {
+        let mut app = make_app(r#"(policy "main" (ask (exec "ls") :sandbox (allow (fs))))"#);
+        app.expand_all();
+
+        // Find the SandboxLeaf row
+        let sbx_idx = app
+            .flat_rows
+            .iter()
+            .position(|r| matches!(&r.kind, TreeNodeKind::SandboxLeaf { .. }));
+        assert!(sbx_idx.is_some(), "should have a SandboxLeaf row");
+        app.cursor = sbx_idx.unwrap();
+
+        let hints = context_hints(&app);
+        let keys: Vec<&str> = hints.iter().map(|(k, _)| *k).collect();
+        assert!(keys.contains(&"Tab"), "sandbox leaf should have Tab hint");
+        assert!(keys.contains(&"e"), "sandbox leaf should have e hint");
+        assert!(keys.contains(&"d"), "sandbox leaf should have d hint");
+    }
+
+    #[test]
     fn context_hints_with_search() {
         let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
         app.search_query = Some("git".to_string());
@@ -1262,6 +1372,60 @@ mod tests {
         assert!(
             output.contains("Keyboard Shortcuts"),
             "help overlay should be visible: {output}"
+        );
+    }
+
+    #[test]
+    fn render_row_sandbox_leaf() {
+        let parent_rule = parse_rule_text(r#"(ask (exec "ls") :sandbox (allow (fs)))"#).unwrap();
+        let sandbox_rule = parse_rule_text("(allow (fs))").unwrap();
+        let row = FlatRow {
+            kind: TreeNodeKind::SandboxLeaf {
+                effect: Effect::Allow,
+                sandbox_rule,
+                parent_rule,
+                level: PolicyLevel::User,
+                policy: "main".to_string(),
+            },
+            depth: 3,
+            expanded: false,
+            has_children: false,
+            tree_path: vec![0, 0, 0, 0],
+            connectors: vec![false, false, false],
+        };
+        let line = render_row(&row, false, false, None, &[]);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(
+            text.contains("auto allow"),
+            "sandbox leaf should show effect: {text}"
+        );
+        assert!(
+            text.contains("[sandbox]"),
+            "sandbox leaf should show [sandbox] tag: {text}"
+        );
+    }
+
+    #[test]
+    fn render_row_leaf_sandbox_indicator() {
+        let rule = parse_rule_text(r#"(ask (exec "ls" "-lha") :sandbox (allow (fs)))"#).unwrap();
+        let row = FlatRow {
+            kind: TreeNodeKind::Leaf {
+                effect: Effect::Ask,
+                rule,
+                level: PolicyLevel::User,
+                policy: "main".to_string(),
+            },
+            depth: 2,
+            expanded: false,
+            has_children: true,
+            tree_path: vec![0, 0, 0],
+            connectors: vec![false, false],
+        };
+        let line = render_row(&row, false, false, None, &[]);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(
+            text.contains("sandboxed"),
+            "leaf with inline sandbox should show 'sandboxed': {text}"
         );
     }
 }

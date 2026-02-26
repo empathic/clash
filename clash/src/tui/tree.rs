@@ -40,6 +40,16 @@ pub enum TreeNodeKind {
         level: PolicyLevel,
         policy: String,
     },
+    /// Leaf for a sandbox sub-rule (child of a sandboxed exec rule).
+    SandboxLeaf {
+        effect: Effect,
+        sandbox_rule: Rule,
+        parent_rule: Rule,
+        level: PolicyLevel,
+        policy: String,
+    },
+    /// A named sandbox reference (child of a sandboxed Leaf).
+    SandboxName(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,14 +93,17 @@ impl TreeNode {
     }
 
     /// Count all leaf rules under this node (recursive).
+    /// SandboxLeaf nodes are not counted (they are sub-rules, not top-level).
     pub fn rule_count(&self) -> usize {
         match &self.kind {
             TreeNodeKind::Leaf { .. } => 1,
+            TreeNodeKind::SandboxLeaf { .. } => 0,
             _ => self.children.iter().map(|c| c.rule_count()).sum(),
         }
     }
 
     /// Count leaf effects: (allow, deny, ask).
+    /// SandboxLeaf nodes are not counted.
     pub fn effect_counts(&self) -> (usize, usize, usize) {
         match &self.kind {
             TreeNodeKind::Leaf { effect, .. } => match effect {
@@ -98,6 +111,7 @@ impl TreeNode {
                 Effect::Deny => (0, 1, 0),
                 Effect::Ask => (0, 0, 1),
             },
+            TreeNodeKind::SandboxLeaf { .. } => (0, 0, 0),
             _ => {
                 let (mut a, mut d, mut k) = (0, 0, 0);
                 for child in &self.children {
@@ -135,10 +149,10 @@ pub struct FlatRow {
 
 /// A rule with provenance info.
 #[derive(Clone)]
-struct ProvenanceRule {
-    rule: Rule,
-    level: PolicyLevel,
-    policy_name: String,
+pub(crate) struct ProvenanceRule {
+    pub rule: Rule,
+    pub level: PolicyLevel,
+    pub policy_name: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -230,9 +244,9 @@ pub fn build_tree(policies: &[LoadedPolicy]) -> Vec<TreeNode> {
 
     // Fs, net, and tool rules apply to any command — group under "*"
     let mut wildcard_children = Vec::new();
-    wildcard_children.extend(build_fs_tree(fs_rules));
-    wildcard_children.extend(build_net_tree(net_rules));
-    wildcard_children.extend(build_tool_tree(tool_rules));
+    wildcard_children.extend(build_fs_tree(fs_rules, &regular_leaf));
+    wildcard_children.extend(build_net_tree(net_rules, &regular_leaf));
+    wildcard_children.extend(build_tool_tree(tool_rules, &regular_leaf));
     if !wildcard_children.is_empty() {
         let mut wildcard = TreeNode::new(TreeNodeKind::Binary("*".to_string()));
         wildcard.children = wildcard_children;
@@ -278,6 +292,66 @@ fn build_exec_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
         .collect()
 }
 
+/// Build a regular Leaf node from a ProvenanceRule.
+fn regular_leaf(pr: &ProvenanceRule) -> TreeNode {
+    TreeNode::new(TreeNodeKind::Leaf {
+        effect: pr.rule.effect,
+        rule: pr.rule.clone(),
+        level: pr.level,
+        policy: pr.policy_name.clone(),
+    })
+}
+
+/// Append sandbox children to a Leaf node based on the rule's sandbox field.
+/// Inline sandbox rules are decomposed into proper sub-trees reusing the
+/// domain-specific tree builders.
+fn append_sandbox_children(
+    leaf: &mut TreeNode,
+    parent_rule: &Rule,
+    level: PolicyLevel,
+    policy: &str,
+    sandbox: &Option<SandboxRef>,
+) {
+    match sandbox {
+        Some(SandboxRef::Inline(rules)) => {
+            let make_leaf = |pr: &ProvenanceRule| {
+                TreeNode::new(TreeNodeKind::SandboxLeaf {
+                    effect: pr.rule.effect,
+                    sandbox_rule: pr.rule.clone(),
+                    parent_rule: parent_rule.clone(),
+                    level,
+                    policy: policy.to_string(),
+                })
+            };
+            let mut fs_rules = Vec::new();
+            let mut net_rules = Vec::new();
+            let mut tool_rules = Vec::new();
+            for r in rules {
+                let pr = ProvenanceRule {
+                    rule: r.clone(),
+                    level,
+                    policy_name: policy.to_string(),
+                };
+                match &r.matcher {
+                    CapMatcher::Fs(_) => fs_rules.push(pr),
+                    CapMatcher::Net(_) => net_rules.push(pr),
+                    CapMatcher::Tool(_) => tool_rules.push(pr),
+                    CapMatcher::Exec(_) => {} // exec-in-sandbox not expected
+                }
+            }
+            leaf.children.extend(build_fs_tree(fs_rules, &make_leaf));
+            leaf.children.extend(build_net_tree(net_rules, &make_leaf));
+            leaf.children
+                .extend(build_tool_tree(tool_rules, &make_leaf));
+        }
+        Some(SandboxRef::Named(name)) => {
+            leaf.children
+                .push(TreeNode::new(TreeNodeKind::SandboxName(name.clone())));
+        }
+        None => {}
+    }
+}
+
 fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
     let mut children = Vec::new();
 
@@ -288,12 +362,19 @@ fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
         };
 
         if args.is_empty() && has_args.is_empty() {
-            let leaf = TreeNode::new(TreeNodeKind::Leaf {
+            let mut leaf = TreeNode::new(TreeNodeKind::Leaf {
                 effect: pr.rule.effect,
                 rule: pr.rule.clone(),
                 level: pr.level,
                 policy: pr.policy_name.clone(),
             });
+            append_sandbox_children(
+                &mut leaf,
+                &pr.rule,
+                pr.level,
+                &pr.policy_name,
+                &pr.rule.sandbox,
+            );
             let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Exec));
             domain.children.push(leaf);
             children.push(domain);
@@ -308,12 +389,19 @@ fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
 
         for arg_combo in &arg_combos {
             for has_combo in &has_combos {
-                let leaf = TreeNode::new(TreeNodeKind::Leaf {
+                let mut leaf = TreeNode::new(TreeNodeKind::Leaf {
                     effect: pr.rule.effect,
                     rule: pr.rule.clone(),
                     level: pr.level,
                     policy: pr.policy_name.clone(),
                 });
+                append_sandbox_children(
+                    &mut leaf,
+                    &pr.rule,
+                    pr.level,
+                    &pr.policy_name,
+                    &pr.rule.sandbox,
+                );
                 let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Exec));
                 domain.children.push(leaf);
 
@@ -378,6 +466,12 @@ fn node_key(kind: &TreeNodeKind) -> String {
         TreeNodeKind::Domain(d) => format!("{d}"),
         TreeNodeKind::PolicyBlock { name, level } => format!("{name}[{level}]"),
         TreeNodeKind::Leaf { rule, level, .. } => format!("leaf:{}:{}", rule, level),
+        TreeNodeKind::SandboxLeaf {
+            sandbox_rule,
+            parent_rule,
+            ..
+        } => format!("sbx-leaf:{sandbox_rule}:{parent_rule}"),
+        TreeNodeKind::SandboxName(name) => format!("sbx-name:{name}"),
     }
 }
 
@@ -385,7 +479,10 @@ fn node_key(kind: &TreeNodeKind) -> String {
 // Fs tree
 // ---------------------------------------------------------------------------
 
-fn build_fs_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
+fn build_fs_tree(
+    rules: Vec<ProvenanceRule>,
+    make_leaf: &dyn Fn(&ProvenanceRule) -> TreeNode,
+) -> Vec<TreeNode> {
     let mut children = Vec::new();
 
     for pr in rules {
@@ -395,12 +492,7 @@ fn build_fs_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
         };
 
         for op in &ops {
-            let leaf = TreeNode::new(TreeNodeKind::Leaf {
-                effect: pr.rule.effect,
-                rule: pr.rule.clone(),
-                level: pr.level,
-                policy: pr.policy_name.clone(),
-            });
+            let leaf = make_leaf(&pr);
             let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Filesystem));
             domain.children.push(leaf);
 
@@ -434,7 +526,10 @@ fn build_fs_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
 // Net tree
 // ---------------------------------------------------------------------------
 
-fn build_net_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
+fn build_net_tree(
+    rules: Vec<ProvenanceRule>,
+    make_leaf: &dyn Fn(&ProvenanceRule) -> TreeNode,
+) -> Vec<TreeNode> {
     let mut children = Vec::new();
 
     for pr in rules {
@@ -444,12 +539,7 @@ fn build_net_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
         };
 
         for domain_text in domain_texts {
-            let leaf = TreeNode::new(TreeNodeKind::Leaf {
-                effect: pr.rule.effect,
-                rule: pr.rule.clone(),
-                level: pr.level,
-                policy: pr.policy_name.clone(),
-            });
+            let leaf = make_leaf(&pr);
             let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Network));
             domain.children.push(leaf);
 
@@ -471,7 +561,10 @@ fn build_net_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
 // Tool tree
 // ---------------------------------------------------------------------------
 
-fn build_tool_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
+fn build_tool_tree(
+    rules: Vec<ProvenanceRule>,
+    make_leaf: &dyn Fn(&ProvenanceRule) -> TreeNode,
+) -> Vec<TreeNode> {
     let mut children = Vec::new();
 
     for pr in rules {
@@ -481,12 +574,7 @@ fn build_tool_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
         };
 
         for name_text in name_texts {
-            let leaf = TreeNode::new(TreeNodeKind::Leaf {
-                effect: pr.rule.effect,
-                rule: pr.rule.clone(),
-                level: pr.level,
-                policy: pr.policy_name.clone(),
-            });
+            let leaf = make_leaf(&pr);
             let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Tool));
             domain.children.push(leaf);
 
@@ -873,5 +961,166 @@ mod tests {
         let roots = build_tree(&[policy]);
         let total: usize = roots.iter().map(|r| r.rule_count()).sum();
         assert_eq!(total, 2);
+    }
+
+    #[test]
+    fn build_tree_sandboxed_exec_inline() {
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (ask (exec "ls" "-lha") :sandbox (allow (fs))))"#,
+        );
+        let roots = build_tree(&[policy]);
+
+        // Find the leaf node
+        fn find_leaf(node: &TreeNode) -> Option<&TreeNode> {
+            if matches!(&node.kind, TreeNodeKind::Leaf { .. }) {
+                return Some(node);
+            }
+            node.children.iter().find_map(find_leaf)
+        }
+        let leaf = find_leaf(&roots[0]).expect("should have a leaf");
+        assert!(
+            !leaf.children.is_empty(),
+            "sandboxed leaf should have children (sub-tree)"
+        );
+
+        // The inline sandbox (allow (fs)) should decompose into a sub-tree
+        // containing a SandboxLeaf somewhere under the leaf.
+        fn find_sandbox_leaf(node: &TreeNode) -> Option<&TreeNode> {
+            if matches!(&node.kind, TreeNodeKind::SandboxLeaf { .. }) {
+                return Some(node);
+            }
+            node.children.iter().find_map(find_sandbox_leaf)
+        }
+        let sbx = find_sandbox_leaf(leaf).expect("should have a SandboxLeaf");
+        assert!(
+            matches!(
+                &sbx.kind,
+                TreeNodeKind::SandboxLeaf {
+                    effect: Effect::Allow,
+                    ..
+                }
+            ),
+            "sandbox leaf should have Allow effect, got {:?}",
+            sbx.kind
+        );
+    }
+
+    #[test]
+    fn build_tree_sandboxed_exec_inline_decomposed() {
+        // Multiple inline sandbox rules should decompose into proper sub-trees
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (ask (exec "ls" "-lha") :sandbox (allow (fs read "/tmp")) (deny (net *))))"#,
+        );
+        let roots = build_tree(&[policy]);
+
+        fn find_leaf(node: &TreeNode) -> Option<&TreeNode> {
+            if matches!(&node.kind, TreeNodeKind::Leaf { .. }) {
+                return Some(node);
+            }
+            node.children.iter().find_map(find_leaf)
+        }
+        let leaf = find_leaf(&roots[0]).expect("should have a leaf");
+
+        // Count SandboxLeaf nodes recursively
+        fn count_sandbox_leaves(node: &TreeNode) -> usize {
+            let here = if matches!(&node.kind, TreeNodeKind::SandboxLeaf { .. }) {
+                1
+            } else {
+                0
+            };
+            here + node
+                .children
+                .iter()
+                .map(count_sandbox_leaves)
+                .sum::<usize>()
+        }
+        let sbx_count = count_sandbox_leaves(leaf);
+        assert_eq!(sbx_count, 2, "should have 2 SandboxLeaf nodes (fs + net)");
+
+        // There should be Domain nodes in the sub-tree
+        fn has_domain(node: &TreeNode, kind: super::DomainKind) -> bool {
+            matches!(&node.kind, TreeNodeKind::Domain(d) if *d == kind)
+                || node.children.iter().any(|c| has_domain(c, kind))
+        }
+        assert!(has_domain(leaf, super::DomainKind::Filesystem));
+        assert!(has_domain(leaf, super::DomainKind::Network));
+    }
+
+    #[test]
+    fn build_tree_sandboxed_exec_fs_with_path() {
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (ask (exec "ls") :sandbox (allow (fs read "/tmp"))))"#,
+        );
+        let roots = build_tree(&[policy]);
+
+        fn find_leaf(node: &TreeNode) -> Option<&TreeNode> {
+            if matches!(&node.kind, TreeNodeKind::Leaf { .. }) {
+                return Some(node);
+            }
+            node.children.iter().find_map(find_leaf)
+        }
+        let leaf = find_leaf(&roots[0]).expect("should have a leaf");
+
+        // Should have a PathNode in the sub-tree
+        fn has_path_node(node: &TreeNode) -> bool {
+            matches!(&node.kind, TreeNodeKind::PathNode(_))
+                || node.children.iter().any(has_path_node)
+        }
+        assert!(
+            has_path_node(leaf),
+            "sandbox fs with path should create PathNode sub-tree"
+        );
+    }
+
+    #[test]
+    fn sandbox_leaf_not_counted_in_rule_count() {
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (ask (exec "ls") :sandbox (allow (fs)) (deny (net *))))"#,
+        );
+        let roots = build_tree(&[policy]);
+        let total: usize = roots.iter().map(|r| r.rule_count()).sum();
+        // Only the parent exec rule should count, not the sandbox sub-rules
+        assert_eq!(total, 1, "sandbox leaves should not count as rules");
+
+        let (allow, deny, ask) = roots.iter().fold((0, 0, 0), |(a, d, k), r| {
+            let (ra, rd, rk) = r.effect_counts();
+            (a + ra, d + rd, k + rk)
+        });
+        assert_eq!(
+            (allow, deny, ask),
+            (0, 0, 1),
+            "only the parent ask should be counted"
+        );
+    }
+
+    #[test]
+    fn build_tree_sandboxed_exec_named() {
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (allow (exec "cargo" *) :sandbox "cargo-env"))"#,
+        );
+        let roots = build_tree(&[policy]);
+
+        fn find_leaf(node: &TreeNode) -> Option<&TreeNode> {
+            if matches!(&node.kind, TreeNodeKind::Leaf { .. }) {
+                return Some(node);
+            }
+            node.children.iter().find_map(find_leaf)
+        }
+        let leaf = find_leaf(&roots[0]).expect("should have a leaf");
+        assert_eq!(
+            leaf.children.len(),
+            1,
+            "named sandbox should have one child"
+        );
+        assert!(
+            matches!(&leaf.children[0].kind, TreeNodeKind::SandboxName(name) if name == "cargo-env"),
+            "sandbox child should be SandboxName(\"cargo-env\"), got {:?}",
+            leaf.children[0].kind
+        );
     }
 }

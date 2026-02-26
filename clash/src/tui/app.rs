@@ -7,7 +7,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, MouseEvent, MouseEventKind};
 
 use crate::policy::Effect;
-use crate::policy::ast::{PolicyItem, Rule, TopLevel};
+use crate::policy::ast::{PolicyItem, Rule, SandboxRef, TopLevel};
 use crate::policy::compile::compile_policy;
 use crate::policy::edit;
 use crate::policy::parse;
@@ -29,6 +29,8 @@ pub enum Mode {
     AddRule(AddRuleForm),
     EditRule(EditRuleState),
     SelectEffect(SelectEffectState),
+    SelectSandboxEffect(SelectSandboxEffectState),
+    EditSandboxRule(EditSandboxRuleState),
     Search,
 }
 
@@ -38,6 +40,12 @@ pub enum ConfirmAction {
         level: PolicyLevel,
         policy: String,
         rule_text: String,
+    },
+    DeleteSandboxRule {
+        level: PolicyLevel,
+        policy: String,
+        sandbox_rule_text: String,
+        parent_rule: Rule,
     },
     QuitUnsaved,
 }
@@ -100,6 +108,31 @@ pub struct SelectEffectState {
     pub rule: Rule,
     pub level: PolicyLevel,
     pub policy: String,
+}
+
+/// State for sandbox effect selector dropdown.
+pub struct SelectSandboxEffectState {
+    pub effect_index: usize,
+    pub sandbox_rule: Rule,
+    pub parent_rule: Rule,
+    pub level: PolicyLevel,
+    pub policy: String,
+}
+
+/// State for inline sandbox rule editing.
+pub struct EditSandboxRuleState {
+    pub input: TextInput,
+    pub original_sandbox_rule: Rule,
+    pub parent_rule: Rule,
+    pub level: PolicyLevel,
+    pub policy: String,
+    pub error: Option<String>,
+}
+
+/// How to mutate a sandbox sub-rule within its parent.
+enum SandboxMutation {
+    Delete,
+    Replace(Rule),
 }
 
 // ---------------------------------------------------------------------------
@@ -468,6 +501,10 @@ impl App {
                 | TreeNodeKind::ToolName(s) => s.clone(),
                 TreeNodeKind::HasMarker => ":has".into(),
                 TreeNodeKind::Leaf { effect, .. } => effect.to_string(),
+                TreeNodeKind::SandboxLeaf { effect, .. } => {
+                    format!("{effect} [sandbox]")
+                }
+                TreeNodeKind::SandboxName(name) => format!("sandbox: \"{name}\""),
             };
             parts.push(label);
             current_roots = &node.children;
@@ -614,28 +651,44 @@ impl App {
         });
     }
 
-    /// Open the effect selector dropdown on the focused leaf.
+    /// Open the effect selector dropdown on the focused leaf or sandbox leaf.
     pub fn start_select_effect(&mut self) {
         let Some(row) = self.flat_rows.get(self.cursor) else {
             return;
         };
-        let TreeNodeKind::Leaf {
-            effect,
-            rule,
-            level,
-            policy,
-        } = &row.kind
-        else {
-            self.set_status("Not a rule leaf", true);
-            return;
-        };
-
-        self.mode = Mode::SelectEffect(SelectEffectState {
-            effect_index: effect_to_display_index(*effect),
-            rule: rule.clone(),
-            level: *level,
-            policy: policy.clone(),
-        });
+        match &row.kind {
+            TreeNodeKind::Leaf {
+                effect,
+                rule,
+                level,
+                policy,
+            } => {
+                self.mode = Mode::SelectEffect(SelectEffectState {
+                    effect_index: effect_to_display_index(*effect),
+                    rule: rule.clone(),
+                    level: *level,
+                    policy: policy.clone(),
+                });
+            }
+            TreeNodeKind::SandboxLeaf {
+                effect,
+                sandbox_rule,
+                parent_rule,
+                level,
+                policy,
+            } => {
+                self.mode = Mode::SelectSandboxEffect(SelectSandboxEffectState {
+                    effect_index: effect_to_display_index(*effect),
+                    sandbox_rule: sandbox_rule.clone(),
+                    parent_rule: parent_rule.clone(),
+                    level: *level,
+                    policy: policy.clone(),
+                });
+            }
+            _ => {
+                self.set_status("Not a rule leaf", true);
+            }
+        }
     }
 
     /// Apply the selected effect from the dropdown.
@@ -693,27 +746,75 @@ impl App {
         }
     }
 
-    /// Initiate deletion of the focused rule (enters Confirm mode).
+    /// Apply the selected effect from the sandbox dropdown.
+    pub fn confirm_select_sandbox_effect(&mut self) {
+        let Mode::SelectSandboxEffect(state) = &self.mode else {
+            return;
+        };
+
+        let new_effect = effect_from_display_index(state.effect_index);
+        let old_sandbox_rule = state.sandbox_rule.clone();
+        let parent_rule = state.parent_rule.clone();
+        let level = state.level;
+        let policy = state.policy.clone();
+
+        if new_effect == old_sandbox_rule.effect {
+            self.mode = Mode::Normal;
+            return;
+        }
+
+        let new_sandbox_rule = Rule {
+            effect: new_effect,
+            ..old_sandbox_rule.clone()
+        };
+
+        self.mode = Mode::Normal;
+        self.mutate_sandbox_rule(
+            level,
+            &policy,
+            &parent_rule,
+            &old_sandbox_rule,
+            SandboxMutation::Replace(new_sandbox_rule),
+            "Effect changed",
+        );
+    }
+
+    /// Initiate deletion of the focused rule or sandbox sub-rule (enters Confirm mode).
     pub fn start_delete(&mut self) {
         let Some(row) = self.flat_rows.get(self.cursor) else {
             return;
         };
-        let TreeNodeKind::Leaf {
-            rule,
-            level,
-            policy,
-            ..
-        } = &row.kind
-        else {
-            self.set_status("Not a rule leaf", true);
-            return;
-        };
-
-        self.mode = Mode::Confirm(ConfirmAction::DeleteRule {
-            level: *level,
-            policy: policy.clone(),
-            rule_text: rule.to_string(),
-        });
+        match &row.kind {
+            TreeNodeKind::Leaf {
+                rule,
+                level,
+                policy,
+                ..
+            } => {
+                self.mode = Mode::Confirm(ConfirmAction::DeleteRule {
+                    level: *level,
+                    policy: policy.clone(),
+                    rule_text: rule.to_string(),
+                });
+            }
+            TreeNodeKind::SandboxLeaf {
+                sandbox_rule,
+                parent_rule,
+                level,
+                policy,
+                ..
+            } => {
+                self.mode = Mode::Confirm(ConfirmAction::DeleteSandboxRule {
+                    level: *level,
+                    policy: policy.clone(),
+                    sandbox_rule_text: sandbox_rule.to_string(),
+                    parent_rule: parent_rule.clone(),
+                });
+            }
+            _ => {
+                self.set_status("Not a rule leaf", true);
+            }
+        }
     }
 
     /// Execute a confirmed delete.
@@ -741,6 +842,118 @@ impl App {
             Err(e) => {
                 self.undo_stack.pop();
                 self.set_status(&format!("Delete failed: {e}"), true);
+            }
+        }
+    }
+
+    /// Execute a confirmed sandbox sub-rule delete.
+    pub fn confirm_delete_sandbox_rule(
+        &mut self,
+        level: PolicyLevel,
+        policy: String,
+        sandbox_rule_text: String,
+        parent_rule: Rule,
+    ) {
+        // Parse the sandbox sub-rule text to find the rule to remove
+        let sandbox_rule = match parse_rule_text(&sandbox_rule_text) {
+            Ok(r) => r,
+            Err(e) => {
+                self.set_status(&format!("Parse error: {e}"), true);
+                return;
+            }
+        };
+        self.mutate_sandbox_rule(
+            level,
+            &policy,
+            &parent_rule,
+            &sandbox_rule,
+            SandboxMutation::Delete,
+            "Sandbox rule deleted",
+        );
+    }
+
+    /// Shared helper: modify a sandbox sub-rule within its parent rule.
+    ///
+    /// Removes the old parent rule and adds the new one with the sandbox
+    /// mutation applied.
+    fn mutate_sandbox_rule(
+        &mut self,
+        level: PolicyLevel,
+        policy: &str,
+        parent_rule: &Rule,
+        target_sandbox_rule: &Rule,
+        mutation: SandboxMutation,
+        success_msg: &str,
+    ) {
+        self.push_undo();
+
+        let Some(SandboxRef::Inline(sandbox_rules)) = &parent_rule.sandbox else {
+            self.undo_stack.pop();
+            self.set_status("Parent rule has no inline sandbox", true);
+            return;
+        };
+
+        // Build new sandbox rules list with the mutation applied
+        let mut new_sandbox_rules: Vec<Rule> = Vec::new();
+        let target_text = target_sandbox_rule.to_string();
+        let mut found = false;
+
+        for r in sandbox_rules {
+            if r.to_string() == target_text && !found {
+                found = true;
+                match &mutation {
+                    SandboxMutation::Delete => {} // skip it
+                    SandboxMutation::Replace(new_rule) => {
+                        new_sandbox_rules.push(new_rule.clone());
+                    }
+                }
+            } else {
+                new_sandbox_rules.push(r.clone());
+            }
+        }
+
+        if !found {
+            self.undo_stack.pop();
+            self.set_status("Sandbox sub-rule not found in parent", true);
+            return;
+        }
+
+        // Build the new parent rule
+        let new_parent = Rule {
+            effect: parent_rule.effect,
+            matcher: parent_rule.matcher.clone(),
+            sandbox: if new_sandbox_rules.is_empty() {
+                None
+            } else {
+                Some(SandboxRef::Inline(new_sandbox_rules))
+            },
+        };
+
+        let old_parent_text = parent_rule.to_string();
+
+        let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == level) else {
+            self.undo_stack.pop();
+            self.set_status("Policy level not found", true);
+            return;
+        };
+
+        let result = edit::remove_rule(&ls.source, policy, &old_parent_text)
+            .and_then(|s| edit::add_rule(&s, policy, &new_parent));
+
+        match result {
+            Ok(new_source) => {
+                if let Err(e) = compile_policy(&new_source) {
+                    self.undo_stack.pop();
+                    self.set_status(&format!("Invalid: {e}"), true);
+                    return;
+                }
+                ls.source = new_source;
+                self.rebuild_tree();
+                self.set_status(success_msg, false);
+            }
+            Err(e) => {
+                self.undo_stack.pop();
+                self.set_status(&format!("Edit failed: {e}"), true);
             }
         }
     }
@@ -965,29 +1178,46 @@ impl App {
     // Edit rule (inline)
     // -----------------------------------------------------------------------
 
-    /// Enter edit mode for the focused leaf rule.
+    /// Enter edit mode for the focused leaf rule or sandbox sub-rule.
     pub fn start_edit_rule(&mut self) {
         let Some(row) = self.flat_rows.get(self.cursor) else {
             return;
         };
-        let TreeNodeKind::Leaf {
-            rule,
-            level,
-            policy,
-            ..
-        } = &row.kind
-        else {
-            self.set_status("Not a rule leaf", true);
-            return;
-        };
-
-        self.mode = Mode::EditRule(EditRuleState {
-            input: TextInput::new(&rule.to_string()),
-            original_rule_text: rule.to_string(),
-            level: *level,
-            policy: policy.clone(),
-            error: None,
-        });
+        match &row.kind {
+            TreeNodeKind::Leaf {
+                rule,
+                level,
+                policy,
+                ..
+            } => {
+                self.mode = Mode::EditRule(EditRuleState {
+                    input: TextInput::new(&rule.to_string()),
+                    original_rule_text: rule.to_string(),
+                    level: *level,
+                    policy: policy.clone(),
+                    error: None,
+                });
+            }
+            TreeNodeKind::SandboxLeaf {
+                sandbox_rule,
+                parent_rule,
+                level,
+                policy,
+                ..
+            } => {
+                self.mode = Mode::EditSandboxRule(EditSandboxRuleState {
+                    input: TextInput::new(&sandbox_rule.to_string()),
+                    original_sandbox_rule: sandbox_rule.clone(),
+                    parent_rule: parent_rule.clone(),
+                    level: *level,
+                    policy: policy.clone(),
+                    error: None,
+                });
+            }
+            _ => {
+                self.set_status("Not a rule leaf", true);
+            }
+        }
     }
 
     /// Complete inline edit: parse new text, remove old, add new.
@@ -1045,6 +1275,40 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Complete inline edit of a sandbox sub-rule.
+    pub fn complete_edit_sandbox_rule(&mut self) {
+        let Mode::EditSandboxRule(state) = &self.mode else {
+            return;
+        };
+
+        let new_text = state.input.value().to_string();
+        let original_sandbox_rule = state.original_sandbox_rule.clone();
+        let parent_rule = state.parent_rule.clone();
+        let level = state.level;
+        let policy = state.policy.clone();
+
+        // Parse the new sandbox sub-rule
+        let new_rule = match parse_rule_text(&new_text) {
+            Ok(r) => r,
+            Err(e) => {
+                if let Mode::EditSandboxRule(state) = &mut self.mode {
+                    state.error = Some(format!("Parse error: {e}"));
+                }
+                return;
+            }
+        };
+
+        self.mode = Mode::Normal;
+        self.mutate_sandbox_rule(
+            level,
+            &policy,
+            &parent_rule,
+            &original_sandbox_rule,
+            SandboxMutation::Replace(new_rule),
+            "Sandbox rule updated",
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1350,6 +1614,8 @@ pub(crate) fn row_search_text(kind: &TreeNodeKind) -> String {
             policy,
             ..
         } => format!("{effect} {rule} {policy}"),
+        TreeNodeKind::SandboxLeaf { sandbox_rule, .. } => format!("sandbox {sandbox_rule}"),
+        TreeNodeKind::SandboxName(name) => format!("sandbox {name}"),
     }
 }
 
@@ -1894,6 +2160,21 @@ mod tests {
     fn row_search_text_binary() {
         let text = row_search_text(&TreeNodeKind::Binary("git".to_string()));
         assert_eq!(text, "git");
+    }
+
+    #[test]
+    fn search_finds_sandbox_content() {
+        let mut app = make_app(r#"(policy "main" (ask (exec "ls" "-lha") :sandbox (allow (fs))))"#);
+        app.expand_all();
+
+        // Search for "sandbox"
+        app.search_query = Some("sandbox".to_string());
+        app.update_search_matches();
+
+        assert!(
+            !app.search_matches.is_empty(),
+            "search for 'sandbox' should find sandbox nodes"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2903,5 +3184,173 @@ mod tests {
             }
             other => panic!("cursor should be on a leaf, got: {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Sandbox editing tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: navigate to the first SandboxLeaf in a fully expanded app.
+    fn cursor_to_sandbox_leaf(app: &mut App) -> bool {
+        app.expand_all();
+        for (i, row) in app.flat_rows.iter().enumerate() {
+            if matches!(&row.kind, TreeNodeKind::SandboxLeaf { .. }) {
+                app.cursor = i;
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn sandbox_effect_cycle() {
+        let mut app = make_app(r#"(policy "main" (ask (exec "ls") :sandbox (allow (fs))))"#);
+        assert!(
+            cursor_to_sandbox_leaf(&mut app),
+            "should find a sandbox leaf"
+        );
+
+        // Start effect select on sandbox leaf
+        app.start_select_effect();
+        assert!(
+            matches!(app.mode, Mode::SelectSandboxEffect(_)),
+            "should enter SelectSandboxEffect mode"
+        );
+
+        // Change to deny (index 2)
+        if let Mode::SelectSandboxEffect(state) = &mut app.mode {
+            state.effect_index = 2; // auto deny
+        }
+        app.confirm_select_sandbox_effect();
+
+        assert!(matches!(app.mode, Mode::Normal));
+
+        // Verify the sandbox sub-rule effect changed
+        let status = app.status_message.as_ref().map(|s| s.text.as_str());
+        assert_eq!(status, Some("Effect changed"));
+
+        // The source should now contain "deny" in the sandbox
+        let source = &app.levels[0].source;
+        assert!(
+            source.contains("deny") && source.contains(":sandbox"),
+            "source should reflect changed sandbox effect: {source}"
+        );
+    }
+
+    #[test]
+    fn sandbox_delete() {
+        let mut app =
+            make_app(r#"(policy "main" (ask (exec "ls") :sandbox (allow (fs)) (deny (net *))))"#);
+        assert!(cursor_to_sandbox_leaf(&mut app));
+
+        // Start delete on sandbox leaf
+        app.start_delete();
+        assert!(
+            matches!(
+                app.mode,
+                Mode::Confirm(ConfirmAction::DeleteSandboxRule { .. })
+            ),
+            "should enter Confirm(DeleteSandboxRule) mode"
+        );
+
+        // Confirm the deletion
+        let mode = std::mem::replace(&mut app.mode, Mode::Normal);
+        if let Mode::Confirm(ConfirmAction::DeleteSandboxRule {
+            level,
+            policy,
+            sandbox_rule_text,
+            parent_rule,
+        }) = mode
+        {
+            app.confirm_delete_sandbox_rule(level, policy, sandbox_rule_text, parent_rule);
+        }
+
+        let status = app.status_message.as_ref().map(|s| s.text.as_str());
+        assert_eq!(status, Some("Sandbox rule deleted"));
+
+        // The parent rule should still exist but with one fewer sandbox sub-rule
+        let source = &app.levels[0].source;
+        assert!(
+            source.contains(":sandbox"),
+            "parent rule should still have sandbox: {source}"
+        );
+    }
+
+    #[test]
+    fn sandbox_delete_last_removes_sandbox() {
+        let mut app = make_app(r#"(policy "main" (ask (exec "ls") :sandbox (allow (fs))))"#);
+        assert!(cursor_to_sandbox_leaf(&mut app));
+
+        app.start_delete();
+        let mode = std::mem::replace(&mut app.mode, Mode::Normal);
+        if let Mode::Confirm(ConfirmAction::DeleteSandboxRule {
+            level,
+            policy,
+            sandbox_rule_text,
+            parent_rule,
+        }) = mode
+        {
+            app.confirm_delete_sandbox_rule(level, policy, sandbox_rule_text, parent_rule);
+        }
+
+        // With only one sandbox sub-rule, deleting it should remove the sandbox entirely
+        let source = &app.levels[0].source;
+        assert!(
+            !source.contains(":sandbox"),
+            "deleting the last sandbox sub-rule should remove :sandbox from the parent: {source}"
+        );
+        // But the parent exec rule should still exist
+        assert!(
+            source.contains("exec") && source.contains("\"ls\""),
+            "parent exec rule should still exist: {source}"
+        );
+    }
+
+    #[test]
+    fn sandbox_edit() {
+        let mut app = make_app(r#"(policy "main" (ask (exec "ls") :sandbox (allow (fs))))"#);
+        assert!(cursor_to_sandbox_leaf(&mut app));
+
+        // Start edit on sandbox leaf
+        app.start_edit_rule();
+        assert!(
+            matches!(app.mode, Mode::EditSandboxRule(_)),
+            "should enter EditSandboxRule mode"
+        );
+
+        // Change the rule text to (deny (net *))
+        if let Mode::EditSandboxRule(state) = &mut app.mode {
+            state.input.clear();
+            for c in "(deny (net *))".chars() {
+                state.input.insert_char(c);
+            }
+        }
+        app.complete_edit_sandbox_rule();
+
+        assert!(matches!(app.mode, Mode::Normal));
+        let status = app.status_message.as_ref().map(|s| s.text.as_str());
+        assert_eq!(status, Some("Sandbox rule updated"));
+
+        // Source should now contain "net" in the sandbox instead of "fs"
+        let source = &app.levels[0].source;
+        assert!(
+            source.contains("net") && source.contains(":sandbox"),
+            "source should reflect edited sandbox rule: {source}"
+        );
+    }
+
+    #[test]
+    fn search_finds_sandbox_leaf_content() {
+        let mut app = make_app(r#"(policy "main" (ask (exec "ls") :sandbox (allow (fs))))"#);
+        app.expand_all();
+
+        // Search for "sandbox" should find SandboxLeaf nodes
+        app.search_query = Some("sandbox".to_string());
+        app.update_search_matches();
+
+        assert!(
+            !app.search_matches.is_empty(),
+            "search for 'sandbox' should find sandbox leaf nodes"
+        );
     }
 }

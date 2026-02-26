@@ -25,7 +25,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputResult {
     // Clear status message on any keypress (except in text-input modes)
     if matches!(
         app.mode,
-        Mode::Normal | Mode::Confirm(_) | Mode::SelectEffect(_)
+        Mode::Normal | Mode::Confirm(_) | Mode::SelectEffect(_) | Mode::SelectSandboxEffect(_)
     ) {
         app.status_message = None;
     }
@@ -36,6 +36,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputResult {
         Mode::AddRule(_) => handle_add_rule(app, key),
         Mode::EditRule(_) => handle_edit_rule(app, key),
         Mode::SelectEffect(_) => handle_select_effect(app, key),
+        Mode::SelectSandboxEffect(_) => handle_select_sandbox_effect(app, key),
+        Mode::EditSandboxRule(_) => handle_edit_sandbox_rule(app, key),
         Mode::Search => handle_search(app, key),
     }
 }
@@ -123,6 +125,15 @@ fn handle_confirm(app: &mut App, key: KeyEvent) -> InputResult {
                     rule_text,
                 }) => {
                     app.confirm_delete(level, policy, rule_text);
+                    InputResult::Continue
+                }
+                Mode::Confirm(ConfirmAction::DeleteSandboxRule {
+                    level,
+                    policy,
+                    sandbox_rule_text,
+                    parent_rule,
+                }) => {
+                    app.confirm_delete_sandbox_rule(level, policy, sandbox_rule_text, parent_rule);
                     InputResult::Continue
                 }
                 Mode::Confirm(ConfirmAction::QuitUnsaved) => InputResult::Quit,
@@ -309,6 +320,85 @@ fn handle_select_effect(app: &mut App, key: KeyEvent) -> InputResult {
         }
         KeyCode::Enter => app.confirm_select_effect(),
         KeyCode::Esc => app.mode = Mode::Normal,
+        _ => {}
+    }
+    InputResult::Continue
+}
+
+// ---------------------------------------------------------------------------
+// Select sandbox effect mode
+// ---------------------------------------------------------------------------
+
+fn handle_select_sandbox_effect(app: &mut App, key: KeyEvent) -> InputResult {
+    let Mode::SelectSandboxEffect(state) = &mut app.mode else {
+        return InputResult::Continue;
+    };
+    match key.code {
+        KeyCode::Left | KeyCode::Char('h') => {
+            if state.effect_index > 0 {
+                state.effect_index -= 1;
+            }
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            if state.effect_index < EFFECT_DISPLAY.len() - 1 {
+                state.effect_index += 1;
+            }
+        }
+        KeyCode::Tab => {
+            state.effect_index = (state.effect_index + 1) % EFFECT_DISPLAY.len();
+        }
+        KeyCode::Enter => app.confirm_select_sandbox_effect(),
+        KeyCode::Esc => app.mode = Mode::Normal,
+        _ => {}
+    }
+    InputResult::Continue
+}
+
+// ---------------------------------------------------------------------------
+// Edit sandbox rule mode
+// ---------------------------------------------------------------------------
+
+fn handle_edit_sandbox_rule(app: &mut App, key: KeyEvent) -> InputResult {
+    match key.code {
+        KeyCode::Enter => app.complete_edit_sandbox_rule(),
+        KeyCode::Esc => app.mode = Mode::Normal,
+        KeyCode::Backspace => {
+            if let Mode::EditSandboxRule(state) = &mut app.mode {
+                state.input.backspace();
+                state.error = None;
+            }
+        }
+        KeyCode::Delete => {
+            if let Mode::EditSandboxRule(state) = &mut app.mode {
+                state.input.delete();
+            }
+        }
+        KeyCode::Left => {
+            if let Mode::EditSandboxRule(state) = &mut app.mode {
+                state.input.move_left();
+            }
+        }
+        KeyCode::Right => {
+            if let Mode::EditSandboxRule(state) = &mut app.mode {
+                state.input.move_right();
+            }
+        }
+        KeyCode::Home => {
+            if let Mode::EditSandboxRule(state) = &mut app.mode {
+                state.input.home();
+            }
+        }
+        KeyCode::End => {
+            if let Mode::EditSandboxRule(state) = &mut app.mode {
+                state.input.end();
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Mode::EditSandboxRule(state) = &mut app.mode {
+                state.input.insert_char(c);
+                state.error = None;
+            }
+        }
         _ => {}
     }
     InputResult::Continue
