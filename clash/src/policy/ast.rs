@@ -381,6 +381,183 @@ impl fmt::Display for PathExpr {
 }
 
 #[cfg(test)]
+pub(crate) mod strategies {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    /// Generate a safe identifier string (no special chars that break s-expr parsing).
+    fn arb_identifier() -> impl Strategy<Value = String> {
+        "[a-z][a-z0-9_-]{0,12}".prop_map(|s| s.to_string())
+    }
+
+    /// Generate an arbitrary Pattern (max depth controlled by recursion limit).
+    pub fn arb_pattern() -> impl Strategy<Value = Pattern> {
+        arb_pattern_inner(3)
+    }
+
+    fn arb_pattern_inner(depth: u32) -> impl Strategy<Value = Pattern> {
+        if depth == 0 {
+            prop_oneof![
+                Just(Pattern::Any),
+                arb_identifier().prop_map(Pattern::Literal),
+            ]
+            .boxed()
+        } else {
+            prop_oneof![
+                4 => Just(Pattern::Any),
+                4 => arb_identifier().prop_map(Pattern::Literal),
+                1 => prop::collection::vec(arb_pattern_inner(depth - 1), 2..=4)
+                    .prop_map(Pattern::Or),
+                1 => arb_pattern_inner(depth - 1)
+                    .prop_map(|p| Pattern::Not(Box::new(p))),
+            ]
+            .boxed()
+        }
+    }
+
+    /// Generate an arbitrary OpPattern.
+    pub fn arb_op_pattern() -> impl Strategy<Value = OpPattern> {
+        prop_oneof![
+            Just(OpPattern::Any),
+            Just(OpPattern::Single(FsOp::Read)),
+            Just(OpPattern::Single(FsOp::Write)),
+            Just(OpPattern::Single(FsOp::Create)),
+            Just(OpPattern::Single(FsOp::Delete)),
+            prop::collection::vec(
+                prop_oneof![
+                    Just(FsOp::Read),
+                    Just(FsOp::Write),
+                    Just(FsOp::Create),
+                    Just(FsOp::Delete),
+                ],
+                2..=4,
+            )
+            .prop_map(OpPattern::Or),
+        ]
+    }
+
+    /// Generate an arbitrary PathExpr.
+    pub fn arb_path_expr() -> impl Strategy<Value = PathExpr> {
+        arb_path_expr_inner(2)
+    }
+
+    fn arb_path_expr_inner(depth: u32) -> impl Strategy<Value = PathExpr> {
+        if depth == 0 {
+            prop_oneof![
+                arb_identifier().prop_map(|s| PathExpr::Static(format!("/tmp/{s}"))),
+                Just(PathExpr::Env("HOME".into())),
+                Just(PathExpr::Env("PWD".into())),
+            ]
+            .boxed()
+        } else {
+            prop_oneof![
+                3 => arb_identifier().prop_map(|s| PathExpr::Static(format!("/tmp/{s}"))),
+                2 => Just(PathExpr::Env("HOME".into())),
+                1 => prop::collection::vec(arb_path_expr_inner(depth - 1), 2..=3)
+                    .prop_map(PathExpr::Join),
+            ]
+            .boxed()
+        }
+    }
+
+    /// Generate an arbitrary PathFilter.
+    pub fn arb_path_filter() -> impl Strategy<Value = PathFilter> {
+        arb_path_filter_inner(2)
+    }
+
+    fn arb_path_filter_inner(depth: u32) -> impl Strategy<Value = PathFilter> {
+        if depth == 0 {
+            prop_oneof![
+                arb_identifier().prop_map(|s| PathFilter::Literal(format!("/tmp/{s}"))),
+                arb_path_expr().prop_map(PathFilter::Subpath),
+            ]
+            .boxed()
+        } else {
+            prop_oneof![
+                3 => arb_identifier().prop_map(|s| PathFilter::Literal(format!("/tmp/{s}"))),
+                2 => arb_path_expr().prop_map(PathFilter::Subpath),
+                1 => prop::collection::vec(arb_path_filter_inner(depth - 1), 2..=3)
+                    .prop_map(PathFilter::Or),
+                1 => arb_path_filter_inner(depth - 1)
+                    .prop_map(|pf| PathFilter::Not(Box::new(pf))),
+            ]
+            .boxed()
+        }
+    }
+
+    /// Generate an arbitrary CapMatcher.
+    pub fn arb_cap_matcher() -> impl Strategy<Value = CapMatcher> {
+        prop_oneof![
+            arb_exec_matcher().prop_map(CapMatcher::Exec),
+            arb_fs_matcher().prop_map(CapMatcher::Fs),
+            arb_net_matcher().prop_map(CapMatcher::Net),
+            arb_tool_matcher().prop_map(CapMatcher::Tool),
+        ]
+    }
+
+    fn arb_exec_matcher() -> impl Strategy<Value = ExecMatcher> {
+        (
+            arb_pattern(),
+            prop::collection::vec(arb_pattern(), 0..=3),
+            prop::collection::vec(arb_pattern(), 0..=2),
+        )
+            .prop_map(|(bin, args, has_args)| ExecMatcher {
+                bin,
+                args,
+                has_args,
+            })
+    }
+
+    fn arb_fs_matcher() -> impl Strategy<Value = FsMatcher> {
+        (arb_op_pattern(), proptest::option::of(arb_path_filter()))
+            .prop_map(|(op, path)| FsMatcher { op, path })
+    }
+
+    fn arb_net_matcher() -> impl Strategy<Value = NetMatcher> {
+        arb_pattern().prop_map(|domain| NetMatcher { domain })
+    }
+
+    fn arb_tool_matcher() -> impl Strategy<Value = ToolMatcher> {
+        arb_pattern().prop_map(|name| ToolMatcher { name })
+    }
+
+    fn arb_effect() -> impl Strategy<Value = Effect> {
+        prop_oneof![Just(Effect::Allow), Just(Effect::Deny), Just(Effect::Ask)]
+    }
+
+    /// Generate an arbitrary Rule (without sandbox to keep parsing simple).
+    pub fn arb_rule() -> impl Strategy<Value = Rule> {
+        (arb_effect(), arb_cap_matcher()).prop_map(|(effect, matcher)| Rule {
+            effect,
+            matcher,
+            sandbox: None,
+        })
+    }
+
+    /// Generate an arbitrary Rule that may have an inline sandbox.
+    pub fn arb_rule_with_sandbox() -> impl Strategy<Value = Rule> {
+        (
+            arb_effect(),
+            arb_exec_matcher(),
+            proptest::option::of(prop::collection::vec(
+                (arb_effect(), arb_cap_matcher()).prop_map(|(effect, matcher)| Rule {
+                    effect,
+                    matcher,
+                    sandbox: None,
+                }),
+                1..=3,
+            )),
+        )
+            .prop_map(|(effect, exec, sandbox_rules)| Rule {
+                effect,
+                matcher: CapMatcher::Exec(exec),
+                sandbox: sandbox_rules.map(SandboxRef::Inline),
+            })
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -478,5 +655,75 @@ mod tests {
     fn display_pattern_not() {
         let p = Pattern::Not(Box::new(Pattern::Literal("secret".into())));
         assert_eq!(p.to_string(), "(not \"secret\")");
+    }
+
+    // -----------------------------------------------------------------------
+    // Property-based tests
+    // -----------------------------------------------------------------------
+
+    use proptest::prelude::*;
+
+    use super::strategies::*;
+
+    proptest! {
+        /// Round-trip stability: rule → Display → parse → Display must be identical.
+        #[test]
+        fn rule_display_roundtrips(rule in arb_rule()) {
+            let displayed = rule.to_string();
+            let source = format!("(policy \"_test\" {displayed})");
+            let parsed = crate::policy::parse::parse(&source);
+            prop_assert!(parsed.is_ok(), "parse failed for: {}", source);
+            let top_levels = parsed.unwrap();
+            let mut found = false;
+            for tl in &top_levels {
+                if let TopLevel::Policy { body, .. } = tl {
+                    for item in body {
+                        if let PolicyItem::Rule(r) = item {
+                            let redisplayed = r.to_string();
+                            prop_assert_eq!(&displayed, &redisplayed,
+                                "round-trip mismatch:\n  original: {}\n  reparsed: {}",
+                                displayed, redisplayed);
+                            found = true;
+                        }
+                    }
+                }
+            }
+            prop_assert!(found, "no rule found after parsing: {}", source);
+        }
+
+        /// Display is always valid s-expr: wrapping in (policy ...) and parsing never fails.
+        #[test]
+        fn rule_display_is_valid_sexpr(rule in arb_rule()) {
+            let displayed = rule.to_string();
+            let source = format!("(policy \"_test\" {displayed})");
+            let result = crate::policy::parse::parse(&source);
+            prop_assert!(result.is_ok(),
+                "Display produced invalid s-expr: {}\n  error: {:?}",
+                source, result.err());
+        }
+
+        /// Sandboxed rule Display also round-trips.
+        #[test]
+        fn sandboxed_rule_display_roundtrips(rule in arb_rule_with_sandbox()) {
+            let displayed = rule.to_string();
+            let source = format!("(policy \"_test\" {displayed})");
+            let parsed = crate::policy::parse::parse(&source);
+            prop_assert!(parsed.is_ok(),
+                "parse failed for sandboxed rule: {}\n  error: {:?}",
+                source, parsed.err());
+            let top_levels = parsed.unwrap();
+            for tl in &top_levels {
+                if let TopLevel::Policy { body, .. } = tl {
+                    for item in body {
+                        if let PolicyItem::Rule(r) = item {
+                            let redisplayed = r.to_string();
+                            prop_assert_eq!(&displayed, &redisplayed,
+                                "sandboxed round-trip mismatch:\n  original: {}\n  reparsed: {}",
+                                displayed, redisplayed);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
