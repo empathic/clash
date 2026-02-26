@@ -153,6 +153,35 @@ Suggest one of these fixes:
 
 **Do NOT retry the command** — it will fail again until the sandbox policy is updated.
 
+### Sandbox Filesystem Errors
+
+Commands that run inside a sandbox have filesystem access **restricted to allowed paths**. By default,
+sandboxed processes can read and execute from most paths but cannot write or create files outside
+the explicitly allowed directories (typically the working directory and temp dirs). If a command
+needs to access files outside these paths (e.g., `~/.fly`, `~/.cache/sccache`, application config
+directories), the sandbox will block it and you'll see errors like:
+
+- "operation not permitted" (macOS — Seatbelt sandbox)
+- "Permission denied" (Linux — Landlock sandbox)
+- "EACCES: permission denied, open '/path/to/file'" (Node.js)
+
+**When you see these errors:** Tell the user that the clash sandbox is likely blocking filesystem access.
+Suggest adding the blocked paths to their policy:
+
+1. Add filesystem access for the needed directory:
+   ```
+   (allow (fs (or read write create) (subpath "/Users/user/.fly")))
+   ```
+2. Or add it to an explicit sandbox block:
+   ```
+   (sandbox "my-sandbox"
+     (fs read (subpath (env PWD)))
+     (fs (or read write create) (subpath "/Users/user/.fly")))
+   ```
+3. Use `/clash:edit` to interactively update the policy
+
+**Do NOT retry the command** — it will fail again until the sandbox policy is updated.
+
 ### Disabling Clash
 
 Set `CLASH_DISABLE=1` in the environment to temporarily disable all clash hooks for a session.

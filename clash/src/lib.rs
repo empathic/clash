@@ -42,6 +42,7 @@ pub mod permissions;
 pub mod policy;
 pub mod sandbox;
 pub mod sandbox_cmd;
+pub mod sandbox_fs_hints;
 pub mod schema;
 pub mod session_policy;
 pub mod settings;

@@ -11,22 +11,27 @@ use tracing::{Level, instrument};
 use super::{SandboxError, SupportLevel};
 
 /// Apply sandbox policy and exec the command via sandbox-exec.
+///
+/// `trace_path` is accepted for API consistency with the platform-agnostic
+/// `exec_sandboxed()` in `mod.rs`. Modern macOS does not support the SBPL
+/// `(trace)` directive or the `sandbox-exec -t` flag, so tracing is a no-op.
+/// Sandbox violation detection relies on stderr heuristics in PostToolUse
+/// (`sandbox_fs_hints`).
 #[instrument(level = Level::TRACE, skip(policy))]
 pub fn exec_sandboxed(
     policy: &SandboxPolicy,
     cwd: &Path,
     command: &[String],
+    _trace_path: Option<&Path>,
 ) -> Result<std::convert::Infallible, SandboxError> {
     let cwd_str = cwd.to_string_lossy();
     let profile = compile_to_sbpl(policy, &cwd_str);
 
     // Build: sandbox-exec -p <profile> -- <command...>
-    let mut args = vec![
-        "sandbox-exec".to_string(),
-        "-p".to_string(),
-        profile,
-        "--".to_string(),
-    ];
+    let mut args = vec!["sandbox-exec".to_string()];
+    args.push("-p".to_string());
+    args.push(profile);
+    args.push("--".to_string());
     args.extend_from_slice(command);
 
     super::do_exec(&args)

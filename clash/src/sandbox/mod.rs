@@ -55,6 +55,7 @@ pub trait SandboxBackend {
         policy: &SandboxPolicy,
         cwd: &Path,
         command: &[String],
+        trace_path: Option<&Path>,
     ) -> Result<(), SandboxError>;
 
     /// Check whether this backend is supported.
@@ -109,6 +110,7 @@ impl SandboxBackend for MockSandbox {
         policy: &SandboxPolicy,
         cwd: &Path,
         command: &[String],
+        _trace_path: Option<&Path>,
     ) -> Result<(), SandboxError> {
         self.applications.borrow_mut().push(MockApplication {
             policy: policy.clone(),
@@ -128,11 +130,16 @@ impl SandboxBackend for MockSandbox {
 ///
 /// This function does not return on success — it replaces the current
 /// process with the target command via `execvp`.
+///
+/// If `trace_path` is provided, sandbox violations are logged to that file.
+/// On macOS this uses `sandbox-exec -t`; on Linux it is ignored (Landlock
+/// has no built-in trace mechanism).
 #[instrument(level = Level::TRACE, skip(policy))]
 pub fn exec_sandboxed(
     policy: &SandboxPolicy,
     cwd: &Path,
     command: &[String],
+    trace_path: Option<&Path>,
 ) -> Result<std::convert::Infallible, SandboxError> {
     if command.is_empty() {
         return Err(SandboxError::Apply("no command specified".into()));
@@ -140,16 +147,19 @@ pub fn exec_sandboxed(
 
     #[cfg(target_os = "linux")]
     {
+        // Landlock has no trace mechanism — ignore trace_path.
+        let _ = trace_path;
         linux::exec_sandboxed(policy, cwd, command)
     }
 
     #[cfg(target_os = "macos")]
     {
-        macos::exec_sandboxed(policy, cwd, command)
+        macos::exec_sandboxed(policy, cwd, command, trace_path)
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
+        let _ = trace_path;
         Err(SandboxError::Unsupported(
             "sandbox only supported on Linux and macOS".into(),
         ))
@@ -337,7 +347,7 @@ mod tests {
         let cwd = Path::new("/home/user");
         let command = vec!["ls".into(), "-la".into()];
 
-        mock.apply_and_exec(&policy, cwd, &command).unwrap();
+        mock.apply_and_exec(&policy, cwd, &command, None).unwrap();
 
         let apps = mock.applications();
         assert_eq!(apps.len(), 1);
@@ -352,9 +362,9 @@ mod tests {
         let mock = MockSandbox::new();
         let policy = simple_policy();
 
-        mock.apply_and_exec(&policy, Path::new("/a"), &["cmd1".into()])
+        mock.apply_and_exec(&policy, Path::new("/a"), &["cmd1".into()], None)
             .unwrap();
-        mock.apply_and_exec(&policy, Path::new("/b"), &["cmd2".into()])
+        mock.apply_and_exec(&policy, Path::new("/b"), &["cmd2".into()], None)
             .unwrap();
 
         let apps = mock.applications();

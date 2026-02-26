@@ -199,11 +199,22 @@ fn wrap_bash_with_sandbox(
     let clash_bin = std::env::current_exe().ok()?;
     let policy_json = serde_json::to_string(sandbox_policy).ok()?;
 
+    // Pass session and tool_use_id so `clash sandbox exec` can log violations
+    // to the audit trail after the sandboxed process exits.
+    let mut extra_args = String::new();
+    if !input.session_id.is_empty() {
+        extra_args += &format!(" --session-id {}", shell_escape(&input.session_id));
+        if let Some(ref tuid) = input.tool_use_id {
+            extra_args += &format!(" --tool-use-id {}", shell_escape(tuid));
+        }
+    }
+
     let sandboxed_command = format!(
-        "{} sandbox exec --policy {} --cwd {} -- bash -c {}",
+        "{} sandbox exec --policy {} --cwd {}{} -- bash -c {}",
         shell_escape(&clash_bin.to_string_lossy()),
         shell_escape(&policy_json),
         shell_escape(&input.cwd),
+        extra_args,
         shell_escape(&bash_input.command),
     );
 

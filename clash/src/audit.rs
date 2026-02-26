@@ -270,6 +270,149 @@ pub fn log_decision(
     }
 }
 
+/// A single sandbox violation captured from the kernel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxViolation {
+    /// The Seatbelt operation that was denied (e.g. "file-write-create").
+    pub operation: String,
+    /// The filesystem path that was blocked.
+    pub path: String,
+}
+
+/// An audit log entry for sandbox violations (separate from policy decisions).
+#[derive(Debug, Serialize)]
+struct SandboxViolationEntry<'a> {
+    timestamp: String,
+    session_id: &'a str,
+    tool_name: &'a str,
+    tool_use_id: &'a str,
+    decision: &'a str, // always "sandbox_violation"
+    tool_input_summary: &'a str,
+    violations: &'a [SandboxViolation],
+    /// Suggested policy rules to fix the violations.
+    suggested_rules: Vec<String>,
+}
+
+/// Write sandbox violation entries to the session audit log.
+///
+/// Called by `clash sandbox exec` after the sandboxed child exits and
+/// violations have been captured from the unified log.
+pub fn log_sandbox_violations(
+    session_id: &str,
+    tool_name: &str,
+    tool_use_id: &str,
+    tool_input_summary: &str,
+    violations: &[SandboxViolation],
+) {
+    if violations.is_empty() {
+        return;
+    }
+
+    let suggested_rules: Vec<String> = deduplicated_suggestions(violations);
+
+    let entry = SandboxViolationEntry {
+        timestamp: chrono_timestamp(),
+        session_id,
+        tool_name,
+        tool_use_id,
+        decision: "sandbox_violation",
+        tool_input_summary,
+        violations,
+        suggested_rules,
+    };
+
+    let session_log = session_dir(session_id).join("audit.jsonl");
+    if let Some(parent) = session_log.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string(&entry) {
+        let mut file = match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&session_log)
+        {
+            Ok(f) => f,
+            Err(e) => {
+                warn!(error = %e, "Failed to open session audit log for sandbox violations");
+                return;
+            }
+        };
+        let _ = writeln!(file, "{}", json);
+    }
+}
+
+/// Read sandbox violations for a specific tool_use_id from the session audit log.
+///
+/// Returns the violations array from the most recent `sandbox_violation` entry
+/// matching the given tool_use_id.
+pub fn read_sandbox_violations(session_id: &str, tool_use_id: &str) -> Vec<SandboxViolation> {
+    let session_log = session_dir(session_id).join("audit.jsonl");
+    let content = match std::fs::read_to_string(&session_log) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    // Search backwards for the most recent matching entry.
+    for line in content.lines().rev() {
+        if !line.contains("sandbox_violation") {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) {
+            if entry.get("decision").and_then(|v| v.as_str()) == Some("sandbox_violation")
+                && entry.get("tool_use_id").and_then(|v| v.as_str()) == Some(tool_use_id)
+            {
+                if let Some(violations) = entry.get("violations") {
+                    return serde_json::from_value(violations.clone()).unwrap_or_default();
+                }
+            }
+        }
+    }
+
+    Vec::new()
+}
+
+/// Deduplicate violations by parent directory and generate suggested policy rules.
+fn deduplicated_suggestions(violations: &[SandboxViolation]) -> Vec<String> {
+    let mut seen_dirs = std::collections::BTreeSet::new();
+    let mut suggestions = Vec::new();
+
+    for v in violations {
+        let dir = parent_dir_suggestion(&v.path);
+        if seen_dirs.insert(dir.clone()) {
+            suggestions.push(format!(
+                "(allow (fs (or read write create) (subpath \"{}\")))",
+                dir
+            ));
+        }
+    }
+
+    suggestions
+}
+
+/// Suggest the parent directory for a path. For dotfile directories under $HOME
+/// (e.g. ~/.fly/perms.123), suggest the dotfile dir (~/.fly). Otherwise suggest
+/// the immediate parent.
+fn parent_dir_suggestion(path: &str) -> String {
+    let p = std::path::Path::new(path);
+
+    if let Some(home) = dirs::home_dir()
+        && let Ok(rel) = p.strip_prefix(&home)
+    {
+        // Check if it's a dotfile directory like .fly/something
+        let mut components = rel.components();
+        if let Some(first) = components.next() {
+            let first_str = first.as_os_str().to_string_lossy();
+            if first_str.starts_with('.') && components.next().is_some() {
+                return home.join(first_str.as_ref()).to_string_lossy().into_owned();
+            }
+        }
+    }
+
+    p.parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
 /// Generate the narrowest possible allow rule for a denied tool invocation.
 ///
 /// Returns a `clash allow '(...)'` command with exact arguments matching
