@@ -383,10 +383,14 @@ impl App {
         }
     }
 
-    /// Execute a confirmed delete.
+    /// Execute a confirmed delete, positioning cursor on nearest sibling or parent.
     pub fn confirm_delete(&mut self, level: PolicyLevel, policy: String, rule_text: String) {
+        let anchor = self.delete_cursor_anchor();
         match self.apply_edit(level, |src| edit::remove_rule(src, &policy, &rule_text)) {
-            Ok(()) => self.set_status("Rule deleted", false),
+            Ok(()) => {
+                self.restore_cursor_after_delete(&anchor);
+                self.set_status("Rule deleted", false);
+            }
             Err(e) => self.set_status(&e, true),
         }
     }
@@ -407,6 +411,7 @@ impl App {
                 return;
             }
         };
+        let anchor = self.delete_cursor_anchor();
         self.mutate_sandbox_rule(
             level,
             &policy,
@@ -415,6 +420,10 @@ impl App {
             SandboxMutation::Delete,
             "Sandbox rule deleted",
         );
+        // Only reposition if the delete succeeded
+        if self.status_message.as_ref().is_some_and(|s| !s.is_error) {
+            self.restore_cursor_after_delete(&anchor);
+        }
     }
 
     /// Shared helper: modify a sandbox sub-rule within its parent rule.
@@ -541,6 +550,98 @@ impl App {
             .map_err(|e| format!("{e}"))?;
         ls.source = new_source;
         Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // Cursor tracking after delete
+    // -------------------------------------------------------------------
+
+    /// Capture anchor info before a delete for cursor repositioning.
+    ///
+    /// Returns the sibling node IDs (next, then previous) and the parent node ID
+    /// at the same depth level, so we can find them after tree rebuild.
+    fn delete_cursor_anchor(&self) -> DeleteAnchor {
+        let cursor = self.tree.cursor;
+        let rows = &self.tree.flat_rows;
+        let Some(row) = rows.get(cursor) else {
+            return DeleteAnchor::default();
+        };
+        let depth = row.depth;
+        let parent = self.tree.arena[row.node_id].parent;
+
+        // Find next sibling (next row at same depth with same parent)
+        let next_sibling = rows[cursor + 1..]
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.depth == depth && self.tree.arena[r.node_id].parent == parent)
+            .map(|(offset, _)| cursor + 1 + offset);
+
+        // Find prev sibling (prev row at same depth with same parent)
+        let prev_sibling = rows[..cursor]
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, r)| r.depth == depth && self.tree.arena[r.node_id].parent == parent)
+            .map(|(i, _)| i);
+
+        // Find parent row
+        let parent_row = parent.and_then(|pid| rows.iter().position(|r| r.node_id == pid));
+
+        // Capture labels for lookup after rebuild (node IDs change)
+        let label_at = |idx: usize| -> Option<String> {
+            rows.get(idx)
+                .map(|r| node_label(&self.tree.arena[r.node_id].kind))
+        };
+
+        DeleteAnchor {
+            next_sibling_label: next_sibling.and_then(&label_at),
+            prev_sibling_label: prev_sibling.and_then(&label_at),
+            parent_label: parent_row.and_then(&label_at),
+            depth,
+            original_cursor: cursor,
+        }
+    }
+
+    /// After a delete + rebuild, reposition cursor using the saved anchor.
+    fn restore_cursor_after_delete(&mut self, anchor: &DeleteAnchor) {
+        let rows = &self.tree.flat_rows;
+        if rows.is_empty() {
+            return;
+        }
+
+        // Try next sibling label at same depth
+        if let Some(ref label) = anchor.next_sibling_label {
+            if let Some(idx) = rows.iter().position(|r| {
+                r.depth == anchor.depth && node_label(&self.tree.arena[r.node_id].kind) == *label
+            }) {
+                self.tree.cursor = idx;
+                return;
+            }
+        }
+
+        // Try prev sibling label at same depth
+        if let Some(ref label) = anchor.prev_sibling_label {
+            if let Some(idx) = rows.iter().position(|r| {
+                r.depth == anchor.depth && node_label(&self.tree.arena[r.node_id].kind) == *label
+            }) {
+                self.tree.cursor = idx;
+                return;
+            }
+        }
+
+        // Try parent label at parent depth
+        if let Some(ref label) = anchor.parent_label {
+            if let Some(idx) = rows.iter().position(|r| {
+                r.depth == anchor.depth.saturating_sub(1)
+                    && node_label(&self.tree.arena[r.node_id].kind) == *label
+            }) {
+                self.tree.cursor = idx;
+                return;
+            }
+        }
+
+        // Fallback: stay near original position
+        self.tree.cursor = anchor.original_cursor.min(rows.len().saturating_sub(1));
     }
 
     // -------------------------------------------------------------------
@@ -867,6 +968,7 @@ impl App {
             return;
         };
 
+        let new_rule_text = new_rule.to_string();
         match state.target {
             RuleTarget::Regular { level, policy } => {
                 let original = original_rule.to_string();
@@ -874,7 +976,10 @@ impl App {
                     edit::remove_rule(src, &policy, &original)
                         .and_then(|s| edit::add_rule(&s, &policy, &new_rule))
                 }) {
-                    Ok(()) => self.set_status("Rule updated", false),
+                    Ok(()) => {
+                        self.cursor_to_rule(&new_rule_text, level, &policy);
+                        self.set_status("Rule updated", false);
+                    }
                     Err(e) => self.set_status(&e, true),
                 }
             }
@@ -893,6 +998,49 @@ impl App {
                 );
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cursor tracking helpers
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct DeleteAnchor {
+    next_sibling_label: Option<String>,
+    prev_sibling_label: Option<String>,
+    parent_label: Option<String>,
+    depth: usize,
+    original_cursor: usize,
+}
+
+/// Extract a label string from a node kind for cursor tracking.
+fn node_label(kind: &TreeNodeKind) -> String {
+    match kind {
+        TreeNodeKind::Domain(d) => d.to_string(),
+        TreeNodeKind::PolicyBlock { name, level } => format!("{name}[{level}]"),
+        TreeNodeKind::Binary(s)
+        | TreeNodeKind::Arg(s)
+        | TreeNodeKind::HasArg(s)
+        | TreeNodeKind::PathNode(s)
+        | TreeNodeKind::FsOp(s)
+        | TreeNodeKind::NetDomain(s)
+        | TreeNodeKind::ToolName(s) => s.clone(),
+        TreeNodeKind::HasMarker => ":has".into(),
+        TreeNodeKind::Leaf {
+            rule,
+            level,
+            policy,
+            ..
+        } => format!("{}|{}|{}", rule, level, policy),
+        TreeNodeKind::SandboxLeaf {
+            sandbox_rule,
+            level,
+            policy,
+            ..
+        } => format!("sbx:{}|{}|{}", sandbox_rule, level, policy),
+        TreeNodeKind::SandboxGroup => "SandboxGroup".into(),
+        TreeNodeKind::SandboxName(name) => format!("sandbox:{name}"),
     }
 }
 
