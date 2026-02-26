@@ -605,6 +605,56 @@ clash bug "Policy not matching git commands" \
 
 ---
 
+## Disabling Clash
+
+Set the `CLASH_DISABLE` environment variable to temporarily bypass all clash enforcement for a session.
+
+| Value | Effect |
+|-------|--------|
+| Unset or empty | Clash **enabled** (normal operation) |
+| `0` or `false` | Clash **enabled** |
+| Any other value (`1`, `true`, `yes`, ...) | Clash **disabled** (all hooks pass-through) |
+
+When disabled, clash hooks still run but immediately return pass-through responses — no policy evaluation, no sandbox enforcement. `clash status` and `clash doctor` will report the disabled state.
+
+**Examples:**
+
+```bash
+# Disable for a single session
+CLASH_DISABLE=1 claude
+
+# Re-enable
+unset CLASH_DISABLE
+```
+
+---
+
+## Uninstalling
+
+To fully remove clash from your system:
+
+```bash
+# 1. Remove the Claude Code plugin (stops hooks from firing)
+claude plugin uninstall clash
+
+# 2. Remove the binary
+cargo uninstall clash
+
+# 3. (Optional) Remove from the plugin marketplace
+claude plugin marketplace remove clash
+
+# 4. (Optional) Remove the status line — only needed if you skipped step 2
+clash statusline uninstall
+
+# 5. (Optional) Clean up configuration and logs
+rm -rf ~/.clash       # user-level policy and logs
+rm -rf .clash         # project-level policy (per repo)
+```
+
+After step 1, Claude Code reverts to its built-in permission model immediately. Policy files are left in place so you can resume where you left off if you reinstall later.
+
+---
+
 ## Exit Codes
 
 | Code | Meaning |
