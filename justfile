@@ -7,11 +7,17 @@ default:
     @just -l
 
 # Build clash and launch Claude Code with the plugin for local development.
-# The symlink lets hooks.json find the binary at ${CLAUDE_PLUGIN_ROOT}/bin/clash.
+# Builds to a temp dir and prepends it to PATH so the dev binary is found
+# before any system-installed version, without polluting ~/.cargo/bin.
 dev *ARGS:
-    @just -q uninstall
-    cargo install --path clash
-    claude --plugin-dir ./clash-plugin --debug-file /tmp/clash-debug --allow-dangerously-skip-permissions {{ARGS}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --bin clash
+    tmpdir=$(mktemp -d)
+    trap 'rm -rf "$tmpdir"' EXIT
+    cp target/debug/clash "$tmpdir/"
+    echo "clash dev binary: $tmpdir/clash"
+    PATH="$tmpdir:$PATH" claude --plugin-dir ./clash-plugin --debug-file /tmp/clash-debug --allow-dangerously-skip-permissions {{ARGS}}
 
 clean-configs:
     -rm -rf ~/.clash
