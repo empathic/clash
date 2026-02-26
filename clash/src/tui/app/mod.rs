@@ -167,12 +167,26 @@ impl LevelState {
 }
 
 // ---------------------------------------------------------------------------
-// Undo entry
+// Edit history (undo/redo)
 // ---------------------------------------------------------------------------
 
 pub(super) struct UndoEntry {
-    sources: Vec<(PolicyLevel, String)>,
-    cursor: usize,
+    pub(super) sources: Vec<(PolicyLevel, String)>,
+    pub(super) cursor: usize,
+}
+
+pub(super) struct EditHistory {
+    pub undo_stack: Vec<UndoEntry>,
+    pub redo_stack: Vec<UndoEntry>,
+}
+
+impl EditHistory {
+    pub fn new() -> Self {
+        Self {
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -223,8 +237,7 @@ pub struct App {
     pub show_help: bool,
     pub mode: Mode,
     pub status_message: Option<StatusMessage>,
-    pub(super) undo_stack: Vec<UndoEntry>,
-    pub(super) redo_stack: Vec<UndoEntry>,
+    pub(super) history: EditHistory,
     pub search: SearchState,
 }
 
@@ -295,8 +308,7 @@ impl App {
             show_help: false,
             mode: Mode::Normal,
             status_message: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            history: EditHistory::new(),
             search: SearchState::new(),
         }
     }

@@ -34,16 +34,16 @@ impl App {
             .iter()
             .map(|ls| (ls.level, ls.source.clone()))
             .collect();
-        self.undo_stack.push(super::UndoEntry {
+        self.history.undo_stack.push(super::UndoEntry {
             sources,
             cursor: self.cursor,
         });
-        self.redo_stack.clear();
+        self.history.redo_stack.clear();
     }
 
     /// Undo the last editing action.
     pub fn undo(&mut self) {
-        let Some(entry) = self.undo_stack.pop() else {
+        let Some(entry) = self.history.undo_stack.pop() else {
             self.set_status("Nothing to undo", true);
             return;
         };
@@ -53,7 +53,7 @@ impl App {
             .iter()
             .map(|ls| (ls.level, ls.source.clone()))
             .collect();
-        self.redo_stack.push(super::UndoEntry {
+        self.history.redo_stack.push(super::UndoEntry {
             sources: current,
             cursor: self.cursor,
         });
@@ -70,7 +70,7 @@ impl App {
 
     /// Redo the last undone action.
     pub fn redo(&mut self) {
-        let Some(entry) = self.redo_stack.pop() else {
+        let Some(entry) = self.history.redo_stack.pop() else {
             self.set_status("Nothing to redo", true);
             return;
         };
@@ -79,7 +79,7 @@ impl App {
             .iter()
             .map(|ls| (ls.level, ls.source.clone()))
             .collect();
-        self.undo_stack.push(super::UndoEntry {
+        self.history.undo_stack.push(super::UndoEntry {
             sources: current,
             cursor: self.cursor,
         });
@@ -114,13 +114,13 @@ impl App {
     {
         self.push_undo();
         let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == level) else {
-            self.undo_stack.pop();
+            self.history.undo_stack.pop();
             return Err("Policy level not found".into());
         };
         match edit_fn(&ls.source) {
             Ok(new_source) => {
                 if let Err(e) = compile_policy(&new_source) {
-                    self.undo_stack.pop();
+                    self.history.undo_stack.pop();
                     return Err(format!("Invalid: {e}"));
                 }
                 ls.source = new_source;
@@ -128,7 +128,7 @@ impl App {
                 Ok(())
             }
             Err(e) => {
-                self.undo_stack.pop();
+                self.history.undo_stack.pop();
                 Err(format!("Edit failed: {e}"))
             }
         }
