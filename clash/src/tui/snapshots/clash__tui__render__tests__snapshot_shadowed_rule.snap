@@ -1,0 +1,28 @@
+---
+source: clash/src/tui/render.rs
+expression: output
+---
+ clash tui  user + project  4/5                                          ? help 
+│ ▼ "git"                                                                      │
+│   ▼ *                                                                        │
+│     ▼ Exec                                                                   │
+│     │   auto allow  [user:main]  [shadowed]                                  │
+│         auto deny   [project:main]                                           │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+┌──────────────────────────────────────────────────────────────────────────────┐
+│AUTO ALLOW Allow running "git" (any args)                                     │
+│Source: main [user]                                                           │
+│Rule: (allow (exec "git" *)                                                   │
+│This rule is shadowed by a higher-precedence rule at another level.           │
+j/k move  Tab effect  e edit  d delete  [/] all  a add  / search  w save  ? help

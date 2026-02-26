@@ -3,12 +3,14 @@
 mod edit;
 mod search;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, MouseEvent, MouseEventKind};
 
 use crate::policy::ast::Rule;
+use crate::policy::compile::{compile_multi_level, detect_all_shadows};
 use crate::policy::edit as policy_edit;
 use crate::settings::{LoadedPolicy, PolicyLevel};
 
@@ -225,6 +227,34 @@ impl App {
 
         let loaded = Self::to_loaded_policies(&levels);
         let mut roots = tree::build_tree(&loaded);
+
+        // Compute shadow detection for multi-level policies
+        if levels.len() > 1 {
+            let level_pairs: Vec<(PolicyLevel, &str)> = levels
+                .iter()
+                .map(|ls| (ls.level, ls.source.as_str()))
+                .collect();
+            if let Ok(dt) = compile_multi_level(&level_pairs) {
+                let all = detect_all_shadows(&dt);
+                let mut shadowed = HashSet::new();
+                for (rules, shadow_map) in [
+                    (&dt.exec_rules, &all.exec),
+                    (&dt.fs_rules, &all.fs),
+                    (&dt.net_rules, &all.net),
+                    (&dt.tool_rules, &all.tool),
+                ] {
+                    for &idx in shadow_map.keys() {
+                        if let Some(rule) = rules.get(idx)
+                            && let Some(level) = rule.origin_level
+                        {
+                            shadowed.insert((level, rule.source.to_string()));
+                        }
+                    }
+                }
+                Self::mark_shadows(&mut roots, &shadowed);
+            }
+        }
+
         // Start fully collapsed
         fn collapse(node: &mut TreeNode) {
             node.expanded = false;
@@ -280,11 +310,63 @@ impl App {
     pub fn rebuild_tree(&mut self) {
         let loaded = Self::to_loaded_policies(&self.levels);
         self.roots = tree::build_tree(&loaded);
+
+        // Compute shadow detection for multi-level policies
+        if self.levels.len() > 1 {
+            let shadowed = self.compute_shadowed_rules();
+            Self::mark_shadows(&mut self.roots, &shadowed);
+        }
+
         self.flat_rows = tree::flatten(&self.roots);
         if self.cursor >= self.flat_rows.len() && !self.flat_rows.is_empty() {
             self.cursor = self.flat_rows.len() - 1;
         }
         self.update_search_matches();
+    }
+
+    /// Compute the set of (level, rule_text) pairs that are shadowed.
+    fn compute_shadowed_rules(&self) -> HashSet<(PolicyLevel, String)> {
+        let levels: Vec<(PolicyLevel, &str)> = self
+            .levels
+            .iter()
+            .map(|ls| (ls.level, ls.source.as_str()))
+            .collect();
+        let Ok(tree) = compile_multi_level(&levels) else {
+            return HashSet::new();
+        };
+        let all = detect_all_shadows(&tree);
+        let mut shadowed = HashSet::new();
+        for (rules, shadow_map) in [
+            (&tree.exec_rules, &all.exec),
+            (&tree.fs_rules, &all.fs),
+            (&tree.net_rules, &all.net),
+            (&tree.tool_rules, &all.tool),
+        ] {
+            for &idx in shadow_map.keys() {
+                if let Some(rule) = rules.get(idx)
+                    && let Some(level) = rule.origin_level
+                {
+                    shadowed.insert((level, rule.source.to_string()));
+                }
+            }
+        }
+        shadowed
+    }
+
+    /// Walk the tree and mark Leaf nodes as shadowed if they match.
+    fn mark_shadows(nodes: &mut [TreeNode], shadowed: &HashSet<(PolicyLevel, String)>) {
+        for node in nodes {
+            if let TreeNodeKind::Leaf {
+                level,
+                rule,
+                is_shadowed,
+                ..
+            } = &mut node.kind
+            {
+                *is_shadowed = shadowed.contains(&(*level, rule.to_string()));
+            }
+            Self::mark_shadows(&mut node.children, shadowed);
+        }
     }
 
     /// Rebuild flat_rows from existing tree (for expand/collapse).
@@ -1154,6 +1236,7 @@ mod tests {
             rule: parse_rule_text("(allow (exec \"git\"))").unwrap(),
             level: PolicyLevel::User,
             policy: "main".to_string(),
+            is_shadowed: false,
         };
         let text = tree::node_search_text(&kind);
         assert!(text.contains("allow"));
@@ -2517,6 +2600,120 @@ mod tests {
         assert!(
             app.flat_rows.len() > initial_rows,
             "live search should expand ancestors"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Shadow detection tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn shadow_detection_multi_level_marks_shadowed() {
+        // Project-level rule shadows User-level rule for same matcher
+        let user = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (allow (exec "git" *)))"#,
+        );
+        let project = test_policy(
+            PolicyLevel::Project,
+            r#"(policy "main" (deny (exec "git" *)))"#,
+        );
+        let mut app = App::new(&[user, project]);
+
+        app.expand_all();
+
+        // Find all git leaf rows
+        let git_leaves: Vec<(usize, PolicyLevel, bool)> = app
+            .flat_rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, row)| {
+                if let TreeNodeKind::Leaf {
+                    level,
+                    rule,
+                    is_shadowed,
+                    ..
+                } = &row.kind
+                {
+                    if rule.to_string().contains("\"git\"") {
+                        return Some((i, *level, *is_shadowed));
+                    }
+                }
+                None
+            })
+            .collect();
+
+        // The User-level rule should be shadowed by the Project-level rule
+        let user_leaf = git_leaves.iter().find(|(_, l, _)| *l == PolicyLevel::User);
+        let project_leaf = git_leaves
+            .iter()
+            .find(|(_, l, _)| *l == PolicyLevel::Project);
+
+        assert!(
+            user_leaf.is_some(),
+            "should have a User leaf; all leaves: {git_leaves:?}"
+        );
+        assert!(
+            project_leaf.is_some(),
+            "should have a Project leaf; all leaves: {git_leaves:?}"
+        );
+
+        let (_, _, user_shadowed) = user_leaf.unwrap();
+        let (_, _, project_shadowed) = project_leaf.unwrap();
+
+        assert!(
+            *user_shadowed,
+            "User-level rule should be marked as shadowed"
+        );
+        assert!(
+            !project_shadowed,
+            "Project-level rule should NOT be shadowed"
+        );
+    }
+
+    #[test]
+    fn shadow_detection_single_level_no_shadows() {
+        let app = make_app(r#"(policy "main" (allow (exec "git" *)) (deny (exec "rm" *)))"#);
+
+        // Single-level: nothing should be shadowed
+        let any_shadowed = app.flat_rows.iter().any(|row| {
+            matches!(
+                &row.kind,
+                TreeNodeKind::Leaf {
+                    is_shadowed: true,
+                    ..
+                }
+            )
+        });
+        assert!(!any_shadowed, "single-level policy should have no shadows");
+    }
+
+    #[test]
+    fn shadow_detection_non_overlapping_not_shadowed() {
+        // Project denies "rm", User allows "git" — no overlap
+        let user = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (allow (exec "git" *)))"#,
+        );
+        let project = test_policy(
+            PolicyLevel::Project,
+            r#"(policy "main" (deny (exec "rm" *)))"#,
+        );
+        let mut app = App::new(&[user, project]);
+        app.expand_all();
+
+        let any_shadowed = app.flat_rows.iter().any(|row| {
+            matches!(
+                &row.kind,
+                TreeNodeKind::Leaf {
+                    is_shadowed: true,
+                    ..
+                }
+            )
+        });
+        assert!(
+            !any_shadowed,
+            "non-overlapping rules should not shadow each other"
         );
     }
 

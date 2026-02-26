@@ -6,7 +6,7 @@ expression: output
 │ ▼ "git"                                                                      │
 │ │ ▼ *                                                                        │
 │ │   ▼ Exec                                                                   │
-│ │       auto allow  [user:main]                                              │
+│ │       auto allow  [user:main]  [shadowed]                                  │
 │   ▼ "push"                                                                   │
 │     ▼ *                                                                      │
 │       ▼ Exec                                                                 │

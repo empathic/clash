@@ -39,6 +39,8 @@ pub enum TreeNodeKind {
         rule: Rule,
         level: PolicyLevel,
         policy: String,
+        /// Whether this rule is shadowed by a higher-precedence rule at another level.
+        is_shadowed: bool,
     },
     /// Leaf for a sandbox sub-rule (child of a sandboxed exec rule).
     SandboxLeaf {
@@ -301,6 +303,7 @@ fn regular_leaf(pr: &ProvenanceRule) -> TreeNode {
         rule: pr.rule.clone(),
         level: pr.level,
         policy: pr.policy_name.clone(),
+        is_shadowed: false,
     })
 }
 
@@ -374,6 +377,7 @@ fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
                 rule: pr.rule.clone(),
                 level: pr.level,
                 policy: pr.policy_name.clone(),
+                is_shadowed: false,
             });
             append_sandbox_children(
                 &mut leaf,
@@ -401,6 +405,7 @@ fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
                     rule: pr.rule.clone(),
                     level: pr.level,
                     policy: pr.policy_name.clone(),
+                    is_shadowed: false,
                 });
                 append_sandbox_children(
                     &mut leaf,

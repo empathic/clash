@@ -149,6 +149,7 @@ impl App {
                 rule,
                 level,
                 policy,
+                ..
             } => {
                 self.mode = Mode::SelectEffect(SelectEffectState {
                     effect_index: effect_to_display_index(*effect),
