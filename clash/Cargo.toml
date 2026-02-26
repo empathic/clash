@@ -2,7 +2,7 @@
 name = "clash"
 version = "0.3.5"
 edition = "2024"
-description = "Command Line Agent Safety Harness — permission policies for Claude Code"
+description = "Command Line Agent Safety Harness — permission policies for coding agents"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
