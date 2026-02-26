@@ -165,6 +165,8 @@ CLASH_DISABLE=1 claude          # disable for this session only
 
 Set `CLASH_DISABLE=0` or unset the variable to re-enable clash.
 
+To fully uninstall clash, direct the user to the [README](https://github.com/empathic/clash#disabling--uninstalling) or `clash --help`.
+
 ### Important Behaviors
 
 - Deny rules ALWAYS take precedence over allow rules, regardless of specificity
