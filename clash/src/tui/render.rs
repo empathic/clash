@@ -28,6 +28,15 @@ pub(crate) fn effect_display(effect: Effect) -> &'static str {
 
 /// Render the entire TUI layout.
 pub fn render(f: &mut Frame, app: &App) {
+    render_base(f, app);
+    let area = f.area();
+    for overlay in active_overlays(app) {
+        overlay.render(f, area, app);
+    }
+}
+
+/// Render the base layout (header, tree, description, key hints).
+fn render_base(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -47,20 +56,44 @@ pub fn render(f: &mut Frame, app: &App) {
     } else {
         render_keyhints(f, app, chunks[3]);
     }
+}
 
-    // Overlays
+// ---------------------------------------------------------------------------
+// Overlay system
+// ---------------------------------------------------------------------------
+
+/// An overlay that renders on top of the base layout.
+enum Overlay<'a> {
+    Help,
+    Confirm(&'a ConfirmAction),
+    AddRule,
+    SaveDiff,
+}
+
+impl Overlay<'_> {
+    fn render(&self, f: &mut Frame, area: Rect, app: &App) {
+        match self {
+            Overlay::Help => render_help_overlay(f, area),
+            Overlay::Confirm(action) => render_confirm_overlay(f, area, action),
+            Overlay::AddRule => render_add_rule_overlay(f, app, area),
+            Overlay::SaveDiff => render_save_diff_overlay(f, app, area),
+        }
+    }
+}
+
+/// Derive the active overlay stack from the current app state.
+fn active_overlays(app: &App) -> Vec<Overlay<'_>> {
+    let mut overlays = Vec::new();
+    match &app.mode {
+        Mode::Confirm(action) => overlays.push(Overlay::Confirm(action)),
+        Mode::AddRule(_) => overlays.push(Overlay::AddRule),
+        Mode::ConfirmSave(_) => overlays.push(Overlay::SaveDiff),
+        _ => {}
+    }
     if app.show_help {
-        render_help_overlay(f, f.area());
+        overlays.push(Overlay::Help);
     }
-    if let Mode::Confirm(action) = &app.mode {
-        render_confirm_overlay(f, f.area(), action);
-    }
-    if matches!(app.mode, Mode::AddRule(_)) {
-        render_add_rule_overlay(f, app, f.area());
-    }
-    if matches!(app.mode, Mode::ConfirmSave(_)) {
-        render_save_diff_overlay(f, app, f.area());
-    }
+    overlays
 }
 
 // ---------------------------------------------------------------------------
