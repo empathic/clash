@@ -427,7 +427,39 @@ fn render_description(f: &mut Frame, app: &App, area: Rect) {
 
     let mut lines = if let Some(row) = app.tree.flat_rows.get(app.tree.cursor) {
         let kind = &app.tree.arena[row.node_id].kind;
-        description_for_row(kind)
+        let mut desc = description_for_row(kind);
+        // Append rule counts for structural (non-leaf) nodes
+        if !matches!(
+            kind,
+            TreeNodeKind::Leaf { .. }
+                | TreeNodeKind::SandboxLeaf { .. }
+                | TreeNodeKind::HasMarker
+                | TreeNodeKind::SandboxName(_)
+        ) {
+            let count = app.tree.arena.rule_count(row.node_id);
+            if count > 0 {
+                let (allow, deny, ask) = app.tree.arena.effect_counts(row.node_id);
+                let mut parts = Vec::new();
+                if allow > 0 {
+                    parts.push(format!("{allow} auto allow"));
+                }
+                if deny > 0 {
+                    parts.push(format!("{deny} auto deny"));
+                }
+                if ask > 0 {
+                    parts.push(format!("{ask} ask"));
+                }
+                desc.push(Line::from(Span::styled(
+                    format!(
+                        "{count} rule{}: {}",
+                        if count == 1 { "" } else { "s" },
+                        parts.join(", ")
+                    ),
+                    tui_style::DIM,
+                )));
+            }
+        }
+        desc
     } else {
         vec![Line::from(Span::styled("No selection", tui_style::DIM))]
     };

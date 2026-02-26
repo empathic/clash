@@ -22,7 +22,7 @@ expression: output
 │                                                                              │
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │Binary: "git"                                                                 │
+│2 rules: 1 auto allow, 1 auto deny                                            │
 │"git"                                                                         │
-│                                                                              │
 │                                                                              │
 j/k move  h collapse  z/Z fold  d delete  [/] all  a add  / search  w save  ? he
