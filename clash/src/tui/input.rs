@@ -212,6 +212,7 @@ fn handle_add_rule(app: &mut App, key: KeyEvent) -> InputResult {
 
     match action {
         StepAction::Advance => app.advance_add_rule(),
+        StepAction::Retreat => app.retreat_add_rule(),
         StepAction::Cancel => app.mode = Mode::Normal,
         StepAction::None => {}
     }
@@ -222,6 +223,7 @@ fn handle_add_rule(app: &mut App, key: KeyEvent) -> InputResult {
 /// Action returned from a step's key handler.
 enum StepAction {
     Advance,
+    Retreat,
     Cancel,
     None,
 }
@@ -247,6 +249,7 @@ fn selector_key(key: KeyEvent, index: &mut usize, count: usize) -> StepAction {
             }
             StepAction::None
         }
+        KeyCode::BackTab => StepAction::Retreat,
         KeyCode::Enter => StepAction::Advance,
         KeyCode::Esc => StepAction::Cancel,
         _ => StepAction::None,
@@ -255,6 +258,17 @@ fn selector_key(key: KeyEvent, index: &mut usize, count: usize) -> StepAction {
 
 /// Handle key for a text input step.
 fn text_input_key(key: KeyEvent, form: &mut super::app::AddRuleForm) -> StepAction {
+    // BackTab always goes back
+    if key.code == KeyCode::BackTab {
+        return StepAction::Retreat;
+    }
+    // Backspace on empty input goes back
+    if key.code == KeyCode::Backspace
+        && let Some(input) = form.active_text_input()
+        && input.value().is_empty()
+    {
+        return StepAction::Retreat;
+    }
     if let Some(input) = form.active_text_input() {
         match input.handle_key(key) {
             TextInputAction::Submit => StepAction::Advance,
