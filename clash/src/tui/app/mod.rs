@@ -225,224 +225,39 @@ impl SearchState {
 }
 
 // ---------------------------------------------------------------------------
-// App state
+// Tree state
 // ---------------------------------------------------------------------------
 
-pub struct App {
+pub struct TreeState {
     pub roots: Vec<TreeNode>,
     pub flat_rows: Vec<FlatRow>,
     pub cursor: usize,
-    pub levels: Vec<LevelState>,
     pub viewport_height: usize,
-    pub show_help: bool,
-    pub mode: Mode,
-    pub status_message: Option<StatusMessage>,
-    pub(super) history: EditHistory,
-    pub search: SearchState,
 }
 
-impl App {
-    /// Create a new app from loaded policies.
-    pub fn new(policies: &[LoadedPolicy]) -> Self {
-        let levels: Vec<LevelState> = policies
-            .iter()
-            .map(|p| {
-                let source = policy_edit::normalize(&p.source).unwrap_or_else(|_| p.source.clone());
-                LevelState {
-                    level: p.level,
-                    path: p.path.clone(),
-                    original_source: source.clone(),
-                    source,
-                }
-            })
-            .collect();
-
-        let loaded = Self::to_loaded_policies(&levels);
-        let mut roots = tree::build_tree(&loaded);
-
-        // Compute shadow detection for multi-level policies
-        if levels.len() > 1 {
-            let level_pairs: Vec<(PolicyLevel, &str)> = levels
-                .iter()
-                .map(|ls| (ls.level, ls.source.as_str()))
-                .collect();
-            if let Ok(dt) = compile_multi_level(&level_pairs) {
-                let all = detect_all_shadows(&dt);
-                let mut shadowed = HashSet::new();
-                for (rules, shadow_map) in [
-                    (&dt.exec_rules, &all.exec),
-                    (&dt.fs_rules, &all.fs),
-                    (&dt.net_rules, &all.net),
-                    (&dt.tool_rules, &all.tool),
-                ] {
-                    for &idx in shadow_map.keys() {
-                        if let Some(rule) = rules.get(idx)
-                            && let Some(level) = rule.origin_level
-                        {
-                            shadowed.insert((level, rule.source.to_string()));
-                        }
-                    }
-                }
-                Self::mark_shadows(&mut roots, &shadowed);
-            }
-        }
-
-        // Start fully collapsed
-        fn collapse(node: &mut TreeNode) {
-            node.expanded = false;
-            for child in &mut node.children {
-                collapse(child);
-            }
-        }
-        for root in &mut roots {
-            collapse(root);
-        }
+impl TreeState {
+    pub fn new(roots: Vec<TreeNode>) -> Self {
         let flat_rows = tree::flatten(&roots);
-
         Self {
             roots,
             flat_rows,
             cursor: 0,
-            levels,
             viewport_height: 20,
-            show_help: false,
-            mode: Mode::Normal,
-            status_message: None,
-            history: EditHistory::new(),
-            search: SearchState::new(),
-        }
-    }
-
-    fn to_loaded_policies(levels: &[LevelState]) -> Vec<LoadedPolicy> {
-        levels
-            .iter()
-            .map(|ls| LoadedPolicy {
-                level: ls.level,
-                path: ls.path.clone(),
-                source: ls.source.clone(),
-            })
-            .collect()
-    }
-
-    /// Whether any level has unsaved changes.
-    pub fn has_unsaved_changes(&self) -> bool {
-        self.levels.iter().any(|ls| ls.is_modified())
-    }
-
-    /// Available policy levels for editing.
-    pub fn available_levels(&self) -> Vec<PolicyLevel> {
-        self.levels.iter().map(|ls| ls.level).collect()
-    }
-
-    /// Rebuild tree from current level sources, preserving cursor bounds.
-    pub fn rebuild_tree(&mut self) {
-        let loaded = Self::to_loaded_policies(&self.levels);
-        self.roots = tree::build_tree(&loaded);
-
-        // Compute shadow detection for multi-level policies
-        if self.levels.len() > 1 {
-            let shadowed = self.compute_shadowed_rules();
-            Self::mark_shadows(&mut self.roots, &shadowed);
-        }
-
-        self.flat_rows = tree::flatten(&self.roots);
-        if self.cursor >= self.flat_rows.len() && !self.flat_rows.is_empty() {
-            self.cursor = self.flat_rows.len() - 1;
-        }
-        self.update_search_matches();
-    }
-
-    /// Compute the set of (level, rule_text) pairs that are shadowed.
-    fn compute_shadowed_rules(&self) -> HashSet<(PolicyLevel, String)> {
-        let levels: Vec<(PolicyLevel, &str)> = self
-            .levels
-            .iter()
-            .map(|ls| (ls.level, ls.source.as_str()))
-            .collect();
-        let Ok(tree) = compile_multi_level(&levels) else {
-            return HashSet::new();
-        };
-        let all = detect_all_shadows(&tree);
-        let mut shadowed = HashSet::new();
-        for (rules, shadow_map) in [
-            (&tree.exec_rules, &all.exec),
-            (&tree.fs_rules, &all.fs),
-            (&tree.net_rules, &all.net),
-            (&tree.tool_rules, &all.tool),
-        ] {
-            for &idx in shadow_map.keys() {
-                if let Some(rule) = rules.get(idx)
-                    && let Some(level) = rule.origin_level
-                {
-                    shadowed.insert((level, rule.source.to_string()));
-                }
-            }
-        }
-        shadowed
-    }
-
-    /// Walk the tree and mark Leaf nodes as shadowed if they match.
-    fn mark_shadows(nodes: &mut [TreeNode], shadowed: &HashSet<(PolicyLevel, String)>) {
-        for node in nodes {
-            if let TreeNodeKind::Leaf {
-                level,
-                rule,
-                is_shadowed,
-                ..
-            } = &mut node.kind
-            {
-                *is_shadowed = shadowed.contains(&(*level, rule.to_string()));
-            }
-            Self::mark_shadows(&mut node.children, shadowed);
         }
     }
 
     /// Rebuild flat_rows from existing tree (for expand/collapse).
+    /// Does NOT re-index search matches — caller must do that.
     pub fn rebuild_flat(&mut self) {
         self.flat_rows = tree::flatten(&self.roots);
+        self.clamp_cursor();
+    }
+
+    /// Clamp cursor to valid range.
+    fn clamp_cursor(&mut self) {
         if self.cursor >= self.flat_rows.len() && !self.flat_rows.is_empty() {
             self.cursor = self.flat_rows.len() - 1;
         }
-        self.update_search_matches();
-    }
-
-    /// Move cursor to a leaf matching the given rule text, level, and policy,
-    /// expanding ancestors as needed. Returns `true` if the leaf was found.
-    fn cursor_to_rule(
-        &mut self,
-        rule_text: &str,
-        target_level: PolicyLevel,
-        target_policy: &str,
-    ) -> bool {
-        // Search the tree for a matching leaf by rule text, level, and policy.
-        let find = |rows: &[FlatRow]| -> Option<usize> {
-            rows.iter().position(|row| {
-                matches!(
-                    &row.kind,
-                    TreeNodeKind::Leaf { rule, level, policy, .. }
-                        if rule.to_string() == rule_text
-                            && *level == target_level
-                            && policy == target_policy
-                )
-            })
-        };
-
-        let Some(i) = find(&self.flat_rows) else {
-            return false;
-        };
-
-        // Ensure ancestors are expanded
-        let tree_path = self.flat_rows[i].tree_path.clone();
-        for prefix_len in 1..tree_path.len() {
-            if let Some(node) = tree::node_at_path_mut(&mut self.roots, &tree_path[..prefix_len]) {
-                node.expanded = true;
-            }
-        }
-        self.rebuild_flat();
-
-        // Re-find after re-flatten (indices may have shifted)
-        self.cursor = find(&self.flat_rows).unwrap_or(i);
-        true
     }
 
     /// Compute scroll offset to keep cursor visible.
@@ -680,6 +495,278 @@ impl App {
             self.rebuild_flat();
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// App state
+// ---------------------------------------------------------------------------
+
+pub struct App {
+    pub tree: TreeState,
+    pub levels: Vec<LevelState>,
+    pub show_help: bool,
+    pub mode: Mode,
+    pub status_message: Option<StatusMessage>,
+    pub(super) history: EditHistory,
+    pub search: SearchState,
+}
+
+impl App {
+    /// Create a new app from loaded policies.
+    pub fn new(policies: &[LoadedPolicy]) -> Self {
+        let levels: Vec<LevelState> = policies
+            .iter()
+            .map(|p| {
+                let source = policy_edit::normalize(&p.source).unwrap_or_else(|_| p.source.clone());
+                LevelState {
+                    level: p.level,
+                    path: p.path.clone(),
+                    original_source: source.clone(),
+                    source,
+                }
+            })
+            .collect();
+
+        let loaded = Self::to_loaded_policies(&levels);
+        let mut roots = tree::build_tree(&loaded);
+
+        // Compute shadow detection for multi-level policies
+        if levels.len() > 1 {
+            let level_pairs: Vec<(PolicyLevel, &str)> = levels
+                .iter()
+                .map(|ls| (ls.level, ls.source.as_str()))
+                .collect();
+            if let Ok(dt) = compile_multi_level(&level_pairs) {
+                let all = detect_all_shadows(&dt);
+                let mut shadowed = HashSet::new();
+                for (rules, shadow_map) in [
+                    (&dt.exec_rules, &all.exec),
+                    (&dt.fs_rules, &all.fs),
+                    (&dt.net_rules, &all.net),
+                    (&dt.tool_rules, &all.tool),
+                ] {
+                    for &idx in shadow_map.keys() {
+                        if let Some(rule) = rules.get(idx)
+                            && let Some(level) = rule.origin_level
+                        {
+                            shadowed.insert((level, rule.source.to_string()));
+                        }
+                    }
+                }
+                Self::mark_shadows(&mut roots, &shadowed);
+            }
+        }
+
+        // Start fully collapsed
+        fn collapse(node: &mut TreeNode) {
+            node.expanded = false;
+            for child in &mut node.children {
+                collapse(child);
+            }
+        }
+        for root in &mut roots {
+            collapse(root);
+        }
+
+        Self {
+            tree: TreeState::new(roots),
+            levels,
+            show_help: false,
+            mode: Mode::Normal,
+            status_message: None,
+            history: EditHistory::new(),
+            search: SearchState::new(),
+        }
+    }
+
+    fn to_loaded_policies(levels: &[LevelState]) -> Vec<LoadedPolicy> {
+        levels
+            .iter()
+            .map(|ls| LoadedPolicy {
+                level: ls.level,
+                path: ls.path.clone(),
+                source: ls.source.clone(),
+            })
+            .collect()
+    }
+
+    /// Whether any level has unsaved changes.
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.levels.iter().any(|ls| ls.is_modified())
+    }
+
+    /// Available policy levels for editing.
+    pub fn available_levels(&self) -> Vec<PolicyLevel> {
+        self.levels.iter().map(|ls| ls.level).collect()
+    }
+
+    /// Rebuild tree from current level sources, preserving cursor bounds.
+    pub fn rebuild_tree(&mut self) {
+        let loaded = Self::to_loaded_policies(&self.levels);
+        self.tree.roots = tree::build_tree(&loaded);
+
+        // Compute shadow detection for multi-level policies
+        if self.levels.len() > 1 {
+            let shadowed = self.compute_shadowed_rules();
+            Self::mark_shadows(&mut self.tree.roots, &shadowed);
+        }
+
+        self.tree.flat_rows = tree::flatten(&self.tree.roots);
+        self.tree.clamp_cursor();
+        self.update_search_matches();
+    }
+
+    /// Compute the set of (level, rule_text) pairs that are shadowed.
+    fn compute_shadowed_rules(&self) -> HashSet<(PolicyLevel, String)> {
+        let levels: Vec<(PolicyLevel, &str)> = self
+            .levels
+            .iter()
+            .map(|ls| (ls.level, ls.source.as_str()))
+            .collect();
+        let Ok(tree) = compile_multi_level(&levels) else {
+            return HashSet::new();
+        };
+        let all = detect_all_shadows(&tree);
+        let mut shadowed = HashSet::new();
+        for (rules, shadow_map) in [
+            (&tree.exec_rules, &all.exec),
+            (&tree.fs_rules, &all.fs),
+            (&tree.net_rules, &all.net),
+            (&tree.tool_rules, &all.tool),
+        ] {
+            for &idx in shadow_map.keys() {
+                if let Some(rule) = rules.get(idx)
+                    && let Some(level) = rule.origin_level
+                {
+                    shadowed.insert((level, rule.source.to_string()));
+                }
+            }
+        }
+        shadowed
+    }
+
+    /// Walk the tree and mark Leaf nodes as shadowed if they match.
+    fn mark_shadows(nodes: &mut [TreeNode], shadowed: &HashSet<(PolicyLevel, String)>) {
+        for node in nodes {
+            if let TreeNodeKind::Leaf {
+                level,
+                rule,
+                is_shadowed,
+                ..
+            } = &mut node.kind
+            {
+                *is_shadowed = shadowed.contains(&(*level, rule.to_string()));
+            }
+            Self::mark_shadows(&mut node.children, shadowed);
+        }
+    }
+
+    /// Rebuild flat_rows from existing tree, then re-index search matches.
+    pub fn rebuild_flat(&mut self) {
+        self.tree.rebuild_flat();
+        self.update_search_matches();
+    }
+
+    /// Move cursor to a leaf matching the given rule text, level, and policy,
+    /// expanding ancestors as needed. Returns `true` if the leaf was found.
+    fn cursor_to_rule(
+        &mut self,
+        rule_text: &str,
+        target_level: PolicyLevel,
+        target_policy: &str,
+    ) -> bool {
+        // Search the tree for a matching leaf by rule text, level, and policy.
+        let find = |rows: &[FlatRow]| -> Option<usize> {
+            rows.iter().position(|row| {
+                matches!(
+                    &row.kind,
+                    TreeNodeKind::Leaf { rule, level, policy, .. }
+                        if rule.to_string() == rule_text
+                            && *level == target_level
+                            && policy == target_policy
+                )
+            })
+        };
+
+        let Some(i) = find(&self.tree.flat_rows) else {
+            return false;
+        };
+
+        // Ensure ancestors are expanded
+        let tree_path = self.tree.flat_rows[i].tree_path.clone();
+        for prefix_len in 1..tree_path.len() {
+            if let Some(node) =
+                tree::node_at_path_mut(&mut self.tree.roots, &tree_path[..prefix_len])
+            {
+                node.expanded = true;
+            }
+        }
+        self.rebuild_flat();
+
+        // Re-find after re-flatten (indices may have shifted)
+        self.tree.cursor = find(&self.tree.flat_rows).unwrap_or(i);
+        true
+    }
+
+    // -----------------------------------------------------------------------
+    // Navigation delegates
+    // -----------------------------------------------------------------------
+
+    pub fn move_cursor_down(&mut self) {
+        self.tree.move_cursor_down();
+    }
+
+    pub fn move_cursor_up(&mut self) {
+        self.tree.move_cursor_up();
+    }
+
+    pub fn cursor_to_top(&mut self) {
+        self.tree.cursor_to_top();
+    }
+
+    pub fn cursor_to_bottom(&mut self) {
+        self.tree.cursor_to_bottom();
+    }
+
+    pub fn page_up(&mut self) {
+        self.tree.page_up();
+    }
+
+    pub fn page_down(&mut self) {
+        self.tree.page_down();
+    }
+
+    pub fn collapse_or_parent(&mut self) {
+        self.tree.collapse_or_parent();
+    }
+
+    pub fn expand(&mut self) {
+        self.tree.expand();
+    }
+
+    pub fn collapse_all(&mut self) {
+        self.tree.collapse_all();
+    }
+
+    pub fn expand_all(&mut self) {
+        self.tree.expand_all();
+    }
+
+    pub fn breadcrumb(&self) -> Option<String> {
+        self.tree.breadcrumb()
+    }
+
+    pub fn toggle_fold_level(&mut self) {
+        self.tree.toggle_fold_level();
+    }
+
+    pub fn toggle_fold_recursive(&mut self) {
+        self.tree.toggle_fold_recursive();
+    }
+
+    pub fn toggle_expand(&mut self) {
+        self.tree.toggle_expand();
+    }
 
     // -----------------------------------------------------------------------
     // Event loop
@@ -692,7 +779,7 @@ impl App {
     {
         loop {
             terminal.draw(|f| {
-                self.viewport_height = f.area().height.saturating_sub(7) as usize;
+                self.tree.viewport_height = f.area().height.saturating_sub(7) as usize;
                 render::render(f, self);
             })?;
 
@@ -705,18 +792,18 @@ impl App {
                 Event::Mouse(MouseEvent {
                     kind: MouseEventKind::ScrollUp,
                     ..
-                }) => self.move_cursor_up(),
+                }) => self.tree.move_cursor_up(),
                 Event::Mouse(MouseEvent {
                     kind: MouseEventKind::ScrollDown,
                     ..
-                }) => self.move_cursor_down(),
+                }) => self.tree.move_cursor_down(),
                 Event::Mouse(MouseEvent {
                     kind: MouseEventKind::Down(_),
                     row,
                     ..
                 }) => {
                     if matches!(self.mode, Mode::Normal) {
-                        self.handle_mouse_click(row);
+                        self.tree.handle_mouse_click(row);
                     }
                 }
                 _ => {}
@@ -998,15 +1085,15 @@ mod tests {
     #[test]
     fn app_new_empty() {
         let app = make_app("");
-        assert!(app.flat_rows.is_empty());
-        assert_eq!(app.cursor, 0);
+        assert!(app.tree.flat_rows.is_empty());
+        assert_eq!(app.tree.cursor, 0);
     }
 
     #[test]
     fn app_new_with_rules() {
         let app = make_app(r#"(policy "main" (allow (exec "git")))"#);
         // Tree starts collapsed, so only root visible
-        assert!(!app.flat_rows.is_empty());
+        assert!(!app.tree.flat_rows.is_empty());
     }
 
     #[test]
@@ -1030,7 +1117,7 @@ mod tests {
         assert!(matches!(app.mode, Mode::Normal));
 
         // Cursor should be on a leaf with the new rule
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         assert!(
             matches!(&row.kind, TreeNodeKind::Leaf { rule, level, .. }
                 if rule.to_string().contains("exec") && *level == PolicyLevel::User),
@@ -1061,7 +1148,7 @@ mod tests {
         app.advance_add_rule(); // level -> complete
 
         assert!(matches!(app.mode, Mode::Normal));
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         assert!(
             matches!(&row.kind, TreeNodeKind::Leaf { .. }),
             "cursor should be on the new fs leaf"
@@ -1091,7 +1178,7 @@ mod tests {
         app.advance_add_rule(); // level -> complete
 
         assert!(matches!(app.mode, Mode::Normal));
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         assert!(matches!(&row.kind, TreeNodeKind::Leaf { .. }));
     }
 
@@ -1118,7 +1205,7 @@ mod tests {
         app.advance_add_rule(); // level -> complete
 
         assert!(matches!(app.mode, Mode::Normal));
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         assert!(matches!(&row.kind, TreeNodeKind::Leaf { .. }));
     }
 
@@ -1149,7 +1236,7 @@ mod tests {
         assert!(matches!(app.mode, Mode::Normal));
 
         // The cursor should be on the Project-level leaf, not the User-level one
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         assert!(
             matches!(
                 &row.kind,
@@ -1216,32 +1303,32 @@ mod tests {
         let mut app = make_app(r#"(policy "main" (allow (exec "git")) (deny (exec "rm")))"#);
         app.expand_all();
 
-        let total = app.flat_rows.len();
+        let total = app.tree.flat_rows.len();
         assert!(total > 1);
 
-        app.cursor_to_top();
-        assert_eq!(app.cursor, 0);
+        app.tree.cursor_to_top();
+        assert_eq!(app.tree.cursor, 0);
 
-        app.cursor_to_bottom();
-        assert_eq!(app.cursor, total - 1);
+        app.tree.cursor_to_bottom();
+        assert_eq!(app.tree.cursor, total - 1);
 
-        app.cursor_to_top();
+        app.tree.cursor_to_top();
         app.move_cursor_down();
-        assert_eq!(app.cursor, 1);
+        assert_eq!(app.tree.cursor, 1);
 
         app.move_cursor_up();
-        assert_eq!(app.cursor, 0);
+        assert_eq!(app.tree.cursor, 0);
 
         // Can't go below 0
         app.move_cursor_up();
-        assert_eq!(app.cursor, 0);
+        assert_eq!(app.tree.cursor, 0);
     }
 
     #[test]
     fn search_finds_matches() {
         let mut app = make_app(r#"(policy "main" (allow (exec "git")) (deny (exec "cargo")))"#);
         // App starts fully collapsed — search should auto-expand ancestors
-        let initial_rows = app.flat_rows.len();
+        let initial_rows = app.tree.flat_rows.len();
 
         app.start_search();
         app.search.input = TextInput::new("git");
@@ -1249,10 +1336,10 @@ mod tests {
 
         assert!(!app.search.matches.is_empty());
         // Cursor should be on first match
-        assert!(app.search.matches.contains(&app.cursor));
+        assert!(app.search.matches.contains(&app.tree.cursor));
         // Ancestors should have been expanded, revealing more rows
         assert!(
-            app.flat_rows.len() > initial_rows,
+            app.tree.flat_rows.len() > initial_rows,
             "search should auto-expand ancestors"
         );
     }
@@ -1437,7 +1524,7 @@ mod tests {
         );
 
         // The cursor must be on a leaf whose rule contains "ls"
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf { rule, .. } => {
                 assert!(
@@ -1452,6 +1539,7 @@ mod tests {
         // Also verify the leaf exists somewhere in flat_rows (in case cursor is wrong
         // but the leaf was added correctly)
         let all_leaves: Vec<(usize, String)> = app
+            .tree
             .flat_rows
             .iter()
             .enumerate()
@@ -1465,10 +1553,10 @@ mod tests {
             .find(|(_, r)| r.contains("\"ls\""))
             .map(|(i, _)| *i);
         assert_eq!(
-            Some(app.cursor),
+            Some(app.tree.cursor),
             expected_idx,
             "cursor {} should match leaf index\nall leaves: {:?}",
-            app.cursor,
+            app.tree.cursor,
             all_leaves
         );
     }
@@ -1502,7 +1590,7 @@ mod tests {
         );
 
         // Cursor should be on the new deny rule
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf { rule, effect, .. } => {
                 assert!(
@@ -1516,7 +1604,7 @@ mod tests {
         }
 
         // The old allow rule should be gone
-        let has_allow_git = app.flat_rows.iter().any(|r| {
+        let has_allow_git = app.tree.flat_rows.iter().any(|r| {
             matches!(&r.kind, TreeNodeKind::Leaf { rule, effect, .. }
                 if rule.to_string().contains("\"git\"") && *effect == Effect::Allow)
         });
@@ -1547,7 +1635,7 @@ mod tests {
         assert!(matches!(app.mode, Mode::Normal));
 
         // Cursor should be on the DENY rm leaf
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf { effect, rule, .. } => {
                 assert_eq!(
@@ -1584,7 +1672,7 @@ mod tests {
 
         assert!(matches!(app.mode, Mode::Normal));
 
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf { rule, .. } => {
                 let text = rule.to_string();
@@ -1627,7 +1715,7 @@ mod tests {
         );
 
         // Cursor should be on the new exec leaf for git
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf {
                 rule,
@@ -1643,7 +1731,8 @@ mod tests {
             }
             other => panic!(
                 "cursor should be on a leaf, got: {other:?}\nall rows: {:?}",
-                app.flat_rows
+                app.tree
+                    .flat_rows
                     .iter()
                     .map(|r| format!("{:?}", r.kind))
                     .collect::<Vec<_>>()
@@ -1685,7 +1774,7 @@ mod tests {
         );
 
         // Cursor should be on the Project-level leaf
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf { rule, level, .. } => {
                 assert_eq!(
@@ -1757,7 +1846,7 @@ mod tests {
         let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
         // Start collapsed
         app.collapse_all();
-        let collapsed_count = app.flat_rows.len();
+        let collapsed_count = app.tree.flat_rows.len();
 
         // Add a rule
         app.start_add_rule();
@@ -1775,14 +1864,14 @@ mod tests {
         // After adding, the tree should have more visible rows because
         // ancestors of the new leaf were expanded
         assert!(
-            app.flat_rows.len() > collapsed_count,
+            app.tree.flat_rows.len() > collapsed_count,
             "tree should be expanded to show new leaf (collapsed={}, after={})",
             collapsed_count,
-            app.flat_rows.len()
+            app.tree.flat_rows.len()
         );
 
         // And the cursor should be on a leaf
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         assert!(
             matches!(&row.kind, TreeNodeKind::Leaf { rule, .. } if rule.to_string().contains("\"ls\"")),
             "cursor should be on the new ls leaf, got: {:?}",
@@ -1812,6 +1901,7 @@ mod tests {
 
         // Collect all leaves
         let leaves: Vec<(usize, String, PolicyLevel, String)> = app
+            .tree
             .flat_rows
             .iter()
             .enumerate()
@@ -1838,9 +1928,9 @@ mod tests {
 
         let (cargo_idx, _, _, _) = cargo_leaf.unwrap();
         assert_eq!(
-            app.cursor, *cargo_idx,
+            app.tree.cursor, *cargo_idx,
             "cursor={} should be on cargo leaf at idx={}\nall leaves: {leaves:?}",
-            app.cursor, cargo_idx
+            app.tree.cursor, cargo_idx
         );
     }
 
@@ -1915,7 +2005,7 @@ mod tests {
         assert!(matches!(app.mode, Mode::Normal), "should complete add rule");
 
         // Cursor should be on the new leaf
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf { rule, .. } => {
                 assert!(
@@ -1954,7 +2044,7 @@ mod tests {
 
         assert!(matches!(app.mode, Mode::Normal));
 
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf { effect, rule, .. } => {
                 assert_eq!(
@@ -2018,7 +2108,7 @@ mod tests {
             }
         );
 
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         assert!(
             matches!(&row.kind, TreeNodeKind::Leaf { rule, .. } if rule.to_string().contains("fs")),
             "cursor should be on fs leaf, got: {:?}",
@@ -2051,7 +2141,7 @@ mod tests {
         );
 
         // Verify cursor is on the new cargo leaf
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf { rule, .. } => {
                 assert!(
@@ -2092,7 +2182,7 @@ mod tests {
 
         assert!(matches!(app.mode, Mode::Normal));
 
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf { rule, level, .. } => {
                 assert_eq!(
@@ -2150,7 +2240,7 @@ mod tests {
         );
 
         // Cursor should be on the sandboxed exec leaf
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf { rule, effect, .. } => {
                 let text = rule.to_string();
@@ -2365,7 +2455,7 @@ mod tests {
         );
 
         // Cursor should be on the (allow (fs)) leaf
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf { rule, .. } => {
                 assert_eq!(
@@ -2410,7 +2500,7 @@ mod tests {
             }
         );
 
-        let row = &app.flat_rows[app.cursor];
+        let row = &app.tree.flat_rows[app.tree.cursor];
         match &row.kind {
             TreeNodeKind::Leaf { rule, .. } => {
                 assert!(
@@ -2430,9 +2520,9 @@ mod tests {
     /// Helper: navigate to the first SandboxLeaf in a fully expanded app.
     fn cursor_to_sandbox_leaf(app: &mut App) -> bool {
         app.expand_all();
-        for (i, row) in app.flat_rows.iter().enumerate() {
+        for (i, row) in app.tree.flat_rows.iter().enumerate() {
             if matches!(&row.kind, TreeNodeKind::SandboxLeaf { .. }) {
-                app.cursor = i;
+                app.tree.cursor = i;
                 return true;
             }
         }
@@ -2594,7 +2684,7 @@ mod tests {
     fn search_expands_collapsed_ancestors() {
         let mut app = make_app(r#"(policy "main" (allow (exec "git")) (deny (exec "cargo")))"#);
         // App starts fully collapsed
-        let initial_rows = app.flat_rows.len();
+        let initial_rows = app.tree.flat_rows.len();
 
         // Search for something deep in the tree
         app.start_search();
@@ -2604,9 +2694,9 @@ mod tests {
         assert!(!app.search.matches.is_empty(), "should find 'allow' leaf");
         // More rows should now be visible due to auto-expansion
         assert!(
-            app.flat_rows.len() > initial_rows,
+            app.tree.flat_rows.len() > initial_rows,
             "search should expand ancestors: had {initial_rows} rows, now {}",
-            app.flat_rows.len()
+            app.tree.flat_rows.len()
         );
     }
 
@@ -2614,7 +2704,7 @@ mod tests {
     fn search_live_expands_ancestors() {
         let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
         // App starts fully collapsed
-        let initial_rows = app.flat_rows.len();
+        let initial_rows = app.tree.flat_rows.len();
 
         app.start_search();
         app.search.input = TextInput::new("git");
@@ -2626,7 +2716,7 @@ mod tests {
             "live search should find 'git'"
         );
         assert!(
-            app.flat_rows.len() > initial_rows,
+            app.tree.flat_rows.len() > initial_rows,
             "live search should expand ancestors"
         );
     }
@@ -2652,6 +2742,7 @@ mod tests {
 
         // Find all git leaf rows
         let git_leaves: Vec<(usize, PolicyLevel, bool)> = app
+            .tree
             .flat_rows
             .iter()
             .enumerate()
@@ -2704,7 +2795,7 @@ mod tests {
         let app = make_app(r#"(policy "main" (allow (exec "git" *)) (deny (exec "rm" *)))"#);
 
         // Single-level: nothing should be shadowed
-        let any_shadowed = app.flat_rows.iter().any(|row| {
+        let any_shadowed = app.tree.flat_rows.iter().any(|row| {
             matches!(
                 &row.kind,
                 TreeNodeKind::Leaf {
@@ -2730,7 +2821,7 @@ mod tests {
         let mut app = App::new(&[user, project]);
         app.expand_all();
 
-        let any_shadowed = app.flat_rows.iter().any(|row| {
+        let any_shadowed = app.tree.flat_rows.iter().any(|row| {
             matches!(
                 &row.kind,
                 TreeNodeKind::Leaf {

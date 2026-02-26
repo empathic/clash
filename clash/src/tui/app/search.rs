@@ -22,7 +22,7 @@ impl App {
             self.rebuild_flat();
             // Jump to first match
             if let Some(&idx) = self.search.matches.first() {
-                self.cursor = idx;
+                self.tree.cursor = idx;
                 self.search.match_cursor = 0;
             }
         }
@@ -47,7 +47,7 @@ impl App {
             return;
         }
         self.search.match_cursor = (self.search.match_cursor + 1) % self.search.matches.len();
-        self.cursor = self.search.matches[self.search.match_cursor];
+        self.tree.cursor = self.search.matches[self.search.match_cursor];
     }
 
     /// Jump to the previous search match.
@@ -60,7 +60,7 @@ impl App {
         } else {
             self.search.match_cursor -= 1;
         }
-        self.cursor = self.search.matches[self.search.match_cursor];
+        self.tree.cursor = self.search.matches[self.search.match_cursor];
     }
 
     /// Live-update search matches as the user types.
@@ -89,7 +89,7 @@ impl App {
             return;
         }
 
-        for (i, row) in self.flat_rows.iter().enumerate() {
+        for (i, row) in self.tree.flat_rows.iter().enumerate() {
             let text = tree::node_search_text(&row.kind);
             if text.to_lowercase().contains(&query_lower) {
                 self.search.matches.push(i);
@@ -103,10 +103,12 @@ impl App {
         let Some(query) = &self.search.query else {
             return;
         };
-        let matching_paths = tree::search_tree(&self.roots, query);
+        let matching_paths = tree::search_tree(&self.tree.roots, query);
         for path in &matching_paths {
             for prefix_len in 1..path.len() {
-                if let Some(node) = tree::node_at_path_mut(&mut self.roots, &path[..prefix_len]) {
+                if let Some(node) =
+                    tree::node_at_path_mut(&mut self.tree.roots, &path[..prefix_len])
+                {
                     node.expanded = true;
                 }
             }

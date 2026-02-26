@@ -36,7 +36,7 @@ impl App {
             .collect();
         self.history.undo_stack.push(super::UndoEntry {
             sources,
-            cursor: self.cursor,
+            cursor: self.tree.cursor,
         });
         self.history.redo_stack.clear();
     }
@@ -55,7 +55,7 @@ impl App {
             .collect();
         self.history.redo_stack.push(super::UndoEntry {
             sources: current,
-            cursor: self.cursor,
+            cursor: self.tree.cursor,
         });
         // Restore
         for (level, source) in &entry.sources {
@@ -63,7 +63,7 @@ impl App {
                 ls.source = source.clone();
             }
         }
-        self.cursor = entry.cursor;
+        self.tree.cursor = entry.cursor;
         self.rebuild_tree();
         self.set_status("Undone", false);
     }
@@ -81,14 +81,14 @@ impl App {
             .collect();
         self.history.undo_stack.push(super::UndoEntry {
             sources: current,
-            cursor: self.cursor,
+            cursor: self.tree.cursor,
         });
         for (level, source) in &entry.sources {
             if let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == *level) {
                 ls.source = source.clone();
             }
         }
-        self.cursor = entry.cursor;
+        self.tree.cursor = entry.cursor;
         self.rebuild_tree();
         self.set_status("Redone", false);
     }
@@ -140,7 +140,7 @@ impl App {
 
     /// Open the effect selector dropdown on the focused leaf or sandbox leaf.
     pub fn start_select_effect(&mut self) {
-        let Some(row) = self.flat_rows.get(self.cursor) else {
+        let Some(row) = self.tree.flat_rows.get(self.tree.cursor) else {
             return;
         };
         match &row.kind {
@@ -246,7 +246,7 @@ impl App {
 
     /// Initiate deletion of the focused rule or sandbox sub-rule (enters Confirm mode).
     pub fn start_delete(&mut self) {
-        let Some(row) = self.flat_rows.get(self.cursor) else {
+        let Some(row) = self.tree.flat_rows.get(self.tree.cursor) else {
             return;
         };
         match &row.kind {
@@ -570,11 +570,11 @@ impl App {
         }) {
             Ok(()) => {
                 if !self.cursor_to_rule(&rule_text, level, &policy_name) {
-                    let fallback = self.flat_rows.iter().position(|row| {
+                    let fallback = self.tree.flat_rows.iter().position(|row| {
                         matches!(&row.kind, TreeNodeKind::Leaf { rule: r, .. } if r.to_string() == rule_text)
                     });
                     if let Some(idx) = fallback {
-                        self.cursor = idx;
+                        self.tree.cursor = idx;
                     }
                 }
                 self.set_status(
@@ -596,7 +596,7 @@ impl App {
 
     /// Enter edit mode for the focused leaf rule or sandbox sub-rule.
     pub fn start_edit_rule(&mut self) {
-        let Some(row) = self.flat_rows.get(self.cursor) else {
+        let Some(row) = self.tree.flat_rows.get(self.tree.cursor) else {
             return;
         };
         match &row.kind {
