@@ -210,6 +210,16 @@ impl DecisionTree {
             return None;
         }
 
+        // Optimize: when all allowed domains are loopback addresses, use
+        // Localhost instead of AllowDomains. This avoids the fork+proxy
+        // overhead since localhost-only access can be enforced directly
+        // at the kernel level.
+        if let NetworkPolicy::AllowDomains(ref domains) = network
+            && domains.iter().all(|d| is_loopback_domain(d))
+        {
+            network = NetworkPolicy::Localhost;
+        }
+
         // Automatically grant full access to system temp directories so
         // sandboxed tools (compilers, package managers, etc.) can create
         // temporary files without needing explicit policy rules.
@@ -526,6 +536,14 @@ impl CompiledTool {
 // ---------------------------------------------------------------------------
 // Sandbox generation helpers
 // ---------------------------------------------------------------------------
+
+/// Returns `true` if the domain is a loopback address (localhost, 127.0.0.1, ::1).
+fn is_loopback_domain(domain: &str) -> bool {
+    matches!(
+        domain.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1"
+    )
+}
 
 /// Convert a single `FsOp` to a sandbox `Cap` flag.
 fn fsop_to_cap(op: &FsOp) -> Cap {
@@ -1078,6 +1096,109 @@ mod tests {
                 temp_path
             );
         }
+    }
+
+    #[test]
+    fn localhost_net_rule_produces_localhost_policy() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec))
+  (allow (net "localhost")))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let sandbox = tree
+            .build_implicit_sandbox()
+            .expect("net rule should produce implicit sandbox");
+        assert_eq!(sandbox.network, NetworkPolicy::Localhost);
+    }
+
+    #[test]
+    fn loopback_ip_net_rule_produces_localhost_policy() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec))
+  (allow (net "127.0.0.1")))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let sandbox = tree
+            .build_implicit_sandbox()
+            .expect("net rule should produce implicit sandbox");
+        assert_eq!(sandbox.network, NetworkPolicy::Localhost);
+    }
+
+    #[test]
+    fn ipv6_loopback_net_rule_produces_localhost_policy() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec))
+  (allow (net "::1")))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let sandbox = tree
+            .build_implicit_sandbox()
+            .expect("net rule should produce implicit sandbox");
+        assert_eq!(sandbox.network, NetworkPolicy::Localhost);
+    }
+
+    #[test]
+    fn mixed_loopback_domains_produces_localhost_policy() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec))
+  (allow (net (or "localhost" "127.0.0.1" "::1"))))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let sandbox = tree
+            .build_implicit_sandbox()
+            .expect("net rule should produce implicit sandbox");
+        assert_eq!(sandbox.network, NetworkPolicy::Localhost);
+    }
+
+    #[test]
+    fn localhost_plus_external_domain_produces_allow_domains() {
+        let env = TestEnv::new(&[]);
+        let tree = compile_policy_with_env(
+            r#"
+(default deny "main")
+(policy "main"
+  (allow (exec))
+  (allow (net (or "localhost" "github.com"))))
+"#,
+            &env,
+        )
+        .unwrap();
+
+        let sandbox = tree
+            .build_implicit_sandbox()
+            .expect("net rule should produce implicit sandbox");
+        assert_eq!(
+            sandbox.network,
+            NetworkPolicy::AllowDomains(vec!["localhost".into(), "github.com".into()])
+        );
     }
 
     #[test]

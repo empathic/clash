@@ -180,9 +180,11 @@ pub enum RuleEffect {
 
 /// Network access policy for sandboxed processes.
 ///
-/// Three modes:
+/// Four modes:
 /// - `Deny`: block all network at kernel level
 /// - `Allow`: unrestricted network access
+/// - `Localhost`: allow connections only to localhost (127.0.0.1/::1),
+///   enforced at kernel level without a proxy.
 /// - `AllowDomains`: domain-specific filtering via local HTTP proxy.
 ///   The sandbox restricts connections to localhost only; a proxy enforces
 ///   the domain allowlist.
@@ -193,6 +195,10 @@ pub enum NetworkPolicy {
     Deny,
     /// Unrestricted network access.
     Allow,
+    /// Allow only localhost connections (127.0.0.1/::1). Enforced at kernel
+    /// level on macOS (Seatbelt) and advisory on Linux (seccomp cannot filter
+    /// connect by destination). No proxy is needed.
+    Localhost,
     /// Allow network access only to specific domains via HTTP proxy.
     /// Domains support exact match and subdomain match (e.g., "github.com"
     /// also matches "api.github.com").
@@ -204,6 +210,7 @@ impl Serialize for NetworkPolicy {
         match self {
             NetworkPolicy::Deny => serializer.serialize_str("deny"),
             NetworkPolicy::Allow => serializer.serialize_str("allow"),
+            NetworkPolicy::Localhost => serializer.serialize_str("localhost"),
             NetworkPolicy::AllowDomains(domains) => {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(Some(1))?;
@@ -224,14 +231,18 @@ impl<'de> Deserialize<'de> for NetworkPolicy {
             type Value = NetworkPolicy;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str(r#""deny", "allow", or {"allow_domains": [...]}"#)
+                formatter.write_str(r#""deny", "allow", "localhost", or {"allow_domains": [...]}"#)
             }
 
             fn visit_str<E: de::Error>(self, value: &str) -> Result<NetworkPolicy, E> {
                 match value {
                     "deny" => Ok(NetworkPolicy::Deny),
                     "allow" => Ok(NetworkPolicy::Allow),
-                    other => Err(de::Error::unknown_variant(other, &["deny", "allow"])),
+                    "localhost" => Ok(NetworkPolicy::Localhost),
+                    other => Err(de::Error::unknown_variant(
+                        other,
+                        &["deny", "allow", "localhost"],
+                    )),
                 }
             }
 
@@ -473,6 +484,14 @@ mod tests {
         // .git dir: deny overrides allow, so only read + execute remain
         let caps = policy.effective_caps("/project/.git/config", "/project");
         assert_eq!(caps, Cap::READ | Cap::EXECUTE);
+    }
+
+    #[test]
+    fn test_network_policy_localhost_serde() {
+        let json = serde_json::to_string(&NetworkPolicy::Localhost).unwrap();
+        assert_eq!(json, r#""localhost""#);
+        let deserialized: NetworkPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, NetworkPolicy::Localhost);
     }
 
     #[test]
