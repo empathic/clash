@@ -499,7 +499,7 @@ unsafe fn set_env_cstr(key: &str, val: &str) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 
