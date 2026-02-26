@@ -16,7 +16,7 @@ use super::style as tui_style;
 use super::tree::{self, FlatRow, TreeNode, TreeNodeKind};
 
 /// Format an effect for display: "ask", "auto allow", "auto deny".
-fn effect_display(effect: Effect) -> &'static str {
+pub(crate) fn effect_display(effect: Effect) -> &'static str {
     match effect {
         Effect::Ask => "ask",
         Effect::Allow => "auto allow",
@@ -144,7 +144,7 @@ fn render_tree(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(tree_widget, inner);
 }
 
-fn collapsed_summary(roots: &[TreeNode], tree_path: &[usize]) -> Vec<Span<'static>> {
+pub(crate) fn collapsed_summary(roots: &[TreeNode], tree_path: &[usize]) -> Vec<Span<'static>> {
     let Some(node) = tree::node_at_path(roots, tree_path) else {
         return Vec::new();
     };
@@ -175,7 +175,7 @@ fn collapsed_summary(roots: &[TreeNode], tree_path: &[usize]) -> Vec<Span<'stati
     spans
 }
 
-fn render_row(
+pub(crate) fn render_row(
     row: &FlatRow,
     is_selected: bool,
     is_search_match: bool,
@@ -304,11 +304,18 @@ fn render_description(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(" cancel", tui_style::DIM),
             ]),
-            Line::from(vec![
-                Span::raw("> "),
-                Span::styled(state.input.value(), Style::default()),
-                Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
-            ]),
+            {
+                let val = state.input.value();
+                let pos = state.input.cursor_pos();
+                let before: String = val.chars().take(pos).collect();
+                let after: String = val.chars().skip(pos).collect();
+                Line::from(vec![
+                    Span::raw("> "),
+                    Span::raw(before),
+                    Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
+                    Span::raw(after),
+                ])
+            },
         ];
         if let Some(err) = &state.error {
             lines.push(Line::from(Span::styled(
@@ -348,7 +355,7 @@ fn render_description(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(desc, inner);
 }
 
-fn description_for_row(row: &FlatRow) -> Vec<Line<'static>> {
+pub(crate) fn description_for_row(row: &FlatRow) -> Vec<Line<'static>> {
     match &row.kind {
         TreeNodeKind::Leaf {
             effect,
@@ -469,7 +476,7 @@ fn render_keyhints(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(bar, area);
 }
 
-fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
+pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
     let mut hints = vec![];
     let row = app.flat_rows.get(app.cursor);
 
@@ -903,7 +910,7 @@ fn step_label(label: &str, is_active: bool) -> Line<'static> {
     Line::from(Span::styled(format!(" {label}"), style))
 }
 
-fn selector_line(options: &[&str], selected: usize, is_active: bool) -> Line<'static> {
+pub(crate) fn selector_line(options: &[&str], selected: usize, is_active: bool) -> Line<'static> {
     let mut spans = vec![Span::raw("   ")];
     for (i, opt) in options.iter().enumerate() {
         if i > 0 {
@@ -924,4 +931,337 @@ fn selector_line(options: &[&str], selected: usize, is_active: bool) -> Line<'st
         spans.push(Span::styled("  ←/→ Tab Enter", tui_style::DIM));
     }
     Line::from(spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use super::*;
+    use crate::policy::Effect;
+    use crate::policy::ast::Rule;
+    use crate::settings::{LoadedPolicy, PolicyLevel};
+    use crate::tui::app::{App, ConfirmAction, Mode, parse_rule_text};
+
+    fn test_policy(level: PolicyLevel, source: &str) -> LoadedPolicy {
+        LoadedPolicy {
+            level,
+            path: PathBuf::from("/tmp/test"),
+            source: source.to_string(),
+        }
+    }
+
+    fn make_app(source: &str) -> App {
+        let policy = test_policy(PolicyLevel::User, source);
+        App::new(&[policy])
+    }
+
+    fn make_leaf_row(effect: Effect, rule: Rule, level: PolicyLevel, policy: &str) -> FlatRow {
+        FlatRow {
+            kind: TreeNodeKind::Leaf {
+                effect,
+                rule,
+                level,
+                policy: policy.to_string(),
+            },
+            depth: 2,
+            expanded: false,
+            has_children: false,
+            tree_path: vec![0, 0, 0],
+            connectors: vec![false, false],
+        }
+    }
+
+    fn make_binary_row(name: &str, expanded: bool) -> FlatRow {
+        FlatRow {
+            kind: TreeNodeKind::Binary(name.to_string()),
+            depth: 0,
+            expanded,
+            has_children: true,
+            tree_path: vec![0],
+            connectors: vec![],
+        }
+    }
+
+    fn render_to_string(app: &App, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests on pure functions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn effect_display_values() {
+        assert_eq!(effect_display(Effect::Ask), "ask");
+        assert_eq!(effect_display(Effect::Allow), "auto allow");
+        assert_eq!(effect_display(Effect::Deny), "auto deny");
+    }
+
+    #[test]
+    fn render_row_leaf_shows_effect() {
+        let rule = parse_rule_text("(allow (exec \"git\"))").unwrap();
+        let row = make_leaf_row(Effect::Allow, rule, PolicyLevel::User, "main");
+        let line = render_row(&row, false, false, None, &[]);
+
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(
+            text.contains("auto allow"),
+            "line should contain effect: {text}"
+        );
+    }
+
+    #[test]
+    fn render_row_binary_node() {
+        let row = make_binary_row("git", true);
+        let line = render_row(&row, false, false, None, &[]);
+
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(
+            text.contains("git"),
+            "line should contain binary name: {text}"
+        );
+    }
+
+    #[test]
+    fn render_row_collapsed_shows_summary() {
+        let summary = vec![
+            Span::styled("  ", tui_style::DIM),
+            Span::styled("1 auto allow", tui_style::ALLOW),
+        ];
+        let row = make_binary_row("git", false);
+        let line = render_row(&row, false, false, None, &summary);
+
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(
+            text.contains("1 auto allow"),
+            "collapsed row should show summary: {text}"
+        );
+    }
+
+    #[test]
+    fn render_row_selected_styling() {
+        let row = make_binary_row("git", true);
+        let line = render_row(&row, true, false, None, &[]);
+
+        assert_eq!(line.style, tui_style::SELECTED);
+    }
+
+    #[test]
+    fn render_row_search_match_styling() {
+        let row = make_binary_row("git", true);
+        let line = render_row(&row, false, true, None, &[]);
+
+        assert!(
+            line.style.add_modifier.contains(Modifier::UNDERLINED),
+            "search match row should be underlined"
+        );
+    }
+
+    #[test]
+    fn description_for_row_leaf() {
+        let rule = parse_rule_text("(allow (exec \"git\"))").unwrap();
+        let row = make_leaf_row(Effect::Allow, rule, PolicyLevel::User, "main");
+        let lines = description_for_row(&row);
+
+        assert!(lines.len() >= 2);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(text.contains("AUTO ALLOW"), "should contain effect: {text}");
+        assert!(text.contains("main"), "should contain policy name: {text}");
+    }
+
+    #[test]
+    fn description_for_row_binary() {
+        let row = make_binary_row("git", true);
+        let lines = description_for_row(&row);
+
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(text.contains("Binary:"), "should say Binary: {text}");
+        assert!(text.contains("git"));
+    }
+
+    #[test]
+    fn description_for_row_domain() {
+        let row = FlatRow {
+            kind: TreeNodeKind::Domain(tree::DomainKind::Exec),
+            depth: 1,
+            expanded: true,
+            has_children: true,
+            tree_path: vec![0, 0],
+            connectors: vec![false],
+        };
+        let lines = description_for_row(&row);
+
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(
+            text.contains("Exec capability rules"),
+            "should describe domain: {text}"
+        );
+    }
+
+    #[test]
+    fn context_hints_on_leaf() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+        app.expand_all();
+
+        // Move cursor to the leaf
+        app.cursor_to_bottom();
+        let hints = context_hints(&app);
+
+        let keys: Vec<&str> = hints.iter().map(|(k, _)| *k).collect();
+        assert!(keys.contains(&"Tab"), "leaf should have Tab hint");
+        assert!(keys.contains(&"e"), "leaf should have e hint");
+        assert!(keys.contains(&"d"), "leaf should have d hint");
+    }
+
+    #[test]
+    fn context_hints_on_branch() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+        app.expand_all();
+        app.cursor_to_top(); // root is a branch
+
+        let hints = context_hints(&app);
+        let keys: Vec<&str> = hints.iter().map(|(k, _)| *k).collect();
+        // Should have collapse hint since it's expanded
+        assert!(keys.contains(&"h"), "expanded branch should have h hint");
+    }
+
+    #[test]
+    fn context_hints_with_search() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+        app.search_query = Some("git".to_string());
+
+        let hints = context_hints(&app);
+        let keys: Vec<&str> = hints.iter().map(|(k, _)| *k).collect();
+        assert!(keys.contains(&"n/N"), "active search should show n/N hint");
+    }
+
+    #[test]
+    fn selector_line_active() {
+        let line = selector_line(&["a", "b", "c"], 1, true);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(
+            text.contains("←/→ Tab Enter"),
+            "active should show navigation hints: {text}"
+        );
+    }
+
+    #[test]
+    fn selector_line_inactive() {
+        let line = selector_line(&["a", "b", "c"], 1, false);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(
+            !text.contains("←/→"),
+            "inactive should not show navigation hints: {text}"
+        );
+
+        // Selected item (index 1 = "b") should be bold.
+        // Spans: [0]="   ", [1]=" a ", [2]="  ", [3]=" b ", [4]="  ", [5]=" c "
+        let selected_span = &line.spans[3];
+        assert!(
+            selected_span.style.add_modifier.contains(Modifier::BOLD),
+            "selected span should be bold, got style {:?} for {:?}",
+            selected_span.style,
+            selected_span.content
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // TestBackend integration tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_empty_policy() {
+        let app = make_app("");
+        let output = render_to_string(&app, 80, 24);
+        assert!(
+            output.contains("No policy rules loaded"),
+            "empty policy should show message: {output}"
+        );
+    }
+
+    #[test]
+    fn render_header_shows_level() {
+        let app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+        let output = render_to_string(&app, 80, 24);
+        assert!(
+            output.contains("user"),
+            "header should contain level name: {output}"
+        );
+        assert!(
+            output.contains("? help"),
+            "header should contain help hint: {output}"
+        );
+    }
+
+    #[test]
+    fn render_tree_shows_binary() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+        app.expand_all();
+        let output = render_to_string(&app, 80, 24);
+        assert!(
+            output.contains("git"),
+            "tree should contain binary name: {output}"
+        );
+    }
+
+    #[test]
+    fn render_add_rule_overlay_visible() {
+        let mut app = make_app(r#"(policy "main")"#);
+        app.start_add_rule();
+        let output = render_to_string(&app, 80, 40);
+        assert!(
+            output.contains("Add Rule"),
+            "add rule overlay should be visible: {output}"
+        );
+    }
+
+    #[test]
+    fn render_confirm_overlay_delete() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+        app.mode = Mode::Confirm(ConfirmAction::DeleteRule {
+            level: PolicyLevel::User,
+            policy: "main".to_string(),
+            rule_text: "(allow (exec \"git\"))".to_string(),
+        });
+        let output = render_to_string(&app, 80, 24);
+        assert!(
+            output.contains("Confirm Delete"),
+            "confirm delete overlay should be visible: {output}"
+        );
+    }
+
+    #[test]
+    fn render_help_overlay() {
+        let mut app = make_app("");
+        app.show_help = true;
+        let output = render_to_string(&app, 80, 40);
+        assert!(
+            output.contains("Keyboard Shortcuts"),
+            "help overlay should be visible: {output}"
+        );
+    }
 }

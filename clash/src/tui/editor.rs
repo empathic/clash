@@ -92,3 +92,134 @@ impl TextInput {
             .unwrap_or(self.content.len())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_input() {
+        let input = TextInput::empty();
+        assert_eq!(input.value(), "");
+        assert_eq!(input.cursor_pos(), 0);
+        assert_eq!(input.char_count(), 0);
+    }
+
+    #[test]
+    fn new_with_initial() {
+        let input = TextInput::new("hello");
+        assert_eq!(input.value(), "hello");
+        assert_eq!(input.cursor_pos(), 5);
+        assert_eq!(input.char_count(), 5);
+    }
+
+    #[test]
+    fn insert_chars() {
+        let mut input = TextInput::empty();
+        input.insert_char('a');
+        input.insert_char('b');
+        input.insert_char('c');
+        assert_eq!(input.value(), "abc");
+        assert_eq!(input.cursor_pos(), 3);
+    }
+
+    #[test]
+    fn backspace() {
+        let mut input = TextInput::new("abc");
+        input.backspace();
+        assert_eq!(input.value(), "ab");
+        assert_eq!(input.cursor_pos(), 2);
+    }
+
+    #[test]
+    fn backspace_at_start() {
+        let mut input = TextInput::new("abc");
+        input.home();
+        input.backspace();
+        assert_eq!(input.value(), "abc");
+        assert_eq!(input.cursor_pos(), 0);
+    }
+
+    #[test]
+    fn delete_at_cursor() {
+        let mut input = TextInput::new("abc");
+        input.home();
+        input.delete();
+        assert_eq!(input.value(), "bc");
+        assert_eq!(input.cursor_pos(), 0);
+    }
+
+    #[test]
+    fn delete_at_end() {
+        let mut input = TextInput::new("abc");
+        input.delete();
+        assert_eq!(input.value(), "abc");
+        assert_eq!(input.cursor_pos(), 3);
+    }
+
+    #[test]
+    fn move_left_right() {
+        let mut input = TextInput::new("abc");
+        input.move_left();
+        assert_eq!(input.cursor_pos(), 2);
+        input.move_left();
+        assert_eq!(input.cursor_pos(), 1);
+        input.move_right();
+        assert_eq!(input.cursor_pos(), 2);
+        // Can't go past end
+        input.move_right();
+        input.move_right();
+        assert_eq!(input.cursor_pos(), 3);
+    }
+
+    #[test]
+    fn home_end() {
+        let mut input = TextInput::new("hello world");
+        input.home();
+        assert_eq!(input.cursor_pos(), 0);
+        input.end();
+        assert_eq!(input.cursor_pos(), 11);
+    }
+
+    #[test]
+    fn clear() {
+        let mut input = TextInput::new("hello");
+        input.clear();
+        assert_eq!(input.value(), "");
+        assert_eq!(input.cursor_pos(), 0);
+    }
+
+    #[test]
+    fn unicode_handling() {
+        let mut input = TextInput::new("café");
+        assert_eq!(input.char_count(), 4);
+        assert_eq!(input.cursor_pos(), 4);
+
+        // Backspace removes last char (é)
+        input.backspace();
+        assert_eq!(input.value(), "caf");
+        assert_eq!(input.cursor_pos(), 3);
+
+        // Insert multi-byte
+        input.insert_char('ñ');
+        assert_eq!(input.value(), "cafñ");
+        assert_eq!(input.char_count(), 4);
+
+        // Navigate and delete in the middle
+        input.home();
+        input.move_right(); // after 'c'
+        input.delete(); // delete 'a'
+        assert_eq!(input.value(), "cfñ");
+        assert_eq!(input.cursor_pos(), 1);
+    }
+
+    #[test]
+    fn insert_in_middle() {
+        let mut input = TextInput::new("ac");
+        input.home();
+        input.move_right(); // after 'a'
+        input.insert_char('b');
+        assert_eq!(input.value(), "abc");
+        assert_eq!(input.cursor_pos(), 2);
+    }
+}

@@ -72,7 +72,7 @@ impl AddRuleForm {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AddRuleStep {
     SelectDomain,
     EnterBinary,
@@ -263,16 +263,29 @@ impl App {
         self.update_search_matches();
     }
 
-    /// Move cursor to a leaf matching the given rule text, expanding ancestors as needed.
-    fn cursor_to_rule(&mut self, rule_text: &str) {
-        // Search the tree (which is fully expanded after rebuild_tree) for a matching leaf.
+    /// Move cursor to a leaf matching the given rule text, level, and policy,
+    /// expanding ancestors as needed. Returns `true` if the leaf was found.
+    fn cursor_to_rule(
+        &mut self,
+        rule_text: &str,
+        target_level: PolicyLevel,
+        target_policy: &str,
+    ) -> bool {
+        // Search the tree for a matching leaf by rule text, level, and policy.
         let find = |rows: &[FlatRow]| -> Option<usize> {
-            rows.iter()
-                .position(|row| matches!(&row.kind, TreeNodeKind::Leaf { rule, .. } if rule.to_string() == rule_text))
+            rows.iter().position(|row| {
+                matches!(
+                    &row.kind,
+                    TreeNodeKind::Leaf { rule, level, policy, .. }
+                        if rule.to_string() == rule_text
+                            && *level == target_level
+                            && policy == target_policy
+                )
+            })
         };
 
         let Some(i) = find(&self.flat_rows) else {
-            return;
+            return false;
         };
 
         // Ensure ancestors are expanded
@@ -286,6 +299,7 @@ impl App {
 
         // Re-find after re-flatten (indices may have shifted)
         self.cursor = find(&self.flat_rows).unwrap_or(i);
+        true
     }
 
     /// Compute scroll offset to keep cursor visible.
@@ -825,45 +839,20 @@ impl App {
             return;
         };
         form.error = None;
-        match form.step {
-            AddRuleStep::EnterBinary => {
-                // Auto-select exec if user entered a specific command
-                let bin = form.binary_input.value().trim();
-                if !bin.is_empty() && bin != "*" {
-                    form.domain_index = 0; // exec
-                }
-                form.step = AddRuleStep::EnterArgs;
+
+        // Auto-select exec if user entered a specific command
+        if form.step == AddRuleStep::EnterBinary {
+            let bin = form.binary_input.value().trim();
+            if !bin.is_empty() && bin != "*" {
+                form.domain_index = 0; // exec
             }
-            AddRuleStep::EnterArgs => {
-                form.step = AddRuleStep::SelectDomain;
-            }
-            AddRuleStep::SelectDomain => {
-                // Domain index: 0=exec, 1=fs, 2=net, 3=tool
-                form.step = match form.domain_index {
-                    0 => AddRuleStep::SelectEffect, // exec: no extra permissions
-                    1 => AddRuleStep::SelectFsOp,
-                    2 => AddRuleStep::EnterNetDomain,
-                    _ => AddRuleStep::EnterToolName,
-                };
-            }
-            AddRuleStep::SelectFsOp => {
-                form.step = AddRuleStep::EnterPath;
-            }
-            AddRuleStep::EnterPath => {
-                form.step = AddRuleStep::SelectEffect;
-            }
-            AddRuleStep::EnterNetDomain => {
-                form.step = AddRuleStep::SelectEffect;
-            }
-            AddRuleStep::EnterToolName => {
-                form.step = AddRuleStep::SelectEffect;
-            }
-            AddRuleStep::SelectEffect => {
-                form.step = AddRuleStep::SelectLevel;
-            }
-            AddRuleStep::SelectLevel => {
-                self.complete_add_rule();
-            }
+        }
+
+        let next = next_add_rule_step(form.step, form.domain_index);
+        if let Some(step) = next {
+            form.step = step;
+        } else {
+            self.complete_add_rule();
         }
     }
 
@@ -873,63 +862,8 @@ impl App {
             return;
         };
 
-        let effect = EFFECT_NAMES[form.effect_index];
         let level = form.available_levels[form.level_index];
-
-        // Build the domain-specific matcher s-expression
-        let rule_text = match form.domain_index {
-            0 => {
-                // Exec: ({effect} (exec {binary} {args...}))
-                let binary_raw = form.binary_input.value().trim().to_string();
-                let binary = if binary_raw.is_empty() {
-                    "*"
-                } else {
-                    &binary_raw
-                };
-                let args = form.args_input.value().trim().to_string();
-                let binary_tok = quote_token_if_needed(binary);
-                let mut parts = vec![format!("({effect} (exec {binary_tok}")];
-                if !args.is_empty() {
-                    for arg in args.split_whitespace() {
-                        parts.push(format!(" {}", quote_token_if_needed(arg)));
-                    }
-                }
-                parts.push("))".to_string());
-                parts.join("")
-            }
-            1 => {
-                // Fs: ({effect} (fs {op} {path}))
-                let op = FS_OPS[form.fs_op_index];
-                let path = form.path_input.value().trim().to_string();
-                if op == "*" && path.is_empty() {
-                    format!("({effect} (fs))")
-                } else if path.is_empty() {
-                    format!("({effect} (fs {op}))")
-                } else {
-                    format!("({effect} (fs {op} {path}))")
-                }
-            }
-            2 => {
-                // Net: ({effect} (net {domain}))
-                let domain = form.net_domain_input.value().trim().to_string();
-                if domain.is_empty() || domain == "*" {
-                    format!("({effect} (net))")
-                } else {
-                    let tok = quote_token_if_needed(&domain);
-                    format!("({effect} (net {tok}))")
-                }
-            }
-            _ => {
-                // Tool: ({effect} (tool {name}))
-                let name = form.tool_name_input.value().trim().to_string();
-                if name.is_empty() || name == "*" {
-                    format!("({effect} (tool))")
-                } else {
-                    let tok = quote_token_if_needed(&name);
-                    format!("({effect} (tool {tok}))")
-                }
-            }
-        };
+        let rule_text = build_rule_text(form);
 
         let rule = match parse_rule_text(&rule_text) {
             Ok(r) => r,
@@ -961,13 +895,31 @@ impl App {
             return;
         };
 
-        // Ensure the policy block exists, then add the rule
-        let result = edit::ensure_policy_block(
-            &ls.source,
-            &policy_name,
-            &format!("(policy \"{policy_name}\")"),
-        )
-        .and_then(|s| edit::add_rule(&s, &policy_name, &rule));
+        // Check for a conflicting rule (same matcher, different effect) — replace it
+        let conflicting = edit::find_conflicting_rule(&ls.source, &policy_name, &rule)
+            .ok()
+            .flatten();
+        let replaced = conflicting.is_some();
+
+        // Build the edit pipeline: optionally remove conflicting rule, ensure policy block, add
+        let result = if let Some(ref old_text) = conflicting {
+            edit::remove_rule(&ls.source, &policy_name, old_text)
+                .and_then(|s| {
+                    edit::ensure_policy_block(
+                        &s,
+                        &policy_name,
+                        &format!("(policy \"{policy_name}\")"),
+                    )
+                })
+                .and_then(|s| edit::add_rule(&s, &policy_name, &rule))
+        } else {
+            edit::ensure_policy_block(
+                &ls.source,
+                &policy_name,
+                &format!("(policy \"{policy_name}\")"),
+            )
+            .and_then(|s| edit::add_rule(&s, &policy_name, &rule))
+        };
 
         match result {
             Ok(new_source) => {
@@ -982,8 +934,23 @@ impl App {
                 let rule_text = rule.to_string();
                 self.mode = Mode::Normal;
                 self.rebuild_tree();
-                self.cursor_to_rule(&rule_text);
-                self.set_status("Rule added", false);
+                if !self.cursor_to_rule(&rule_text, level, &policy_name) {
+                    // Fallback: try matching by rule text alone (ignoring level/policy)
+                    let fallback = self.flat_rows.iter().position(|row| {
+                        matches!(&row.kind, TreeNodeKind::Leaf { rule: r, .. } if r.to_string() == rule_text)
+                    });
+                    if let Some(idx) = fallback {
+                        self.cursor = idx;
+                    }
+                }
+                self.set_status(
+                    if replaced {
+                        "Rule replaced"
+                    } else {
+                        "Rule added"
+                    },
+                    false,
+                );
             }
             Err(e) => {
                 self.undo_stack.pop();
@@ -1086,7 +1053,7 @@ impl App {
 
     /// Enter search mode.
     pub fn start_search(&mut self) {
-        self.search_input = TextInput::empty();
+        self.search_input.clear();
         self.mode = Mode::Search;
     }
 
@@ -1244,8 +1211,103 @@ fn effect_to_display_index(effect: Effect) -> usize {
     }
 }
 
+/// Compute the next step in the add-rule flow, or `None` if the form is complete.
+pub(crate) fn next_add_rule_step(step: AddRuleStep, domain_index: usize) -> Option<AddRuleStep> {
+    match step {
+        AddRuleStep::EnterBinary => Some(AddRuleStep::EnterArgs),
+        AddRuleStep::EnterArgs => Some(AddRuleStep::SelectDomain),
+        AddRuleStep::SelectDomain => Some(match domain_index {
+            0 => AddRuleStep::SelectEffect,
+            1 => AddRuleStep::SelectFsOp,
+            2 => AddRuleStep::EnterNetDomain,
+            _ => AddRuleStep::EnterToolName,
+        }),
+        AddRuleStep::SelectFsOp => Some(AddRuleStep::EnterPath),
+        AddRuleStep::EnterPath => Some(AddRuleStep::SelectEffect),
+        AddRuleStep::EnterNetDomain => Some(AddRuleStep::SelectEffect),
+        AddRuleStep::EnterToolName => Some(AddRuleStep::SelectEffect),
+        AddRuleStep::SelectEffect => Some(AddRuleStep::SelectLevel),
+        AddRuleStep::SelectLevel => None,
+    }
+}
+
+/// Build the capability-specific part of the rule (without effect or exec wrapper).
+fn build_cap_text(form: &AddRuleForm) -> String {
+    match form.domain_index {
+        1 => {
+            let op = FS_OPS[form.fs_op_index];
+            let path = form.path_input.value().trim().to_string();
+            if op == "*" && path.is_empty() {
+                "(fs)".to_string()
+            } else if path.is_empty() {
+                format!("(fs {op})")
+            } else {
+                format!("(fs {op} {path})")
+            }
+        }
+        2 => {
+            let domain = form.net_domain_input.value().trim().to_string();
+            if domain.is_empty() || domain == "*" {
+                "(net)".to_string()
+            } else {
+                let tok = quote_token_if_needed(&domain);
+                format!("(net {tok})")
+            }
+        }
+        _ => {
+            let name = form.tool_name_input.value().trim().to_string();
+            if name.is_empty() || name == "*" {
+                "(tool)".to_string()
+            } else {
+                let tok = quote_token_if_needed(&name);
+                format!("(tool {tok})")
+            }
+        }
+    }
+}
+
+/// Build the rule s-expression text from an add-rule form.
+pub(crate) fn build_rule_text(form: &AddRuleForm) -> String {
+    let effect = EFFECT_NAMES[form.effect_index];
+    let binary_raw = form.binary_input.value().trim().to_string();
+    let has_command = !binary_raw.is_empty() && binary_raw != "*";
+
+    if has_command && form.domain_index != 0 {
+        // Sandboxed exec: ({effect} (exec {binary} {args} :sandbox (allow {cap})))
+        let binary_tok = quote_token_if_needed(&binary_raw);
+        let args = form.args_input.value().trim().to_string();
+        let mut exec_part = format!("({effect} (exec {binary_tok}");
+        for arg in args.split_whitespace() {
+            exec_part.push_str(&format!(" {}", quote_token_if_needed(arg)));
+        }
+        let cap = build_cap_text(form);
+        format!("{exec_part}) :sandbox (allow {cap}))")
+    } else if form.domain_index == 0 {
+        // Plain exec: ({effect} (exec {binary} {args...}))
+        let binary = if binary_raw.is_empty() {
+            "*"
+        } else {
+            &binary_raw
+        };
+        let args = form.args_input.value().trim().to_string();
+        let binary_tok = quote_token_if_needed(binary);
+        let mut parts = vec![format!("({effect} (exec {binary_tok}")];
+        if !args.is_empty() {
+            for arg in args.split_whitespace() {
+                parts.push(format!(" {}", quote_token_if_needed(arg)));
+            }
+        }
+        parts.push("))".to_string());
+        parts.join("")
+    } else {
+        // Standalone capability rule (no command): ({effect} {cap})
+        let cap = build_cap_text(form);
+        format!("({effect} {cap})")
+    }
+}
+
 /// Quote a token with double quotes if it's not `*` and not already a parenthesized expression.
-fn quote_token_if_needed(token: &str) -> String {
+pub(crate) fn quote_token_if_needed(token: &str) -> String {
     if token == "*" || token.starts_with('(') || token.starts_with('"') {
         token.to_string()
     } else {
@@ -1254,7 +1316,7 @@ fn quote_token_if_needed(token: &str) -> String {
 }
 
 /// Parse a single rule from its s-expression text.
-fn parse_rule_text(rule_text: &str) -> Result<Rule> {
+pub(crate) fn parse_rule_text(rule_text: &str) -> Result<Rule> {
     let source = format!("(policy \"_tmp\" {rule_text})");
     let top_levels = parse::parse(&source)?;
     for tl in top_levels {
@@ -1270,7 +1332,7 @@ fn parse_rule_text(rule_text: &str) -> Result<Rule> {
 }
 
 /// Extract searchable text from a node kind.
-fn row_search_text(kind: &TreeNodeKind) -> String {
+pub(crate) fn row_search_text(kind: &TreeNodeKind) -> String {
     match kind {
         TreeNodeKind::Domain(d) => d.to_string(),
         TreeNodeKind::PolicyBlock { name, level } => format!("{name} {level}"),
@@ -1288,5 +1350,1558 @@ fn row_search_text(kind: &TreeNodeKind) -> String {
             policy,
             ..
         } => format!("{effect} {rule} {policy}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::settings::{LoadedPolicy, PolicyLevel};
+
+    fn test_policy(level: PolicyLevel, source: &str) -> LoadedPolicy {
+        LoadedPolicy {
+            level,
+            path: PathBuf::from("/tmp/test"),
+            source: source.to_string(),
+        }
+    }
+
+    fn make_app(source: &str) -> App {
+        let policy = test_policy(PolicyLevel::User, source);
+        App::new(&[policy])
+    }
+
+    fn make_app_multi(policies: &[LoadedPolicy]) -> App {
+        App::new(policies)
+    }
+
+    // -----------------------------------------------------------------------
+    // Pure function tests: quote_token_if_needed
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn quote_token_star() {
+        assert_eq!(quote_token_if_needed("*"), "*");
+    }
+
+    #[test]
+    fn quote_token_parens() {
+        assert_eq!(
+            quote_token_if_needed("(subpath \"/tmp\")"),
+            "(subpath \"/tmp\")"
+        );
+    }
+
+    #[test]
+    fn quote_token_word() {
+        assert_eq!(quote_token_if_needed("git"), "\"git\"");
+    }
+
+    #[test]
+    fn quote_token_already_quoted() {
+        assert_eq!(quote_token_if_needed("\"git\""), "\"git\"");
+    }
+
+    // -----------------------------------------------------------------------
+    // Pure function tests: parse_rule_text
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_rule_text_valid_exec() {
+        let rule = parse_rule_text("(allow (exec \"git\"))").unwrap();
+        assert_eq!(rule.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn parse_rule_text_invalid() {
+        assert!(parse_rule_text("not a rule").is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Pure function tests: next_add_rule_step
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn next_step_binary_to_args() {
+        assert_eq!(
+            next_add_rule_step(AddRuleStep::EnterBinary, 0),
+            Some(AddRuleStep::EnterArgs)
+        );
+    }
+
+    #[test]
+    fn next_step_args_to_domain() {
+        assert_eq!(
+            next_add_rule_step(AddRuleStep::EnterArgs, 0),
+            Some(AddRuleStep::SelectDomain)
+        );
+    }
+
+    #[test]
+    fn next_step_domain_exec_to_effect() {
+        assert_eq!(
+            next_add_rule_step(AddRuleStep::SelectDomain, 0),
+            Some(AddRuleStep::SelectEffect)
+        );
+    }
+
+    #[test]
+    fn next_step_domain_fs_to_fsop() {
+        assert_eq!(
+            next_add_rule_step(AddRuleStep::SelectDomain, 1),
+            Some(AddRuleStep::SelectFsOp)
+        );
+    }
+
+    #[test]
+    fn next_step_domain_net_to_netdomain() {
+        assert_eq!(
+            next_add_rule_step(AddRuleStep::SelectDomain, 2),
+            Some(AddRuleStep::EnterNetDomain)
+        );
+    }
+
+    #[test]
+    fn next_step_domain_tool_to_toolname() {
+        assert_eq!(
+            next_add_rule_step(AddRuleStep::SelectDomain, 3),
+            Some(AddRuleStep::EnterToolName)
+        );
+    }
+
+    #[test]
+    fn next_step_fsop_to_path() {
+        assert_eq!(
+            next_add_rule_step(AddRuleStep::SelectFsOp, 0),
+            Some(AddRuleStep::EnterPath)
+        );
+    }
+
+    #[test]
+    fn next_step_path_to_effect() {
+        assert_eq!(
+            next_add_rule_step(AddRuleStep::EnterPath, 0),
+            Some(AddRuleStep::SelectEffect)
+        );
+    }
+
+    #[test]
+    fn next_step_netdomain_to_effect() {
+        assert_eq!(
+            next_add_rule_step(AddRuleStep::EnterNetDomain, 0),
+            Some(AddRuleStep::SelectEffect)
+        );
+    }
+
+    #[test]
+    fn next_step_toolname_to_effect() {
+        assert_eq!(
+            next_add_rule_step(AddRuleStep::EnterToolName, 0),
+            Some(AddRuleStep::SelectEffect)
+        );
+    }
+
+    #[test]
+    fn next_step_effect_to_level() {
+        assert_eq!(
+            next_add_rule_step(AddRuleStep::SelectEffect, 0),
+            Some(AddRuleStep::SelectLevel)
+        );
+    }
+
+    #[test]
+    fn next_step_level_completes() {
+        assert_eq!(next_add_rule_step(AddRuleStep::SelectLevel, 0), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Pure function tests: build_rule_text
+    // -----------------------------------------------------------------------
+
+    fn make_form(domain_index: usize) -> AddRuleForm {
+        AddRuleForm {
+            step: AddRuleStep::SelectLevel,
+            domain_index,
+            effect_index: 0, // allow
+            level_index: 0,
+            fs_op_index: 0,
+            binary_input: TextInput::empty(),
+            args_input: TextInput::empty(),
+            path_input: TextInput::empty(),
+            net_domain_input: TextInput::empty(),
+            tool_name_input: TextInput::empty(),
+            available_levels: vec![PolicyLevel::User],
+            error: None,
+        }
+    }
+
+    #[test]
+    fn build_rule_text_exec_basic() {
+        let mut form = make_form(0);
+        form.binary_input = TextInput::new("git");
+        let text = build_rule_text(&form);
+        assert_eq!(text, "(allow (exec \"git\"))");
+    }
+
+    #[test]
+    fn build_rule_text_exec_wildcard() {
+        let mut form = make_form(0);
+        form.binary_input = TextInput::new("*");
+        let text = build_rule_text(&form);
+        assert_eq!(text, "(allow (exec *))");
+    }
+
+    #[test]
+    fn build_rule_text_exec_empty_binary() {
+        let form = make_form(0);
+        let text = build_rule_text(&form);
+        // Empty binary defaults to *
+        assert_eq!(text, "(allow (exec *))");
+    }
+
+    #[test]
+    fn build_rule_text_exec_with_args() {
+        let mut form = make_form(0);
+        form.binary_input = TextInput::new("git");
+        form.args_input = TextInput::new("push origin");
+        let text = build_rule_text(&form);
+        assert_eq!(text, "(allow (exec \"git\" \"push\" \"origin\"))");
+    }
+
+    #[test]
+    fn build_rule_text_fs_wildcard() {
+        let form = make_form(1);
+        let text = build_rule_text(&form);
+        // fs_op_index=0 is "*", path is empty
+        assert_eq!(text, "(allow (fs))");
+    }
+
+    #[test]
+    fn build_rule_text_fs_with_op_and_path() {
+        let mut form = make_form(1);
+        form.fs_op_index = 1; // "read"
+        form.path_input = TextInput::new("/tmp");
+        let text = build_rule_text(&form);
+        assert_eq!(text, "(allow (fs read /tmp))");
+    }
+
+    #[test]
+    fn build_rule_text_net_wildcard() {
+        let form = make_form(2);
+        let text = build_rule_text(&form);
+        assert_eq!(text, "(allow (net))");
+    }
+
+    #[test]
+    fn build_rule_text_net_with_domain() {
+        let mut form = make_form(2);
+        form.net_domain_input = TextInput::new("example.com");
+        let text = build_rule_text(&form);
+        assert_eq!(text, "(allow (net \"example.com\"))");
+    }
+
+    #[test]
+    fn build_rule_text_tool_wildcard() {
+        let form = make_form(3);
+        let text = build_rule_text(&form);
+        assert_eq!(text, "(allow (tool))");
+    }
+
+    #[test]
+    fn build_rule_text_tool_with_name() {
+        let mut form = make_form(3);
+        form.tool_name_input = TextInput::new("Bash");
+        let text = build_rule_text(&form);
+        assert_eq!(text, "(allow (tool \"Bash\"))");
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration tests: App state
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn app_new_empty() {
+        let app = make_app("");
+        assert!(app.flat_rows.is_empty());
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn app_new_with_rules() {
+        let app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+        // Tree starts collapsed, so only root visible
+        assert!(!app.flat_rows.is_empty());
+    }
+
+    #[test]
+    fn add_rule_cursor_lands_on_exec() {
+        let app_source = r#"(policy "main")"#;
+        let mut app = make_app(app_source);
+
+        app.start_add_rule();
+        // Set binary to "ls"
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("ls");
+        }
+
+        // Step through: binary -> args -> domain -> effect -> level -> complete
+        app.advance_add_rule(); // binary -> args
+        app.advance_add_rule(); // args -> domain (auto-selects exec)
+        app.advance_add_rule(); // domain -> effect (exec skips to effect)
+        app.advance_add_rule(); // effect -> level
+        app.advance_add_rule(); // level -> complete
+
+        assert!(matches!(app.mode, Mode::Normal));
+
+        // Cursor should be on a leaf with the new rule
+        let row = &app.flat_rows[app.cursor];
+        assert!(
+            matches!(&row.kind, TreeNodeKind::Leaf { rule, level, .. }
+                if rule.to_string().contains("exec") && *level == PolicyLevel::User),
+            "cursor should be on the new exec leaf, got {:?}",
+            row.kind
+        );
+    }
+
+    #[test]
+    fn add_rule_cursor_lands_on_fs() {
+        let mut app = make_app(r#"(policy "main")"#);
+        app.start_add_rule();
+
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("*");
+        }
+        app.advance_add_rule(); // binary -> args
+        app.advance_add_rule(); // args -> domain
+
+        // Select fs domain
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.domain_index = 1;
+        }
+        app.advance_add_rule(); // domain -> fs_op
+        app.advance_add_rule(); // fs_op -> path
+        app.advance_add_rule(); // path -> effect
+        app.advance_add_rule(); // effect -> level
+        app.advance_add_rule(); // level -> complete
+
+        assert!(matches!(app.mode, Mode::Normal));
+        let row = &app.flat_rows[app.cursor];
+        assert!(
+            matches!(&row.kind, TreeNodeKind::Leaf { .. }),
+            "cursor should be on the new fs leaf"
+        );
+    }
+
+    #[test]
+    fn add_rule_cursor_lands_on_net() {
+        let mut app = make_app(r#"(policy "main")"#);
+        app.start_add_rule();
+
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("*");
+        }
+        app.advance_add_rule(); // binary -> args
+        app.advance_add_rule(); // args -> domain
+
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.domain_index = 2;
+        }
+        app.advance_add_rule(); // domain -> net_domain
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.net_domain_input = TextInput::new("example.com");
+        }
+        app.advance_add_rule(); // net_domain -> effect
+        app.advance_add_rule(); // effect -> level
+        app.advance_add_rule(); // level -> complete
+
+        assert!(matches!(app.mode, Mode::Normal));
+        let row = &app.flat_rows[app.cursor];
+        assert!(matches!(&row.kind, TreeNodeKind::Leaf { .. }));
+    }
+
+    #[test]
+    fn add_rule_cursor_lands_on_tool() {
+        let mut app = make_app(r#"(policy "main")"#);
+        app.start_add_rule();
+
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("*");
+        }
+        app.advance_add_rule(); // binary -> args
+        app.advance_add_rule(); // args -> domain
+
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.domain_index = 3;
+        }
+        app.advance_add_rule(); // domain -> tool_name
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.tool_name_input = TextInput::new("Bash");
+        }
+        app.advance_add_rule(); // tool_name -> effect
+        app.advance_add_rule(); // effect -> level
+        app.advance_add_rule(); // level -> complete
+
+        assert!(matches!(app.mode, Mode::Normal));
+        let row = &app.flat_rows[app.cursor];
+        assert!(matches!(&row.kind, TreeNodeKind::Leaf { .. }));
+    }
+
+    #[test]
+    fn add_rule_multi_level_cursor_correct() {
+        // Create policies at both User and Project levels with the same rule
+        let user = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let project = test_policy(PolicyLevel::Project, r#"(policy "main")"#);
+        let mut app = make_app_multi(&[user, project]);
+
+        // Add a rule to the project level
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("git");
+            form.level_index = 1; // Project level
+        }
+        app.advance_add_rule(); // binary -> args
+        app.advance_add_rule(); // args -> domain
+        app.advance_add_rule(); // domain -> effect
+        app.advance_add_rule(); // effect -> level
+
+        // Confirm level is Project
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.level_index = 1;
+        }
+        app.advance_add_rule(); // level -> complete
+
+        assert!(matches!(app.mode, Mode::Normal));
+
+        // The cursor should be on the Project-level leaf, not the User-level one
+        let row = &app.flat_rows[app.cursor];
+        assert!(
+            matches!(
+                &row.kind,
+                TreeNodeKind::Leaf {
+                    level: PolicyLevel::Project,
+                    ..
+                }
+            ),
+            "cursor should be on the Project leaf, got {:?}",
+            row.kind
+        );
+    }
+
+    #[test]
+    fn undo_restores_previous_state() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+        let original_source = app.levels[0].source.clone();
+
+        // Add a rule
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("ls");
+        }
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+
+        // Source should have changed
+        assert_ne!(app.levels[0].source, original_source);
+
+        // Undo
+        app.undo();
+        assert_eq!(app.levels[0].source, original_source);
+    }
+
+    #[test]
+    fn redo_after_undo() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+
+        // Add a rule
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("ls");
+        }
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+
+        let after_add_source = app.levels[0].source.clone();
+
+        app.undo();
+        assert_ne!(app.levels[0].source, after_add_source);
+
+        app.redo();
+        assert_eq!(app.levels[0].source, after_add_source);
+    }
+
+    #[test]
+    fn navigation_basics() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")) (deny (exec "rm")))"#);
+        app.expand_all();
+
+        let total = app.flat_rows.len();
+        assert!(total > 1);
+
+        app.cursor_to_top();
+        assert_eq!(app.cursor, 0);
+
+        app.cursor_to_bottom();
+        assert_eq!(app.cursor, total - 1);
+
+        app.cursor_to_top();
+        app.move_cursor_down();
+        assert_eq!(app.cursor, 1);
+
+        app.move_cursor_up();
+        assert_eq!(app.cursor, 0);
+
+        // Can't go below 0
+        app.move_cursor_up();
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn search_finds_matches() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")) (deny (exec "cargo")))"#);
+        app.expand_all();
+
+        app.start_search();
+        app.search_input = TextInput::new("git");
+        app.commit_search();
+
+        assert!(!app.search_matches.is_empty());
+        // Cursor should be on first match
+        assert!(app.search_matches.contains(&app.cursor));
+    }
+
+    #[test]
+    fn row_search_text_leaf() {
+        let kind = TreeNodeKind::Leaf {
+            effect: Effect::Allow,
+            rule: parse_rule_text("(allow (exec \"git\"))").unwrap(),
+            level: PolicyLevel::User,
+            policy: "main".to_string(),
+        };
+        let text = row_search_text(&kind);
+        assert!(text.contains("allow"));
+        assert!(text.contains("main"));
+    }
+
+    #[test]
+    fn row_search_text_binary() {
+        let text = row_search_text(&TreeNodeKind::Binary("git".to_string()));
+        assert_eq!(text, "git");
+    }
+
+    // -----------------------------------------------------------------------
+    // Round-trip pipeline tests: form -> build_rule_text -> parse ->
+    // rule.to_string() -> add to source -> rebuild tree -> find leaf
+    // -----------------------------------------------------------------------
+
+    /// Helper: simulate the full add-rule pipeline and check that the leaf
+    /// exists in the rebuilt tree with the expected rule text.
+    fn assert_rule_round_trips(form: &AddRuleForm, existing_source: &str) {
+        let rule_text = build_rule_text(form);
+        let rule = parse_rule_text(&rule_text)
+            .unwrap_or_else(|e| panic!("parse_rule_text failed for '{rule_text}': {e}"));
+        let display = rule.to_string();
+
+        let new_source = edit::ensure_policy_block(existing_source, "main", r#"(policy "main")"#)
+            .and_then(|s| edit::add_rule(&s, "main", &rule))
+            .unwrap_or_else(|e| panic!("add_rule failed: {e}"));
+
+        let loaded = LoadedPolicy {
+            level: PolicyLevel::User,
+            path: PathBuf::from("/tmp/test"),
+            source: new_source,
+        };
+        let roots = tree::build_tree(&[loaded]);
+        let rows = tree::flatten(&roots);
+
+        let all_leaves: Vec<String> = rows
+            .iter()
+            .filter_map(|r| match &r.kind {
+                TreeNodeKind::Leaf { rule, .. } => Some(rule.to_string()),
+                _ => None,
+            })
+            .collect();
+
+        let found = rows.iter().any(|row| {
+            matches!(
+                &row.kind,
+                TreeNodeKind::Leaf { rule, level, policy, .. }
+                    if rule.to_string() == display
+                        && *level == PolicyLevel::User
+                        && policy == "main"
+            )
+        });
+
+        assert!(
+            found,
+            "tree should contain leaf matching '{}'\n  build_rule_text: '{}'\n  all leaves: {:?}",
+            display, rule_text, all_leaves
+        );
+    }
+
+    #[test]
+    fn round_trip_exec_basic() {
+        let mut form = make_form(0);
+        form.binary_input = TextInput::new("ls");
+        assert_rule_round_trips(&form, r#"(policy "main")"#);
+    }
+
+    #[test]
+    fn round_trip_exec_wildcard() {
+        let form = make_form(0); // empty binary -> wildcard
+        assert_rule_round_trips(&form, r#"(policy "main")"#);
+    }
+
+    #[test]
+    fn round_trip_exec_with_args() {
+        let mut form = make_form(0);
+        form.binary_input = TextInput::new("git");
+        form.args_input = TextInput::new("push origin");
+        assert_rule_round_trips(&form, r#"(policy "main")"#);
+    }
+
+    #[test]
+    fn round_trip_fs_wildcard() {
+        let form = make_form(1);
+        assert_rule_round_trips(&form, r#"(policy "main")"#);
+    }
+
+    #[test]
+    fn round_trip_fs_with_op() {
+        let mut form = make_form(1);
+        form.fs_op_index = 1; // "read"
+        assert_rule_round_trips(&form, r#"(policy "main")"#);
+    }
+
+    #[test]
+    fn round_trip_net_wildcard() {
+        let form = make_form(2);
+        assert_rule_round_trips(&form, r#"(policy "main")"#);
+    }
+
+    #[test]
+    fn round_trip_net_with_domain() {
+        let mut form = make_form(2);
+        form.net_domain_input = TextInput::new("example.com");
+        assert_rule_round_trips(&form, r#"(policy "main")"#);
+    }
+
+    #[test]
+    fn round_trip_tool_wildcard() {
+        let form = make_form(3);
+        assert_rule_round_trips(&form, r#"(policy "main")"#);
+    }
+
+    #[test]
+    fn round_trip_tool_with_name() {
+        let mut form = make_form(3);
+        form.tool_name_input = TextInput::new("Bash");
+        assert_rule_round_trips(&form, r#"(policy "main")"#);
+    }
+
+    #[test]
+    fn round_trip_with_existing_rules() {
+        let mut form = make_form(0);
+        form.binary_input = TextInput::new("ls");
+        assert_rule_round_trips(
+            &form,
+            r#"(policy "main" (allow (exec "git")) (deny (exec "rm")))"#,
+        );
+    }
+
+    /// Verify that cursor_to_rule finds the leaf at the exact correct index
+    /// after adding to a pre-populated tree.
+    #[test]
+    fn cursor_to_rule_finds_exact_leaf() {
+        let mut app = make_app(
+            r#"(policy "main" (allow (exec "git")) (deny (exec "rm")) (ask (exec "cargo")))"#,
+        );
+
+        // Add "ls" rule
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("ls");
+        }
+        app.advance_add_rule(); // binary -> args
+        app.advance_add_rule(); // args -> domain
+        app.advance_add_rule(); // domain -> effect
+        app.advance_add_rule(); // effect -> level
+        app.advance_add_rule(); // level -> complete
+
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "should complete successfully"
+        );
+
+        // The cursor must be on a leaf whose rule contains "ls"
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf { rule, .. } => {
+                assert!(
+                    rule.to_string().contains("\"ls\""),
+                    "cursor should be on the 'ls' rule, got: {}",
+                    rule
+                );
+            }
+            other => panic!("cursor should be on a leaf, got: {other:?}"),
+        }
+
+        // Also verify the leaf exists somewhere in flat_rows (in case cursor is wrong
+        // but the leaf was added correctly)
+        let all_leaves: Vec<(usize, String)> = app
+            .flat_rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| match &r.kind {
+                TreeNodeKind::Leaf { rule, .. } => Some((i, rule.to_string())),
+                _ => None,
+            })
+            .collect();
+        let expected_idx = all_leaves
+            .iter()
+            .find(|(_, r)| r.contains("\"ls\""))
+            .map(|(i, _)| *i);
+        assert_eq!(
+            Some(app.cursor),
+            expected_idx,
+            "cursor {} should match leaf index\nall leaves: {:?}",
+            app.cursor,
+            all_leaves
+        );
+    }
+
+    /// Adding a conflicting rule (same binary, different effect) should surface
+    /// a validation error and stay in AddRule mode.
+    #[test]
+    fn add_conflicting_rule_replaces_existing() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+
+        // Add deny for git — should replace existing allow
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("git");
+            form.effect_index = 1; // deny
+        }
+        app.advance_add_rule(); // binary -> args
+        app.advance_add_rule(); // args -> domain
+        app.advance_add_rule(); // domain -> effect
+        app.advance_add_rule(); // effect -> level
+        app.advance_add_rule(); // level -> complete
+
+        // Should succeed — conflicting rule replaced
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "should complete (replace); mode = {:?}",
+            match &app.mode {
+                Mode::AddRule(f) => format!("AddRule(err={:?})", f.error),
+                _ => "other".into(),
+            }
+        );
+
+        // Cursor should be on the new deny rule
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf { rule, effect, .. } => {
+                assert!(
+                    rule.to_string().contains("\"git\"") && *effect == Effect::Deny,
+                    "cursor should be on (deny (exec \"git\")), got: {} (effect={})",
+                    rule,
+                    effect,
+                );
+            }
+            other => panic!("cursor should be on a leaf, got: {other:?}"),
+        }
+
+        // The old allow rule should be gone
+        let has_allow_git = app.flat_rows.iter().any(|r| {
+            matches!(&r.kind, TreeNodeKind::Leaf { rule, effect, .. }
+                if rule.to_string().contains("\"git\"") && *effect == Effect::Allow)
+        });
+        assert!(
+            !has_allow_git,
+            "old (allow (exec \"git\")) should be removed"
+        );
+    }
+
+    /// Adding a different binary with a different effect should succeed and
+    /// place cursor on the new leaf.
+    #[test]
+    fn add_different_binary_different_effect() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+
+        // Add deny for rm (different binary, no conflict)
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("rm");
+            form.effect_index = 1; // deny
+        }
+        app.advance_add_rule(); // binary -> args
+        app.advance_add_rule(); // args -> domain
+        app.advance_add_rule(); // domain -> effect
+        app.advance_add_rule(); // effect -> level
+        app.advance_add_rule(); // level -> complete
+
+        assert!(matches!(app.mode, Mode::Normal));
+
+        // Cursor should be on the DENY rm leaf
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf { effect, rule, .. } => {
+                assert_eq!(
+                    *effect,
+                    Effect::Deny,
+                    "cursor should be on the deny rule, got {} with rule: {}",
+                    effect,
+                    rule
+                );
+                assert!(
+                    rule.to_string().contains("\"rm\""),
+                    "cursor should be on rm rule, got: {}",
+                    rule
+                );
+            }
+            other => panic!("cursor should be on a leaf, got: {other:?}"),
+        }
+    }
+
+    /// Verify cursor placement when adding to a tree that has rules from
+    /// multiple domains (exec + fs + net) all under wildcard.
+    #[test]
+    fn add_exec_wildcard_with_mixed_domains() {
+        let mut app = make_app(r#"(policy "main" (allow (fs)) (deny (net)) (ask (tool "Bash")))"#);
+
+        // Add a wildcard exec rule
+        app.start_add_rule();
+        // leave binary empty -> wildcard
+        app.advance_add_rule(); // binary -> args
+        app.advance_add_rule(); // args -> domain (domain stays exec=0)
+        app.advance_add_rule(); // domain -> effect
+        app.advance_add_rule(); // effect -> level
+        app.advance_add_rule(); // level -> complete
+
+        assert!(matches!(app.mode, Mode::Normal));
+
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf { rule, .. } => {
+                let text = rule.to_string();
+                assert!(
+                    text.contains("exec"),
+                    "cursor should be on the exec leaf, got: {text}"
+                );
+            }
+            other => panic!("cursor should be on a leaf, got: {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Realistic scenario tests with DEFAULT_POLICY
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn add_rule_to_default_policy() {
+        use crate::settings::DEFAULT_POLICY;
+        let policy = test_policy(PolicyLevel::User, DEFAULT_POLICY);
+        let mut app = App::new(&[policy]);
+
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("git");
+        }
+        app.advance_add_rule(); // binary -> args
+        app.advance_add_rule(); // args -> domain
+        app.advance_add_rule(); // domain -> effect
+        app.advance_add_rule(); // effect -> level
+        app.advance_add_rule(); // level -> complete
+
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "should complete successfully; mode = {:?}",
+            match &app.mode {
+                Mode::AddRule(f) => format!("AddRule(error={:?}, step={:?})", f.error, f.step),
+                _ => "other".to_string(),
+            }
+        );
+
+        // Cursor should be on the new exec leaf for git
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf {
+                rule,
+                level,
+                policy,
+                ..
+            } => {
+                assert!(
+                    rule.to_string().contains("exec") && rule.to_string().contains("\"git\""),
+                    "cursor should be on exec git leaf, got rule={}, level={level}, policy={policy}",
+                    rule
+                );
+            }
+            other => panic!(
+                "cursor should be on a leaf, got: {other:?}\nall rows: {:?}",
+                app.flat_rows
+                    .iter()
+                    .map(|r| format!("{:?}", r.kind))
+                    .collect::<Vec<_>>()
+            ),
+        }
+    }
+
+    #[test]
+    fn add_rule_to_default_policy_with_two_levels() {
+        use crate::settings::DEFAULT_POLICY;
+        let user = test_policy(PolicyLevel::User, DEFAULT_POLICY);
+        let project = test_policy(PolicyLevel::Project, DEFAULT_POLICY);
+        let mut app = App::new(&[user, project]);
+
+        // Add a rule to the Project level
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("cargo");
+            form.level_index = 1; // Project
+        }
+        app.advance_add_rule(); // binary -> args
+        app.advance_add_rule(); // args -> domain
+        app.advance_add_rule(); // domain -> effect
+        app.advance_add_rule(); // effect -> level
+
+        // Ensure level_index is set to Project
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.level_index = 1;
+        }
+        app.advance_add_rule(); // level -> complete
+
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "should complete successfully; mode = {:?}",
+            match &app.mode {
+                Mode::AddRule(f) => format!("AddRule(error={:?}, step={:?})", f.error, f.step),
+                _ => "other".to_string(),
+            }
+        );
+
+        // Cursor should be on the Project-level leaf
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf { rule, level, .. } => {
+                assert_eq!(
+                    *level,
+                    PolicyLevel::Project,
+                    "cursor should be on Project level leaf, got level={level}, rule={rule}"
+                );
+                assert!(
+                    rule.to_string().contains("cargo"),
+                    "cursor should be on cargo rule, got: {}",
+                    rule
+                );
+            }
+            other => panic!("cursor should be on a leaf, got: {other:?}"),
+        }
+    }
+
+    /// Test cursor_to_rule directly to verify it finds/misses correctly.
+    #[test]
+    fn cursor_to_rule_returns_false_on_mismatch() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+        app.expand_all();
+
+        // Should find the existing rule
+        let found = app.cursor_to_rule(
+            &parse_rule_text(r#"(allow (exec "git"))"#)
+                .unwrap()
+                .to_string(),
+            PolicyLevel::User,
+            "main",
+        );
+        assert!(found, "should find existing rule");
+
+        // Should NOT find a rule that doesn't exist
+        let found = app.cursor_to_rule(
+            &parse_rule_text(r#"(deny (exec "ls"))"#)
+                .unwrap()
+                .to_string(),
+            PolicyLevel::User,
+            "main",
+        );
+        assert!(!found, "should not find non-existent rule");
+
+        // Should NOT find with wrong level
+        let found = app.cursor_to_rule(
+            &parse_rule_text(r#"(allow (exec "git"))"#)
+                .unwrap()
+                .to_string(),
+            PolicyLevel::Project,
+            "main",
+        );
+        assert!(!found, "should not find rule at wrong level");
+
+        // Should NOT find with wrong policy
+        let found = app.cursor_to_rule(
+            &parse_rule_text(r#"(allow (exec "git"))"#)
+                .unwrap()
+                .to_string(),
+            PolicyLevel::User,
+            "other",
+        );
+        assert!(!found, "should not find rule in wrong policy");
+    }
+
+    /// Ensure that after add, the tree is expanded to show the new leaf
+    /// even if the tree was previously collapsed.
+    #[test]
+    fn add_rule_expands_ancestors_of_new_leaf() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
+        // Start collapsed
+        app.collapse_all();
+        let collapsed_count = app.flat_rows.len();
+
+        // Add a rule
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("ls");
+        }
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+
+        assert!(matches!(app.mode, Mode::Normal));
+
+        // After adding, the tree should have more visible rows because
+        // ancestors of the new leaf were expanded
+        assert!(
+            app.flat_rows.len() > collapsed_count,
+            "tree should be expanded to show new leaf (collapsed={}, after={})",
+            collapsed_count,
+            app.flat_rows.len()
+        );
+
+        // And the cursor should be on a leaf
+        let row = &app.flat_rows[app.cursor];
+        assert!(
+            matches!(&row.kind, TreeNodeKind::Leaf { rule, .. } if rule.to_string().contains("\"ls\"")),
+            "cursor should be on the new ls leaf, got: {:?}",
+            row.kind
+        );
+    }
+
+    /// Detailed diagnostic: dump all flat_rows after add to verify
+    /// what cursor_to_rule sees.
+    #[test]
+    fn add_rule_diagnostic_all_leaves() {
+        let mut app = make_app(
+            r#"(policy "main" (allow (exec "git")) (deny (exec "rm")) (allow (fs read)))"#,
+        );
+
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = TextInput::new("cargo");
+        }
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+
+        assert!(matches!(app.mode, Mode::Normal));
+
+        // Collect all leaves
+        let leaves: Vec<(usize, String, PolicyLevel, String)> = app
+            .flat_rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| match &r.kind {
+                TreeNodeKind::Leaf {
+                    rule,
+                    level,
+                    policy,
+                    ..
+                } => Some((i, rule.to_string(), *level, policy.clone())),
+                _ => None,
+            })
+            .collect();
+
+        // There should be exactly 4 leaves (git, rm, fs read, cargo)
+        assert_eq!(leaves.len(), 4, "expected 4 leaves, got: {leaves:?}");
+
+        // The cargo leaf should exist and cursor should point to it
+        let cargo_leaf = leaves.iter().find(|(_, r, _, _)| r.contains("cargo"));
+        assert!(
+            cargo_leaf.is_some(),
+            "cargo leaf should exist in: {leaves:?}"
+        );
+
+        let (cargo_idx, _, _, _) = cargo_leaf.unwrap();
+        assert_eq!(
+            app.cursor, *cargo_idx,
+            "cursor={} should be on cargo leaf at idx={}\nall leaves: {leaves:?}",
+            app.cursor, cargo_idx
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Key-event integration tests (simulate actual user input)
+    // -----------------------------------------------------------------------
+
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn type_str(app: &mut App, s: &str) {
+        for ch in s.chars() {
+            input::handle_key(app, key(KeyCode::Char(ch)));
+        }
+    }
+
+    fn press_enter(app: &mut App) {
+        input::handle_key(app, key(KeyCode::Enter));
+    }
+
+    fn press_right(app: &mut App) {
+        input::handle_key(app, key(KeyCode::Right));
+    }
+
+    /// Simulate adding "git" exec rule via actual key events.
+    #[test]
+    fn key_event_add_exec_rule() {
+        let mut app = make_app(r#"(policy "main")"#);
+
+        // Press 'a' to start add rule
+        input::handle_key(&mut app, key(KeyCode::Char('a')));
+        assert!(matches!(app.mode, Mode::AddRule(_)));
+
+        // Type "git" for binary
+        type_str(&mut app, "git");
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.binary_input.value(), "git");
+            assert_eq!(form.step, AddRuleStep::EnterBinary);
+        }
+
+        // Enter -> args step
+        press_enter(&mut app);
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.step, AddRuleStep::EnterArgs);
+        }
+
+        // Enter -> domain step (empty args)
+        press_enter(&mut app);
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.step, AddRuleStep::SelectDomain);
+            assert_eq!(form.domain_index, 0, "should auto-select exec");
+        }
+
+        // Enter -> effect step (exec selected)
+        press_enter(&mut app);
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.step, AddRuleStep::SelectEffect);
+            assert_eq!(form.effect_index, 0, "default effect should be allow");
+        }
+
+        // Enter -> level step
+        press_enter(&mut app);
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.step, AddRuleStep::SelectLevel);
+        }
+
+        // Enter -> complete
+        press_enter(&mut app);
+        assert!(matches!(app.mode, Mode::Normal), "should complete add rule");
+
+        // Cursor should be on the new leaf
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf { rule, .. } => {
+                assert!(
+                    rule.to_string().contains("\"git\""),
+                    "cursor should be on git leaf, got: {}",
+                    rule
+                );
+            }
+            other => panic!("cursor should be on a leaf, got: {other:?}"),
+        }
+    }
+
+    /// Simulate adding a deny rule by navigating effect with arrow keys.
+    #[test]
+    fn key_event_add_deny_rule() {
+        let mut app = make_app(r#"(policy "main")"#);
+
+        input::handle_key(&mut app, key(KeyCode::Char('a')));
+        type_str(&mut app, "rm");
+        press_enter(&mut app); // binary -> args
+        press_enter(&mut app); // args -> domain
+        press_enter(&mut app); // domain -> effect
+
+        // Navigate to "deny" (index 1)
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.step, AddRuleStep::SelectEffect);
+            assert_eq!(form.effect_index, 0); // starts at "allow"
+        }
+        press_right(&mut app); // effect_index = 1 ("deny")
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.effect_index, 1);
+        }
+
+        press_enter(&mut app); // effect -> level
+        press_enter(&mut app); // level -> complete
+
+        assert!(matches!(app.mode, Mode::Normal));
+
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf { effect, rule, .. } => {
+                assert_eq!(
+                    *effect,
+                    Effect::Deny,
+                    "should be deny, got {} with rule {}",
+                    effect,
+                    rule
+                );
+                assert!(
+                    rule.to_string().contains("\"rm\""),
+                    "should be rm rule, got: {}",
+                    rule
+                );
+            }
+            other => panic!("expected leaf, got: {other:?}"),
+        }
+    }
+
+    /// Simulate adding an fs rule via key events with domain selection.
+    #[test]
+    fn key_event_add_fs_rule() {
+        let mut app = make_app(r#"(policy "main")"#);
+
+        input::handle_key(&mut app, key(KeyCode::Char('a')));
+        // Leave binary empty -> wildcard, press Enter
+        press_enter(&mut app); // binary -> args
+        press_enter(&mut app); // args -> domain
+
+        // Navigate to fs (index 1)
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.step, AddRuleStep::SelectDomain);
+        }
+        press_right(&mut app); // domain_index = 1 (fs)
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.domain_index, 1);
+        }
+
+        press_enter(&mut app); // domain -> fs_op
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.step, AddRuleStep::SelectFsOp);
+        }
+
+        // Select "read" (index 1)
+        press_right(&mut app); // fs_op_index = 1 ("read")
+        press_enter(&mut app); // fs_op -> path
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.step, AddRuleStep::EnterPath);
+        }
+
+        press_enter(&mut app); // path (empty) -> effect
+        press_enter(&mut app); // effect -> level
+        press_enter(&mut app); // level -> complete
+
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "should complete; mode = {:?}",
+            match &app.mode {
+                Mode::AddRule(f) => format!("AddRule(err={:?}, step={:?})", f.error, f.step),
+                _ => "other".into(),
+            }
+        );
+
+        let row = &app.flat_rows[app.cursor];
+        assert!(
+            matches!(&row.kind, TreeNodeKind::Leaf { rule, .. } if rule.to_string().contains("fs")),
+            "cursor should be on fs leaf, got: {:?}",
+            row.kind
+        );
+    }
+
+    /// Simulate the complete flow with DEFAULT_POLICY via key events.
+    #[test]
+    fn key_event_add_to_default_policy() {
+        use crate::settings::DEFAULT_POLICY;
+        let policy = test_policy(PolicyLevel::User, DEFAULT_POLICY);
+        let mut app = App::new(&[policy]);
+
+        input::handle_key(&mut app, key(KeyCode::Char('a')));
+        type_str(&mut app, "cargo");
+        press_enter(&mut app); // binary -> args
+        press_enter(&mut app); // args -> domain (auto-exec)
+        press_enter(&mut app); // domain -> effect
+        press_enter(&mut app); // effect -> level
+        press_enter(&mut app); // level -> complete
+
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "should complete; mode = {:?}",
+            match &app.mode {
+                Mode::AddRule(f) => format!("AddRule(err={:?}, step={:?})", f.error, f.step),
+                _ => "other".into(),
+            }
+        );
+
+        // Verify cursor is on the new cargo leaf
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf { rule, .. } => {
+                assert!(
+                    rule.to_string().contains("cargo"),
+                    "cursor should be on cargo leaf, got: {}",
+                    rule
+                );
+            }
+            other => panic!("cursor should be on a leaf, got: {other:?}"),
+        }
+    }
+
+    /// Simulate adding a rule to a specific level when multiple exist.
+    #[test]
+    fn key_event_add_to_project_level() {
+        let user = test_policy(PolicyLevel::User, r#"(policy "main")"#);
+        let project = test_policy(PolicyLevel::Project, r#"(policy "main")"#);
+        let mut app = make_app_multi(&[user, project]);
+
+        input::handle_key(&mut app, key(KeyCode::Char('a')));
+        type_str(&mut app, "npm");
+        press_enter(&mut app); // binary -> args
+        press_enter(&mut app); // args -> domain
+        press_enter(&mut app); // domain -> effect
+        press_enter(&mut app); // effect -> level
+
+        // Navigate to Project level (index 1)
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.step, AddRuleStep::SelectLevel);
+            assert_eq!(form.level_index, 0); // default is User
+        }
+        press_right(&mut app); // level_index = 1 (Project)
+        if let Mode::AddRule(form) = &app.mode {
+            assert_eq!(form.level_index, 1);
+        }
+
+        press_enter(&mut app); // level -> complete
+
+        assert!(matches!(app.mode, Mode::Normal));
+
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf { rule, level, .. } => {
+                assert_eq!(
+                    *level,
+                    PolicyLevel::Project,
+                    "cursor should be on Project leaf, got level={level} rule={}",
+                    rule
+                );
+                assert!(rule.to_string().contains("npm"), "got: {}", rule);
+            }
+            other => panic!("expected leaf, got: {other:?}"),
+        }
+    }
+
+    /// User enters "ls" + "-lha", selects fs domain, effect=ask.
+    /// Should produce a sandboxed exec rule: (ask (exec "ls" "-lha" :sandbox (allow (fs))))
+    #[test]
+    fn sandboxed_exec_ls_fs() {
+        let source = r#"(policy "main"
+            (allow (exec "ls" "-lha"))
+            (allow (fs read))
+            (ask (fs))
+            (allow (net))
+        )"#;
+        let mut app = make_app(source);
+
+        input::handle_key(&mut app, key(KeyCode::Char('a')));
+        type_str(&mut app, "ls");
+        press_enter(&mut app); // binary -> args
+        type_str(&mut app, "-lha");
+        press_enter(&mut app); // args -> domain
+        // domain auto-selected to exec (0), user changes to fs (1)
+        press_right(&mut app); // domain = fs
+        press_enter(&mut app); // domain -> fs_op
+        press_enter(&mut app); // fs_op (wildcard) -> path
+        press_enter(&mut app); // path (empty) -> effect
+        // Navigate to "ask" (index 2)
+        press_right(&mut app); // deny
+        press_right(&mut app); // ask
+        press_enter(&mut app); // effect -> level
+        press_enter(&mut app); // level -> complete
+
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "should complete; mode = {:?}",
+            match &app.mode {
+                Mode::AddRule(f) => format!(
+                    "AddRule(step={:?}, err={:?}, rule={})",
+                    f.step,
+                    f.error,
+                    build_rule_text(f)
+                ),
+                _ => "other".into(),
+            }
+        );
+
+        // Cursor should be on the sandboxed exec leaf
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf { rule, effect, .. } => {
+                let text = rule.to_string();
+                assert!(
+                    text.contains("\"ls\"") && text.contains(":sandbox") && *effect == Effect::Ask,
+                    "expected sandboxed (ask (exec \"ls\" ... :sandbox ...)), got: {text}"
+                );
+            }
+            other => panic!("cursor should be on a leaf, got: {other:?}"),
+        }
+    }
+
+    /// build_rule_text: command + fs domain = sandboxed exec rule
+    #[test]
+    fn build_rule_text_sandboxed_exec_fs() {
+        let mut f = make_form(1); // fs
+        f.binary_input = TextInput::new("ls");
+        f.args_input = TextInput::new("-lha");
+        f.effect_index = 2; // ask
+        assert_eq!(
+            build_rule_text(&f),
+            r#"(ask (exec "ls" "-lha") :sandbox (allow (fs)))"#
+        );
+    }
+
+    /// build_rule_text: command + net domain = sandboxed exec rule
+    #[test]
+    fn build_rule_text_sandboxed_exec_net() {
+        let mut f = make_form(2); // net
+        f.binary_input = TextInput::new("curl");
+        f.effect_index = 0; // allow
+        assert_eq!(
+            build_rule_text(&f),
+            r#"(allow (exec "curl") :sandbox (allow (net)))"#
+        );
+    }
+
+    /// build_rule_text: no command + fs domain = standalone fs rule (not sandboxed)
+    #[test]
+    fn build_rule_text_standalone_fs_no_command() {
+        let f = make_form(1); // fs, no binary
+        assert_eq!(build_rule_text(&f), "(allow (fs))");
+    }
+
+    /// build_rule_text: wildcard command + fs domain = standalone fs rule
+    #[test]
+    fn build_rule_text_wildcard_command_fs() {
+        let mut f = make_form(1); // fs
+        f.binary_input = TextInput::new("*");
+        assert_eq!(build_rule_text(&f), "(allow (fs))");
+    }
+
+    /// build_rule_text: command + exec domain = plain exec (no sandbox)
+    #[test]
+    fn build_rule_text_plain_exec_with_command() {
+        let mut f = make_form(0); // exec
+        f.binary_input = TextInput::new("git");
+        f.effect_index = 1; // deny
+        assert_eq!(build_rule_text(&f), r#"(deny (exec "git"))"#);
+    }
+
+    /// When (allow (fs)) already exists, adding it again is idempotent.
+    /// cursor_to_rule should find the existing leaf.
+    #[test]
+    fn add_fs_rule_idempotent_cursor_correct() {
+        let source = r#"(policy "main"
+            (allow (exec "ls" "-lha"))
+            (allow (fs read))
+            (allow (fs))
+            (allow (net))
+        )"#;
+        let mut app = make_app(source);
+
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.domain_index = 1; // fs
+        }
+        // Skip binary/args since they're irrelevant for fs
+        app.advance_add_rule(); // binary -> args
+        app.advance_add_rule(); // args -> domain
+        app.advance_add_rule(); // domain -> fs_op
+        app.advance_add_rule(); // fs_op -> path
+        app.advance_add_rule(); // path -> effect
+        app.advance_add_rule(); // effect -> level
+        app.advance_add_rule(); // level -> complete
+
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "should complete (idempotent)"
+        );
+
+        // Cursor should be on the (allow (fs)) leaf
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf { rule, .. } => {
+                assert_eq!(
+                    rule.to_string(),
+                    "(allow (fs))",
+                    "cursor should be on (allow (fs)), got: {}",
+                    rule
+                );
+            }
+            other => panic!("cursor should be on a leaf, got: {other:?}"),
+        }
+    }
+
+    /// Non-conflicting fs add: add (allow (fs read)) to a policy without it.
+    #[test]
+    fn add_fs_read_rule_cursor_correct() {
+        let source = r#"(policy "main"
+            (allow (exec "ls"))
+            (allow (net))
+        )"#;
+        let mut app = make_app(source);
+
+        input::handle_key(&mut app, key(KeyCode::Char('a')));
+        press_enter(&mut app); // binary (empty) -> args
+        press_enter(&mut app); // args -> domain
+        press_right(&mut app); // domain = fs
+        press_enter(&mut app); // domain -> fs_op
+
+        // Select "read" (index 1)
+        press_right(&mut app); // fs_op = read
+        press_enter(&mut app); // fs_op -> path
+        press_enter(&mut app); // path (empty) -> effect
+        press_enter(&mut app); // effect (allow) -> level
+        press_enter(&mut app); // level -> complete
+
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "should complete; mode = {:?}",
+            match &app.mode {
+                Mode::AddRule(f) => format!("AddRule(err={:?})", f.error),
+                _ => "other".into(),
+            }
+        );
+
+        let row = &app.flat_rows[app.cursor];
+        match &row.kind {
+            TreeNodeKind::Leaf { rule, .. } => {
+                assert!(
+                    rule.to_string().contains("fs") && rule.to_string().contains("read"),
+                    "cursor should be on fs read leaf, got: {}",
+                    rule
+                );
+            }
+            other => panic!("cursor should be on a leaf, got: {other:?}"),
+        }
     }
 }

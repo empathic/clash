@@ -121,6 +121,32 @@ pub fn active_policy(source: &str) -> Result<String> {
     bail!("no (default ...) declaration found in policy")
 }
 
+/// Find a rule in the named policy that has the same capability matcher
+/// as `rule` but differs in effect or sandbox. Returns the Display text of
+/// the conflicting rule, or `None` if no conflict exists.
+pub fn find_conflicting_rule(
+    source: &str,
+    policy_name: &str,
+    rule: &Rule,
+) -> Result<Option<String>> {
+    let top_levels = parse::parse(source)?;
+    for tl in &top_levels {
+        if let TopLevel::Policy { name, body } = tl
+            && name == policy_name
+        {
+            for item in body {
+                if let PolicyItem::Rule(existing) = item
+                    && existing.matcher == rule.matcher
+                    && (existing.effect != rule.effect || existing.sandbox != rule.sandbox)
+                {
+                    return Ok(Some(existing.to_string()));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Normalize source by parsing and re-serializing. Strips comments and applies
 /// canonical formatting so that subsequent edits diff cleanly against the baseline.
 pub fn normalize(source: &str) -> Result<String> {

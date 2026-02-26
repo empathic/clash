@@ -580,3 +580,298 @@ pub fn node_at_path_mut<'a>(roots: &'a mut [TreeNode], path: &[usize]) -> Option
     }
     Some(current)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::settings::{LoadedPolicy, PolicyLevel};
+
+    fn test_policy(level: PolicyLevel, source: &str) -> LoadedPolicy {
+        LoadedPolicy {
+            level,
+            path: PathBuf::from("/tmp/test"),
+            source: source.to_string(),
+        }
+    }
+
+    #[test]
+    fn build_tree_empty() {
+        let roots = build_tree(&[]);
+        assert!(roots.is_empty());
+    }
+
+    #[test]
+    fn build_tree_empty_source() {
+        let policy = test_policy(PolicyLevel::User, "");
+        let roots = build_tree(&[policy]);
+        assert!(roots.is_empty());
+    }
+
+    #[test]
+    fn build_tree_single_exec() {
+        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let roots = build_tree(&[policy]);
+
+        // Should have one root: Binary(r#""git""#) — Pattern::Literal Display includes quotes
+        assert_eq!(roots.len(), 1);
+        assert!(
+            matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == r#""git""#),
+            "root should be Binary(\"git\"), got {:?}",
+            roots[0].kind
+        );
+
+        // Binary -> Domain(Exec) -> Leaf
+        assert_eq!(roots[0].children.len(), 1);
+        assert!(matches!(
+            &roots[0].children[0].kind,
+            TreeNodeKind::Domain(DomainKind::Exec)
+        ));
+        assert_eq!(roots[0].children[0].children.len(), 1);
+        assert!(matches!(
+            &roots[0].children[0].children[0].kind,
+            TreeNodeKind::Leaf {
+                effect: Effect::Allow,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn build_tree_exec_with_args() {
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (deny (exec "git" "push" *)))"#,
+        );
+        let roots = build_tree(&[policy]);
+
+        assert_eq!(roots.len(), 1);
+        assert!(
+            matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == r#""git""#),
+            "root should be Binary(\"git\"), got {:?}",
+            roots[0].kind
+        );
+
+        // Binary -> Arg("push") -> Arg("*") -> Domain(Exec) -> Leaf
+        let child = &roots[0].children[0];
+        assert!(
+            matches!(&child.kind, TreeNodeKind::Arg(s) if s == r#""push""#),
+            "first child should be Arg(\"push\"), got {:?}",
+            child.kind
+        );
+        let child2 = &child.children[0];
+        assert!(matches!(&child2.kind, TreeNodeKind::Arg(s) if s == "*"));
+        let domain = &child2.children[0];
+        assert!(matches!(
+            &domain.kind,
+            TreeNodeKind::Domain(DomainKind::Exec)
+        ));
+        let leaf = &domain.children[0];
+        assert!(matches!(
+            &leaf.kind,
+            TreeNodeKind::Leaf {
+                effect: Effect::Deny,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn build_tree_fs_rule() {
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (allow (fs read "/tmp")))"#,
+        );
+        let roots = build_tree(&[policy]);
+
+        // Fs rules go under a wildcard "*" binary node
+        assert_eq!(roots.len(), 1);
+        assert!(matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == "*"));
+
+        // Should contain a path node for "/tmp"
+        fn find_leaf(node: &TreeNode) -> bool {
+            if matches!(&node.kind, TreeNodeKind::Leaf { .. }) {
+                return true;
+            }
+            node.children.iter().any(find_leaf)
+        }
+        assert!(find_leaf(&roots[0]));
+    }
+
+    #[test]
+    fn build_tree_net_rule() {
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (allow (net "example.com")))"#,
+        );
+        let roots = build_tree(&[policy]);
+        assert!(!roots.is_empty());
+
+        // Net goes under "*" binary
+        assert!(matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == "*"));
+    }
+
+    #[test]
+    fn build_tree_tool_rule() {
+        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (ask (tool "Bash")))"#);
+        let roots = build_tree(&[policy]);
+        assert!(!roots.is_empty());
+
+        assert!(matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == "*"));
+    }
+
+    #[test]
+    fn build_tree_merge_wildcards() {
+        // An exec rule for * and an fs rule should merge under one Binary("*") node
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (allow (exec *)) (deny (fs read "/tmp")))"#,
+        );
+        let roots = build_tree(&[policy]);
+
+        // Both should be under one "*" node
+        assert_eq!(roots.len(), 1);
+        assert!(matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == "*"));
+        // Should have at least 2 children (Domain(Exec) and something from fs)
+        assert!(roots[0].children.len() >= 2);
+    }
+
+    #[test]
+    fn build_tree_multi_level() {
+        let user = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let project = test_policy(
+            PolicyLevel::Project,
+            r#"(policy "main" (deny (exec "git")))"#,
+        );
+        let roots = build_tree(&[user, project]);
+
+        // Both rules are for "git", should merge under one Binary("git") node
+        assert_eq!(roots.len(), 1);
+        assert!(matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == r#""git""#));
+
+        // Should have two leaves (one allow from User, one deny from Project)
+        fn count_leaves(node: &TreeNode) -> usize {
+            match &node.kind {
+                TreeNodeKind::Leaf { .. } => 1,
+                _ => node.children.iter().map(count_leaves).sum(),
+            }
+        }
+        assert_eq!(count_leaves(&roots[0]), 2);
+    }
+
+    #[test]
+    fn flatten_all_expanded() {
+        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let roots = build_tree(&[policy]);
+        let rows = flatten(&roots);
+
+        // All nodes are expanded by default, so all should be visible:
+        // Binary("git") -> Domain(Exec) -> Leaf = 3 rows
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].depth, 0);
+        assert_eq!(rows[1].depth, 1);
+        assert_eq!(rows[2].depth, 2);
+    }
+
+    #[test]
+    fn flatten_collapsed_hides_children() {
+        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let mut roots = build_tree(&[policy]);
+
+        // Collapse the root
+        roots[0].expanded = false;
+        let rows = flatten(&roots);
+
+        // Only the root should be visible
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(&rows[0].kind, TreeNodeKind::Binary(s) if s == r#""git""#));
+        assert!(!rows[0].expanded);
+    }
+
+    #[test]
+    fn flatten_tree_path_correct() {
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (allow (exec "git")) (deny (exec "cargo")))"#,
+        );
+        let roots = build_tree(&[policy]);
+        let rows = flatten(&roots);
+
+        // Every row's tree_path should resolve back to a valid node
+        for row in &rows {
+            let node = node_at_path(&roots, &row.tree_path);
+            assert!(
+                node.is_some(),
+                "tree_path {:?} should resolve to a node",
+                row.tree_path
+            );
+        }
+    }
+
+    #[test]
+    fn node_at_path_valid() {
+        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let roots = build_tree(&[policy]);
+
+        // Path [0] = first root
+        let node = node_at_path(&roots, &[0]);
+        assert!(node.is_some());
+        assert!(matches!(&node.unwrap().kind, TreeNodeKind::Binary(s) if s == r#""git""#));
+
+        // Path [0, 0] = first child of first root
+        let node = node_at_path(&roots, &[0, 0]);
+        assert!(node.is_some());
+    }
+
+    #[test]
+    fn node_at_path_invalid() {
+        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let roots = build_tree(&[policy]);
+
+        // Out of bounds
+        assert!(node_at_path(&roots, &[99]).is_none());
+        assert!(node_at_path(&roots, &[0, 99]).is_none());
+    }
+
+    #[test]
+    fn node_at_path_empty() {
+        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let roots = build_tree(&[policy]);
+
+        assert!(node_at_path(&roots, &[]).is_none());
+    }
+
+    #[test]
+    fn effect_counts_single() {
+        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
+        let roots = build_tree(&[policy]);
+        let (allow, deny, ask) = roots[0].effect_counts();
+        assert_eq!((allow, deny, ask), (1, 0, 0));
+    }
+
+    #[test]
+    fn effect_counts_mixed() {
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (allow (exec "git")) (deny (exec "rm")) (ask (exec "sudo")))"#,
+        );
+        let roots = build_tree(&[policy]);
+        let total: (usize, usize, usize) = roots.iter().fold((0, 0, 0), |(a, d, k), root| {
+            let (ra, rd, rk) = root.effect_counts();
+            (a + ra, d + rd, k + rk)
+        });
+        assert_eq!(total, (1, 1, 1));
+    }
+
+    #[test]
+    fn rule_count() {
+        let policy = test_policy(
+            PolicyLevel::User,
+            r#"(policy "main" (allow (exec "git")) (deny (exec "rm")))"#,
+        );
+        let roots = build_tree(&[policy]);
+        let total: usize = roots.iter().map(|r| r.rule_count()).sum();
+        assert_eq!(total, 2);
+    }
+}
