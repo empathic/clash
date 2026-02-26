@@ -160,11 +160,20 @@ Matches network access by domain, optionally scoped to URL paths.
 ```
 (net)                                        ; match any network access
 (net "github.com")                           ; match github.com exactly
+(net "localhost")                            ; match localhost only
 (net "github.com" (subpath "/owner/repo"))   ; match github.com under /owner/repo
 (net /.*\.example\.com/ (regex "/api/.*"))   ; match example.com subdomains under /api/
 ```
 
 Path filters on net rules use the same syntax as filesystem path filters (`subpath`, `literal`, `regex`, `or`, `not`) but match against the URL path of the request rather than a filesystem path. Path filtering is enforced at the policy evaluation layer; the kernel sandbox proxy only performs domain-level filtering.
+
+#### Localhost-only network access
+
+When all allowed net domains are loopback addresses (`"localhost"`, `"127.0.0.1"`, `"::1"`), Clash automatically uses a lightweight localhost-only sandbox mode. This is enforced directly at the kernel level without spawning an HTTP proxy, making it more efficient than domain-filtered networking. On macOS, Seatbelt restricts connections to localhost at the kernel level. On Linux, enforcement is advisory (seccomp cannot filter connect destinations).
+
+```
+(allow (net "localhost"))   ; localhost-only — no proxy overhead
+```
 
 ### Tool Matcher
 

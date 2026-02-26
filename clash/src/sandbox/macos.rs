@@ -91,8 +91,11 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
         NetworkPolicy::Allow => {
             p += "(allow network*)\n";
         }
-        NetworkPolicy::AllowDomains(_) => {
-            // Allow only localhost connections (to reach the domain-filtering proxy).
+        NetworkPolicy::Localhost | NetworkPolicy::AllowDomains(_) => {
+            // Allow only localhost connections. For Localhost, this is the
+            // complete enforcement. For AllowDomains, a proxy on localhost
+            // handles domain filtering.
+            //
             // Seatbelt's (remote ip) filter only accepts "localhost" or "*" as
             // host — raw IPs like "127.0.0.1" are not valid. "localhost" covers
             // both IPv4 (127.0.0.1) and IPv6 (::1) loopback.
@@ -274,5 +277,43 @@ mod tests {
         let pattern = "/tmp/foo\"bar";
         let result = sbpl_filter(pattern, PathMatch::Regex);
         assert_eq!(result, "(regex #\"/tmp/foo\"bar\")");
+    }
+
+    // ── Network policy SBPL ────────────────────────────────────────
+
+    #[test]
+    fn sbpl_localhost_allows_only_loopback() {
+        let policy = SandboxPolicy {
+            default: Cap::READ | Cap::EXECUTE,
+            rules: vec![],
+            network: NetworkPolicy::Localhost,
+        };
+        let profile = compile_to_sbpl(&policy, "/tmp");
+        assert!(
+            profile.contains("(allow network-outbound (remote ip \"localhost:*\"))"),
+            "Localhost policy should allow outbound to localhost"
+        );
+        assert!(
+            profile.contains("(deny network*)"),
+            "Localhost policy should deny all other network"
+        );
+    }
+
+    #[test]
+    fn sbpl_localhost_same_as_allow_domains() {
+        let localhost_policy = SandboxPolicy {
+            default: Cap::READ | Cap::EXECUTE,
+            rules: vec![],
+            network: NetworkPolicy::Localhost,
+        };
+        let domains_policy = SandboxPolicy {
+            default: Cap::READ | Cap::EXECUTE,
+            rules: vec![],
+            network: NetworkPolicy::AllowDomains(vec!["example.com".into()]),
+        };
+        let localhost_profile = compile_to_sbpl(&localhost_policy, "/tmp");
+        let domains_profile = compile_to_sbpl(&domains_policy, "/tmp");
+        // Both should produce the same network section (localhost-only + deny rest)
+        assert_eq!(localhost_profile, domains_profile);
     }
 }

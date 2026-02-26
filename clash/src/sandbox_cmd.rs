@@ -172,6 +172,13 @@ fn exec_with_proxy(
     command: &[String],
 ) -> Result<()> {
     match &policy.network {
+        NetworkPolicy::Localhost => {
+            // Localhost-only: kernel enforces the restriction directly,
+            // no proxy needed. Exec the sandboxed command directly.
+            match sandbox::exec_sandboxed(policy, cwd, command) {
+                Err(e) => anyhow::bail!("sandbox exec failed: {}", e),
+            }
+        }
         NetworkPolicy::AllowDomains(domains) => {
             // Start the proxy BEFORE forking so we know the address.
             let proxy_handle = sandbox::proxy::start_proxy(sandbox::proxy::ProxyConfig {

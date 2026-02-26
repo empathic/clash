@@ -205,13 +205,16 @@ Sandboxes automatically grant access to:
 
 ### Sandbox network restrictions
 
-Sandbox network access has three modes:
+Sandbox network access has four modes:
 
 - `(allow (net))` or `(allow (net *))` — sandbox **allows** all network access (no restrictions)
+- `(allow (net "localhost"))` — sandbox allows **localhost-only** connections, enforced at the kernel level without a proxy
 - `(allow (net "domain.com"))` — sandbox allows network access **only to listed domains** via a local HTTP proxy
 - No net rule — sandbox **denies** all network access
 
-Domain-specific net rules like `(allow (net "crates.io"))` are enforced using a local HTTP proxy. The OS sandbox restricts the process to localhost-only connections, and clash starts a proxy that checks each request against the domain allowlist. Programs that respect `HTTP_PROXY`/`HTTPS_PROXY` environment variables (curl, cargo, npm, pip, etc.) are filtered; programs that bypass the proxy can still reach any host on Linux (advisory enforcement). On macOS, Seatbelt blocks non-localhost connections at the kernel level.
+**Localhost-only mode**: When all allowed domains are loopback addresses (`"localhost"`, `"127.0.0.1"`, `"::1"`), Clash uses a lightweight localhost-only mode that is enforced directly by the OS sandbox without spawning an HTTP proxy. This is useful for processes that need to connect to local development servers but should not access the internet. On macOS, Seatbelt blocks non-localhost connections at the kernel level. On Linux, enforcement is advisory (seccomp cannot filter connect destinations).
+
+**Domain filtering**: Domain-specific net rules like `(allow (net "crates.io"))` are enforced using a local HTTP proxy. The OS sandbox restricts the process to localhost-only connections, and clash starts a proxy that checks each request against the domain allowlist. Programs that respect `HTTP_PROXY`/`HTTPS_PROXY` environment variables (curl, cargo, npm, pip, etc.) are filtered; programs that bypass the proxy can still reach any host on Linux (advisory enforcement). On macOS, Seatbelt blocks non-localhost connections at the kernel level.
 
 Subdomain matching is supported: `(allow (net "github.com"))` also permits `api.github.com`.
 

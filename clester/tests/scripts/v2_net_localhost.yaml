@@ -1,0 +1,42 @@
+meta:
+  name: v2 sexpr policy — localhost-only network rules
+  description: Test that localhost-only net rules allow local and deny external
+
+clash:
+  policy_sexpr: |
+    (default deny "main")
+    (policy "main"
+      (allow (net "localhost")))
+
+steps:
+  - name: webfetch localhost allowed
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "http://localhost:8080/api/status"
+    expect:
+      decision: allow
+
+  - name: webfetch 127.0.0.1 denied (literal match only)
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "http://127.0.0.1:3000/health"
+    expect:
+      decision: deny
+
+  - name: webfetch external domain denied
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://github.com/anthropics/claude-code"
+    expect:
+      decision: deny
+
+  - name: websearch denied
+    hook: pre-tool-use
+    tool_name: WebSearch
+    tool_input:
+      query: "test query"
+    expect:
+      decision: deny

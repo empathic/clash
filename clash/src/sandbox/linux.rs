@@ -37,6 +37,12 @@ pub fn exec_sandboxed(
         NetworkPolicy::Deny => {
             install_seccomp_network_filter()?;
         }
+        NetworkPolicy::Localhost => {
+            // Localhost-only: seccomp cannot filter connect() by destination
+            // address, so this is advisory. Block bind/listen/accept to prevent
+            // server-side operations.
+            install_seccomp_advisory_network_filter()?;
+        }
         NetworkPolicy::AllowDomains(_) => {
             // On Linux, seccomp cannot filter connect() by destination address
             // (the address arg is a pointer seccomp can't dereference). We allow

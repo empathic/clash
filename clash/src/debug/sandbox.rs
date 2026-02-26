@@ -225,6 +225,7 @@ fn format_network(network: &NetworkPolicy) -> String {
     match network {
         NetworkPolicy::Deny => style::red("denied (all network blocked)"),
         NetworkPolicy::Allow => style::green("allowed (unrestricted)"),
+        NetworkPolicy::Localhost => style::yellow("localhost only"),
         NetworkPolicy::AllowDomains(domains) => {
             format!("{}: {}", style::yellow("filtered"), domains.join(", "))
         }
@@ -263,6 +264,12 @@ mod tests {
     fn test_format_network_allow() {
         let s = format_network(&NetworkPolicy::Allow);
         assert!(s.contains("unrestricted"));
+    }
+
+    #[test]
+    fn test_format_network_localhost() {
+        let s = format_network(&NetworkPolicy::Localhost);
+        assert!(s.contains("localhost"));
     }
 
     #[test]
