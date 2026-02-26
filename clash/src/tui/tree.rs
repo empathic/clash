@@ -788,21 +788,41 @@ pub fn node_search_text(kind: &TreeNodeKind) -> String {
     }
 }
 
-/// Search the full arena for nodes matching a query (case-insensitive),
-/// regardless of collapsed state. Returns NodeIds of all matching nodes.
+/// Search the full arena for nodes matching a query using fuzzy matching,
+/// regardless of collapsed state. Returns NodeIds of all matching nodes
+/// sorted by match score (best first).
 pub fn search_tree(arena: &TreeArena, query: &str) -> Vec<NodeId> {
-    let query_lower = query.to_lowercase();
-    if query_lower.is_empty() {
+    if query.is_empty() {
         return Vec::new();
     }
-    let mut matches = Vec::new();
+    let mut scored: Vec<(NodeId, u16)> = Vec::new();
     arena.walk_all(&mut |id, node| {
         let text = node_search_text(&node.kind);
-        if text.to_lowercase().contains(&query_lower) {
-            matches.push(id);
+        if let Some(score) = fuzzy_match(&text, query) {
+            scored.push((id, score));
         }
     });
-    matches
+    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.into_iter().map(|(id, _)| id).collect()
+}
+
+/// Score a fuzzy match of `query` against `text`.
+/// Returns `Some(score)` if the query matches, `None` otherwise.
+pub fn fuzzy_match(text: &str, query: &str) -> Option<u16> {
+    use nucleo_matcher::pattern::{Atom, AtomKind, CaseMatching, Normalization};
+    use nucleo_matcher::{Config, Matcher, Utf32Str};
+
+    let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
+    let atom = Atom::new(
+        query,
+        CaseMatching::Ignore,
+        Normalization::Smart,
+        AtomKind::Fuzzy,
+        false,
+    );
+    let mut buf = Vec::new();
+    let haystack = Utf32Str::new(text, &mut buf);
+    atom.score(haystack, &mut matcher)
 }
 
 // ---------------------------------------------------------------------------
