@@ -136,6 +136,10 @@ fn handle_confirm(app: &mut App, key: KeyEvent) -> InputResult {
                     app.confirm_delete_sandbox_rule(level, policy, sandbox_rule_text, parent_rule);
                     InputResult::Continue
                 }
+                Mode::Confirm(ConfirmAction::DeleteBranch { leaves, .. }) => {
+                    app.confirm_delete_branch(leaves);
+                    InputResult::Continue
+                }
                 Mode::Confirm(ConfirmAction::QuitUnsaved) => InputResult::Quit,
                 _ => InputResult::Continue,
             }

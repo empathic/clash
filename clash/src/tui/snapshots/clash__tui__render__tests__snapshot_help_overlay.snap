@@ -41,4 +41,4 @@ expression: output
 │"git"                                                                         │
 │                                                                              │
 │                                                                              │
-j/k move  l expand  z/Z fold  [/] all  a add  / search  w save  ? help  q quit
+j/k move  l expand  z/Z fold  d delete  [/] all  a add  / search  w save  ? help

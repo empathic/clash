@@ -642,6 +642,7 @@ pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
                         }
                         hints.push(("z/Z", "fold"));
                     }
+                    hints.push(("d", "delete"));
                 }
                 TreeNodeKind::Leaf { .. } => {
                     if row.has_children {
@@ -802,6 +803,15 @@ fn render_confirm_overlay(f: &mut Frame, area: Rect, action: &ConfirmAction) {
         } => (
             " Confirm Delete Sandbox Rule ",
             format!("Delete sandbox sub-rule?\n\n  {sandbox_rule_text}\n\ny/n"),
+        ),
+        ConfirmAction::DeleteBranch { label, leaves } => (
+            " Confirm Branch Delete ",
+            format!(
+                "Delete {} rule{} under {}?\n\ny/n",
+                leaves.len(),
+                if leaves.len() == 1 { "" } else { "s" },
+                label,
+            ),
         ),
         ConfirmAction::QuitUnsaved => (
             " Unsaved Changes ",
