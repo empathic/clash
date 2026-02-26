@@ -22,7 +22,7 @@ pub(crate) use self::edit::{DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS};
 // Re-export helpers used only by tests in other modules
 #[cfg(test)]
 pub(crate) use self::edit::{
-    build_rule_text, next_add_rule_step, parse_rule_text, quote_token_if_needed,
+    build_rule, build_rule_text, next_add_rule_step, parse_rule_text, quote_token_if_needed,
 };
 
 // ---------------------------------------------------------------------------
@@ -2077,6 +2077,128 @@ mod tests {
         f.binary_input = TextInput::new("git");
         f.effect_index = 1; // deny
         assert_eq!(build_rule_text(&f), r#"(deny (exec "git"))"#);
+    }
+
+    // -----------------------------------------------------------------------
+    // build_rule equivalence tests: direct AST == parsed string for all paths
+    // -----------------------------------------------------------------------
+
+    /// Assert that build_rule(form) produces the same Rule as the string round-trip.
+    fn assert_build_rule_equivalence(form: &AddRuleForm) {
+        let direct = build_rule(form);
+        let text = build_rule_text(form);
+        let roundtrip = parse_rule_text(&text)
+            .unwrap_or_else(|e| panic!("parse_rule_text failed for '{text}': {e}"));
+        assert_eq!(
+            direct.to_string(),
+            roundtrip.to_string(),
+            "build_rule and build_rule_text should produce equivalent rules\n  direct: {}\n  text: {}\n  roundtrip: {}",
+            direct,
+            text,
+            roundtrip
+        );
+    }
+
+    #[test]
+    fn build_rule_equiv_exec_basic() {
+        let mut f = make_form(0);
+        f.binary_input = TextInput::new("git");
+        assert_build_rule_equivalence(&f);
+    }
+
+    #[test]
+    fn build_rule_equiv_exec_wildcard() {
+        let f = make_form(0);
+        assert_build_rule_equivalence(&f);
+    }
+
+    #[test]
+    fn build_rule_equiv_exec_with_args() {
+        let mut f = make_form(0);
+        f.binary_input = TextInput::new("git");
+        f.args_input = TextInput::new("push origin");
+        assert_build_rule_equivalence(&f);
+    }
+
+    #[test]
+    fn build_rule_equiv_exec_star_binary() {
+        let mut f = make_form(0);
+        f.binary_input = TextInput::new("*");
+        assert_build_rule_equivalence(&f);
+    }
+
+    #[test]
+    fn build_rule_equiv_fs_wildcard() {
+        let f = make_form(1);
+        assert_build_rule_equivalence(&f);
+    }
+
+    #[test]
+    fn build_rule_equiv_fs_read() {
+        let mut f = make_form(1);
+        f.fs_op_index = 1;
+        assert_build_rule_equivalence(&f);
+    }
+
+    #[test]
+    fn build_rule_equiv_net_wildcard() {
+        let f = make_form(2);
+        assert_build_rule_equivalence(&f);
+    }
+
+    #[test]
+    fn build_rule_equiv_net_domain() {
+        let mut f = make_form(2);
+        f.net_domain_input = TextInput::new("example.com");
+        assert_build_rule_equivalence(&f);
+    }
+
+    #[test]
+    fn build_rule_equiv_tool_wildcard() {
+        let f = make_form(3);
+        assert_build_rule_equivalence(&f);
+    }
+
+    #[test]
+    fn build_rule_equiv_tool_name() {
+        let mut f = make_form(3);
+        f.tool_name_input = TextInput::new("Bash");
+        assert_build_rule_equivalence(&f);
+    }
+
+    #[test]
+    fn build_rule_equiv_sandboxed_exec_fs() {
+        let mut f = make_form(1);
+        f.binary_input = TextInput::new("ls");
+        f.args_input = TextInput::new("-lha");
+        f.effect_index = 2; // ask
+        assert_build_rule_equivalence(&f);
+    }
+
+    #[test]
+    fn build_rule_equiv_sandboxed_exec_net() {
+        let mut f = make_form(2);
+        f.binary_input = TextInput::new("curl");
+        assert_build_rule_equivalence(&f);
+    }
+
+    #[test]
+    fn build_rule_equiv_all_effects() {
+        for effect_idx in 0..3 {
+            let mut f = make_form(0);
+            f.binary_input = TextInput::new("git");
+            f.effect_index = effect_idx;
+            assert_build_rule_equivalence(&f);
+        }
+    }
+
+    #[test]
+    fn build_rule_equiv_all_fs_ops() {
+        for op_idx in 0..5 {
+            let mut f = make_form(1);
+            f.fs_op_index = op_idx;
+            assert_build_rule_equivalence(&f);
+        }
     }
 
     /// When (allow (fs)) already exists, adding it again is idempotent.

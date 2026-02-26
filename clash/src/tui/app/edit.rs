@@ -3,7 +3,10 @@
 use std::fs;
 
 use crate::policy::Effect;
-use crate::policy::ast::{PolicyItem, Rule, SandboxRef, TopLevel};
+use crate::policy::ast::{
+    CapMatcher, ExecMatcher, FsMatcher, FsOp, NetMatcher, OpPattern, PathFilter, Pattern,
+    PolicyItem, Rule, SandboxRef, ToolMatcher, TopLevel,
+};
 use crate::policy::compile::compile_policy;
 use crate::policy::edit;
 use crate::policy::parse;
@@ -490,24 +493,14 @@ impl App {
         }
     }
 
-    /// Complete the add-rule form: build s-expression from structured fields, parse, validate, add.
+    /// Complete the add-rule form: construct AST directly, validate, add.
     fn complete_add_rule(&mut self) {
         let Mode::AddRule(form) = &self.mode else {
             return;
         };
 
         let level = form.available_levels[form.level_index];
-        let rule_text = build_rule_text(form);
-
-        let rule = match parse_rule_text(&rule_text) {
-            Ok(r) => r,
-            Err(e) => {
-                if let Mode::AddRule(form) = &mut self.mode {
-                    form.error = Some(format!("Parse error: {e}"));
-                }
-                return;
-            }
-        };
+        let rule = build_rule(form);
 
         // Find the level and its active policy
         let Some(ls) = self.levels.iter().find(|ls| ls.level == level) else {
@@ -678,6 +671,15 @@ pub const EFFECT_NAMES: &[&str] = &["allow", "deny", "ask"];
 pub const EFFECT_DISPLAY: &[&str] = &["ask", "auto allow", "auto deny"];
 pub const FS_OPS: &[&str] = &["*", "read", "write", "create", "delete"];
 
+/// Map form effect_index (EFFECT_NAMES order: allow=0, deny=1, ask=2) to Effect.
+fn effect_from_form_index(index: usize) -> Effect {
+    match index {
+        0 => Effect::Allow,
+        1 => Effect::Deny,
+        _ => Effect::Ask,
+    }
+}
+
 pub(super) fn effect_from_display_index(index: usize) -> Effect {
     match index {
         0 => Effect::Ask,
@@ -715,6 +717,7 @@ pub(crate) fn next_add_rule_step(step: AddRuleStep, domain_index: usize) -> Opti
 }
 
 /// Build the capability-specific part of the rule (without effect or exec wrapper).
+#[cfg(test)]
 fn build_cap_text(form: &AddRuleForm) -> String {
     match form.domain_index {
         1 => {
@@ -750,6 +753,10 @@ fn build_cap_text(form: &AddRuleForm) -> String {
 }
 
 /// Build the rule s-expression text from an add-rule form.
+///
+/// Kept for backward-compatibility verification in tests. The primary path
+/// is `build_rule()` which constructs AST types directly.
+#[cfg(test)]
 pub(crate) fn build_rule_text(form: &AddRuleForm) -> String {
     let effect = EFFECT_NAMES[form.effect_index];
     let binary_raw = form.binary_input.value().trim().to_string();
@@ -789,7 +796,164 @@ pub(crate) fn build_rule_text(form: &AddRuleForm) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Direct AST construction from form fields (no string round-trip)
+// ---------------------------------------------------------------------------
+
+/// Build a `Rule` directly from form fields, bypassing string serialization.
+///
+/// This is the primary rule-construction path. It constructs AST types directly
+/// from the form's structured fields, using `Display` only for display — never
+/// as an intermediate step in rule creation.
+pub(crate) fn build_rule(form: &AddRuleForm) -> Rule {
+    let effect = effect_from_form_index(form.effect_index);
+    let binary_raw = form.binary_input.value().trim().to_string();
+    let has_command = !binary_raw.is_empty() && binary_raw != "*";
+
+    if has_command && form.domain_index != 0 {
+        // Sandboxed exec: the user specified a command + a non-exec capability domain.
+        // Result: (effect (exec bin args...) :sandbox (allow (cap ...)))
+        let exec = build_exec_matcher_from_form(form);
+        let sandbox_cap = build_cap_matcher_from_form(form);
+        let sandbox_rule = Rule {
+            effect: Effect::Allow,
+            matcher: sandbox_cap,
+            sandbox: None,
+        };
+        Rule {
+            effect,
+            matcher: CapMatcher::Exec(exec),
+            sandbox: Some(SandboxRef::Inline(vec![sandbox_rule])),
+        }
+    } else if form.domain_index == 0 {
+        // Plain exec rule
+        let exec = build_exec_matcher_from_form(form);
+        Rule {
+            effect,
+            matcher: CapMatcher::Exec(exec),
+            sandbox: None,
+        }
+    } else {
+        // Standalone capability rule (no command)
+        let cap = build_cap_matcher_from_form(form);
+        Rule {
+            effect,
+            matcher: cap,
+            sandbox: None,
+        }
+    }
+}
+
+/// Build an ExecMatcher from form fields (binary + args).
+fn build_exec_matcher_from_form(form: &AddRuleForm) -> ExecMatcher {
+    let binary_raw = form.binary_input.value().trim().to_string();
+    let bin = if binary_raw.is_empty() || binary_raw == "*" {
+        Pattern::Any
+    } else {
+        Pattern::Literal(binary_raw)
+    };
+
+    let args_raw = form.args_input.value().trim().to_string();
+    let args: Vec<Pattern> = if args_raw.is_empty() {
+        Vec::new()
+    } else {
+        args_raw
+            .split_whitespace()
+            .map(|arg| {
+                if arg == "*" {
+                    Pattern::Any
+                } else {
+                    Pattern::Literal(arg.to_string())
+                }
+            })
+            .collect()
+    };
+
+    ExecMatcher {
+        bin,
+        args,
+        has_args: Vec::new(),
+    }
+}
+
+/// Build a CapMatcher for the selected non-exec domain from form fields.
+fn build_cap_matcher_from_form(form: &AddRuleForm) -> CapMatcher {
+    match form.domain_index {
+        1 => CapMatcher::Fs(build_fs_matcher_from_form(form)),
+        2 => CapMatcher::Net(build_net_matcher_from_form(form)),
+        _ => CapMatcher::Tool(build_tool_matcher_from_form(form)),
+    }
+}
+
+/// Build an FsMatcher from form fields (op + path).
+fn build_fs_matcher_from_form(form: &AddRuleForm) -> FsMatcher {
+    let op = match form.fs_op_index {
+        0 => OpPattern::Any,
+        1 => OpPattern::Single(FsOp::Read),
+        2 => OpPattern::Single(FsOp::Write),
+        3 => OpPattern::Single(FsOp::Create),
+        _ => OpPattern::Single(FsOp::Delete),
+    };
+
+    let path_raw = form.path_input.value().trim().to_string();
+    let path = if path_raw.is_empty() {
+        None
+    } else {
+        // Path might be a complex s-expression like (subpath (env PWD)).
+        // Try to parse it; if that fails, treat it as a literal path.
+        match parse_path_filter(&path_raw) {
+            Some(pf) => Some(pf),
+            None => Some(PathFilter::Literal(path_raw)),
+        }
+    };
+
+    FsMatcher { op, path }
+}
+
+/// Attempt to parse a path filter from user input.
+/// The user may enter s-expression syntax like `(subpath (env PWD))` or a plain path.
+fn parse_path_filter(input: &str) -> Option<PathFilter> {
+    // Wrap in a dummy rule to parse via the policy parser
+    let source = format!("(policy \"_tmp\" (allow (fs read {input})))");
+    let top_levels = parse::parse(&source).ok()?;
+    for tl in top_levels {
+        if let TopLevel::Policy { body, .. } = tl {
+            for item in body {
+                if let PolicyItem::Rule(rule) = item
+                    && let CapMatcher::Fs(m) = rule.matcher
+                {
+                    return m.path;
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Build a NetMatcher from form fields.
+fn build_net_matcher_from_form(form: &AddRuleForm) -> NetMatcher {
+    let domain_raw = form.net_domain_input.value().trim().to_string();
+    let domain = if domain_raw.is_empty() || domain_raw == "*" {
+        Pattern::Any
+    } else {
+        Pattern::Literal(domain_raw)
+    };
+    NetMatcher { domain }
+}
+
+/// Build a ToolMatcher from form fields.
+fn build_tool_matcher_from_form(form: &AddRuleForm) -> ToolMatcher {
+    let name_raw = form.tool_name_input.value().trim().to_string();
+    let name = if name_raw.is_empty() || name_raw == "*" {
+        Pattern::Any
+    } else {
+        Pattern::Literal(name_raw)
+    };
+    ToolMatcher { name }
+}
+
 /// Quote a token with double quotes if it's not `*` and not already a parenthesized expression.
+#[cfg(test)]
 pub(crate) fn quote_token_if_needed(token: &str) -> String {
     if token == "*" || token.starts_with('(') || token.starts_with('"') {
         token.to_string()
