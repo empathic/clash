@@ -133,7 +133,7 @@ fn render_tree(f: &mut Frame, app: &App, area: Rect) {
     for i in scroll..end {
         let row = &app.flat_rows[i];
         let is_selected = i == app.cursor;
-        let is_match = app.search_matches.contains(&i);
+        let is_match = app.search.matches.contains(&i);
         let inline_select = if is_selected { selecting } else { None };
         let summary = if !row.expanded && row.has_children {
             collapsed_summary(&app.roots, &row.tree_path)
@@ -648,7 +648,7 @@ pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
     hints.push(("[/]", "all"));
     hints.push(("a", "add"));
     hints.push(("/", "search"));
-    if app.search_query.is_some() {
+    if app.search.query.is_some() {
         hints.push(("n/N", "next/prev"));
     }
     hints.push(("w", "save"));
@@ -662,8 +662,8 @@ pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
 // ---------------------------------------------------------------------------
 
 fn render_search_bar(f: &mut Frame, app: &App, area: Rect) {
-    let match_info = if app.search_matches.is_empty() {
-        if app.search_input.value().is_empty() {
+    let match_info = if app.search.matches.is_empty() {
+        if app.search.input.value().is_empty() {
             String::new()
         } else {
             " (no matches)".to_string()
@@ -671,14 +671,14 @@ fn render_search_bar(f: &mut Frame, app: &App, area: Rect) {
     } else {
         format!(
             " ({}/{})",
-            app.search_match_cursor + 1,
-            app.search_matches.len()
+            app.search.match_cursor + 1,
+            app.search.matches.len()
         )
     };
 
     let line = Line::from(vec![
         Span::styled("/", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(app.search_input.value()),
+        Span::raw(app.search.input.value()),
         Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
         Span::styled(match_info, tui_style::DIM),
     ]);
@@ -1376,7 +1376,7 @@ mod tests {
     #[test]
     fn context_hints_with_search() {
         let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
-        app.search_query = Some("git".to_string());
+        app.search.query = Some("git".to_string());
 
         let hints = context_hints(&app);
         let keys: Vec<&str> = hints.iter().map(|(k, _)| *k).collect();
@@ -1581,7 +1581,7 @@ mod tests {
     fn snapshot_search_active() {
         let mut app = make_app(REALISTIC_POLICY);
         app.start_search();
-        app.search_input = super::super::editor::TextInput::new("git");
+        app.search.input = super::super::editor::TextInput::new("git");
         app.update_search_live();
         app.mode = Mode::Search;
         let output = render_to_string(&app, 80, 24);

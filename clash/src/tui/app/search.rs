@@ -6,24 +6,24 @@ use super::{App, Mode};
 impl App {
     /// Enter search mode.
     pub fn start_search(&mut self) {
-        self.search_input.clear();
+        self.search.input.clear();
         self.mode = Mode::Search;
     }
 
     /// Commit the search query and jump to first match.
     pub fn commit_search(&mut self) {
-        let query = self.search_input.value().to_string();
+        let query = self.search.input.value().to_string();
         if query.is_empty() {
-            self.search_query = None;
-            self.search_matches.clear();
+            self.search.query = None;
+            self.search.matches.clear();
         } else {
-            self.search_query = Some(query);
+            self.search.query = Some(query);
             self.expand_search_ancestors();
             self.rebuild_flat();
             // Jump to first match
-            if let Some(&idx) = self.search_matches.first() {
+            if let Some(&idx) = self.search.matches.first() {
                 self.cursor = idx;
-                self.search_match_cursor = 0;
+                self.search.match_cursor = 0;
             }
         }
         self.mode = Mode::Normal;
@@ -36,41 +36,41 @@ impl App {
 
     /// Clear the active search.
     pub fn clear_search(&mut self) {
-        self.search_query = None;
-        self.search_matches.clear();
-        self.search_match_cursor = 0;
+        self.search.query = None;
+        self.search.matches.clear();
+        self.search.match_cursor = 0;
     }
 
     /// Jump to the next search match.
     pub fn next_search_match(&mut self) {
-        if self.search_matches.is_empty() {
+        if self.search.matches.is_empty() {
             return;
         }
-        self.search_match_cursor = (self.search_match_cursor + 1) % self.search_matches.len();
-        self.cursor = self.search_matches[self.search_match_cursor];
+        self.search.match_cursor = (self.search.match_cursor + 1) % self.search.matches.len();
+        self.cursor = self.search.matches[self.search.match_cursor];
     }
 
     /// Jump to the previous search match.
     pub fn prev_search_match(&mut self) {
-        if self.search_matches.is_empty() {
+        if self.search.matches.is_empty() {
             return;
         }
-        if self.search_match_cursor == 0 {
-            self.search_match_cursor = self.search_matches.len() - 1;
+        if self.search.match_cursor == 0 {
+            self.search.match_cursor = self.search.matches.len() - 1;
         } else {
-            self.search_match_cursor -= 1;
+            self.search.match_cursor -= 1;
         }
-        self.cursor = self.search_matches[self.search_match_cursor];
+        self.cursor = self.search.matches[self.search.match_cursor];
     }
 
     /// Live-update search matches as the user types.
     pub fn update_search_live(&mut self) {
-        let query = self.search_input.value().to_string();
+        let query = self.search.input.value().to_string();
         if query.is_empty() {
-            self.search_query = None;
-            self.search_matches.clear();
+            self.search.query = None;
+            self.search.matches.clear();
         } else {
-            self.search_query = Some(query);
+            self.search.query = Some(query);
             self.expand_search_ancestors();
             self.rebuild_flat();
         }
@@ -78,10 +78,10 @@ impl App {
 
     /// Re-index search matches from the current flat rows.
     pub(super) fn update_search_matches(&mut self) {
-        self.search_matches.clear();
-        self.search_match_cursor = 0;
+        self.search.matches.clear();
+        self.search.match_cursor = 0;
 
-        let Some(query) = &self.search_query else {
+        let Some(query) = &self.search.query else {
             return;
         };
         let query_lower = query.to_lowercase();
@@ -92,7 +92,7 @@ impl App {
         for (i, row) in self.flat_rows.iter().enumerate() {
             let text = tree::node_search_text(&row.kind);
             if text.to_lowercase().contains(&query_lower) {
-                self.search_matches.push(i);
+                self.search.matches.push(i);
             }
         }
     }
@@ -100,7 +100,7 @@ impl App {
     /// Search the full tree and expand ancestors of all matching nodes
     /// so they become visible in flat rows.
     fn expand_search_ancestors(&mut self) {
-        let Some(query) = &self.search_query else {
+        let Some(query) = &self.search.query else {
             return;
         };
         let matching_paths = tree::search_tree(&self.roots, query);

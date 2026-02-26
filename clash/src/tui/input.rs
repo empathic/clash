@@ -51,7 +51,7 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> InputResult {
         // Quit (with unsaved-changes check)
         KeyCode::Char('q') => return app.start_quit(),
         KeyCode::Esc => {
-            if app.search_query.is_some() {
+            if app.search.query.is_some() {
                 app.clear_search();
             } else {
                 return app.start_quit();
@@ -321,7 +321,7 @@ fn handle_select_effect(app: &mut App, key: KeyEvent) -> InputResult {
 // ---------------------------------------------------------------------------
 
 fn handle_search(app: &mut App, key: KeyEvent) -> InputResult {
-    match app.search_input.handle_key(key) {
+    match app.search.input.handle_key(key) {
         TextInputAction::Submit => app.commit_search(),
         TextInputAction::Cancel => app.cancel_search(),
         TextInputAction::Changed => app.update_search_live(),

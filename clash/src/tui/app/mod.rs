@@ -185,6 +185,32 @@ pub struct StatusMessage {
 }
 
 // ---------------------------------------------------------------------------
+// Search state
+// ---------------------------------------------------------------------------
+
+pub struct SearchState {
+    /// Search text input.
+    pub input: TextInput,
+    /// Active search query (after Enter).
+    pub query: Option<String>,
+    /// Flat row indices that match the search.
+    pub matches: Vec<usize>,
+    /// Current position in matches.
+    pub match_cursor: usize,
+}
+
+impl SearchState {
+    pub fn new() -> Self {
+        Self {
+            input: TextInput::empty(),
+            query: None,
+            matches: Vec::new(),
+            match_cursor: 0,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
 
@@ -199,14 +225,7 @@ pub struct App {
     pub status_message: Option<StatusMessage>,
     pub(super) undo_stack: Vec<UndoEntry>,
     pub(super) redo_stack: Vec<UndoEntry>,
-    /// Search text input.
-    pub search_input: TextInput,
-    /// Active search query (after Enter).
-    pub search_query: Option<String>,
-    /// Flat row indices that match the search.
-    pub search_matches: Vec<usize>,
-    /// Current position in search_matches.
-    pub search_match_cursor: usize,
+    pub search: SearchState,
 }
 
 impl App {
@@ -278,10 +297,7 @@ impl App {
             status_message: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            search_input: TextInput::empty(),
-            search_query: None,
-            search_matches: Vec::new(),
-            search_match_cursor: 0,
+            search: SearchState::new(),
         }
     }
 
@@ -1216,12 +1232,12 @@ mod tests {
         let initial_rows = app.flat_rows.len();
 
         app.start_search();
-        app.search_input = TextInput::new("git");
+        app.search.input = TextInput::new("git");
         app.commit_search();
 
-        assert!(!app.search_matches.is_empty());
+        assert!(!app.search.matches.is_empty());
         // Cursor should be on first match
-        assert!(app.search_matches.contains(&app.cursor));
+        assert!(app.search.matches.contains(&app.cursor));
         // Ancestors should have been expanded, revealing more rows
         assert!(
             app.flat_rows.len() > initial_rows,
@@ -1254,11 +1270,11 @@ mod tests {
         let mut app = make_app(r#"(policy "main" (ask (exec "ls" "-lha") :sandbox (allow (fs))))"#);
         // App starts fully collapsed — search should auto-expand to find matches
         app.start_search();
-        app.search_input = TextInput::new("sandbox");
+        app.search.input = TextInput::new("sandbox");
         app.commit_search();
 
         assert!(
-            !app.search_matches.is_empty(),
+            !app.search.matches.is_empty(),
             "search for 'sandbox' should find sandbox nodes even when collapsed"
         );
     }
@@ -2553,11 +2569,11 @@ mod tests {
         let mut app = make_app(r#"(policy "main" (ask (exec "ls") :sandbox (allow (fs))))"#);
         // App starts fully collapsed — search should auto-expand
         app.start_search();
-        app.search_input = TextInput::new("sandbox");
+        app.search.input = TextInput::new("sandbox");
         app.commit_search();
 
         assert!(
-            !app.search_matches.is_empty(),
+            !app.search.matches.is_empty(),
             "search for 'sandbox' should find sandbox leaf nodes even when collapsed"
         );
     }
@@ -2570,10 +2586,10 @@ mod tests {
 
         // Search for something deep in the tree
         app.start_search();
-        app.search_input = TextInput::new("allow");
+        app.search.input = TextInput::new("allow");
         app.commit_search();
 
-        assert!(!app.search_matches.is_empty(), "should find 'allow' leaf");
+        assert!(!app.search.matches.is_empty(), "should find 'allow' leaf");
         // More rows should now be visible due to auto-expansion
         assert!(
             app.flat_rows.len() > initial_rows,
@@ -2589,12 +2605,12 @@ mod tests {
         let initial_rows = app.flat_rows.len();
 
         app.start_search();
-        app.search_input = TextInput::new("git");
+        app.search.input = TextInput::new("git");
         app.update_search_live();
 
         // Live search should also expand ancestors
         assert!(
-            !app.search_matches.is_empty(),
+            !app.search.matches.is_empty(),
             "live search should find 'git'"
         );
         assert!(
