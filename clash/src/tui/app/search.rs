@@ -90,7 +90,7 @@ impl App {
         }
 
         for (i, row) in self.tree.flat_rows.iter().enumerate() {
-            let text = tree::node_search_text(&row.kind);
+            let text = tree::node_search_text(&self.tree.arena[row.node_id].kind);
             if text.to_lowercase().contains(&query_lower) {
                 self.search.matches.push(i);
             }
@@ -103,14 +103,12 @@ impl App {
         let Some(query) = &self.search.query else {
             return;
         };
-        let matching_paths = tree::search_tree(&self.tree.roots, query);
-        for path in &matching_paths {
-            for prefix_len in 1..path.len() {
-                if let Some(node) =
-                    tree::node_at_path_mut(&mut self.tree.roots, &path[..prefix_len])
-                {
-                    node.expanded = true;
-                }
+        let matching_ids = tree::search_tree(&self.tree.arena, query);
+        for id in matching_ids {
+            let ancestors = self.tree.arena.ancestors(id);
+            // Expand all ancestors except the matching node itself
+            for &aid in &ancestors[..ancestors.len().saturating_sub(1)] {
+                self.tree.arena[aid].expanded = true;
             }
         }
     }

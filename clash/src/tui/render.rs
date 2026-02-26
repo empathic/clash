@@ -15,7 +15,7 @@ use super::app::{
     Mode,
 };
 use super::style as tui_style;
-use super::tree::{self, FlatRow, TreeNode, TreeNodeKind};
+use super::tree::{FlatRow, NodeId, TreeArena, TreeNodeKind};
 
 /// Format an effect for display: "ask", "auto allow", "auto deny".
 pub(crate) fn effect_display(effect: Effect) -> &'static str {
@@ -136,11 +136,12 @@ fn render_tree(f: &mut Frame, app: &App, area: Rect) {
         let is_match = app.search.matches.contains(&i);
         let inline_select = if is_selected { selecting } else { None };
         let summary = if !row.expanded && row.has_children {
-            collapsed_summary(&app.tree.roots, &row.tree_path)
+            collapsed_summary(&app.tree.arena, row.node_id)
         } else {
             Vec::new()
         };
-        let line = render_row(row, is_selected, is_match, inline_select, &summary);
+        let kind = &app.tree.arena[row.node_id].kind;
+        let line = render_row(row, kind, is_selected, is_match, inline_select, &summary);
         lines.push(line);
     }
 
@@ -148,11 +149,8 @@ fn render_tree(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(tree_widget, inner);
 }
 
-pub(crate) fn collapsed_summary(roots: &[TreeNode], tree_path: &[usize]) -> Vec<Span<'static>> {
-    let Some(node) = tree::node_at_path(roots, tree_path) else {
-        return Vec::new();
-    };
-    let (allow, deny, ask) = node.effect_counts();
+pub(crate) fn collapsed_summary(arena: &TreeArena, node_id: NodeId) -> Vec<Span<'static>> {
+    let (allow, deny, ask) = arena.effect_counts(node_id);
     let mut spans = Vec::new();
     spans.push(Span::styled("  ", tui_style::DIM));
     let mut first = true;
@@ -181,6 +179,7 @@ pub(crate) fn collapsed_summary(roots: &[TreeNode], tree_path: &[usize]) -> Vec<
 
 pub(crate) fn render_row(
     row: &FlatRow,
+    kind: &TreeNodeKind,
     is_selected: bool,
     is_search_match: bool,
     inline_select: Option<usize>,
@@ -207,7 +206,7 @@ pub(crate) fn render_row(
     }
 
     // Node content
-    match &row.kind {
+    match kind {
         TreeNodeKind::Domain(domain) => {
             spans.push(Span::styled(domain.to_string(), tui_style::DOMAIN));
         }
@@ -394,7 +393,8 @@ fn render_description(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let mut lines = if let Some(row) = app.tree.flat_rows.get(app.tree.cursor) {
-        description_for_row(row)
+        let kind = &app.tree.arena[row.node_id].kind;
+        description_for_row(kind)
     } else {
         vec![Line::from(Span::styled("No selection", tui_style::DIM))]
     };
@@ -420,8 +420,8 @@ fn render_description(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(desc, inner);
 }
 
-pub(crate) fn description_for_row(row: &FlatRow) -> Vec<Line<'static>> {
-    match &row.kind {
+pub(crate) fn description_for_row(kind: &TreeNodeKind) -> Vec<Line<'static>> {
+    match kind {
         TreeNodeKind::Leaf {
             effect,
             rule,
@@ -591,7 +591,7 @@ pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
         Some(row) => {
             hints.push(("j/k", "move"));
 
-            match &row.kind {
+            match &app.tree.arena[row.node_id].kind {
                 TreeNodeKind::Domain(_)
                 | TreeNodeKind::Binary(_)
                 | TreeNodeKind::Arg(_)
@@ -1148,6 +1148,7 @@ mod tests {
     use crate::policy::ast::Rule;
     use crate::settings::{LoadedPolicy, PolicyLevel};
     use crate::tui::app::{App, ConfirmAction, Mode, parse_rule_text};
+    use crate::tui::tree::DomainKind;
 
     fn test_policy(level: PolicyLevel, source: &str) -> LoadedPolicy {
         LoadedPolicy {
@@ -1162,32 +1163,42 @@ mod tests {
         App::new(&[policy])
     }
 
-    fn make_leaf_row(effect: Effect, rule: Rule, level: PolicyLevel, policy: &str) -> FlatRow {
-        FlatRow {
-            kind: TreeNodeKind::Leaf {
-                effect,
-                rule,
-                level,
-                policy: policy.to_string(),
-                is_shadowed: false,
-            },
+    /// Build a FlatRow with a dummy node_id (only useful for depth/expanded/connectors).
+    /// Tests that call render_row or description_for_row pass the kind separately.
+    fn make_leaf_row_parts(
+        effect: Effect,
+        rule: Rule,
+        level: PolicyLevel,
+        policy: &str,
+    ) -> (TreeNodeKind, FlatRow) {
+        let kind = TreeNodeKind::Leaf {
+            effect,
+            rule,
+            level,
+            policy: policy.to_string(),
+            is_shadowed: false,
+        };
+        // We use a dummy NodeId(0) — only the depth/expanded/connectors matter for render_row.
+        let row = FlatRow {
+            node_id: NodeId::dummy(),
             depth: 2,
             expanded: false,
             has_children: false,
-            tree_path: vec![0, 0, 0],
             connectors: vec![false, false],
-        }
+        };
+        (kind, row)
     }
 
-    fn make_binary_row(name: &str, expanded: bool) -> FlatRow {
-        FlatRow {
-            kind: TreeNodeKind::Binary(name.to_string()),
+    fn make_binary_row_parts(name: &str, expanded: bool) -> (TreeNodeKind, FlatRow) {
+        let kind = TreeNodeKind::Binary(name.to_string());
+        let row = FlatRow {
+            node_id: NodeId::dummy(),
             depth: 0,
             expanded,
             has_children: true,
-            tree_path: vec![0],
             connectors: vec![],
-        }
+        };
+        (kind, row)
     }
 
     fn render_to_string(app: &App, width: u16, height: u16) -> String {
@@ -1219,8 +1230,8 @@ mod tests {
     #[test]
     fn render_row_leaf_shows_effect() {
         let rule = parse_rule_text("(allow (exec \"git\"))").unwrap();
-        let row = make_leaf_row(Effect::Allow, rule, PolicyLevel::User, "main");
-        let line = render_row(&row, false, false, None, &[]);
+        let (kind, row) = make_leaf_row_parts(Effect::Allow, rule, PolicyLevel::User, "main");
+        let line = render_row(&row, &kind, false, false, None, &[]);
 
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(
@@ -1231,8 +1242,8 @@ mod tests {
 
     #[test]
     fn render_row_binary_node() {
-        let row = make_binary_row("git", true);
-        let line = render_row(&row, false, false, None, &[]);
+        let (kind, row) = make_binary_row_parts("git", true);
+        let line = render_row(&row, &kind, false, false, None, &[]);
 
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(
@@ -1247,8 +1258,8 @@ mod tests {
             Span::styled("  ", tui_style::DIM),
             Span::styled("1 auto allow", tui_style::ALLOW),
         ];
-        let row = make_binary_row("git", false);
-        let line = render_row(&row, false, false, None, &summary);
+        let (kind, row) = make_binary_row_parts("git", false);
+        let line = render_row(&row, &kind, false, false, None, &summary);
 
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(
@@ -1259,16 +1270,16 @@ mod tests {
 
     #[test]
     fn render_row_selected_styling() {
-        let row = make_binary_row("git", true);
-        let line = render_row(&row, true, false, None, &[]);
+        let (kind, row) = make_binary_row_parts("git", true);
+        let line = render_row(&row, &kind, true, false, None, &[]);
 
         assert_eq!(line.style, tui_style::SELECTED);
     }
 
     #[test]
     fn render_row_search_match_styling() {
-        let row = make_binary_row("git", true);
-        let line = render_row(&row, false, true, None, &[]);
+        let (kind, row) = make_binary_row_parts("git", true);
+        let line = render_row(&row, &kind, false, true, None, &[]);
 
         assert!(
             line.style.add_modifier.contains(Modifier::UNDERLINED),
@@ -1279,8 +1290,8 @@ mod tests {
     #[test]
     fn description_for_row_leaf() {
         let rule = parse_rule_text("(allow (exec \"git\"))").unwrap();
-        let row = make_leaf_row(Effect::Allow, rule, PolicyLevel::User, "main");
-        let lines = description_for_row(&row);
+        let (kind, _row) = make_leaf_row_parts(Effect::Allow, rule, PolicyLevel::User, "main");
+        let lines = description_for_row(&kind);
 
         assert!(lines.len() >= 2);
         let text: String = lines
@@ -1293,8 +1304,8 @@ mod tests {
 
     #[test]
     fn description_for_row_binary() {
-        let row = make_binary_row("git", true);
-        let lines = description_for_row(&row);
+        let (kind, _row) = make_binary_row_parts("git", true);
+        let lines = description_for_row(&kind);
 
         let text: String = lines
             .iter()
@@ -1306,15 +1317,8 @@ mod tests {
 
     #[test]
     fn description_for_row_domain() {
-        let row = FlatRow {
-            kind: TreeNodeKind::Domain(tree::DomainKind::Exec),
-            depth: 1,
-            expanded: true,
-            has_children: true,
-            tree_path: vec![0, 0],
-            connectors: vec![false],
-        };
-        let lines = description_for_row(&row);
+        let kind = TreeNodeKind::Domain(DomainKind::Exec);
+        let lines = description_for_row(&kind);
 
         let text: String = lines
             .iter()
@@ -1359,11 +1363,12 @@ mod tests {
         app.expand_all();
 
         // Find the SandboxLeaf row
-        let sbx_idx = app
-            .tree
-            .flat_rows
-            .iter()
-            .position(|r| matches!(&r.kind, TreeNodeKind::SandboxLeaf { .. }));
+        let sbx_idx = app.tree.flat_rows.iter().position(|r| {
+            matches!(
+                &app.tree.arena[r.node_id].kind,
+                TreeNodeKind::SandboxLeaf { .. }
+            )
+        });
         assert!(sbx_idx.is_some(), "should have a SandboxLeaf row");
         app.tree.cursor = sbx_idx.unwrap();
 
@@ -1494,21 +1499,21 @@ mod tests {
     fn render_row_sandbox_leaf() {
         let parent_rule = parse_rule_text(r#"(ask (exec "ls") :sandbox (allow (fs)))"#).unwrap();
         let sandbox_rule = parse_rule_text("(allow (fs))").unwrap();
+        let kind = TreeNodeKind::SandboxLeaf {
+            effect: Effect::Allow,
+            sandbox_rule,
+            parent_rule,
+            level: PolicyLevel::User,
+            policy: "main".to_string(),
+        };
         let row = FlatRow {
-            kind: TreeNodeKind::SandboxLeaf {
-                effect: Effect::Allow,
-                sandbox_rule,
-                parent_rule,
-                level: PolicyLevel::User,
-                policy: "main".to_string(),
-            },
+            node_id: NodeId::dummy(),
             depth: 3,
             expanded: false,
             has_children: false,
-            tree_path: vec![0, 0, 0, 0],
             connectors: vec![false, false, false],
         };
-        let line = render_row(&row, false, false, None, &[]);
+        let line = render_row(&row, &kind, false, false, None, &[]);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(
             text.contains("auto allow"),
@@ -1523,21 +1528,21 @@ mod tests {
     #[test]
     fn render_row_leaf_sandbox_indicator() {
         let rule = parse_rule_text(r#"(ask (exec "ls" "-lha") :sandbox (allow (fs)))"#).unwrap();
+        let kind = TreeNodeKind::Leaf {
+            effect: Effect::Ask,
+            rule,
+            level: PolicyLevel::User,
+            policy: "main".to_string(),
+            is_shadowed: false,
+        };
         let row = FlatRow {
-            kind: TreeNodeKind::Leaf {
-                effect: Effect::Ask,
-                rule,
-                level: PolicyLevel::User,
-                policy: "main".to_string(),
-                is_shadowed: false,
-            },
+            node_id: NodeId::dummy(),
             depth: 2,
             expanded: false,
             has_children: true,
-            tree_path: vec![0, 0, 0],
             connectors: vec![false, false],
         };
-        let line = render_row(&row, false, false, None, &[]);
+        let line = render_row(&row, &kind, false, false, None, &[]);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(
             text.contains("sandboxed"),
@@ -1693,7 +1698,7 @@ mod tests {
         for (i, row) in app.tree.flat_rows.iter().enumerate() {
             if let TreeNodeKind::Leaf {
                 is_shadowed: true, ..
-            } = &row.kind
+            } = &app.tree.arena[row.node_id].kind
             {
                 app.tree.cursor = i;
                 break;
