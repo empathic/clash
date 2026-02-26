@@ -48,7 +48,7 @@ pub fn run(
     let system_info = [
         ("OS", std::env::consts::OS),
         ("Arch", std::env::consts::ARCH),
-        ("Version", env!("CARGO_PKG_VERSION")),
+        ("Version", crate::version::version_long()),
     ];
 
     let url = if let Some(api_key) = option_env!("CLASH_HOTLINE_LINEAR_KEY") {
