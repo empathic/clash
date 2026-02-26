@@ -165,7 +165,7 @@ Matches network access by domain.
 
 ### Tool Matcher
 
-Matches agent tools by name. Applies to Claude Code tools that don't map to exec/fs/net (e.g. Skill, Task, AskUserQuestion, EnterPlanMode).
+Matches agent tools by name. Applies to Claude Code tools that don't map to exec/fs/net (e.g. Skill, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode). Interactive tools (AskUserQuestion, EnterPlanMode, ExitPlanMode) get passthrough treatment when allowed — Clash defers to Claude Code's native UI instead of auto-approving.
 
 ```
 (tool)                         ; match any agent tool

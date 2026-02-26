@@ -179,17 +179,16 @@ mod tests {
 
     #[test]
     fn extract_version_default() {
-        let ast = super::super::parse::parse("(default deny \"main\")\n(policy \"main\")\n")
-            .unwrap();
+        let ast =
+            super::super::parse::parse("(default deny \"main\")\n(policy \"main\")\n").unwrap();
         assert_eq!(extract_version(&ast).unwrap(), 1);
     }
 
     #[test]
     fn extract_version_explicit() {
-        let ast = super::super::parse::parse(
-            "(version 1)\n(default deny \"main\")\n(policy \"main\")\n",
-        )
-        .unwrap();
+        let ast =
+            super::super::parse::parse("(version 1)\n(default deny \"main\")\n(policy \"main\")\n")
+                .unwrap();
         assert_eq!(extract_version(&ast).unwrap(), 1);
     }
 

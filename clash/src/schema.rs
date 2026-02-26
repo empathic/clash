@@ -265,7 +265,7 @@ fn rule_syntax() -> RuleSyntax {
             SchemaField {
                 key: "tool",
                 type_name: "capability",
-                description: "Agent tool access: (tool [name-pattern]). Matches tools not covered by exec/fs/net (e.g. Skill, Task, AskUserQuestion, EnterPlanMode).",
+                description: "Agent tool access: (tool [name-pattern]). Matches tools not covered by exec/fs/net (e.g. Skill, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode).",
                 default: None,
                 values: None,
                 required: false,

@@ -176,6 +176,13 @@ fn is_deny_decision(output: &HookOutput) -> bool {
 /// Tools that require user interaction via Claude Code's native UI.
 /// Auto-approving these would skip the interaction, so non-deny
 /// decisions are converted to passthrough.
+///
+/// - `AskUserQuestion`: prompts the user for input
+/// - `EnterPlanMode`: requires user consent to enter plan mode
+/// - `ExitPlanMode`: requires user review/approval of the plan before implementation
 fn is_interactive_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "AskUserQuestion")
+    matches!(
+        tool_name,
+        "AskUserQuestion" | "EnterPlanMode" | "ExitPlanMode"
+    )
 }
