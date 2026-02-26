@@ -470,13 +470,15 @@ pub(crate) mod strategies {
         if depth == 0 {
             prop_oneof![
                 arb_identifier().prop_map(|s| PathFilter::Literal(format!("/tmp/{s}"))),
-                arb_path_expr().prop_map(PathFilter::Subpath),
+                (arb_path_expr(), proptest::bool::ANY)
+                    .prop_map(|(expr, wt)| PathFilter::Subpath(expr, wt)),
             ]
             .boxed()
         } else {
             prop_oneof![
                 3 => arb_identifier().prop_map(|s| PathFilter::Literal(format!("/tmp/{s}"))),
-                2 => arb_path_expr().prop_map(PathFilter::Subpath),
+                2 => (arb_path_expr(), proptest::bool::ANY)
+                    .prop_map(|(expr, wt)| PathFilter::Subpath(expr, wt)),
                 1 => prop::collection::vec(arb_path_filter_inner(depth - 1), 2..=3)
                     .prop_map(PathFilter::Or),
                 1 => arb_path_filter_inner(depth - 1)
@@ -515,7 +517,8 @@ pub(crate) mod strategies {
     }
 
     fn arb_net_matcher() -> impl Strategy<Value = NetMatcher> {
-        arb_pattern().prop_map(|domain| NetMatcher { domain })
+        (arb_pattern(), proptest::option::of(arb_path_filter()))
+            .prop_map(|(domain, path)| NetMatcher { domain, path })
     }
 
     fn arb_tool_matcher() -> impl Strategy<Value = ToolMatcher> {
