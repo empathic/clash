@@ -6,7 +6,7 @@ use crate::sandbox_cmd::SandboxCmd;
 
 #[derive(Parser, Debug)]
 #[command(name = "clash")]
-#[command(version)]
+#[command(version = crate::version::version_long())]
 #[command(about = "Command line agent safety harness")]
 pub struct Cli {
     #[arg(short, long, global = true)]

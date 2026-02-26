@@ -49,4 +49,5 @@ pub mod shell;
 pub mod shell_complete;
 pub mod style;
 pub mod tracing_init;
+pub mod version;
 pub mod wizard;
