@@ -26,7 +26,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputResult {
     // Clear status message on any keypress (except in text-input modes)
     if matches!(
         app.mode,
-        Mode::Normal | Mode::Confirm(_) | Mode::SelectEffect(_)
+        Mode::Normal | Mode::Confirm(_) | Mode::ConfirmSave(_) | Mode::SelectEffect(_)
     ) {
         app.status_message = None;
     }
@@ -34,6 +34,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputResult {
     match &app.mode {
         Mode::Normal => handle_normal(app, key),
         Mode::Confirm(_) => handle_confirm(app, key),
+        Mode::ConfirmSave(_) => handle_confirm_save(app, key),
         Mode::AddRule(_) => handle_add_rule(app, key),
         Mode::EditRule(_) => handle_edit_rule(app, key),
         Mode::SelectEffect(_) => handle_select_effect(app, key),
@@ -142,6 +143,38 @@ fn handle_confirm(app: &mut App, key: KeyEvent) -> InputResult {
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
             app.mode = Mode::Normal;
             app.status_message = None;
+            InputResult::Continue
+        }
+        _ => InputResult::Continue,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Confirm save mode
+// ---------------------------------------------------------------------------
+
+fn handle_confirm_save(app: &mut App, key: KeyEvent) -> InputResult {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            app.mode = Mode::Normal;
+            app.confirm_save();
+            InputResult::Continue
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            app.mode = Mode::Normal;
+            app.status_message = None;
+            InputResult::Continue
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Mode::ConfirmSave(diff) = &mut app.mode {
+                diff.scroll = diff.scroll.saturating_add(1);
+            }
+            InputResult::Continue
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Mode::ConfirmSave(diff) = &mut app.mode {
+                diff.scroll = diff.scroll.saturating_sub(1);
+            }
             InputResult::Continue
         }
         _ => InputResult::Continue,

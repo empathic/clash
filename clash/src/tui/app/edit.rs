@@ -2,6 +2,8 @@
 
 use std::fs;
 
+use similar::TextDiff;
+
 use crate::policy::Effect;
 use crate::policy::ast::{
     CapMatcher, ExecMatcher, FsMatcher, FsOp, NetMatcher, OpPattern, PathFilter, Pattern,
@@ -16,8 +18,8 @@ use super::super::editor::TextInput;
 use super::super::input::InputResult;
 use super::super::tree::TreeNodeKind;
 use super::{
-    AddRuleForm, AddRuleStep, App, EditRuleState, Mode, RuleTarget, SandboxMutation,
-    SelectEffectState, StatusMessage,
+    AddRuleForm, AddRuleStep, App, DiffHunk, DiffLine, EditRuleState, Mode, RuleTarget,
+    SandboxMutation, SaveDiff, SelectEffectState, StatusMessage,
 };
 
 // -----------------------------------------------------------------------
@@ -382,25 +384,55 @@ impl App {
     // Save / Quit
     // -------------------------------------------------------------------
 
-    /// Save all modified levels to disk.
+    /// Compute diffs and enter ConfirmSave mode, or report no changes.
     pub fn save_all(&mut self) {
         if !self.has_unsaved_changes() {
             self.set_status("No changes to save", false);
             return;
         }
 
+        // Validate all modified levels before showing the diff
+        for ls in &self.levels {
+            if !ls.is_modified() {
+                continue;
+            }
+            if let Err(e) = compile_policy(&ls.source) {
+                self.set_status(&format!("Validation failed for {}: {e}", ls.level), true);
+                return;
+            }
+        }
+
+        // Compute diffs
+        let mut hunks = Vec::new();
+        for ls in &self.levels {
+            if !ls.is_modified() {
+                continue;
+            }
+            let diff = TextDiff::from_lines(&ls.original_source, &ls.source);
+            let mut lines = Vec::new();
+            for change in diff.iter_all_changes() {
+                let text = change.to_string_lossy().trim_end().to_string();
+                match change.tag() {
+                    similar::ChangeTag::Equal => lines.push(DiffLine::Context(text)),
+                    similar::ChangeTag::Insert => lines.push(DiffLine::Added(text)),
+                    similar::ChangeTag::Delete => lines.push(DiffLine::Removed(text)),
+                }
+            }
+            hunks.push(DiffHunk {
+                level: ls.level,
+                lines,
+            });
+        }
+
+        self.mode = Mode::ConfirmSave(SaveDiff { hunks, scroll: 0 });
+    }
+
+    /// Actually write all modified levels to disk (called after user confirms).
+    pub fn confirm_save(&mut self) {
         let mut saved = 0;
         for ls in &mut self.levels {
             if !ls.is_modified() {
                 continue;
-            }
-            // Validate before writing
-            if let Err(e) = compile_policy(&ls.source) {
-                self.status_message = Some(StatusMessage {
-                    text: format!("Validation failed for {}: {e}", ls.level),
-                    is_error: true,
-                });
-                return;
             }
             if let Some(parent) = ls.path.parent()
                 && let Err(e) = fs::create_dir_all(parent)
