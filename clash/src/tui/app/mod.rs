@@ -5,6 +5,7 @@ mod search;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, MouseEvent, MouseEventKind};
@@ -196,7 +197,14 @@ impl EditHistory {
 pub struct StatusMessage {
     pub text: String,
     pub is_error: bool,
+    pub created_at: Instant,
 }
+
+/// How long status messages remain visible before auto-clearing.
+const STATUS_MESSAGE_TTL: Duration = Duration::from_secs(3);
+
+/// Tick interval for background housekeeping (status message expiry).
+const TICK_INTERVAL: Duration = Duration::from_millis(250);
 
 // ---------------------------------------------------------------------------
 // Search state
@@ -743,33 +751,45 @@ impl App {
                 render::render(f, self);
             })?;
 
-            let ev = event::read()?;
-            match ev {
-                Event::Key(key) => match input::handle_key(self, key) {
-                    InputResult::Continue => {}
-                    InputResult::Quit => break,
-                },
-                Event::Mouse(MouseEvent {
-                    kind: MouseEventKind::ScrollUp,
-                    ..
-                }) => self.tree.move_cursor_up(),
-                Event::Mouse(MouseEvent {
-                    kind: MouseEventKind::ScrollDown,
-                    ..
-                }) => self.tree.move_cursor_down(),
-                Event::Mouse(MouseEvent {
-                    kind: MouseEventKind::Down(_),
-                    row,
-                    ..
-                }) => {
-                    if matches!(self.mode, Mode::Normal) {
-                        self.tree.handle_mouse_click(row);
+            if event::poll(TICK_INTERVAL)? {
+                match event::read()? {
+                    Event::Key(key) => match input::handle_key(self, key) {
+                        InputResult::Continue => {}
+                        InputResult::Quit => break,
+                    },
+                    Event::Mouse(MouseEvent {
+                        kind: MouseEventKind::ScrollUp,
+                        ..
+                    }) => self.tree.move_cursor_up(),
+                    Event::Mouse(MouseEvent {
+                        kind: MouseEventKind::ScrollDown,
+                        ..
+                    }) => self.tree.move_cursor_down(),
+                    Event::Mouse(MouseEvent {
+                        kind: MouseEventKind::Down(_),
+                        row,
+                        ..
+                    }) => {
+                        if matches!(self.mode, Mode::Normal) {
+                            self.tree.handle_mouse_click(row);
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
+            } else {
+                self.tick();
             }
         }
         Ok(())
+    }
+
+    /// Background tick: expire stale status messages.
+    fn tick(&mut self) {
+        if let Some(status) = &self.status_message
+            && status.created_at.elapsed() >= STATUS_MESSAGE_TTL
+        {
+            self.status_message = None;
+        }
     }
 }
 

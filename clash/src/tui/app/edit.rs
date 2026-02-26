@@ -97,6 +97,7 @@ impl App {
         self.status_message = Some(StatusMessage {
             text: text.to_string(),
             is_error,
+            created_at: std::time::Instant::now(),
         });
     }
 
@@ -441,6 +442,7 @@ impl App {
                 self.status_message = Some(StatusMessage {
                     text: format!("Failed to create directory: {e}"),
                     is_error: true,
+                    created_at: std::time::Instant::now(),
                 });
                 return;
             }
@@ -448,6 +450,7 @@ impl App {
                 self.status_message = Some(StatusMessage {
                     text: format!("Failed to write {}: {e}", ls.path.display()),
                     is_error: true,
+                    created_at: std::time::Instant::now(),
                 });
                 return;
             }
