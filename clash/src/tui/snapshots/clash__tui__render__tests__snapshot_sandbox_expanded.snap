@@ -22,7 +22,7 @@ expression: output
 │                                                                              │
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │Binary: "ls"                                                                  │
+│1 rule: 1 ask                                                                 │
 │"ls"                                                                          │
-│                                                                              │
 │                                                                              │
 j/k move  h collapse  z/Z fold  d delete  [/] all  a add  / search  w save  ? he
