@@ -143,7 +143,7 @@ impl App {
         let Some(row) = self.tree.flat_rows.get(self.tree.cursor) else {
             return;
         };
-        match &row.kind {
+        match &self.tree.arena[row.node_id].kind {
             TreeNodeKind::Leaf {
                 effect,
                 rule,
@@ -249,7 +249,7 @@ impl App {
         let Some(row) = self.tree.flat_rows.get(self.tree.cursor) else {
             return;
         };
-        match &row.kind {
+        match &self.tree.arena[row.node_id].kind {
             TreeNodeKind::Leaf {
                 rule,
                 level,
@@ -571,7 +571,7 @@ impl App {
             Ok(()) => {
                 if !self.cursor_to_rule(&rule_text, level, &policy_name) {
                     let fallback = self.tree.flat_rows.iter().position(|row| {
-                        matches!(&row.kind, TreeNodeKind::Leaf { rule: r, .. } if r.to_string() == rule_text)
+                        matches!(&self.tree.arena[row.node_id].kind, TreeNodeKind::Leaf { rule: r, .. } if r.to_string() == rule_text)
                     });
                     if let Some(idx) = fallback {
                         self.tree.cursor = idx;
@@ -599,7 +599,7 @@ impl App {
         let Some(row) = self.tree.flat_rows.get(self.tree.cursor) else {
             return;
         };
-        match &row.kind {
+        match &self.tree.arena[row.node_id].kind {
             TreeNodeKind::Leaf {
                 rule,
                 level,

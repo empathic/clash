@@ -1,6 +1,11 @@
 //! Policy tree: build a visual tree from AST rules, flatten for rendering.
+//!
+//! Nodes are stored in a `TreeArena` (flat `Vec<TreeNode>` indexed by `NodeId`).
+//! `FlatRow` carries a `NodeId` instead of cloning the `TreeNodeKind`, so
+//! navigation is a cheap index lookup rather than a path traversal.
 
 use std::fmt;
+use std::ops::{Index, IndexMut};
 
 use crate::policy::Effect;
 use crate::policy::ast::*;
@@ -76,40 +81,93 @@ impl fmt::Display for DomainKind {
 }
 
 // ---------------------------------------------------------------------------
-// Tree node
+// NodeId and TreeArena
 // ---------------------------------------------------------------------------
 
-/// A node in the policy tree.
+/// Index into a `TreeArena`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NodeId(usize);
+
+impl NodeId {
+    /// Create a dummy NodeId for use in tests where the arena is not used.
+    #[cfg(test)]
+    pub fn dummy() -> Self {
+        NodeId(0)
+    }
+}
+
+/// A node stored in the arena.
 #[derive(Debug, Clone)]
 pub struct TreeNode {
     pub kind: TreeNodeKind,
-    pub children: Vec<TreeNode>,
+    pub children: Vec<NodeId>,
+    pub parent: Option<NodeId>,
     pub expanded: bool,
 }
 
-impl TreeNode {
-    fn new(kind: TreeNodeKind) -> Self {
+/// Arena holding all tree nodes, plus the root set.
+#[derive(Debug, Clone)]
+pub struct TreeArena {
+    nodes: Vec<TreeNode>,
+    pub root_ids: Vec<NodeId>,
+}
+
+impl TreeArena {
+    fn new() -> Self {
         Self {
+            nodes: Vec::new(),
+            root_ids: Vec::new(),
+        }
+    }
+
+    /// Allocate a new node, returning its ID.
+    fn alloc(&mut self, kind: TreeNodeKind, parent: Option<NodeId>) -> NodeId {
+        let id = NodeId(self.nodes.len());
+        self.nodes.push(TreeNode {
             kind,
             children: Vec::new(),
+            parent,
             expanded: true,
-        }
+        });
+        id
     }
 
-    /// Count all leaf rules under this node (recursive).
-    /// SandboxLeaf nodes are not counted (they are sub-rules, not top-level).
-    pub fn rule_count(&self) -> usize {
-        match &self.kind {
+    pub fn is_empty(&self) -> bool {
+        self.root_ids.is_empty()
+    }
+
+    /// Iterate over root nodes.
+    pub fn roots(&self) -> impl Iterator<Item = (NodeId, &TreeNode)> {
+        self.root_ids.iter().map(|&id| (id, &self.nodes[id.0]))
+    }
+
+    /// Get a node by ID.
+    pub fn get(&self, id: NodeId) -> &TreeNode {
+        &self.nodes[id.0]
+    }
+
+    /// Get a mutable node by ID.
+    pub fn get_mut(&mut self, id: NodeId) -> &mut TreeNode {
+        &mut self.nodes[id.0]
+    }
+
+    /// Count all leaf rules under a node (recursive).
+    pub fn rule_count(&self, id: NodeId) -> usize {
+        let node = &self[id];
+        match &node.kind {
             TreeNodeKind::Leaf { .. } => 1,
             TreeNodeKind::SandboxLeaf { .. } => 0,
-            _ => self.children.iter().map(|c| c.rule_count()).sum(),
+            _ => {
+                let children: Vec<NodeId> = node.children.clone();
+                children.iter().map(|&c| self.rule_count(c)).sum()
+            }
         }
     }
 
-    /// Count leaf effects: (allow, deny, ask).
-    /// SandboxLeaf nodes are not counted.
-    pub fn effect_counts(&self) -> (usize, usize, usize) {
-        match &self.kind {
+    /// Count leaf effects under a node: (allow, deny, ask).
+    pub fn effect_counts(&self, id: NodeId) -> (usize, usize, usize) {
+        let node = &self[id];
+        match &node.kind {
             TreeNodeKind::Leaf { effect, .. } => match effect {
                 Effect::Allow => (1, 0, 0),
                 Effect::Deny => (0, 1, 0),
@@ -117,9 +175,10 @@ impl TreeNode {
             },
             TreeNodeKind::SandboxLeaf { .. } => (0, 0, 0),
             _ => {
+                let children: Vec<NodeId> = node.children.clone();
                 let (mut a, mut d, mut k) = (0, 0, 0);
-                for child in &self.children {
-                    let (ca, cd, ck) = child.effect_counts();
+                for &c in &children {
+                    let (ca, cd, ck) = self.effect_counts(c);
                     a += ca;
                     d += cd;
                     k += ck;
@@ -127,6 +186,58 @@ impl TreeNode {
                 (a, d, k)
             }
         }
+    }
+
+    /// Collect the ancestor chain from root to the given node (inclusive).
+    pub fn ancestors(&self, id: NodeId) -> Vec<NodeId> {
+        let mut chain = Vec::new();
+        let mut cur = id;
+        loop {
+            chain.push(cur);
+            match self[cur].parent {
+                Some(p) => cur = p,
+                None => break,
+            }
+        }
+        chain.reverse();
+        chain
+    }
+
+    /// Walk all nodes in the arena, calling `f` on each.
+    pub fn for_each_mut(&mut self, mut f: impl FnMut(&mut TreeNode)) {
+        for node in &mut self.nodes {
+            f(node);
+        }
+    }
+
+    /// Walk all descendants of a node (not including the node itself).
+    fn walk(&self, id: NodeId, f: &mut impl FnMut(NodeId, &TreeNode)) {
+        let children: Vec<NodeId> = self[id].children.clone();
+        for cid in children {
+            f(cid, &self[cid]);
+            self.walk(cid, f);
+        }
+    }
+
+    /// Walk all nodes in the entire arena.
+    fn walk_all(&self, f: &mut impl FnMut(NodeId, &TreeNode)) {
+        for &rid in &self.root_ids {
+            f(rid, &self[rid]);
+            self.walk(rid, f);
+        }
+    }
+}
+
+impl Index<NodeId> for TreeArena {
+    type Output = TreeNode;
+    fn index(&self, id: NodeId) -> &TreeNode {
+        &self.nodes[id.0]
+    }
+}
+
+impl IndexMut<NodeId> for TreeArena {
+    fn index_mut(&mut self, id: NodeId) -> &mut TreeNode {
+        &mut self.nodes[id.0]
     }
 }
 
@@ -137,14 +248,56 @@ impl TreeNode {
 /// A flattened row ready for terminal rendering.
 #[derive(Debug, Clone)]
 pub struct FlatRow {
-    pub kind: TreeNodeKind,
+    /// The arena node this row represents.
+    pub node_id: NodeId,
     pub depth: usize,
     pub expanded: bool,
     pub has_children: bool,
-    /// Path of child indices from root to this node.
-    pub tree_path: Vec<usize>,
     /// For drawing tree connector lines: true = draw vertical line at this depth.
     pub connectors: Vec<bool>,
+}
+
+// ---------------------------------------------------------------------------
+// Build node (private, used only during tree construction)
+// ---------------------------------------------------------------------------
+
+/// Temporary tree structure used during building. Converted to arena afterwards.
+#[derive(Debug, Clone)]
+struct BuildNode {
+    kind: TreeNodeKind,
+    children: Vec<BuildNode>,
+    expanded: bool,
+}
+
+impl BuildNode {
+    fn new(kind: TreeNodeKind) -> Self {
+        Self {
+            kind,
+            children: Vec::new(),
+            expanded: true,
+        }
+    }
+}
+
+/// Convert a list of BuildNodes into the arena, returning their NodeIds.
+fn insert_build_nodes(
+    arena: &mut TreeArena,
+    nodes: Vec<BuildNode>,
+    parent: Option<NodeId>,
+) -> Vec<NodeId> {
+    let mut ids = Vec::with_capacity(nodes.len());
+    for bn in nodes {
+        let id = arena.alloc(bn.kind, parent);
+        arena[id].expanded = bn.expanded;
+        if let Some(p) = parent {
+            arena[p].children.push(id);
+        }
+        let child_ids = insert_build_nodes(arena, bn.children, Some(id));
+        // children were already pushed during insert_build_nodes via arena[p].children.push
+        let _ = child_ids;
+        ids.push(id);
+    }
+    ids
 }
 
 // ---------------------------------------------------------------------------
@@ -204,8 +357,8 @@ fn cartesian(sets: &[Vec<String>]) -> Vec<Vec<String>> {
     result
 }
 
-/// Build the full visual tree from loaded policies.
-pub fn build_tree(policies: &[LoadedPolicy]) -> Vec<TreeNode> {
+/// Build the full visual tree from loaded policies, returning an arena.
+pub fn build_tree(policies: &[LoadedPolicy]) -> TreeArena {
     let mut all_rules: Vec<ProvenanceRule> = Vec::new();
 
     for loaded in policies {
@@ -242,7 +395,7 @@ pub fn build_tree(policies: &[LoadedPolicy]) -> Vec<TreeNode> {
         }
     }
 
-    let mut roots = Vec::new();
+    let mut roots: Vec<BuildNode> = Vec::new();
 
     roots.extend(build_exec_tree(exec_rules));
 
@@ -252,23 +405,26 @@ pub fn build_tree(policies: &[LoadedPolicy]) -> Vec<TreeNode> {
     wildcard_children.extend(build_net_tree(net_rules, &regular_leaf));
     wildcard_children.extend(build_tool_tree(tool_rules, &regular_leaf));
     if !wildcard_children.is_empty() {
-        let mut wildcard = TreeNode::new(TreeNodeKind::Binary("*".to_string()));
+        let mut wildcard = BuildNode::new(TreeNodeKind::Binary("*".to_string()));
         wildcard.children = wildcard_children;
         roots.push(wildcard);
     }
 
-    // Merge top-level nodes that share a key (e.g. same binary from different policies,
-    // or exec rules for "*" merging with the wildcard node above)
+    // Merge top-level nodes that share a key
     merge_nodes(&mut roots);
 
-    roots
+    // Convert BuildNode tree into arena
+    let mut arena = TreeArena::new();
+    let root_ids = insert_build_nodes(&mut arena, roots, None);
+    arena.root_ids = root_ids;
+    arena
 }
 
 // ---------------------------------------------------------------------------
 // Exec tree: trie on (bin, args...)
 // ---------------------------------------------------------------------------
 
-fn build_exec_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
+fn build_exec_tree(rules: Vec<ProvenanceRule>) -> Vec<BuildNode> {
     // Group by binary pattern, expanding Or into individual alternatives
     let mut by_bin: Vec<(String, Vec<ProvenanceRule>)> = Vec::new();
 
@@ -289,7 +445,7 @@ fn build_exec_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
     by_bin
         .into_iter()
         .map(|(bin_text, rules)| {
-            let mut bin_node = TreeNode::new(TreeNodeKind::Binary(bin_text));
+            let mut bin_node = BuildNode::new(TreeNodeKind::Binary(bin_text));
             bin_node.children = build_exec_args_tree(rules);
             bin_node
         })
@@ -297,8 +453,8 @@ fn build_exec_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
 }
 
 /// Build a regular Leaf node from a ProvenanceRule.
-fn regular_leaf(pr: &ProvenanceRule) -> TreeNode {
-    TreeNode::new(TreeNodeKind::Leaf {
+fn regular_leaf(pr: &ProvenanceRule) -> BuildNode {
+    BuildNode::new(TreeNodeKind::Leaf {
         effect: pr.rule.effect,
         rule: pr.rule.clone(),
         level: pr.level,
@@ -308,10 +464,8 @@ fn regular_leaf(pr: &ProvenanceRule) -> TreeNode {
 }
 
 /// Append sandbox children to a Leaf node based on the rule's sandbox field.
-/// Inline sandbox rules are decomposed into proper sub-trees reusing the
-/// domain-specific tree builders.
 fn append_sandbox_children(
-    leaf: &mut TreeNode,
+    leaf: &mut BuildNode,
     parent_rule: &Rule,
     level: PolicyLevel,
     policy: &str,
@@ -320,7 +474,7 @@ fn append_sandbox_children(
     match sandbox {
         Some(SandboxRef::Inline(rules)) => {
             let make_leaf = |pr: &ProvenanceRule| {
-                TreeNode::new(TreeNodeKind::SandboxLeaf {
+                BuildNode::new(TreeNodeKind::SandboxLeaf {
                     effect: pr.rule.effect,
                     sandbox_rule: pr.rule.clone(),
                     parent_rule: parent_rule.clone(),
@@ -344,7 +498,7 @@ fn append_sandbox_children(
                     CapMatcher::Exec(_) => {} // exec-in-sandbox not expected
                 }
             }
-            let mut group = TreeNode::new(TreeNodeKind::SandboxGroup);
+            let mut group = BuildNode::new(TreeNodeKind::SandboxGroup);
             group.children.extend(build_fs_tree(fs_rules, &make_leaf));
             group.children.extend(build_net_tree(net_rules, &make_leaf));
             group
@@ -356,13 +510,13 @@ fn append_sandbox_children(
         }
         Some(SandboxRef::Named(name)) => {
             leaf.children
-                .push(TreeNode::new(TreeNodeKind::SandboxName(name.clone())));
+                .push(BuildNode::new(TreeNodeKind::SandboxName(name.clone())));
         }
         None => {}
     }
 }
 
-fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
+fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<BuildNode> {
     let mut children = Vec::new();
 
     for pr in rules {
@@ -372,7 +526,7 @@ fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
         };
 
         if args.is_empty() && has_args.is_empty() {
-            let mut leaf = TreeNode::new(TreeNodeKind::Leaf {
+            let mut leaf = BuildNode::new(TreeNodeKind::Leaf {
                 effect: pr.rule.effect,
                 rule: pr.rule.clone(),
                 level: pr.level,
@@ -386,7 +540,7 @@ fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
                 &pr.policy_name,
                 &pr.rule.sandbox,
             );
-            let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Exec));
+            let mut domain = BuildNode::new(TreeNodeKind::Domain(DomainKind::Exec));
             domain.children.push(leaf);
             children.push(domain);
             continue;
@@ -400,7 +554,7 @@ fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
 
         for arg_combo in &arg_combos {
             for has_combo in &has_combos {
-                let mut leaf = TreeNode::new(TreeNodeKind::Leaf {
+                let mut leaf = BuildNode::new(TreeNodeKind::Leaf {
                     effect: pr.rule.effect,
                     rule: pr.rule.clone(),
                     level: pr.level,
@@ -414,17 +568,17 @@ fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
                     &pr.policy_name,
                     &pr.rule.sandbox,
                 );
-                let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Exec));
+                let mut domain = BuildNode::new(TreeNodeKind::Domain(DomainKind::Exec));
                 domain.children.push(leaf);
 
-                let mut chain_nodes: Vec<TreeNode> = Vec::new();
+                let mut chain_nodes: Vec<BuildNode> = Vec::new();
                 for text in arg_combo {
-                    chain_nodes.push(TreeNode::new(TreeNodeKind::Arg(text.clone())));
+                    chain_nodes.push(BuildNode::new(TreeNodeKind::Arg(text.clone())));
                 }
                 if !has_combo.is_empty() {
-                    chain_nodes.push(TreeNode::new(TreeNodeKind::HasMarker));
+                    chain_nodes.push(BuildNode::new(TreeNodeKind::HasMarker));
                     for text in has_combo {
-                        chain_nodes.push(TreeNode::new(TreeNodeKind::HasArg(text.clone())));
+                        chain_nodes.push(BuildNode::new(TreeNodeKind::HasArg(text.clone())));
                     }
                 }
 
@@ -443,12 +597,12 @@ fn build_exec_args_tree(rules: Vec<ProvenanceRule>) -> Vec<TreeNode> {
 }
 
 /// Merge nodes with the same kind by combining their children.
-fn merge_nodes(nodes: &mut Vec<TreeNode>) {
+fn merge_nodes(nodes: &mut Vec<BuildNode>) {
     if nodes.len() <= 1 {
         return;
     }
 
-    let mut merged: Vec<TreeNode> = Vec::new();
+    let mut merged: Vec<BuildNode> = Vec::new();
 
     for node in nodes.drain(..) {
         let key = node_key(&node.kind);
@@ -494,8 +648,8 @@ fn node_key(kind: &TreeNodeKind) -> String {
 
 fn build_fs_tree(
     rules: Vec<ProvenanceRule>,
-    make_leaf: &dyn Fn(&ProvenanceRule) -> TreeNode,
-) -> Vec<TreeNode> {
+    make_leaf: &dyn Fn(&ProvenanceRule) -> BuildNode,
+) -> Vec<BuildNode> {
     let mut children = Vec::new();
 
     for pr in rules {
@@ -506,16 +660,16 @@ fn build_fs_tree(
 
         for op in &ops {
             let leaf = make_leaf(&pr);
-            let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Filesystem));
+            let mut domain = BuildNode::new(TreeNodeKind::Domain(DomainKind::Filesystem));
             domain.children.push(leaf);
 
             if let Some(path_texts) = &paths {
                 for path_text in path_texts {
-                    let mut path_node = TreeNode::new(TreeNodeKind::PathNode(path_text.clone()));
+                    let mut path_node = BuildNode::new(TreeNodeKind::PathNode(path_text.clone()));
                     if op == "*" {
                         path_node.children.push(domain.clone());
                     } else {
-                        let mut op_node = TreeNode::new(TreeNodeKind::FsOp(op.clone()));
+                        let mut op_node = BuildNode::new(TreeNodeKind::FsOp(op.clone()));
                         op_node.children.push(domain.clone());
                         path_node.children.push(op_node);
                     }
@@ -524,7 +678,7 @@ fn build_fs_tree(
             } else if op == "*" {
                 children.push(domain);
             } else {
-                let mut op_node = TreeNode::new(TreeNodeKind::FsOp(op.clone()));
+                let mut op_node = BuildNode::new(TreeNodeKind::FsOp(op.clone()));
                 op_node.children.push(domain);
                 children.push(op_node);
             }
@@ -541,8 +695,8 @@ fn build_fs_tree(
 
 fn build_net_tree(
     rules: Vec<ProvenanceRule>,
-    make_leaf: &dyn Fn(&ProvenanceRule) -> TreeNode,
-) -> Vec<TreeNode> {
+    make_leaf: &dyn Fn(&ProvenanceRule) -> BuildNode,
+) -> Vec<BuildNode> {
     let mut children = Vec::new();
 
     for pr in rules {
@@ -553,13 +707,13 @@ fn build_net_tree(
 
         for domain_text in domain_texts {
             let leaf = make_leaf(&pr);
-            let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Network));
+            let mut domain = BuildNode::new(TreeNodeKind::Domain(DomainKind::Network));
             domain.children.push(leaf);
 
             if domain_text == "*" {
                 children.push(domain);
             } else {
-                let mut domain_node = TreeNode::new(TreeNodeKind::NetDomain(domain_text));
+                let mut domain_node = BuildNode::new(TreeNodeKind::NetDomain(domain_text));
                 domain_node.children.push(domain);
                 children.push(domain_node);
             }
@@ -576,8 +730,8 @@ fn build_net_tree(
 
 fn build_tool_tree(
     rules: Vec<ProvenanceRule>,
-    make_leaf: &dyn Fn(&ProvenanceRule) -> TreeNode,
-) -> Vec<TreeNode> {
+    make_leaf: &dyn Fn(&ProvenanceRule) -> BuildNode,
+) -> Vec<BuildNode> {
     let mut children = Vec::new();
 
     for pr in rules {
@@ -588,13 +742,13 @@ fn build_tool_tree(
 
         for name_text in name_texts {
             let leaf = make_leaf(&pr);
-            let mut domain = TreeNode::new(TreeNodeKind::Domain(DomainKind::Tool));
+            let mut domain = BuildNode::new(TreeNodeKind::Domain(DomainKind::Tool));
             domain.children.push(leaf);
 
             if name_text == "*" {
                 children.push(domain);
             } else {
-                let mut name_node = TreeNode::new(TreeNodeKind::ToolName(name_text));
+                let mut name_node = BuildNode::new(TreeNodeKind::ToolName(name_text));
                 name_node.children.push(domain);
                 children.push(name_node);
             }
@@ -634,35 +788,21 @@ pub fn node_search_text(kind: &TreeNodeKind) -> String {
     }
 }
 
-/// Search the full tree for nodes matching a query (case-insensitive),
-/// regardless of collapsed state. Returns tree paths of all matching nodes.
-pub fn search_tree(roots: &[TreeNode], query: &str) -> Vec<Vec<usize>> {
+/// Search the full arena for nodes matching a query (case-insensitive),
+/// regardless of collapsed state. Returns NodeIds of all matching nodes.
+pub fn search_tree(arena: &TreeArena, query: &str) -> Vec<NodeId> {
     let query_lower = query.to_lowercase();
     if query_lower.is_empty() {
         return Vec::new();
     }
     let mut matches = Vec::new();
-    for (i, root) in roots.iter().enumerate() {
-        search_node(root, &query_lower, &mut vec![i], &mut matches);
-    }
+    arena.walk_all(&mut |id, node| {
+        let text = node_search_text(&node.kind);
+        if text.to_lowercase().contains(&query_lower) {
+            matches.push(id);
+        }
+    });
     matches
-}
-
-fn search_node(
-    node: &TreeNode,
-    query_lower: &str,
-    path: &mut Vec<usize>,
-    matches: &mut Vec<Vec<usize>>,
-) {
-    let text = node_search_text(&node.kind);
-    if text.to_lowercase().contains(query_lower) {
-        matches.push(path.clone());
-    }
-    for (i, child) in node.children.iter().enumerate() {
-        path.push(i);
-        search_node(child, query_lower, path, matches);
-        path.pop();
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -670,28 +810,27 @@ fn search_node(
 // ---------------------------------------------------------------------------
 
 /// Flatten the tree into rows for rendering, respecting collapsed state.
-pub fn flatten(roots: &[TreeNode]) -> Vec<FlatRow> {
+pub fn flatten(arena: &TreeArena) -> Vec<FlatRow> {
     let mut rows = Vec::new();
-    for (i, root) in roots.iter().enumerate() {
-        let is_last = i == roots.len() - 1;
-        flatten_node(root, 0, &mut [], &mut vec![i], is_last, &mut rows);
+    let root_count = arena.root_ids.len();
+    for (i, &root_id) in arena.root_ids.iter().enumerate() {
+        let is_last = i == root_count - 1;
+        flatten_node(arena, root_id, 0, &mut [], is_last, &mut rows);
     }
     rows
 }
 
 fn flatten_node(
-    node: &TreeNode,
+    arena: &TreeArena,
+    node_id: NodeId,
     depth: usize,
     parent_connectors: &mut [bool],
-    tree_path: &mut Vec<usize>,
     is_last_sibling: bool,
     out: &mut Vec<FlatRow>,
 ) {
+    let node = &arena[node_id];
     let mut connectors = parent_connectors.to_owned();
     if depth > 0 {
-        // The connector at (depth-1) indicates whether we should draw a vertical
-        // line continuing down from the parent. We draw it if there are more
-        // siblings after this one.
         if connectors.len() >= depth {
             connectors[depth - 1] = !is_last_sibling;
         } else {
@@ -700,46 +839,21 @@ fn flatten_node(
     }
 
     out.push(FlatRow {
-        kind: node.kind.clone(),
+        node_id,
         depth,
         expanded: node.expanded,
         has_children: !node.children.is_empty(),
-        tree_path: tree_path.clone(),
         connectors: connectors.clone(),
     });
 
     if node.expanded {
-        for (i, child) in node.children.iter().enumerate() {
-            let is_last = i == node.children.len() - 1;
-            tree_path.push(i);
-            flatten_node(child, depth + 1, &mut connectors, tree_path, is_last, out);
-            tree_path.pop();
+        let children: Vec<NodeId> = node.children.clone();
+        let child_count = children.len();
+        for (i, child_id) in children.into_iter().enumerate() {
+            let is_last = i == child_count - 1;
+            flatten_node(arena, child_id, depth + 1, &mut connectors, is_last, out);
         }
     }
-}
-
-/// Look up a node in the tree by its path.
-pub fn node_at_path<'a>(roots: &'a [TreeNode], path: &[usize]) -> Option<&'a TreeNode> {
-    if path.is_empty() {
-        return None;
-    }
-    let mut current = roots.get(path[0])?;
-    for &idx in &path[1..] {
-        current = current.children.get(idx)?;
-    }
-    Some(current)
-}
-
-/// Look up a mutable node in the tree by its path.
-pub fn node_at_path_mut<'a>(roots: &'a mut [TreeNode], path: &[usize]) -> Option<&'a mut TreeNode> {
-    if path.is_empty() {
-        return None;
-    }
-    let mut current = roots.get_mut(path[0])?;
-    for &idx in &path[1..] {
-        current = current.children.get_mut(idx)?;
-    }
-    Some(current)
 }
 
 #[cfg(test)]
@@ -759,39 +873,42 @@ mod tests {
 
     #[test]
     fn build_tree_empty() {
-        let roots = build_tree(&[]);
-        assert!(roots.is_empty());
+        let arena = build_tree(&[]);
+        assert!(arena.root_ids.is_empty());
     }
 
     #[test]
     fn build_tree_empty_source() {
         let policy = test_policy(PolicyLevel::User, "");
-        let roots = build_tree(&[policy]);
-        assert!(roots.is_empty());
+        let arena = build_tree(&[policy]);
+        assert!(arena.root_ids.is_empty());
     }
 
     #[test]
     fn build_tree_single_exec() {
         let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
-        let roots = build_tree(&[policy]);
+        let arena = build_tree(&[policy]);
 
-        // Should have one root: Binary(r#""git""#) — Pattern::Literal Display includes quotes
-        assert_eq!(roots.len(), 1);
+        // Should have one root: Binary(r#""git""#)
+        assert_eq!(arena.root_ids.len(), 1);
+        let root = &arena[arena.root_ids[0]];
         assert!(
-            matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == r#""git""#),
+            matches!(&root.kind, TreeNodeKind::Binary(s) if s == r#""git""#),
             "root should be Binary(\"git\"), got {:?}",
-            roots[0].kind
+            root.kind
         );
 
         // Binary -> Domain(Exec) -> Leaf
-        assert_eq!(roots[0].children.len(), 1);
+        assert_eq!(root.children.len(), 1);
+        let domain = &arena[root.children[0]];
         assert!(matches!(
-            &roots[0].children[0].kind,
+            &domain.kind,
             TreeNodeKind::Domain(DomainKind::Exec)
         ));
-        assert_eq!(roots[0].children[0].children.len(), 1);
+        assert_eq!(domain.children.len(), 1);
+        let leaf = &arena[domain.children[0]];
         assert!(matches!(
-            &roots[0].children[0].children[0].kind,
+            &leaf.kind,
             TreeNodeKind::Leaf {
                 effect: Effect::Allow,
                 ..
@@ -805,30 +922,31 @@ mod tests {
             PolicyLevel::User,
             r#"(policy "main" (deny (exec "git" "push" *)))"#,
         );
-        let roots = build_tree(&[policy]);
+        let arena = build_tree(&[policy]);
 
-        assert_eq!(roots.len(), 1);
+        assert_eq!(arena.root_ids.len(), 1);
+        let root = &arena[arena.root_ids[0]];
         assert!(
-            matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == r#""git""#),
+            matches!(&root.kind, TreeNodeKind::Binary(s) if s == r#""git""#),
             "root should be Binary(\"git\"), got {:?}",
-            roots[0].kind
+            root.kind
         );
 
         // Binary -> Arg("push") -> Arg("*") -> Domain(Exec) -> Leaf
-        let child = &roots[0].children[0];
+        let child = &arena[root.children[0]];
         assert!(
             matches!(&child.kind, TreeNodeKind::Arg(s) if s == r#""push""#),
             "first child should be Arg(\"push\"), got {:?}",
             child.kind
         );
-        let child2 = &child.children[0];
+        let child2 = &arena[child.children[0]];
         assert!(matches!(&child2.kind, TreeNodeKind::Arg(s) if s == "*"));
-        let domain = &child2.children[0];
+        let domain = &arena[child2.children[0]];
         assert!(matches!(
             &domain.kind,
             TreeNodeKind::Domain(DomainKind::Exec)
         ));
-        let leaf = &domain.children[0];
+        let leaf = &arena[domain.children[0]];
         assert!(matches!(
             &leaf.kind,
             TreeNodeKind::Leaf {
@@ -844,20 +962,21 @@ mod tests {
             PolicyLevel::User,
             r#"(policy "main" (allow (fs read "/tmp")))"#,
         );
-        let roots = build_tree(&[policy]);
+        let arena = build_tree(&[policy]);
 
         // Fs rules go under a wildcard "*" binary node
-        assert_eq!(roots.len(), 1);
-        assert!(matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == "*"));
+        assert_eq!(arena.root_ids.len(), 1);
+        let root = &arena[arena.root_ids[0]];
+        assert!(matches!(&root.kind, TreeNodeKind::Binary(s) if s == "*"));
 
-        // Should contain a path node for "/tmp"
-        fn find_leaf(node: &TreeNode) -> bool {
-            if matches!(&node.kind, TreeNodeKind::Leaf { .. }) {
+        // Should contain a leaf somewhere
+        fn find_leaf(arena: &TreeArena, id: NodeId) -> bool {
+            if matches!(&arena[id].kind, TreeNodeKind::Leaf { .. }) {
                 return true;
             }
-            node.children.iter().any(find_leaf)
+            arena[id].children.iter().any(|&c| find_leaf(arena, c))
         }
-        assert!(find_leaf(&roots[0]));
+        assert!(find_leaf(&arena, arena.root_ids[0]));
     }
 
     #[test]
@@ -866,36 +985,36 @@ mod tests {
             PolicyLevel::User,
             r#"(policy "main" (allow (net "example.com")))"#,
         );
-        let roots = build_tree(&[policy]);
-        assert!(!roots.is_empty());
+        let arena = build_tree(&[policy]);
+        assert!(!arena.root_ids.is_empty());
 
         // Net goes under "*" binary
-        assert!(matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == "*"));
+        let root = &arena[arena.root_ids[0]];
+        assert!(matches!(&root.kind, TreeNodeKind::Binary(s) if s == "*"));
     }
 
     #[test]
     fn build_tree_tool_rule() {
         let policy = test_policy(PolicyLevel::User, r#"(policy "main" (ask (tool "Bash")))"#);
-        let roots = build_tree(&[policy]);
-        assert!(!roots.is_empty());
+        let arena = build_tree(&[policy]);
+        assert!(!arena.root_ids.is_empty());
 
-        assert!(matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == "*"));
+        let root = &arena[arena.root_ids[0]];
+        assert!(matches!(&root.kind, TreeNodeKind::Binary(s) if s == "*"));
     }
 
     #[test]
     fn build_tree_merge_wildcards() {
-        // An exec rule for * and an fs rule should merge under one Binary("*") node
         let policy = test_policy(
             PolicyLevel::User,
             r#"(policy "main" (allow (exec *)) (deny (fs read "/tmp")))"#,
         );
-        let roots = build_tree(&[policy]);
+        let arena = build_tree(&[policy]);
 
-        // Both should be under one "*" node
-        assert_eq!(roots.len(), 1);
-        assert!(matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == "*"));
-        // Should have at least 2 children (Domain(Exec) and something from fs)
-        assert!(roots[0].children.len() >= 2);
+        assert_eq!(arena.root_ids.len(), 1);
+        let root = &arena[arena.root_ids[0]];
+        assert!(matches!(&root.kind, TreeNodeKind::Binary(s) if s == "*"));
+        assert!(root.children.len() >= 2);
     }
 
     #[test]
@@ -905,29 +1024,32 @@ mod tests {
             PolicyLevel::Project,
             r#"(policy "main" (deny (exec "git")))"#,
         );
-        let roots = build_tree(&[user, project]);
+        let arena = build_tree(&[user, project]);
 
-        // Both rules are for "git", should merge under one Binary("git") node
-        assert_eq!(roots.len(), 1);
-        assert!(matches!(&roots[0].kind, TreeNodeKind::Binary(s) if s == r#""git""#));
+        assert_eq!(arena.root_ids.len(), 1);
+        let root = &arena[arena.root_ids[0]];
+        assert!(matches!(&root.kind, TreeNodeKind::Binary(s) if s == r#""git""#));
 
-        // Should have two leaves (one allow from User, one deny from Project)
-        fn count_leaves(node: &TreeNode) -> usize {
-            match &node.kind {
+        // Should have two leaves
+        fn count_leaves(arena: &TreeArena, id: NodeId) -> usize {
+            match &arena[id].kind {
                 TreeNodeKind::Leaf { .. } => 1,
-                _ => node.children.iter().map(count_leaves).sum(),
+                _ => arena[id]
+                    .children
+                    .iter()
+                    .map(|&c| count_leaves(arena, c))
+                    .sum(),
             }
         }
-        assert_eq!(count_leaves(&roots[0]), 2);
+        assert_eq!(count_leaves(&arena, arena.root_ids[0]), 2);
     }
 
     #[test]
     fn flatten_all_expanded() {
         let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
-        let roots = build_tree(&[policy]);
-        let rows = flatten(&roots);
+        let arena = build_tree(&[policy]);
+        let rows = flatten(&arena);
 
-        // All nodes are expanded by default, so all should be visible:
         // Binary("git") -> Domain(Exec) -> Leaf = 3 rows
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].depth, 0);
@@ -938,76 +1060,38 @@ mod tests {
     #[test]
     fn flatten_collapsed_hides_children() {
         let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
-        let mut roots = build_tree(&[policy]);
+        let mut arena = build_tree(&[policy]);
 
         // Collapse the root
-        roots[0].expanded = false;
-        let rows = flatten(&roots);
+        let root_id = arena.root_ids[0];
+        arena[root_id].expanded = false;
+        let rows = flatten(&arena);
 
-        // Only the root should be visible
         assert_eq!(rows.len(), 1);
-        assert!(matches!(&rows[0].kind, TreeNodeKind::Binary(s) if s == r#""git""#));
+        assert!(matches!(&arena[rows[0].node_id].kind, TreeNodeKind::Binary(s) if s == r#""git""#));
         assert!(!rows[0].expanded);
     }
 
     #[test]
-    fn flatten_tree_path_correct() {
+    fn flatten_node_id_valid() {
         let policy = test_policy(
             PolicyLevel::User,
             r#"(policy "main" (allow (exec "git")) (deny (exec "cargo")))"#,
         );
-        let roots = build_tree(&[policy]);
-        let rows = flatten(&roots);
+        let arena = build_tree(&[policy]);
+        let rows = flatten(&arena);
 
-        // Every row's tree_path should resolve back to a valid node
+        // Every row's node_id should resolve to a valid node
         for row in &rows {
-            let node = node_at_path(&roots, &row.tree_path);
-            assert!(
-                node.is_some(),
-                "tree_path {:?} should resolve to a node",
-                row.tree_path
-            );
+            let _node = &arena[row.node_id]; // Should not panic
         }
-    }
-
-    #[test]
-    fn node_at_path_valid() {
-        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
-        let roots = build_tree(&[policy]);
-
-        // Path [0] = first root
-        let node = node_at_path(&roots, &[0]);
-        assert!(node.is_some());
-        assert!(matches!(&node.unwrap().kind, TreeNodeKind::Binary(s) if s == r#""git""#));
-
-        // Path [0, 0] = first child of first root
-        let node = node_at_path(&roots, &[0, 0]);
-        assert!(node.is_some());
-    }
-
-    #[test]
-    fn node_at_path_invalid() {
-        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
-        let roots = build_tree(&[policy]);
-
-        // Out of bounds
-        assert!(node_at_path(&roots, &[99]).is_none());
-        assert!(node_at_path(&roots, &[0, 99]).is_none());
-    }
-
-    #[test]
-    fn node_at_path_empty() {
-        let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
-        let roots = build_tree(&[policy]);
-
-        assert!(node_at_path(&roots, &[]).is_none());
     }
 
     #[test]
     fn effect_counts_single() {
         let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
-        let roots = build_tree(&[policy]);
-        let (allow, deny, ask) = roots[0].effect_counts();
+        let arena = build_tree(&[policy]);
+        let (allow, deny, ask) = arena.effect_counts(arena.root_ids[0]);
         assert_eq!((allow, deny, ask), (1, 0, 0));
     }
 
@@ -1017,11 +1101,12 @@ mod tests {
             PolicyLevel::User,
             r#"(policy "main" (allow (exec "git")) (deny (exec "rm")) (ask (exec "sudo")))"#,
         );
-        let roots = build_tree(&[policy]);
-        let total: (usize, usize, usize) = roots.iter().fold((0, 0, 0), |(a, d, k), root| {
-            let (ra, rd, rk) = root.effect_counts();
-            (a + ra, d + rd, k + rk)
-        });
+        let arena = build_tree(&[policy]);
+        let total: (usize, usize, usize) =
+            arena.root_ids.iter().fold((0, 0, 0), |(a, d, k), &root| {
+                let (ra, rd, rk) = arena.effect_counts(root);
+                (a + ra, d + rd, k + rk)
+            });
         assert_eq!(total, (1, 1, 1));
     }
 
@@ -1031,8 +1116,8 @@ mod tests {
             PolicyLevel::User,
             r#"(policy "main" (allow (exec "git")) (deny (exec "rm")))"#,
         );
-        let roots = build_tree(&[policy]);
-        let total: usize = roots.iter().map(|r| r.rule_count()).sum();
+        let arena = build_tree(&[policy]);
+        let total: usize = arena.root_ids.iter().map(|&r| arena.rule_count(r)).sum();
         assert_eq!(total, 2);
     }
 
@@ -1042,83 +1127,84 @@ mod tests {
             PolicyLevel::User,
             r#"(policy "main" (ask (exec "ls" "-lha") :sandbox (allow (fs))))"#,
         );
-        let roots = build_tree(&[policy]);
+        let arena = build_tree(&[policy]);
 
-        // Find the leaf node
-        fn find_leaf(node: &TreeNode) -> Option<&TreeNode> {
-            if matches!(&node.kind, TreeNodeKind::Leaf { .. }) {
-                return Some(node);
+        fn find_leaf(arena: &TreeArena, id: NodeId) -> Option<NodeId> {
+            if matches!(&arena[id].kind, TreeNodeKind::Leaf { .. }) {
+                return Some(id);
             }
-            node.children.iter().find_map(find_leaf)
+            arena[id].children.iter().find_map(|&c| find_leaf(arena, c))
         }
-        let leaf = find_leaf(&roots[0]).expect("should have a leaf");
+        let leaf_id = find_leaf(&arena, arena.root_ids[0]).expect("should have a leaf");
+        let leaf = &arena[leaf_id];
         assert!(
             !leaf.children.is_empty(),
             "sandboxed leaf should have children (sub-tree)"
         );
 
-        // The inline sandbox (allow (fs)) should decompose into a sub-tree
-        // containing a SandboxLeaf somewhere under the leaf.
-        fn find_sandbox_leaf(node: &TreeNode) -> Option<&TreeNode> {
-            if matches!(&node.kind, TreeNodeKind::SandboxLeaf { .. }) {
-                return Some(node);
+        fn find_sandbox_leaf(arena: &TreeArena, id: NodeId) -> Option<NodeId> {
+            if matches!(&arena[id].kind, TreeNodeKind::SandboxLeaf { .. }) {
+                return Some(id);
             }
-            node.children.iter().find_map(find_sandbox_leaf)
+            arena[id]
+                .children
+                .iter()
+                .find_map(|&c| find_sandbox_leaf(arena, c))
         }
-        let sbx = find_sandbox_leaf(leaf).expect("should have a SandboxLeaf");
+        let sbx_id = find_sandbox_leaf(&arena, leaf_id).expect("should have a SandboxLeaf");
         assert!(
             matches!(
-                &sbx.kind,
+                &arena[sbx_id].kind,
                 TreeNodeKind::SandboxLeaf {
                     effect: Effect::Allow,
                     ..
                 }
             ),
             "sandbox leaf should have Allow effect, got {:?}",
-            sbx.kind
+            arena[sbx_id].kind
         );
     }
 
     #[test]
     fn build_tree_sandboxed_exec_inline_decomposed() {
-        // Multiple inline sandbox rules should decompose into proper sub-trees
         let policy = test_policy(
             PolicyLevel::User,
             r#"(policy "main" (ask (exec "ls" "-lha") :sandbox (allow (fs read "/tmp")) (deny (net *))))"#,
         );
-        let roots = build_tree(&[policy]);
+        let arena = build_tree(&[policy]);
 
-        fn find_leaf(node: &TreeNode) -> Option<&TreeNode> {
-            if matches!(&node.kind, TreeNodeKind::Leaf { .. }) {
-                return Some(node);
+        fn find_leaf(arena: &TreeArena, id: NodeId) -> Option<NodeId> {
+            if matches!(&arena[id].kind, TreeNodeKind::Leaf { .. }) {
+                return Some(id);
             }
-            node.children.iter().find_map(find_leaf)
+            arena[id].children.iter().find_map(|&c| find_leaf(arena, c))
         }
-        let leaf = find_leaf(&roots[0]).expect("should have a leaf");
+        let leaf_id = find_leaf(&arena, arena.root_ids[0]).expect("should have a leaf");
 
-        // Count SandboxLeaf nodes recursively
-        fn count_sandbox_leaves(node: &TreeNode) -> usize {
-            let here = if matches!(&node.kind, TreeNodeKind::SandboxLeaf { .. }) {
+        fn count_sandbox_leaves(arena: &TreeArena, id: NodeId) -> usize {
+            let here = if matches!(&arena[id].kind, TreeNodeKind::SandboxLeaf { .. }) {
                 1
             } else {
                 0
             };
-            here + node
+            here + arena[id]
                 .children
                 .iter()
-                .map(count_sandbox_leaves)
+                .map(|&c| count_sandbox_leaves(arena, c))
                 .sum::<usize>()
         }
-        let sbx_count = count_sandbox_leaves(leaf);
+        let sbx_count = count_sandbox_leaves(&arena, leaf_id);
         assert_eq!(sbx_count, 2, "should have 2 SandboxLeaf nodes (fs + net)");
 
-        // There should be Domain nodes in the sub-tree
-        fn has_domain(node: &TreeNode, kind: super::DomainKind) -> bool {
-            matches!(&node.kind, TreeNodeKind::Domain(d) if *d == kind)
-                || node.children.iter().any(|c| has_domain(c, kind))
+        fn has_domain(arena: &TreeArena, id: NodeId, kind: super::DomainKind) -> bool {
+            matches!(&arena[id].kind, TreeNodeKind::Domain(d) if *d == kind)
+                || arena[id]
+                    .children
+                    .iter()
+                    .any(|&c| has_domain(arena, c, kind))
         }
-        assert!(has_domain(leaf, super::DomainKind::Filesystem));
-        assert!(has_domain(leaf, super::DomainKind::Network));
+        assert!(has_domain(&arena, leaf_id, super::DomainKind::Filesystem));
+        assert!(has_domain(&arena, leaf_id, super::DomainKind::Network));
     }
 
     #[test]
@@ -1127,23 +1213,22 @@ mod tests {
             PolicyLevel::User,
             r#"(policy "main" (ask (exec "ls") :sandbox (allow (fs read "/tmp"))))"#,
         );
-        let roots = build_tree(&[policy]);
+        let arena = build_tree(&[policy]);
 
-        fn find_leaf(node: &TreeNode) -> Option<&TreeNode> {
-            if matches!(&node.kind, TreeNodeKind::Leaf { .. }) {
-                return Some(node);
+        fn find_leaf(arena: &TreeArena, id: NodeId) -> Option<NodeId> {
+            if matches!(&arena[id].kind, TreeNodeKind::Leaf { .. }) {
+                return Some(id);
             }
-            node.children.iter().find_map(find_leaf)
+            arena[id].children.iter().find_map(|&c| find_leaf(arena, c))
         }
-        let leaf = find_leaf(&roots[0]).expect("should have a leaf");
+        let leaf_id = find_leaf(&arena, arena.root_ids[0]).expect("should have a leaf");
 
-        // Should have a PathNode in the sub-tree
-        fn has_path_node(node: &TreeNode) -> bool {
-            matches!(&node.kind, TreeNodeKind::PathNode(_))
-                || node.children.iter().any(has_path_node)
+        fn has_path_node(arena: &TreeArena, id: NodeId) -> bool {
+            matches!(&arena[id].kind, TreeNodeKind::PathNode(_))
+                || arena[id].children.iter().any(|&c| has_path_node(arena, c))
         }
         assert!(
-            has_path_node(leaf),
+            has_path_node(&arena, leaf_id),
             "sandbox fs with path should create PathNode sub-tree"
         );
     }
@@ -1154,13 +1239,12 @@ mod tests {
             PolicyLevel::User,
             r#"(policy "main" (ask (exec "ls") :sandbox (allow (fs)) (deny (net *))))"#,
         );
-        let roots = build_tree(&[policy]);
-        let total: usize = roots.iter().map(|r| r.rule_count()).sum();
-        // Only the parent exec rule should count, not the sandbox sub-rules
+        let arena = build_tree(&[policy]);
+        let total: usize = arena.root_ids.iter().map(|&r| arena.rule_count(r)).sum();
         assert_eq!(total, 1, "sandbox leaves should not count as rules");
 
-        let (allow, deny, ask) = roots.iter().fold((0, 0, 0), |(a, d, k), r| {
-            let (ra, rd, rk) = r.effect_counts();
+        let (allow, deny, ask) = arena.root_ids.iter().fold((0, 0, 0), |(a, d, k), &r| {
+            let (ra, rd, rk) = arena.effect_counts(r);
             (a + ra, d + rd, k + rk)
         });
         assert_eq!(
@@ -1176,24 +1260,26 @@ mod tests {
             PolicyLevel::User,
             r#"(policy "main" (allow (exec "cargo" *) :sandbox "cargo-env"))"#,
         );
-        let roots = build_tree(&[policy]);
+        let arena = build_tree(&[policy]);
 
-        fn find_leaf(node: &TreeNode) -> Option<&TreeNode> {
-            if matches!(&node.kind, TreeNodeKind::Leaf { .. }) {
-                return Some(node);
+        fn find_leaf(arena: &TreeArena, id: NodeId) -> Option<NodeId> {
+            if matches!(&arena[id].kind, TreeNodeKind::Leaf { .. }) {
+                return Some(id);
             }
-            node.children.iter().find_map(find_leaf)
+            arena[id].children.iter().find_map(|&c| find_leaf(arena, c))
         }
-        let leaf = find_leaf(&roots[0]).expect("should have a leaf");
+        let leaf_id = find_leaf(&arena, arena.root_ids[0]).expect("should have a leaf");
+        let leaf = &arena[leaf_id];
         assert_eq!(
             leaf.children.len(),
             1,
             "named sandbox should have one child"
         );
+        let child = &arena[leaf.children[0]];
         assert!(
-            matches!(&leaf.children[0].kind, TreeNodeKind::SandboxName(name) if name == "cargo-env"),
+            matches!(&child.kind, TreeNodeKind::SandboxName(name) if name == "cargo-env"),
             "sandbox child should be SandboxName(\"cargo-env\"), got {:?}",
-            leaf.children[0].kind
+            child.kind
         );
     }
 
@@ -1218,10 +1304,9 @@ mod tests {
             PolicyLevel::User,
             r#"(policy "main" (allow (exec "git")) (deny (exec "cargo")))"#,
         );
-        let roots = build_tree(&[policy]);
+        let arena = build_tree(&[policy]);
 
-        // Search for "Exec" should find Domain(Exec) nodes
-        let matches = search_tree(&roots, "Exec");
+        let matches = search_tree(&arena, "Exec");
         assert!(
             matches.len() >= 2,
             "should find at least 2 Exec domain nodes, got {}",
@@ -1232,10 +1317,10 @@ mod tests {
     #[test]
     fn search_tree_case_insensitive() {
         let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
-        let roots = build_tree(&[policy]);
+        let arena = build_tree(&[policy]);
 
-        let upper = search_tree(&roots, "GIT");
-        let lower = search_tree(&roots, "git");
+        let upper = search_tree(&arena, "GIT");
+        let lower = search_tree(&arena, "git");
         assert_eq!(upper.len(), lower.len());
         assert!(!upper.is_empty());
     }
@@ -1243,35 +1328,26 @@ mod tests {
     #[test]
     fn search_tree_empty_query() {
         let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
-        let roots = build_tree(&[policy]);
-        assert!(search_tree(&roots, "").is_empty());
+        let arena = build_tree(&[policy]);
+        assert!(search_tree(&arena, "").is_empty());
     }
 
     #[test]
     fn search_tree_no_match() {
         let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
-        let roots = build_tree(&[policy]);
-        assert!(search_tree(&roots, "zzzznotfound").is_empty());
+        let arena = build_tree(&[policy]);
+        assert!(search_tree(&arena, "zzzznotfound").is_empty());
     }
 
     #[test]
     fn search_tree_finds_collapsed_nodes() {
         let policy = test_policy(PolicyLevel::User, r#"(policy "main" (allow (exec "git")))"#);
-        let mut roots = build_tree(&[policy]);
+        let mut arena = build_tree(&[policy]);
 
         // Collapse everything
-        fn collapse(node: &mut TreeNode) {
-            node.expanded = false;
-            for child in &mut node.children {
-                collapse(child);
-            }
-        }
-        for root in &mut roots {
-            collapse(root);
-        }
+        arena.for_each_mut(|node| node.expanded = false);
 
-        // search_tree should still find nodes in collapsed tree
-        let matches = search_tree(&roots, "allow");
+        let matches = search_tree(&arena, "allow");
         assert!(
             !matches.is_empty(),
             "search_tree should find nodes regardless of collapsed state"
@@ -1299,18 +1375,15 @@ mod tests {
     }
 
     proptest! {
-        /// Every FlatRow's tree_path resolves to a valid node via node_at_path.
+        /// Every FlatRow's node_id resolves to a valid node in the arena.
         #[test]
-        fn flat_row_paths_resolve(source in arb_policy_source()) {
+        fn flat_row_node_ids_valid(source in arb_policy_source()) {
             let policy = test_policy(PolicyLevel::User, &source);
-            let roots = build_tree(&[policy]);
-            let rows = flatten(&roots);
+            let arena = build_tree(&[policy]);
+            let rows = flatten(&arena);
 
             for row in &rows {
-                let node = node_at_path(&roots, &row.tree_path);
-                prop_assert!(node.is_some(),
-                    "tree_path {:?} should resolve to a valid node\n  source: {}",
-                    row.tree_path, source);
+                let _node = &arena[row.node_id]; // should not panic
             }
         }
 
@@ -1320,32 +1393,24 @@ mod tests {
             let policy = test_policy(PolicyLevel::User, &source);
 
             // Build tree and expand all, flatten
-            let mut roots1 = build_tree(&[policy.clone()]);
-            fn expand_all(node: &mut TreeNode) {
-                node.expanded = true;
-                for c in &mut node.children { expand_all(c); }
-            }
-            for root in &mut roots1 { expand_all(root); }
-            let rows1 = flatten(&roots1);
+            let mut arena1 = build_tree(&[policy.clone()]);
+            arena1.for_each_mut(|node| node.expanded = true);
+            let rows1 = flatten(&arena1);
 
             // Build fresh tree, collapse all, then expand all, flatten
-            let mut roots2 = build_tree(&[policy]);
-            fn collapse_all(node: &mut TreeNode) {
-                node.expanded = false;
-                for c in &mut node.children { collapse_all(c); }
-            }
-            for root in &mut roots2 { collapse_all(root); }
-            for root in &mut roots2 { expand_all(root); }
-            let rows2 = flatten(&roots2);
+            let mut arena2 = build_tree(&[policy]);
+            arena2.for_each_mut(|node| node.expanded = false);
+            arena2.for_each_mut(|node| node.expanded = true);
+            let rows2 = flatten(&arena2);
 
             prop_assert_eq!(rows1.len(), rows2.len(),
                 "expand_all should produce same row count regardless of prior state");
             for (i, (r1, r2)) in rows1.iter().zip(rows2.iter()).enumerate() {
                 prop_assert_eq!(r1.depth, r2.depth,
                     "row {} depth mismatch after expand_all", i);
-                prop_assert!(r1.tree_path == r2.tree_path,
-                    "row {} tree_path mismatch after expand_all: {:?} vs {:?}",
-                    i, r1.tree_path, r2.tree_path);
+                prop_assert!(r1.node_id == r2.node_id,
+                    "row {} node_id mismatch after expand_all: {:?} vs {:?}",
+                    i, r1.node_id, r2.node_id);
             }
         }
     }
