@@ -81,10 +81,10 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         ""
     };
 
-    let pos = if app.flat_rows.is_empty() {
+    let pos = if app.tree.flat_rows.is_empty() {
         String::new()
     } else {
-        format!("  {}/{}", app.cursor + 1, app.flat_rows.len())
+        format!("  {}/{}", app.tree.cursor + 1, app.tree.flat_rows.len())
     };
 
     let left = format!(" clash tui  {level_text}{modified}{pos}");
@@ -114,15 +114,15 @@ fn render_tree(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(block, area);
 
     let visible_height = inner.height as usize;
-    if app.flat_rows.is_empty() {
+    if app.tree.flat_rows.is_empty() {
         let msg = Paragraph::new("  No policy rules loaded. Run `clash init` to create a policy.")
             .style(tui_style::DIM);
         f.render_widget(msg, inner);
         return;
     }
 
-    let scroll = app.scroll_offset(visible_height);
-    let end = (scroll + visible_height).min(app.flat_rows.len());
+    let scroll = app.tree.scroll_offset(visible_height);
+    let end = (scroll + visible_height).min(app.tree.flat_rows.len());
     let mut lines: Vec<Line> = Vec::new();
 
     let selecting = match &app.mode {
@@ -131,12 +131,12 @@ fn render_tree(f: &mut Frame, app: &App, area: Rect) {
     };
 
     for i in scroll..end {
-        let row = &app.flat_rows[i];
-        let is_selected = i == app.cursor;
+        let row = &app.tree.flat_rows[i];
+        let is_selected = i == app.tree.cursor;
         let is_match = app.search.matches.contains(&i);
         let inline_select = if is_selected { selecting } else { None };
         let summary = if !row.expanded && row.has_children {
-            collapsed_summary(&app.roots, &row.tree_path)
+            collapsed_summary(&app.tree.roots, &row.tree_path)
         } else {
             Vec::new()
         };
@@ -393,7 +393,7 @@ fn render_description(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let mut lines = if let Some(row) = app.flat_rows.get(app.cursor) {
+    let mut lines = if let Some(row) = app.tree.flat_rows.get(app.tree.cursor) {
         description_for_row(row)
     } else {
         vec![Line::from(Span::styled("No selection", tui_style::DIM))]
@@ -585,7 +585,7 @@ fn render_keyhints(f: &mut Frame, app: &App, area: Rect) {
 
 pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
     let mut hints = vec![];
-    let row = app.flat_rows.get(app.cursor);
+    let row = app.tree.flat_rows.get(app.tree.cursor);
 
     match row {
         Some(row) => {
@@ -1332,7 +1332,7 @@ mod tests {
         app.expand_all();
 
         // Move cursor to the leaf
-        app.cursor_to_bottom();
+        app.tree.cursor_to_bottom();
         let hints = context_hints(&app);
 
         let keys: Vec<&str> = hints.iter().map(|(k, _)| *k).collect();
@@ -1345,7 +1345,7 @@ mod tests {
     fn context_hints_on_branch() {
         let mut app = make_app(r#"(policy "main" (allow (exec "git")))"#);
         app.expand_all();
-        app.cursor_to_top(); // root is a branch
+        app.tree.cursor_to_top(); // root is a branch
 
         let hints = context_hints(&app);
         let keys: Vec<&str> = hints.iter().map(|(k, _)| *k).collect();
@@ -1360,11 +1360,12 @@ mod tests {
 
         // Find the SandboxLeaf row
         let sbx_idx = app
+            .tree
             .flat_rows
             .iter()
             .position(|r| matches!(&r.kind, TreeNodeKind::SandboxLeaf { .. }));
         assert!(sbx_idx.is_some(), "should have a SandboxLeaf row");
-        app.cursor = sbx_idx.unwrap();
+        app.tree.cursor = sbx_idx.unwrap();
 
         let hints = context_hints(&app);
         let keys: Vec<&str> = hints.iter().map(|(k, _)| *k).collect();
@@ -1620,7 +1621,7 @@ mod tests {
     fn snapshot_edit_rule_mode() {
         let mut app = make_app(REALISTIC_POLICY);
         app.expand_all();
-        app.cursor_to_bottom();
+        app.tree.cursor_to_bottom();
         app.start_edit_rule();
         let output = render_to_string(&app, 80, 24);
         insta::assert_snapshot!(output);
@@ -1689,12 +1690,12 @@ mod tests {
         let mut app = App::new(&[user, project]);
         app.expand_all();
         // Move cursor to the shadowed User leaf
-        for (i, row) in app.flat_rows.iter().enumerate() {
+        for (i, row) in app.tree.flat_rows.iter().enumerate() {
             if let TreeNodeKind::Leaf {
                 is_shadowed: true, ..
             } = &row.kind
             {
-                app.cursor = i;
+                app.tree.cursor = i;
                 break;
             }
         }
