@@ -100,7 +100,7 @@ fn cap_to_access_fs(caps: Cap) -> landlock::BitFlags<AccessFs> {
         access |= AccessFs::ReadFile | AccessFs::ReadDir;
     }
     if caps.contains(Cap::WRITE) {
-        access |= AccessFs::WriteFile | AccessFs::Truncate;
+        access |= AccessFs::WriteFile | AccessFs::Truncate | AccessFs::Refer;
     }
     if caps.contains(Cap::CREATE) {
         access |= AccessFs::MakeReg
