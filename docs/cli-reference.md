@@ -71,11 +71,103 @@ clash edit
 
 Equivalent to `clash policy shell` — opens an interactive REPL where you can add, remove, and test rules. Type `help` for available commands, and `apply` to save changes.
 
+For a visual tree-based editor, see [`clash tui`](#clash-tui).
+
 **Examples:**
 
 ```bash
 # Open the interactive policy editor
 clash edit
+```
+
+---
+
+## clash tui
+
+Full-screen terminal UI for viewing and editing policy rules across all active levels (user, project, session).
+
+```
+clash tui
+```
+
+**Layout:**
+
+The screen is divided into four regions:
+
+1. **Header bar** — shows loaded policy levels, a `[modified]` indicator when there are unsaved changes, and a position counter (e.g. `3/12`)
+2. **Tree view** — hierarchical display of rules grouped by domain (Exec, Fs, Net, Tool), then by matcher components (binary, args, paths, etc.), with leaf nodes showing the effect (auto allow / auto deny / ask) and source level
+3. **Description pane** — contextual details for the selected node: human-readable rule explanation, source policy, s-expression, breadcrumb trail, and status messages
+4. **Key hints bar** — context-sensitive shortcut hints; replaced by the search bar during search mode
+
+**Keyboard shortcuts:**
+
+*Navigation*
+
+| Key | Action |
+|-----|--------|
+| `j` / `Down` | Move cursor down |
+| `k` / `Up` | Move cursor up |
+| `h` / `Left` | Collapse node or go to parent |
+| `l` / `Right` / `Enter` | Expand node or enter children |
+| `Space` | Toggle expand/collapse |
+| `g` | Jump to top |
+| `G` | Jump to bottom |
+| `PgUp` / `PgDn` | Page up/down |
+
+*Editing*
+
+| Key | Action |
+|-----|--------|
+| `e` | Edit node value inline (see below) |
+| `E` | Edit full rule as s-expression |
+| `Tab` | Cycle effect on a leaf node; on a branch, change all descendant effects |
+| `a` | Add a new rule (guided form) |
+| `d` | Delete rule at cursor (with confirmation) |
+| `w` | Save all changes (shows diff for review) |
+| `u` | Undo last edit |
+| `Ctrl+r` | Redo |
+
+*Folding*
+
+| Key | Action |
+|-----|--------|
+| `z` | Fold/unfold immediate children |
+| `Z` | Fold/unfold entire subtree |
+| `[` | Collapse all nodes |
+| `]` | Expand all nodes |
+
+*Search*
+
+| Key | Action |
+|-----|--------|
+| `/` | Start fuzzy search |
+| `n` | Jump to next match |
+| `N` | Jump to previous match |
+| `Esc` | Clear search (or quit if no search active) |
+
+*General*
+
+| Key | Action |
+|-----|--------|
+| `?` | Toggle help overlay |
+| `q` | Quit (prompts if unsaved changes) |
+
+**Inline node editing (`e` key):**
+
+The behavior of `e` depends on the selected node type:
+
+| Node type | Edit mode |
+|-----------|-----------|
+| Binary, Arg, HasArg, NetDomain, ToolName | Text input — type a new value, Enter to confirm |
+| PathNode | Text input — edit the path filter s-expression |
+| FsOp | Selector — cycle through read/write/create/delete/`*` with Tab or arrow keys |
+| Leaf / SandboxLeaf | Effect cycle — same as Tab |
+| Domain, PolicyBlock, HasMarker, SandboxName | Not editable |
+
+**Example:**
+
+```bash
+clash tui
 ```
 
 ---
@@ -670,3 +762,4 @@ After step 1, Claude Code reverts to its built-in permission model immediately. 
 - [Policy Writing Guide](./policy-guide.md) — how to write policy rules
 - [Policy Grammar](./policy-grammar.md) — formal EBNF grammar
 - [Policy Semantics](./policy-semantics.md) — evaluation algorithm
+- [`clash tui`](#clash-tui) — full-screen visual policy editor

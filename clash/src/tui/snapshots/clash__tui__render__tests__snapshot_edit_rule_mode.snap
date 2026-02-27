@@ -10,7 +10,7 @@ expression: output
 │     ▼ Exec                                                                   │
 │         ask         [user:main]                                              │
 │ ▼ *                                                                          │
-│ │ ▼ subpath env PWD                                                          │
+│ │ ▼ subpath ${PWD}                                                           │
 │ │   ▼ read                                                                   │
 │ │     ▼ Filesystem                                                           │
 │ │         auto allow  [user:main]                                            │
@@ -25,4 +25,4 @@ expression: output
 │> (ask (tool "Bash"))_                                                        │
 │                                                                              │
 │                                                                              │
-j/k move  Tab effect  e edit  d delete  [/] all  a add  / search  w save  ? help
+j/k move  Tab effect  e edit  E edit rule  d delete  [/] all  a add  / search  w

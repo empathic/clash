@@ -25,4 +25,4 @@ expression: output
 │Source: main [user]                                                           │
 │Rule: (allow (exec "git" *)                                                   │
 │This rule is shadowed by a higher-precedence rule at another level.           │
-j/k move  Tab effect  e edit  d delete  [/] all  a add  / search  w save  ? help
+j/k move  Tab effect  e edit  E edit rule  d delete  [/] all  a add  / search  w

@@ -18,7 +18,8 @@ expression: output
 │              │  PgUp/PgDn   Page up/down                      │              │
 │              │                                                │              │
 │              │  Tab         Select effect (dropdown)          │              │
-│              │  e           Edit rule at cursor               │              │
+│              │  e           Edit node value inline            │              │
+│              │  E           Edit full rule s-expr             │              │
 │              │  a           Add a new rule                    │              │
 │              │  d           Delete rule at cursor             │              │
 │              │  w           Save all changes                  │              │
@@ -35,10 +36,9 @@ expression: output
 │              │  Esc         Clear search / quit               │              │
 │              │  ?           Toggle this help                  │              │
 │              │  q           Quit (confirms if unsaved)        │              │
-│              │                                                │              │
-┌──────────────│  Press any key to close                        │──────────────┐
-│Binary: "git" └────────────────────────────────────────────────┘              │
-│1 rule: 1 auto allow                                                          │
+┌──────────────│                                                │──────────────┐
+│Binary: "git" │  Press any key to close                        │              │
+│1 rule: 1 auto└────────────────────────────────────────────────┘              │
 │"git"                                                                         │
 │                                                                              │
-j/k move  l expand  z/Z fold  Tab effect  d delete  [/] all  a add  / search  w
+j/k move  l expand  z/Z fold  Tab effect  e edit  d delete  [/] all  a add  / se

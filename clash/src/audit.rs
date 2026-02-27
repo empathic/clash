@@ -357,14 +357,12 @@ pub fn read_sandbox_violations(session_id: &str, tool_use_id: &str) -> Vec<Sandb
         if !line.contains("sandbox_violation") {
             continue;
         }
-        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) {
-            if entry.get("decision").and_then(|v| v.as_str()) == Some("sandbox_violation")
-                && entry.get("tool_use_id").and_then(|v| v.as_str()) == Some(tool_use_id)
-            {
-                if let Some(violations) = entry.get("violations") {
-                    return serde_json::from_value(violations.clone()).unwrap_or_default();
-                }
-            }
+        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(line)
+            && entry.get("decision").and_then(|v| v.as_str()) == Some("sandbox_violation")
+            && entry.get("tool_use_id").and_then(|v| v.as_str()) == Some(tool_use_id)
+            && let Some(violations) = entry.get("violations")
+        {
+            return serde_json::from_value(violations.clone()).unwrap_or_default();
         }
     }
 

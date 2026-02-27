@@ -32,6 +32,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputResult {
             | Mode::ConfirmSave(_)
             | Mode::SelectEffect(_)
             | Mode::SelectBranchEffect(_)
+            | Mode::SelectFsOp(_)
     ) {
         app.status_message = None;
     }
@@ -42,6 +43,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputResult {
         Mode::ConfirmSave(_) => handle_confirm_save(app, key),
         Mode::AddRule(_) => handle_add_rule(app, key),
         Mode::EditRule(_) => handle_edit_rule(app, key),
+        Mode::EditNodeText(_) => handle_edit_node_text(app, key),
+        Mode::SelectFsOp(_) => handle_select_fs_op(app, key),
         Mode::SelectEffect(_) => handle_select_effect(app, key),
         Mode::SelectBranchEffect(_) => handle_select_branch_effect(app, key),
         Mode::Search => handle_search(app, key),
@@ -104,7 +107,8 @@ fn handle_normal(app: &mut App, key: KeyEvent) -> InputResult {
 
         // Add / Edit / Search
         KeyCode::Char('a') => app.start_add_rule(),
-        KeyCode::Char('e') => app.start_edit_rule(),
+        KeyCode::Char('e') => app.start_edit_node(),
+        KeyCode::Char('E') => app.start_edit_rule(),
         KeyCode::Char('/') => app.start_search(),
 
         // Search navigation
@@ -324,6 +328,56 @@ fn handle_edit_rule(app: &mut App, key: KeyEvent) -> InputResult {
                 state.error = None;
             }
         }
+        _ => {}
+    }
+    InputResult::Continue
+}
+
+// ---------------------------------------------------------------------------
+// Edit node text mode
+// ---------------------------------------------------------------------------
+
+fn handle_edit_node_text(app: &mut App, key: KeyEvent) -> InputResult {
+    let Mode::EditNodeText(state) = &mut app.mode else {
+        return InputResult::Continue;
+    };
+    match state.input.handle_key(key) {
+        TextInputAction::Submit => app.confirm_edit_node_text(),
+        TextInputAction::Cancel => app.mode = Mode::Normal,
+        TextInputAction::Changed => {
+            if let Mode::EditNodeText(state) = &mut app.mode {
+                state.error = None;
+            }
+        }
+        _ => {}
+    }
+    InputResult::Continue
+}
+
+// ---------------------------------------------------------------------------
+// Select fs op mode
+// ---------------------------------------------------------------------------
+
+fn handle_select_fs_op(app: &mut App, key: KeyEvent) -> InputResult {
+    let Mode::SelectFsOp(state) = &mut app.mode else {
+        return InputResult::Continue;
+    };
+    match key.code {
+        KeyCode::Left | KeyCode::Char('h') => {
+            if state.op_index > 0 {
+                state.op_index -= 1;
+            }
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            if state.op_index < FS_OPS.len() - 1 {
+                state.op_index += 1;
+            }
+        }
+        KeyCode::Tab => {
+            state.op_index = (state.op_index + 1) % FS_OPS.len();
+        }
+        KeyCode::Enter => app.confirm_select_fs_op(),
+        KeyCode::Esc => app.mode = Mode::Normal,
         _ => {}
     }
     InputResult::Continue

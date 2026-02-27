@@ -14,6 +14,7 @@ use super::app::{
     AddRuleStep, App, COMMON_ENV_VARS, ConfirmAction, DOMAIN_NAMES, DiffLine, EFFECT_DISPLAY,
     EFFECT_NAMES, FS_OPS, Mode, PATH_SOURCES, PATH_TYPES, WORKTREE_OPTIONS,
 };
+use super::editor::TextInput;
 use super::style as tui_style;
 use super::tree::{self as tui_tree, FlatRow, NodeId, TreeArena, TreeNodeKind};
 
@@ -139,6 +140,18 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
 // Tree view
 // ---------------------------------------------------------------------------
 
+/// Inline editing state for a single row.
+pub(crate) enum InlineEdit<'a> {
+    /// No inline edit active.
+    None,
+    /// Effect selector (for leaf or branch).
+    EffectSelect(usize),
+    /// Text input (for Binary, Arg, HasArg, PathNode, NetDomain, ToolName).
+    TextInput(&'a TextInput),
+    /// FsOp selector.
+    FsOpSelect(usize),
+}
+
 fn render_tree(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::LEFT | Borders::RIGHT)
@@ -171,23 +184,43 @@ fn render_tree(f: &mut Frame, app: &App, area: Rect) {
         let row = &app.tree.flat_rows[i];
         let is_selected = i == app.tree.cursor;
         let is_match = app.search.matches.contains(&i);
-        // Leaf nodes get the leaf-level selector; branch nodes get the branch selector
-        let inline_select = if is_selected {
-            let kind = &app.tree.arena[row.node_id].kind;
-            match kind {
-                TreeNodeKind::Leaf { .. } | TreeNodeKind::SandboxLeaf { .. } => selecting,
-                _ => branch_selecting,
+
+        // Determine inline edit state for this row
+        let inline_edit = if is_selected {
+            match &app.mode {
+                Mode::EditNodeText(state) if state.node_id == row.node_id => {
+                    InlineEdit::TextInput(&state.input)
+                }
+                Mode::SelectFsOp(state) if state.node_id == row.node_id => {
+                    InlineEdit::FsOpSelect(state.op_index)
+                }
+                _ => {
+                    let kind = &app.tree.arena[row.node_id].kind;
+                    match kind {
+                        TreeNodeKind::Leaf { .. } | TreeNodeKind::SandboxLeaf { .. } => {
+                            match selecting {
+                                Some(idx) => InlineEdit::EffectSelect(idx),
+                                None => InlineEdit::None,
+                            }
+                        }
+                        _ => match branch_selecting {
+                            Some(idx) => InlineEdit::EffectSelect(idx),
+                            None => InlineEdit::None,
+                        },
+                    }
+                }
             }
         } else {
-            None
+            InlineEdit::None
         };
+
         let summary = if !row.expanded && row.has_children {
             collapsed_summary(&app.tree.arena, row.node_id)
         } else {
             Vec::new()
         };
         let kind = &app.tree.arena[row.node_id].kind;
-        let line = render_row(row, kind, is_selected, is_match, inline_select, &summary);
+        let line = render_row(row, kind, is_selected, is_match, &inline_edit, &summary);
         lines.push(line);
     }
 
@@ -228,7 +261,7 @@ pub(crate) fn render_row(
     kind: &TreeNodeKind,
     is_selected: bool,
     is_search_match: bool,
-    inline_select: Option<usize>,
+    inline_edit: &InlineEdit<'_>,
     summary: &[Span<'static>],
 ) -> Line<'static> {
     let mut spans: Vec<Span> = Vec::new();
@@ -250,6 +283,56 @@ pub(crate) fn render_row(
     } else if row.depth > 0 {
         spans.push(Span::raw("  "));
     }
+
+    // Inline text input replaces node label for text-editable nodes
+    if let InlineEdit::TextInput(input) = inline_edit {
+        let val = input.value();
+        let pos = input.cursor_pos();
+        let before: String = val.chars().take(pos).collect();
+        let after: String = val.chars().skip(pos).collect();
+        spans.push(Span::raw(before));
+        spans.push(Span::styled(
+            "_",
+            Style::default().add_modifier(Modifier::SLOW_BLINK),
+        ));
+        spans.push(Span::raw(after));
+
+        let style = if is_selected {
+            tui_style::SELECTED
+        } else {
+            Style::default()
+        };
+        return Line::from(spans).style(style);
+    }
+
+    // Inline FsOp selector replaces node label for FsOp nodes
+    if let InlineEdit::FsOpSelect(sel_idx) = inline_edit {
+        for (i, &name) in FS_OPS.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw(" "));
+            }
+            let style = if i == *sel_idx {
+                Style::default()
+                    .add_modifier(Modifier::REVERSED)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                tui_style::DIM
+            };
+            spans.push(Span::styled(format!(" {name} "), style));
+        }
+
+        let style = if is_selected {
+            tui_style::SELECTED
+        } else {
+            Style::default()
+        };
+        return Line::from(spans).style(style);
+    }
+
+    let inline_select = match inline_edit {
+        InlineEdit::EffectSelect(idx) => Some(*idx),
+        _ => None,
+    };
 
     // Node content
     match kind {
@@ -413,6 +496,22 @@ pub(crate) fn render_row(
 // Description pane
 // ---------------------------------------------------------------------------
 
+/// Return `(label, hint)` for the inline edit description pane based on node kind.
+fn edit_node_hint(kind: &TreeNodeKind) -> (&str, &str) {
+    match kind {
+        TreeNodeKind::Binary(_) => ("command", "* any  /regex/  or literal name"),
+        TreeNodeKind::Arg(_) => ("argument", "* any  /regex/  or literal value"),
+        TreeNodeKind::HasArg(_) => ("argument", "* any  /regex/  or literal value"),
+        TreeNodeKind::NetDomain(_) => ("domain", "* any  /regex/  or domain name"),
+        TreeNodeKind::ToolName(_) => ("tool", "* any  /regex/  or tool name"),
+        TreeNodeKind::PathNode(_) => (
+            "path",
+            "s-expr e.g. (subpath (env PWD))  \"/exact/path\"  /regex/",
+        ),
+        _ => ("node", ""),
+    }
+}
+
 fn render_description(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
@@ -459,6 +558,44 @@ fn render_description(f: &mut Frame, app: &App, area: Rect) {
                 tui_style::DENY.add_modifier(Modifier::BOLD),
             )));
         }
+        let para = Paragraph::new(lines).wrap(Wrap { trim: false });
+        f.render_widget(para, inner);
+        return;
+    }
+
+    // In inline node text edit mode, show help in description pane
+    if let Mode::EditNodeText(state) = &app.mode {
+        let (label, hint) = edit_node_hint(&app.tree.arena[state.node_id].kind);
+        let mut lines = vec![Line::from(vec![
+            Span::styled(format!("Edit {label}: "), tui_style::DIM),
+            Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(" confirm  ", tui_style::DIM),
+            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(" cancel", tui_style::DIM),
+        ])];
+        lines.push(Line::from(Span::styled(hint, tui_style::DIM)));
+        if let Some(err) = &state.error {
+            lines.push(Line::from(Span::styled(
+                err.as_str(),
+                tui_style::DENY.add_modifier(Modifier::BOLD),
+            )));
+        }
+        let para = Paragraph::new(lines).wrap(Wrap { trim: false });
+        f.render_widget(para, inner);
+        return;
+    }
+
+    // In FsOp selector mode, show help in description pane
+    if matches!(&app.mode, Mode::SelectFsOp(_)) {
+        let lines = vec![Line::from(vec![
+            Span::styled("Select operation: ", tui_style::DIM),
+            Span::styled("Tab/←/→", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(" cycle  ", tui_style::DIM),
+            Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(" confirm  ", tui_style::DIM),
+            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(" cancel", tui_style::DIM),
+        ])];
         let para = Paragraph::new(lines).wrap(Wrap { trim: false });
         f.render_widget(para, inner);
         return;
@@ -732,15 +869,26 @@ pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
             hints.push(("j/k", "move"));
 
             match &app.tree.arena[row.node_id].kind {
-                TreeNodeKind::Domain(_)
-                | TreeNodeKind::Binary(_)
+                TreeNodeKind::Binary(_)
                 | TreeNodeKind::Arg(_)
                 | TreeNodeKind::HasArg(_)
                 | TreeNodeKind::PathNode(_)
                 | TreeNodeKind::FsOp(_)
                 | TreeNodeKind::NetDomain(_)
-                | TreeNodeKind::ToolName(_)
-                | TreeNodeKind::PolicyBlock { .. } => {
+                | TreeNodeKind::ToolName(_) => {
+                    if row.has_children {
+                        if row.expanded {
+                            hints.push(("h", "collapse"));
+                        } else {
+                            hints.push(("l", "expand"));
+                        }
+                        hints.push(("z/Z", "fold"));
+                    }
+                    hints.push(("Tab", "effect"));
+                    hints.push(("e", "edit"));
+                    hints.push(("d", "delete"));
+                }
+                TreeNodeKind::Domain(_) | TreeNodeKind::PolicyBlock { .. } => {
                     if row.has_children {
                         if row.expanded {
                             hints.push(("h", "collapse"));
@@ -762,11 +910,13 @@ pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
                     }
                     hints.push(("Tab", "effect"));
                     hints.push(("e", "edit"));
+                    hints.push(("E", "edit rule"));
                     hints.push(("d", "delete"));
                 }
                 TreeNodeKind::SandboxLeaf { .. } => {
                     hints.push(("Tab", "effect"));
                     hints.push(("e", "edit"));
+                    hints.push(("E", "edit rule"));
                     hints.push(("d", "delete"));
                 }
                 TreeNodeKind::SandboxGroup => {
@@ -835,7 +985,7 @@ fn render_search_bar(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_help_overlay(f: &mut Frame, area: Rect) {
     let width = 50u16.min(area.width.saturating_sub(4));
-    let height = 33u16.min(area.height.saturating_sub(4));
+    let height = 34u16.min(area.height.saturating_sub(4));
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
     let overlay = Rect::new(x, y, width, height);
@@ -864,7 +1014,8 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         help_line(bold, "  PgUp/PgDn   ", "Page up/down"),
         Line::from(""),
         help_line(bold, "  Tab         ", "Select effect (dropdown)"),
-        help_line(bold, "  e           ", "Edit rule at cursor"),
+        help_line(bold, "  e           ", "Edit node value inline"),
+        help_line(bold, "  E           ", "Edit full rule s-expr"),
         help_line(bold, "  a           ", "Add a new rule"),
         help_line(bold, "  d           ", "Delete rule at cursor"),
         help_line(bold, "  w           ", "Save all changes"),
@@ -1583,7 +1734,7 @@ mod tests {
     fn render_row_leaf_shows_effect() {
         let rule = parse_rule_text("(allow (exec \"git\"))").unwrap();
         let (kind, row) = make_leaf_row_parts(Effect::Allow, rule, PolicyLevel::User, "main");
-        let line = render_row(&row, &kind, false, false, None, &[]);
+        let line = render_row(&row, &kind, false, false, &InlineEdit::None, &[]);
 
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(
@@ -1595,7 +1746,7 @@ mod tests {
     #[test]
     fn render_row_binary_node() {
         let (kind, row) = make_binary_row_parts("git", true);
-        let line = render_row(&row, &kind, false, false, None, &[]);
+        let line = render_row(&row, &kind, false, false, &InlineEdit::None, &[]);
 
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(
@@ -1611,7 +1762,7 @@ mod tests {
             Span::styled("1 auto allow", tui_style::ALLOW),
         ];
         let (kind, row) = make_binary_row_parts("git", false);
-        let line = render_row(&row, &kind, false, false, None, &summary);
+        let line = render_row(&row, &kind, false, false, &InlineEdit::None, &summary);
 
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(
@@ -1623,7 +1774,7 @@ mod tests {
     #[test]
     fn render_row_selected_styling() {
         let (kind, row) = make_binary_row_parts("git", true);
-        let line = render_row(&row, &kind, true, false, None, &[]);
+        let line = render_row(&row, &kind, true, false, &InlineEdit::None, &[]);
 
         assert_eq!(line.style, tui_style::SELECTED);
     }
@@ -1631,7 +1782,7 @@ mod tests {
     #[test]
     fn render_row_search_match_styling() {
         let (kind, row) = make_binary_row_parts("git", true);
-        let line = render_row(&row, &kind, false, true, None, &[]);
+        let line = render_row(&row, &kind, false, true, &InlineEdit::None, &[]);
 
         assert!(
             line.style.add_modifier.contains(Modifier::UNDERLINED),
@@ -1865,7 +2016,7 @@ mod tests {
             has_children: false,
             connectors: vec![false, false, false],
         };
-        let line = render_row(&row, &kind, false, false, None, &[]);
+        let line = render_row(&row, &kind, false, false, &InlineEdit::None, &[]);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(
             text.contains("auto allow"),
@@ -1894,7 +2045,7 @@ mod tests {
             has_children: true,
             connectors: vec![false, false],
         };
-        let line = render_row(&row, &kind, false, false, None, &[]);
+        let line = render_row(&row, &kind, false, false, &InlineEdit::None, &[]);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(
             text.contains("sandboxed"),

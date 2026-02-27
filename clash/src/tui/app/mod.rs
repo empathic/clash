@@ -41,6 +41,8 @@ pub enum Mode {
     ConfirmSave(SaveDiff),
     AddRule(AddRuleForm),
     EditRule(EditRuleState),
+    EditNodeText(EditNodeTextState),
+    SelectFsOp(SelectFsOpState),
     SelectEffect(SelectEffectState),
     SelectBranchEffect(SelectBranchEffectState),
     Search,
@@ -177,6 +179,17 @@ pub struct SelectBranchEffectState {
     pub leaves: Vec<LeafInfo>,
 }
 
+pub struct EditNodeTextState {
+    pub input: TextInput,
+    pub node_id: NodeId,
+    pub error: Option<String>,
+}
+
+pub struct SelectFsOpState {
+    pub op_index: usize,
+    pub node_id: NodeId,
+}
+
 enum SandboxMutation {
     Delete,
     Replace(Rule),
@@ -226,6 +239,7 @@ impl EditHistory {
 // Status message
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
 pub struct StatusMessage {
     pub text: String,
     pub is_error: bool,
@@ -2342,6 +2356,211 @@ mod tests {
         f.binary_input = TextInput::new("git");
         f.effect_index = 1; // deny
         assert_eq!(build_rule_text(&f), r#"(deny (exec "git"))"#);
+    }
+
+    // -----------------------------------------------------------------------
+    // Inline node editing tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: find the first Binary node in the flat_rows and move cursor there.
+    fn cursor_to_binary(app: &mut App, name: &str) -> bool {
+        for (i, row) in app.tree.flat_rows.iter().enumerate() {
+            if let TreeNodeKind::Binary(s) = &app.tree.arena[row.node_id].kind {
+                if s.contains(name) {
+                    app.tree.cursor = i;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Edit a Binary node value, confirm, then verify the tree updated.
+    #[test]
+    fn edit_node_text_updates_source() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git" *)))"#);
+        app.expand_all();
+
+        assert!(cursor_to_binary(&mut app, "git"), "should find git binary");
+
+        // Start edit
+        app.start_edit_node();
+        assert!(matches!(app.mode, Mode::EditNodeText(_)));
+
+        // Verify the input shows the unquoted value
+        if let Mode::EditNodeText(state) = &app.mode {
+            assert_eq!(state.input.value(), "git", "should show unquoted value");
+        }
+
+        // Replace with "cargo"
+        if let Mode::EditNodeText(state) = &mut app.mode {
+            state.input = TextInput::new("cargo");
+        }
+        app.confirm_edit_node_text();
+
+        // Source should now contain "cargo" instead of "git"
+        assert!(
+            app.levels[0].source.contains("\"cargo\""),
+            "source should contain cargo: {}",
+            app.levels[0].source
+        );
+        assert!(
+            !app.levels[0].source.contains("\"git\""),
+            "source should not contain git: {}",
+            app.levels[0].source
+        );
+    }
+
+    /// After editing a node once, editing it again should show the NEW value.
+    #[test]
+    fn edit_node_twice_shows_updated_value() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git" *)))"#);
+        app.expand_all();
+
+        assert!(cursor_to_binary(&mut app, "git"));
+
+        // First edit: git -> cargo
+        app.start_edit_node();
+        if let Mode::EditNodeText(state) = &mut app.mode {
+            state.input = TextInput::new("cargo");
+        }
+        app.confirm_edit_node_text();
+
+        // Navigate to the (now renamed) cargo binary
+        assert!(
+            cursor_to_binary(&mut app, "cargo"),
+            "should find cargo binary after first edit; flat_rows: {:?}",
+            app.tree
+                .flat_rows
+                .iter()
+                .map(|r| format!("{:?}", app.tree.arena[r.node_id].kind))
+                .collect::<Vec<_>>()
+        );
+
+        // Second edit: should show "cargo", not "git"
+        app.start_edit_node();
+        assert!(
+            matches!(app.mode, Mode::EditNodeText(_)),
+            "should enter EditNodeText mode"
+        );
+        if let Mode::EditNodeText(state) = &app.mode {
+            assert_eq!(
+                state.input.value(),
+                "cargo",
+                "second edit should show updated value 'cargo', not old 'git'"
+            );
+        }
+
+        // Complete second edit: cargo -> npm
+        if let Mode::EditNodeText(state) = &mut app.mode {
+            state.input = TextInput::new("npm");
+        }
+        app.confirm_edit_node_text();
+
+        // Verify source updated again
+        assert!(
+            app.levels[0].source.contains("\"npm\""),
+            "source should contain npm: {}",
+            app.levels[0].source
+        );
+        assert!(
+            !app.levels[0].source.contains("\"cargo\""),
+            "source should not contain cargo: {}",
+            app.levels[0].source
+        );
+    }
+
+    /// Editing a parent node of a rule with Or-expanded args should not
+    /// produce duplicate "rule not found" errors.
+    #[test]
+    fn edit_node_with_or_pattern_no_duplicate_error() {
+        let mut app =
+            make_app(r#"(policy "main" (allow (exec "cargo" (or "build" "test" "check") *)))"#);
+        app.expand_all();
+
+        // Navigate to the Binary("cargo") node
+        assert!(cursor_to_binary(&mut app, "cargo"));
+
+        // Edit: cargo -> rustc
+        app.start_edit_node();
+        if let Mode::EditNodeText(state) = &mut app.mode {
+            state.input = TextInput::new("rustc");
+        }
+        app.confirm_edit_node_text();
+
+        // Should succeed without errors
+        assert!(
+            app.status_message.as_ref().is_none_or(|s| !s.is_error),
+            "edit should succeed without errors; status: {:?}",
+            app.status_message
+        );
+        assert!(
+            app.levels[0].source.contains("\"rustc\""),
+            "source should contain rustc: {}",
+            app.levels[0].source
+        );
+    }
+
+    /// Editing a node to include a quote character should round-trip correctly.
+    #[test]
+    fn edit_node_with_quote_char() {
+        let mut app = make_app(r#"(policy "main" (allow (exec "git" *)))"#);
+        app.expand_all();
+
+        assert!(cursor_to_binary(&mut app, "git"));
+
+        // Edit: git -> git"hub (contains a quote)
+        app.start_edit_node();
+        if let Mode::EditNodeText(state) = &mut app.mode {
+            state.input = TextInput::new("git\"hub");
+        }
+        app.confirm_edit_node_text();
+
+        // Source should contain the escaped form
+        assert!(
+            app.levels[0].source.contains("git\\\"hub")
+                || app.levels[0].source.contains("git\"hub"),
+            "source should contain git\"hub: {}",
+            app.levels[0].source
+        );
+
+        // Now edit again — should show the unquoted value with the literal quote
+        assert!(
+            cursor_to_binary(&mut app, "git"),
+            "should find the renamed binary; rows: {:?}",
+            app.tree
+                .flat_rows
+                .iter()
+                .map(|r| format!("{:?}", app.tree.arena[r.node_id].kind))
+                .collect::<Vec<_>>()
+        );
+
+        app.start_edit_node();
+        assert!(matches!(app.mode, Mode::EditNodeText(_)));
+        if let Mode::EditNodeText(state) = &app.mode {
+            assert_eq!(
+                state.input.value(),
+                "git\"hub",
+                "re-edit should show literal content with quote"
+            );
+        }
+
+        // Edit again: git"hub -> cargo
+        if let Mode::EditNodeText(state) = &mut app.mode {
+            state.input = TextInput::new("cargo");
+        }
+        app.confirm_edit_node_text();
+
+        assert!(
+            app.levels[0].source.contains("\"cargo\""),
+            "source should contain cargo after second edit: {}",
+            app.levels[0].source
+        );
+        assert!(
+            !app.levels[0].source.contains("git"),
+            "source should not contain git after second edit: {}",
+            app.levels[0].source
+        );
     }
 
     // -----------------------------------------------------------------------
