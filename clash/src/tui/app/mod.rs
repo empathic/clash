@@ -21,7 +21,10 @@ use super::render;
 use super::tree::{self, FlatRow, LeafInfo, NodeId, TreeArena, TreeNodeKind};
 
 // Re-export constants used by input.rs and render.rs
-pub(crate) use self::edit::{DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS};
+pub(crate) use self::edit::{
+    COMMON_ENV_VARS, DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS, PATH_SOURCES, PATH_TYPES,
+    WORKTREE_OPTIONS,
+};
 // Re-export helpers used only by tests in other modules
 #[cfg(test)]
 pub(crate) use self::edit::{
@@ -108,6 +111,14 @@ pub struct AddRuleForm {
     pub tool_name_input: TextInput,
     pub available_levels: Vec<PolicyLevel>,
     pub error: Option<String>,
+    // Structured path form fields
+    pub path_type_index: usize,
+    pub path_source_index: usize,
+    pub env_var_index: usize,
+    pub custom_env_input: TextInput,
+    pub static_path_input: TextInput,
+    pub regex_path_input: TextInput,
+    pub worktree: bool,
 }
 
 impl AddRuleForm {
@@ -119,6 +130,9 @@ impl AddRuleForm {
             AddRuleStep::EnterPath => Some(&mut self.path_input),
             AddRuleStep::EnterNetDomain => Some(&mut self.net_domain_input),
             AddRuleStep::EnterToolName => Some(&mut self.tool_name_input),
+            AddRuleStep::EnterCustomEnvVar => Some(&mut self.custom_env_input),
+            AddRuleStep::EnterStaticPath => Some(&mut self.static_path_input),
+            AddRuleStep::EnterRegexPath => Some(&mut self.regex_path_input),
             _ => None,
         }
     }
@@ -135,6 +149,14 @@ pub enum AddRuleStep {
     EnterToolName,
     SelectEffect,
     SelectLevel,
+    // Structured path steps
+    SelectPathType,
+    SelectPathSource,
+    SelectEnvVar,
+    EnterCustomEnvVar,
+    EnterStaticPath,
+    EnterRegexPath,
+    ToggleWorktree,
 }
 
 pub struct EditRuleState {
@@ -410,10 +432,10 @@ impl TreeState {
                 TreeNodeKind::Binary(s)
                 | TreeNodeKind::Arg(s)
                 | TreeNodeKind::HasArg(s)
-                | TreeNodeKind::PathNode(s)
                 | TreeNodeKind::FsOp(s)
                 | TreeNodeKind::NetDomain(s)
                 | TreeNodeKind::ToolName(s) => s.clone(),
+                TreeNodeKind::PathNode(pf) => tree::display_path_filter_short(pf),
                 TreeNodeKind::HasMarker => ":has".into(),
                 TreeNodeKind::Leaf { effect, .. } => effect.to_string(),
                 TreeNodeKind::SandboxLeaf { effect, .. } => {
@@ -923,10 +945,10 @@ mod tests {
     }
 
     #[test]
-    fn next_step_fsop_to_path() {
+    fn next_step_fsop_to_path_type() {
         assert_eq!(
             next_add_rule_step(AddRuleStep::SelectFsOp, 0),
-            Some(AddRuleStep::EnterPath)
+            Some(AddRuleStep::SelectPathType)
         );
     }
 
@@ -985,6 +1007,13 @@ mod tests {
             tool_name_input: TextInput::empty(),
             available_levels: vec![PolicyLevel::User],
             error: None,
+            path_type_index: 3, // "any" — matches legacy empty-path behavior
+            path_source_index: 0,
+            env_var_index: 0,
+            custom_env_input: TextInput::empty(),
+            static_path_input: TextInput::empty(),
+            regex_path_input: TextInput::empty(),
+            worktree: false,
         }
     }
 
@@ -1133,8 +1162,13 @@ mod tests {
             form.domain_index = 1;
         }
         app.advance_add_rule(); // domain -> fs_op
-        app.advance_add_rule(); // fs_op -> path
-        app.advance_add_rule(); // path -> effect
+
+        // Select "any" path type to skip path steps
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.path_type_index = 3; // any
+        }
+        app.advance_add_rule(); // fs_op -> path_type
+        app.advance_add_rule(); // path_type (any) -> effect
         app.advance_add_rule(); // effect -> level
         app.advance_add_rule(); // level -> complete
 
@@ -2089,12 +2123,16 @@ mod tests {
 
         // Select "read" (index 1)
         press_right(&mut app); // fs_op_index = 1 ("read")
-        press_enter(&mut app); // fs_op -> path
+        press_enter(&mut app); // fs_op -> path_type
         if let Mode::AddRule(form) = &app.mode {
-            assert_eq!(form.step, AddRuleStep::EnterPath);
+            assert_eq!(form.step, AddRuleStep::SelectPathType);
         }
 
-        press_enter(&mut app); // path (empty) -> effect
+        // Select "any" path type (index 3)
+        press_right(&mut app);
+        press_right(&mut app);
+        press_right(&mut app);
+        press_enter(&mut app); // path_type (any) -> effect
         press_enter(&mut app); // effect -> level
         press_enter(&mut app); // level -> complete
 
@@ -2217,8 +2255,12 @@ mod tests {
         // domain auto-selected to exec (0), user changes to fs (1)
         press_right(&mut app); // domain = fs
         press_enter(&mut app); // domain -> fs_op
-        press_enter(&mut app); // fs_op (wildcard) -> path
-        press_enter(&mut app); // path (empty) -> effect
+        press_enter(&mut app); // fs_op (wildcard) -> path_type
+        // Select "any" path type (index 3)
+        press_right(&mut app);
+        press_right(&mut app);
+        press_right(&mut app);
+        press_enter(&mut app); // path_type (any) -> effect
         // Navigate to "ask" (index 2)
         press_right(&mut app); // deny
         press_right(&mut app); // ask
@@ -2444,8 +2486,13 @@ mod tests {
         app.advance_add_rule(); // binary -> args
         app.advance_add_rule(); // args -> domain
         app.advance_add_rule(); // domain -> fs_op
-        app.advance_add_rule(); // fs_op -> path
-        app.advance_add_rule(); // path -> effect
+
+        // Select "any" path type
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.path_type_index = 3; // any
+        }
+        app.advance_add_rule(); // fs_op -> path_type
+        app.advance_add_rule(); // path_type (any) -> effect
         app.advance_add_rule(); // effect -> level
         app.advance_add_rule(); // level -> complete
 
@@ -2486,8 +2533,13 @@ mod tests {
 
         // Select "read" (index 1)
         press_right(&mut app); // fs_op = read
-        press_enter(&mut app); // fs_op -> path
-        press_enter(&mut app); // path (empty) -> effect
+        press_enter(&mut app); // fs_op -> path_type
+
+        // Select "any" path type (index 3)
+        press_right(&mut app);
+        press_right(&mut app);
+        press_right(&mut app);
+        press_enter(&mut app); // path_type (any) -> effect
         press_enter(&mut app); // effect (allow) -> level
         press_enter(&mut app); // level -> complete
 
@@ -3060,6 +3112,13 @@ mod tests {
                         },
                         available_levels: vec![PolicyLevel::User],
                         error: None,
+                        path_type_index: if path.is_empty() { 3 } else { 4 }, // 3=any, 4=raw
+                        path_source_index: 0,
+                        env_var_index: 0,
+                        custom_env_input: TextInput::empty(),
+                        static_path_input: TextInput::empty(),
+                        regex_path_input: TextInput::empty(),
+                        worktree: false,
                     }
                 },
             )

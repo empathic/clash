@@ -7,15 +7,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::policy::Effect;
-use crate::policy::ast::SandboxRef;
+use crate::policy::ast::{PathExpr, PathFilter, SandboxRef};
 use crate::wizard::describe_rule;
 
 use super::app::{
-    AddRuleStep, App, ConfirmAction, DOMAIN_NAMES, DiffLine, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS,
-    Mode,
+    AddRuleStep, App, COMMON_ENV_VARS, ConfirmAction, DOMAIN_NAMES, DiffLine, EFFECT_DISPLAY,
+    EFFECT_NAMES, FS_OPS, Mode, PATH_SOURCES, PATH_TYPES, WORKTREE_OPTIONS,
 };
 use super::style as tui_style;
-use super::tree::{FlatRow, NodeId, TreeArena, TreeNodeKind};
+use super::tree::{self as tui_tree, FlatRow, NodeId, TreeArena, TreeNodeKind};
 
 /// Format an effect for display: "ask", "auto allow", "auto deny".
 pub(crate) fn effect_display(effect: Effect) -> &'static str {
@@ -272,8 +272,11 @@ pub(crate) fn render_row(
         TreeNodeKind::HasArg(text) => {
             spans.push(Span::styled(text.clone(), tui_style::PATTERN));
         }
-        TreeNodeKind::PathNode(text) => {
-            spans.push(Span::styled(text.clone(), tui_style::PATTERN));
+        TreeNodeKind::PathNode(pf) => {
+            spans.push(Span::styled(
+                tui_tree::display_path_filter_short(pf),
+                tui_style::PATTERN,
+            ));
         }
         TreeNodeKind::FsOp(text) => {
             spans.push(Span::styled(text.clone(), tui_style::PATTERN));
@@ -594,29 +597,65 @@ pub(crate) fn description_for_row(kind: &TreeNodeKind) -> Vec<Line<'static>> {
                 Span::styled(arg.clone(), tui_style::PATTERN),
             ])]
         }
-        TreeNodeKind::PathNode(path) => {
-            vec![Line::from(vec![
-                Span::styled("Path filter: ", tui_style::DIM),
-                Span::styled(path.clone(), tui_style::PATTERN),
-            ])]
+        TreeNodeKind::PathNode(pf) => {
+            let short = tui_tree::display_path_filter_short(pf);
+            let sexpr = pf.to_string();
+            let mut lines = vec![Line::from(vec![
+                Span::styled("Path: ", tui_style::DIM),
+                Span::styled(short.clone(), tui_style::PATTERN),
+            ])];
+            lines.push(Line::from(Span::styled(
+                describe_path_filter(pf),
+                Style::default(),
+            )));
+            if sexpr != short {
+                lines.push(Line::from(vec![
+                    Span::styled("s-expr: ", tui_style::DIM),
+                    Span::raw(sexpr),
+                ]));
+            }
+            lines
         }
         TreeNodeKind::FsOp(op) => {
-            vec![Line::from(vec![
-                Span::styled("Operation: ", tui_style::DIM),
-                Span::styled(op.clone(), tui_style::PATTERN),
-            ])]
+            let explanation = match op.as_str() {
+                "read" => "Matches filesystem read operations (file reads, directory listings).",
+                "write" => "Matches filesystem write operations (file modifications).",
+                "create" => "Matches filesystem create operations (new files, directories).",
+                "delete" => "Matches filesystem delete operations (file/directory removal).",
+                "*" => "Matches all filesystem operations.",
+                _ => "Matches this filesystem operation.",
+            };
+            vec![
+                Line::from(vec![
+                    Span::styled("Operation: ", tui_style::DIM),
+                    Span::styled(op.clone(), tui_style::PATTERN),
+                ]),
+                Line::from(Span::styled(explanation.to_string(), Style::default())),
+            ]
         }
         TreeNodeKind::NetDomain(domain) => {
-            vec![Line::from(vec![
-                Span::styled("Domain pattern: ", tui_style::DIM),
-                Span::styled(domain.clone(), tui_style::PATTERN),
-            ])]
+            vec![
+                Line::from(vec![
+                    Span::styled("Domain: ", tui_style::DIM),
+                    Span::styled(domain.clone(), tui_style::PATTERN),
+                ]),
+                Line::from(Span::styled(
+                    format!("Matches network requests to {domain}."),
+                    Style::default(),
+                )),
+            ]
         }
         TreeNodeKind::ToolName(name) => {
-            vec![Line::from(vec![
-                Span::styled("Tool: ", tui_style::DIM),
-                Span::styled(name.clone(), tui_style::PATTERN),
-            ])]
+            vec![
+                Line::from(vec![
+                    Span::styled("Tool: ", tui_style::DIM),
+                    Span::styled(name.clone(), tui_style::PATTERN),
+                ]),
+                Line::from(Span::styled(
+                    format!("Matches use of the {name} tool."),
+                    Style::default(),
+                )),
+            ]
         }
         TreeNodeKind::PolicyBlock { name, level } => {
             vec![Line::from(vec![
@@ -976,6 +1015,55 @@ fn render_save_diff_overlay(f: &mut Frame, app: &App, area: Rect) {
 }
 
 // ---------------------------------------------------------------------------
+// Path filter description helper
+// ---------------------------------------------------------------------------
+
+/// Produce a human-readable explanation for a PathFilter.
+fn describe_path_filter(pf: &PathFilter) -> String {
+    match pf {
+        PathFilter::Subpath(expr, worktree) => {
+            let target = describe_path_expr(expr);
+            let worktree_note = if *worktree {
+                " (including git worktree directories)"
+            } else {
+                ""
+            };
+            format!(
+                "Matches files recursively under {target} and all subdirectories{worktree_note}."
+            )
+        }
+        PathFilter::Literal(s) => {
+            format!("Matches the exact path \"{s}\".")
+        }
+        PathFilter::Regex(r) => {
+            format!("Matches paths matching the regex /{r}/.")
+        }
+        PathFilter::Not(inner) => {
+            let inner_desc = describe_path_filter(inner);
+            format!("Negation: excludes paths where: {inner_desc}")
+        }
+        PathFilter::Or(filters) => {
+            format!(
+                "Matches any of {} alternative path patterns.",
+                filters.len()
+            )
+        }
+    }
+}
+
+/// Produce a human-readable description for a PathExpr.
+fn describe_path_expr(expr: &PathExpr) -> String {
+    match expr {
+        PathExpr::Static(s) => format!("\"{s}\""),
+        PathExpr::Env(name) => format!("the ${name} environment variable"),
+        PathExpr::Join(parts) => {
+            let descs: Vec<String> = parts.iter().map(describe_path_expr).collect();
+            descs.join(" + ")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Add rule overlay
 // ---------------------------------------------------------------------------
 
@@ -985,10 +1073,19 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let width = 58u16.min(area.width.saturating_sub(4));
-    // Dynamic height based on number of steps
+    // Dynamic height based on domain and path type
     let base_height: u16 = match form.domain_index {
-        1 => 26, // fs: cmd + args + domain + op + path + effect + level
-        _ => 23, // exec/net/tool: cmd + args + domain + permissions + effect + level
+        1 => {
+            let path_steps: u16 = match form.path_type_index {
+                0 => 9, // subpath: type + source + env/path + worktree
+                1 => 3, // exact: type + path input
+                2 => 3, // regex: type + regex input
+                3 => 1, // any: just type selector
+                _ => 3, // raw: type + text input
+            };
+            20 + path_steps
+        }
+        _ => 23,
     };
     let height = base_height.min(area.height.saturating_sub(4));
     let x = (area.width.saturating_sub(width)) / 2;
@@ -1013,11 +1110,18 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
     let effect_index = form.effect_index;
     let level_index = form.level_index;
     let fs_op_index = form.fs_op_index;
+    let path_type_index = form.path_type_index;
+    let path_source_index = form.path_source_index;
+    let env_var_index = form.env_var_index;
+    let worktree = form.worktree;
     let binary_val = form.binary_input.value().to_string();
     let args_val = form.args_input.value().to_string();
     let path_val = form.path_input.value().to_string();
     let net_domain_val = form.net_domain_input.value().to_string();
     let tool_name_val = form.tool_name_input.value().to_string();
+    let custom_env_val = form.custom_env_input.value().to_string();
+    let static_path_val = form.static_path_input.value().to_string();
+    let regex_path_val = form.regex_path_input.value().to_string();
     let level_names: Vec<String> = form
         .available_levels
         .iter()
@@ -1086,7 +1190,7 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
             step_num += 1;
         }
         1 => {
-            // Fs: Operation, then Path
+            // Fs: Operation
             lines.push(step_label(
                 &format!("{step_num}. Operation"),
                 matches!(step, AddRuleStep::SelectFsOp),
@@ -1099,20 +1203,156 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(""));
             step_num += 1;
 
+            // Path type selector
             lines.push(step_label(
-                &format!("{step_num}. Path"),
-                matches!(step, AddRuleStep::EnterPath),
+                &format!("{step_num}. Path type"),
+                matches!(step, AddRuleStep::SelectPathType),
             ));
-            render_text_step(
-                &mut lines,
-                &path_val,
-                matches!(step, AddRuleStep::EnterPath),
-                "e.g. (subpath (env PWD)), blank=any",
-                bold,
-                dim,
-            );
+            lines.push(selector_line(
+                PATH_TYPES,
+                path_type_index,
+                matches!(step, AddRuleStep::SelectPathType),
+            ));
             lines.push(Line::from(""));
             step_num += 1;
+
+            // Conditional sub-steps based on path type
+            match path_type_index {
+                0 => {
+                    // subpath: source → env/static → worktree
+                    lines.push(step_label(
+                        &format!("{step_num}. Path source"),
+                        matches!(step, AddRuleStep::SelectPathSource),
+                    ));
+                    lines.push(selector_line(
+                        PATH_SOURCES,
+                        path_source_index,
+                        matches!(step, AddRuleStep::SelectPathSource),
+                    ));
+                    lines.push(Line::from(""));
+                    step_num += 1;
+
+                    match path_source_index {
+                        0 => {
+                            // env variable
+                            lines.push(step_label(
+                                &format!("{step_num}. Env variable"),
+                                matches!(step, AddRuleStep::SelectEnvVar),
+                            ));
+                            lines.push(selector_line(
+                                COMMON_ENV_VARS,
+                                env_var_index,
+                                matches!(step, AddRuleStep::SelectEnvVar),
+                            ));
+                            lines.push(Line::from(""));
+                            step_num += 1;
+
+                            if env_var_index == COMMON_ENV_VARS.len() - 1 {
+                                // custom env var
+                                lines.push(step_label(
+                                    &format!("{step_num}. Custom env var"),
+                                    matches!(step, AddRuleStep::EnterCustomEnvVar),
+                                ));
+                                render_text_step(
+                                    &mut lines,
+                                    &custom_env_val,
+                                    matches!(step, AddRuleStep::EnterCustomEnvVar),
+                                    "e.g. VIRTUAL_ENV",
+                                    bold,
+                                    dim,
+                                );
+                                lines.push(Line::from(""));
+                                step_num += 1;
+                            }
+                        }
+                        _ => {
+                            // static path
+                            lines.push(step_label(
+                                &format!("{step_num}. Static path"),
+                                matches!(step, AddRuleStep::EnterStaticPath),
+                            ));
+                            render_text_step(
+                                &mut lines,
+                                &static_path_val,
+                                matches!(step, AddRuleStep::EnterStaticPath),
+                                "e.g. /tmp, /home/user/.config",
+                                bold,
+                                dim,
+                            );
+                            lines.push(Line::from(""));
+                            step_num += 1;
+                        }
+                    }
+
+                    // Worktree toggle
+                    let wt_idx = if worktree { 1 } else { 0 };
+                    lines.push(step_label(
+                        &format!("{step_num}. Worktree?"),
+                        matches!(step, AddRuleStep::ToggleWorktree),
+                    ));
+                    lines.push(selector_line(
+                        WORKTREE_OPTIONS,
+                        wt_idx,
+                        matches!(step, AddRuleStep::ToggleWorktree),
+                    ));
+                    lines.push(Line::from(""));
+                    step_num += 1;
+                }
+                1 => {
+                    // exact: static path input
+                    lines.push(step_label(
+                        &format!("{step_num}. Exact path"),
+                        matches!(step, AddRuleStep::EnterStaticPath),
+                    ));
+                    render_text_step(
+                        &mut lines,
+                        &static_path_val,
+                        matches!(step, AddRuleStep::EnterStaticPath),
+                        "e.g. /etc/passwd, /tmp/file.txt",
+                        bold,
+                        dim,
+                    );
+                    lines.push(Line::from(""));
+                    step_num += 1;
+                }
+                2 => {
+                    // regex: regex input
+                    lines.push(step_label(
+                        &format!("{step_num}. Regex pattern"),
+                        matches!(step, AddRuleStep::EnterRegexPath),
+                    ));
+                    render_text_step(
+                        &mut lines,
+                        &regex_path_val,
+                        matches!(step, AddRuleStep::EnterRegexPath),
+                        "e.g. .*\\.rs, /tmp/.*",
+                        bold,
+                        dim,
+                    );
+                    lines.push(Line::from(""));
+                    step_num += 1;
+                }
+                3 => {
+                    // any: no extra steps
+                }
+                _ => {
+                    // raw s-expr: legacy text input
+                    lines.push(step_label(
+                        &format!("{step_num}. Path (s-expr)"),
+                        matches!(step, AddRuleStep::EnterPath),
+                    ));
+                    render_text_step(
+                        &mut lines,
+                        &path_val,
+                        matches!(step, AddRuleStep::EnterPath),
+                        "e.g. (subpath (env PWD)), blank=any",
+                        bold,
+                        dim,
+                    );
+                    lines.push(Line::from(""));
+                    step_num += 1;
+                }
+            }
         }
         2 => {
             // Net: host

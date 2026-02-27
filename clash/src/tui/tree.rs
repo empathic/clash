@@ -12,6 +12,42 @@ use crate::policy::ast::*;
 use crate::settings::{LoadedPolicy, PolicyLevel};
 
 // ---------------------------------------------------------------------------
+// Human-readable PathFilter display
+// ---------------------------------------------------------------------------
+
+/// Produce a concise tree label for a PathFilter, e.g. `"subpath env PWD"`.
+pub fn display_path_filter_short(pf: &PathFilter) -> String {
+    match pf {
+        PathFilter::Subpath(expr, worktree) => {
+            let expr_s = display_path_expr_short(expr);
+            if *worktree {
+                format!("subpath :worktree {expr_s}")
+            } else {
+                format!("subpath {expr_s}")
+            }
+        }
+        PathFilter::Literal(s) => s.clone(),
+        PathFilter::Regex(r) => format!("/{r}/"),
+        PathFilter::Or(fs) => {
+            let parts: Vec<String> = fs.iter().map(display_path_filter_short).collect();
+            format!("(or {})", parts.join(" "))
+        }
+        PathFilter::Not(inner) => {
+            format!("not ({})", display_path_filter_short(inner))
+        }
+    }
+}
+
+/// Produce a concise label for a PathExpr.
+fn display_path_expr_short(expr: &PathExpr) -> String {
+    match expr {
+        PathExpr::Static(s) => s.clone(),
+        PathExpr::Env(name) => format!("env {name}"),
+        PathExpr::Join(parts) => parts.iter().map(display_path_expr_short).collect(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Node kinds
 // ---------------------------------------------------------------------------
 
@@ -31,7 +67,7 @@ pub enum TreeNodeKind {
     /// Orderless arg pattern.
     HasArg(String),
     /// Filesystem path node.
-    PathNode(String),
+    PathNode(PathFilter),
     /// Filesystem operation node.
     FsOp(String),
     /// Network domain pattern.
@@ -426,11 +462,11 @@ fn expand_op(op: &OpPattern) -> Vec<String> {
     }
 }
 
-/// Expand a PathFilter::Or into individual paths (recursive).
-fn expand_path_filter(pf: &PathFilter) -> Vec<String> {
+/// Expand a PathFilter::Or into individual path filters (recursive).
+fn expand_path_filter(pf: &PathFilter) -> Vec<PathFilter> {
     match pf {
         PathFilter::Or(fs) => fs.iter().flat_map(expand_path_filter).collect(),
-        other => vec![other.to_string()],
+        other => vec![other.clone()],
     }
 }
 
@@ -719,7 +755,7 @@ fn node_key(kind: &TreeNodeKind) -> String {
     match kind {
         TreeNodeKind::Arg(s) | TreeNodeKind::HasArg(s) | TreeNodeKind::Binary(s) => s.clone(),
         TreeNodeKind::HasMarker => ":has".into(),
-        TreeNodeKind::PathNode(s) => s.clone(),
+        TreeNodeKind::PathNode(pf) => pf.to_string(),
         TreeNodeKind::FsOp(s) => s.clone(),
         TreeNodeKind::NetDomain(s) => s.clone(),
         TreeNodeKind::ToolName(s) => s.clone(),
@@ -757,9 +793,9 @@ fn build_fs_tree(
             let mut domain = BuildNode::new(TreeNodeKind::Domain(DomainKind::Filesystem));
             domain.children.push(leaf);
 
-            if let Some(path_texts) = &paths {
-                for path_text in path_texts {
-                    let mut path_node = BuildNode::new(TreeNodeKind::PathNode(path_text.clone()));
+            if let Some(path_filters) = &paths {
+                for pf in path_filters {
+                    let mut path_node = BuildNode::new(TreeNodeKind::PathNode(pf.clone()));
                     if op == "*" {
                         path_node.children.push(domain.clone());
                     } else {
@@ -865,10 +901,19 @@ pub fn node_search_text(kind: &TreeNodeKind) -> String {
         TreeNodeKind::Binary(s)
         | TreeNodeKind::Arg(s)
         | TreeNodeKind::HasArg(s)
-        | TreeNodeKind::PathNode(s)
         | TreeNodeKind::FsOp(s)
         | TreeNodeKind::NetDomain(s)
         | TreeNodeKind::ToolName(s) => s.clone(),
+        TreeNodeKind::PathNode(pf) => {
+            // Include both short label and s-expr for findability
+            let short = display_path_filter_short(pf);
+            let sexpr = pf.to_string();
+            if short == sexpr {
+                short
+            } else {
+                format!("{short} {sexpr}")
+            }
+        }
         TreeNodeKind::HasMarker => ":has".into(),
         TreeNodeKind::Leaf {
             effect,

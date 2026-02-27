@@ -6,7 +6,7 @@ use similar::TextDiff;
 
 use crate::policy::Effect;
 use crate::policy::ast::{
-    CapMatcher, ExecMatcher, FsMatcher, FsOp, NetMatcher, OpPattern, PathFilter, Pattern,
+    CapMatcher, ExecMatcher, FsMatcher, FsOp, NetMatcher, OpPattern, PathExpr, PathFilter, Pattern,
     PolicyItem, Rule, SandboxRef, ToolMatcher, TopLevel,
 };
 use crate::policy::compile::compile_policy;
@@ -904,6 +904,13 @@ impl App {
             tool_name_input: TextInput::empty(),
             available_levels: available,
             error: None,
+            path_type_index: 0,
+            path_source_index: 0,
+            env_var_index: 0,
+            custom_env_input: TextInput::empty(),
+            static_path_input: TextInput::empty(),
+            regex_path_input: TextInput::empty(),
+            worktree: false,
         });
     }
 
@@ -924,7 +931,13 @@ impl App {
             }
         }
 
-        let next = next_add_rule_step(form.step, form.domain_index);
+        let next = next_add_rule_step_full(
+            form.step,
+            form.domain_index,
+            form.path_type_index,
+            form.path_source_index,
+            form.env_var_index,
+        );
         if let Some(step) = next {
             form.step = step;
         } else {
@@ -938,7 +951,12 @@ impl App {
             return;
         };
         form.error = None;
-        if let Some(prev) = prev_add_rule_step(form.step, form.domain_index) {
+        if let Some(prev) = prev_add_rule_step_full(
+            form.step,
+            form.domain_index,
+            form.path_type_index,
+            form.path_source_index,
+        ) {
             form.step = prev;
         }
     }
@@ -1137,10 +1155,10 @@ fn node_label(kind: &TreeNodeKind) -> String {
         TreeNodeKind::Binary(s)
         | TreeNodeKind::Arg(s)
         | TreeNodeKind::HasArg(s)
-        | TreeNodeKind::PathNode(s)
         | TreeNodeKind::FsOp(s)
         | TreeNodeKind::NetDomain(s)
         | TreeNodeKind::ToolName(s) => s.clone(),
+        TreeNodeKind::PathNode(pf) => pf.to_string(),
         TreeNodeKind::HasMarker => ":has".into(),
         TreeNodeKind::Leaf {
             rule,
@@ -1167,6 +1185,10 @@ pub const DOMAIN_NAMES: &[&str] = &["exec", "fs", "net", "tool"];
 pub const EFFECT_NAMES: &[&str] = &["allow", "deny", "ask"];
 pub const EFFECT_DISPLAY: &[&str] = &["ask", "auto allow", "auto deny"];
 pub const FS_OPS: &[&str] = &["*", "read", "write", "create", "delete"];
+pub const PATH_TYPES: &[&str] = &["subpath", "exact", "regex", "any", "raw s-expr"];
+pub const PATH_SOURCES: &[&str] = &["env variable", "static path"];
+pub const COMMON_ENV_VARS: &[&str] = &["PWD", "HOME", "TMPDIR", "custom"];
+pub const WORKTREE_OPTIONS: &[&str] = &["no", "yes"];
 
 /// Map form effect_index (EFFECT_NAMES order: allow=0, deny=1, ask=2) to Effect.
 fn effect_from_form_index(index: usize) -> Effect {
@@ -1194,7 +1216,14 @@ pub(super) fn effect_to_display_index(effect: Effect) -> usize {
 }
 
 /// Compute the previous step in the add-rule flow, or `None` if already at the first step.
-pub(crate) fn prev_add_rule_step(step: AddRuleStep, domain_index: usize) -> Option<AddRuleStep> {
+///
+/// Full version accepting all form indices for path step navigation.
+pub(crate) fn prev_add_rule_step_full(
+    step: AddRuleStep,
+    domain_index: usize,
+    path_type_index: usize,
+    path_source_index: usize,
+) -> Option<AddRuleStep> {
     match step {
         AddRuleStep::EnterBinary => None,
         AddRuleStep::EnterArgs => Some(AddRuleStep::EnterBinary),
@@ -1203,9 +1232,37 @@ pub(crate) fn prev_add_rule_step(step: AddRuleStep, domain_index: usize) -> Opti
         AddRuleStep::EnterPath => Some(AddRuleStep::SelectFsOp),
         AddRuleStep::EnterNetDomain => Some(AddRuleStep::SelectDomain),
         AddRuleStep::EnterToolName => Some(AddRuleStep::SelectDomain),
+        // Structured path steps
+        AddRuleStep::SelectPathType => Some(AddRuleStep::SelectFsOp),
+        AddRuleStep::SelectPathSource => Some(AddRuleStep::SelectPathType),
+        AddRuleStep::SelectEnvVar => Some(AddRuleStep::SelectPathSource),
+        AddRuleStep::EnterCustomEnvVar => Some(AddRuleStep::SelectEnvVar),
+        AddRuleStep::EnterStaticPath => match domain_index {
+            1 if path_type_index == 0 => Some(AddRuleStep::SelectPathSource), // subpath static
+            _ => Some(AddRuleStep::SelectPathType),                           // exact
+        },
+        AddRuleStep::EnterRegexPath => Some(AddRuleStep::SelectPathType),
+        AddRuleStep::ToggleWorktree => match path_source_index {
+            0 => {
+                // env variable
+                if path_type_index == 0 {
+                    // From SelectEnvVar or EnterCustomEnvVar
+                    Some(AddRuleStep::SelectEnvVar)
+                } else {
+                    Some(AddRuleStep::SelectPathType)
+                }
+            }
+            _ => Some(AddRuleStep::EnterStaticPath), // static path
+        },
         AddRuleStep::SelectEffect => Some(match domain_index {
             0 => AddRuleStep::SelectDomain,
-            1 => AddRuleStep::EnterPath,
+            1 => match path_type_index {
+                0 => AddRuleStep::ToggleWorktree,  // subpath
+                1 => AddRuleStep::EnterStaticPath, // exact
+                2 => AddRuleStep::EnterRegexPath,  // regex
+                3 => AddRuleStep::SelectPathType,  // any
+                _ => AddRuleStep::EnterPath,       // raw s-expr
+            },
             2 => AddRuleStep::EnterNetDomain,
             _ => AddRuleStep::EnterToolName,
         }),
@@ -1214,7 +1271,19 @@ pub(crate) fn prev_add_rule_step(step: AddRuleStep, domain_index: usize) -> Opti
 }
 
 /// Compute the next step in the add-rule flow, or `None` if the form is complete.
+#[cfg(test)]
 pub(crate) fn next_add_rule_step(step: AddRuleStep, domain_index: usize) -> Option<AddRuleStep> {
+    next_add_rule_step_full(step, domain_index, 0, 0, 0)
+}
+
+/// Full version accepting all form indices for path step navigation.
+pub(crate) fn next_add_rule_step_full(
+    step: AddRuleStep,
+    domain_index: usize,
+    path_type_index: usize,
+    path_source_index: usize,
+    env_var_index: usize,
+) -> Option<AddRuleStep> {
     match step {
         AddRuleStep::EnterBinary => Some(AddRuleStep::EnterArgs),
         AddRuleStep::EnterArgs => Some(AddRuleStep::SelectDomain),
@@ -1224,10 +1293,39 @@ pub(crate) fn next_add_rule_step(step: AddRuleStep, domain_index: usize) -> Opti
             2 => AddRuleStep::EnterNetDomain,
             _ => AddRuleStep::EnterToolName,
         }),
-        AddRuleStep::SelectFsOp => Some(AddRuleStep::EnterPath),
+        AddRuleStep::SelectFsOp => Some(AddRuleStep::SelectPathType),
         AddRuleStep::EnterPath => Some(AddRuleStep::SelectEffect),
         AddRuleStep::EnterNetDomain => Some(AddRuleStep::SelectEffect),
         AddRuleStep::EnterToolName => Some(AddRuleStep::SelectEffect),
+        // Structured path steps
+        AddRuleStep::SelectPathType => Some(match path_type_index {
+            0 => AddRuleStep::SelectPathSource, // subpath
+            1 => AddRuleStep::EnterStaticPath,  // exact
+            2 => AddRuleStep::EnterRegexPath,   // regex
+            3 => AddRuleStep::SelectEffect,     // any
+            _ => AddRuleStep::EnterPath,        // raw s-expr
+        }),
+        AddRuleStep::SelectPathSource => Some(match path_source_index {
+            0 => AddRuleStep::SelectEnvVar,    // env variable
+            _ => AddRuleStep::EnterStaticPath, // static path
+        }),
+        AddRuleStep::SelectEnvVar => {
+            if env_var_index == COMMON_ENV_VARS.len() - 1 {
+                Some(AddRuleStep::EnterCustomEnvVar) // "custom"
+            } else {
+                Some(AddRuleStep::ToggleWorktree)
+            }
+        }
+        AddRuleStep::EnterCustomEnvVar => Some(AddRuleStep::ToggleWorktree),
+        AddRuleStep::EnterStaticPath => {
+            if path_type_index == 0 {
+                Some(AddRuleStep::ToggleWorktree) // subpath static path
+            } else {
+                Some(AddRuleStep::SelectEffect) // exact path
+            }
+        }
+        AddRuleStep::EnterRegexPath => Some(AddRuleStep::SelectEffect),
+        AddRuleStep::ToggleWorktree => Some(AddRuleStep::SelectEffect),
         AddRuleStep::SelectEffect => Some(AddRuleStep::SelectLevel),
         AddRuleStep::SelectLevel => None,
     }
@@ -1402,7 +1500,7 @@ fn build_cap_matcher_from_form(form: &AddRuleForm) -> CapMatcher {
     }
 }
 
-/// Build an FsMatcher from form fields (op + path).
+/// Build an FsMatcher from form fields (op + structured path).
 fn build_fs_matcher_from_form(form: &AddRuleForm) -> FsMatcher {
     let op = match form.fs_op_index {
         0 => OpPattern::Any,
@@ -1412,15 +1510,67 @@ fn build_fs_matcher_from_form(form: &AddRuleForm) -> FsMatcher {
         _ => OpPattern::Single(FsOp::Delete),
     };
 
-    let path_raw = form.path_input.value().trim().to_string();
-    let path = if path_raw.is_empty() {
-        None
-    } else {
-        // Path might be a complex s-expression like (subpath (env PWD)).
-        // Try to parse it; if that fails, treat it as a literal path.
-        match parse_path_filter(&path_raw) {
-            Some(pf) => Some(pf),
-            None => Some(PathFilter::Literal(path_raw)),
+    let path = match form.path_type_index {
+        0 => {
+            // subpath
+            let expr = match form.path_source_index {
+                0 => {
+                    // env variable
+                    let var_name = if form.env_var_index < COMMON_ENV_VARS.len() - 1 {
+                        COMMON_ENV_VARS[form.env_var_index].to_string()
+                    } else {
+                        // custom
+                        let custom = form.custom_env_input.value().trim().to_string();
+                        if custom.is_empty() {
+                            "PWD".to_string()
+                        } else {
+                            custom
+                        }
+                    };
+                    PathExpr::Env(var_name)
+                }
+                _ => {
+                    // static path
+                    let p = form.static_path_input.value().trim().to_string();
+                    if p.is_empty() {
+                        PathExpr::Static("/".to_string())
+                    } else {
+                        PathExpr::Static(p)
+                    }
+                }
+            };
+            Some(PathFilter::Subpath(expr, form.worktree))
+        }
+        1 => {
+            // exact
+            let p = form.static_path_input.value().trim().to_string();
+            if p.is_empty() {
+                None
+            } else {
+                Some(PathFilter::Literal(p))
+            }
+        }
+        2 => {
+            // regex
+            let r = form.regex_path_input.value().trim().to_string();
+            if r.is_empty() {
+                None
+            } else {
+                Some(PathFilter::Regex(r))
+            }
+        }
+        3 => None, // any
+        _ => {
+            // raw s-expr (legacy)
+            let path_raw = form.path_input.value().trim().to_string();
+            if path_raw.is_empty() {
+                None
+            } else {
+                match parse_path_filter(&path_raw) {
+                    Some(pf) => Some(pf),
+                    None => Some(PathFilter::Literal(path_raw)),
+                }
+            }
         }
     };
 
