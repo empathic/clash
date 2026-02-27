@@ -123,15 +123,16 @@ pub fn upgrade_policy(source: &str) -> anyhow::Result<(String, Vec<String>)> {
 
     // Apply all auto-fixes for deprecations between the declared version and current.
     for dep in all_deprecations() {
-        if dep.deprecated_in > version && dep.deprecated_in <= CURRENT_VERSION {
-            if (dep.check)(&result) {
-                if let Some(fix) = dep.fix {
-                    result = fix(&result);
-                    changes.push(dep.message);
-                } else {
-                    // No auto-fix available — warn but continue.
-                    changes.push(format!("{} (manual fix required)", dep.message));
-                }
+        if dep.deprecated_in > version
+            && dep.deprecated_in <= CURRENT_VERSION
+            && (dep.check)(&result)
+        {
+            if let Some(fix) = dep.fix {
+                result = fix(&result);
+                changes.push(dep.message);
+            } else {
+                // No auto-fix available — warn but continue.
+                changes.push(format!("{} (manual fix required)", dep.message));
             }
         }
     }
