@@ -79,10 +79,7 @@ pub fn check_for_sandbox_fs_hint(
     // Source 2: Parse stderr for filesystem error patterns (fallback).
     // Note: don't use `?` on tool_response — we still want to proceed if we
     // have audit violations even when the response is missing.
-    let response_text = input
-        .tool_response
-        .as_ref()
-        .and_then(|r| extract_response_text(r));
+    let response_text = input.tool_response.as_ref().and_then(extract_response_text);
     let stderr_has_errors = response_text.as_ref().is_some_and(|t| contains_fs_error(t));
 
     info!(
