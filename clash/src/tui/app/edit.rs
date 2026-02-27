@@ -1210,6 +1210,25 @@ impl App {
         }
     }
 
+    /// Live-validate the current EditNodeText input.
+    /// Sets `state.error` for PathNode if the filter doesn't parse; clears it otherwise.
+    pub fn validate_edit_node_text(&mut self) {
+        let Mode::EditNodeText(state) = &mut self.mode else {
+            return;
+        };
+        let node_id = state.node_id;
+        if matches!(self.tree.arena[node_id].kind, TreeNodeKind::PathNode(_)) {
+            let val = state.input.value();
+            state.error = if !val.is_empty() && parse_path_filter(val).is_none() {
+                Some("Invalid path filter".into())
+            } else {
+                None
+            };
+        } else {
+            state.error = None;
+        }
+    }
+
     /// Apply a confirmed inline text edit to all rules under the edited node.
     pub fn confirm_edit_node_text(&mut self) {
         let Mode::EditNodeText(state) = &self.mode else {

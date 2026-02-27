@@ -345,9 +345,7 @@ fn handle_edit_node_text(app: &mut App, key: KeyEvent) -> InputResult {
         TextInputAction::Submit => app.confirm_edit_node_text(),
         TextInputAction::Cancel => app.mode = Mode::Normal,
         TextInputAction::Changed => {
-            if let Mode::EditNodeText(state) = &mut app.mode {
-                state.error = None;
-            }
+            app.validate_edit_node_text();
         }
         _ => {}
     }
