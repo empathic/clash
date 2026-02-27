@@ -3,7 +3,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::app::{
-    AddRuleStep, App, ConfirmAction, DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS, Mode,
+    AddRuleStep, App, COMMON_ENV_VARS, ConfirmAction, DOMAIN_NAMES, EFFECT_DISPLAY, EFFECT_NAMES,
+    FS_OPS, Mode, PATH_SOURCES, PATH_TYPES, WORKTREE_OPTIONS,
 };
 use super::editor::TextInputAction;
 
@@ -208,11 +209,29 @@ fn handle_add_rule(app: &mut App, key: KeyEvent) -> InputResult {
             let len = form.available_levels.len();
             selector_key(key, &mut form.level_index, len)
         }
+        AddRuleStep::SelectPathType => {
+            selector_key(key, &mut form.path_type_index, PATH_TYPES.len())
+        }
+        AddRuleStep::SelectPathSource => {
+            selector_key(key, &mut form.path_source_index, PATH_SOURCES.len())
+        }
+        AddRuleStep::SelectEnvVar => {
+            selector_key(key, &mut form.env_var_index, COMMON_ENV_VARS.len())
+        }
+        AddRuleStep::ToggleWorktree => {
+            let mut index = if form.worktree { 1 } else { 0 };
+            let result = selector_key(key, &mut index, WORKTREE_OPTIONS.len());
+            form.worktree = index == 1;
+            result
+        }
         AddRuleStep::EnterBinary
         | AddRuleStep::EnterArgs
         | AddRuleStep::EnterPath
         | AddRuleStep::EnterNetDomain
-        | AddRuleStep::EnterToolName => text_input_key(key, form),
+        | AddRuleStep::EnterToolName
+        | AddRuleStep::EnterCustomEnvVar
+        | AddRuleStep::EnterStaticPath
+        | AddRuleStep::EnterRegexPath => text_input_key(key, form),
     };
 
     match action {

@@ -17,7 +17,7 @@ expression: output
 │     ▼ Exec                                                                   │
 │         ask         [user:main]                                              │
 │ ▼ *                                                                          │
-│ │ ▼ (subpath (env PWD))                                                      │
+│ │ ▼ subpath env PWD                                                          │
 │ │   ▼ read                                                                   │
 │ │     ▼ Filesystem                                                           │
 ┌──────────────────────────────────────────────────────────────────────────────┐

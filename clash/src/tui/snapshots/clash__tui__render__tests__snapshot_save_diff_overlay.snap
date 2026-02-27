@@ -16,7 +16,7 @@ expression: output
 │   ▼ Ex│  +   (allow (exec "cargo"))                                  │       │
 │       │    )                                                         │       │
 │ ▼ *   │                                                              │       │
-│ │ ▼ (s│  Save? y confirm  n/Esc cancel  j/k scroll                   │       │
+│ │ ▼ su│  Save? y confirm  n/Esc cancel  j/k scroll                   │       │
 │ │   ▼ │                                                              │       │
 │ │     │                                                              │       │
 │ │     │                                                              │       │
