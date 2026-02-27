@@ -258,6 +258,7 @@ fn maybe_start_proxy(network: &NetworkPolicy) -> Result<Option<proxy::ProxyHandl
 
 /// Set `HTTP_PROXY` / `HTTPS_PROXY` env vars on a `Command` so the sandboxed
 /// process routes traffic through the domain-filtering proxy.
+#[cfg(target_os = "macos")]
 fn set_proxy_env(cmd: &mut std::process::Command, addr: std::net::SocketAddr) {
     let proxy_url = format!("http://{}", addr);
     cmd.env("HTTP_PROXY", &proxy_url)
