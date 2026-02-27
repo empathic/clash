@@ -16,10 +16,11 @@ use crate::settings::PolicyLevel;
 
 use super::super::editor::TextInput;
 use super::super::input::InputResult;
-use super::super::tree::{LeafInfo, TreeNodeKind};
+use super::super::tree::{LeafInfo, NodeId, TreeNodeKind};
 use super::{
-    AddRuleForm, AddRuleStep, App, DiffHunk, DiffLine, EditRuleState, Mode, RuleTarget,
-    SandboxMutation, SaveDiff, SelectBranchEffectState, SelectEffectState, StatusMessage,
+    AddRuleForm, AddRuleStep, App, DiffHunk, DiffLine, EditNodeTextState, EditRuleState, Mode,
+    RuleTarget, SandboxMutation, SaveDiff, SelectBranchEffectState, SelectEffectState,
+    SelectFsOpState, StatusMessage,
 };
 
 // -----------------------------------------------------------------------
@@ -214,6 +215,7 @@ impl App {
         self.push_undo();
         let mut changed = 0;
         let mut errors = Vec::new();
+        let mut seen = std::collections::HashSet::new();
 
         for leaf in &state.leaves {
             let LeafInfo::Regular {
@@ -224,6 +226,11 @@ impl App {
             else {
                 continue;
             };
+
+            // Or-expansion can produce duplicate leaves for the same rule; skip.
+            if !seen.insert((*level, policy.clone(), rule_text.clone())) {
+                continue;
+            }
 
             let old_rule = match parse_rule_text(rule_text) {
                 Ok(r) => r,
@@ -410,8 +417,27 @@ impl App {
         self.push_undo();
         let mut deleted = 0;
         let mut errors = Vec::new();
+        let mut seen = std::collections::HashSet::new();
 
         for leaf in &leaves {
+            // Or-expansion can produce duplicate leaves for the same rule; skip.
+            let dedup_key: (PolicyLevel, String, String) = match leaf {
+                LeafInfo::Regular {
+                    level,
+                    policy,
+                    rule_text,
+                } => (*level, policy.clone(), rule_text.clone()),
+                LeafInfo::Sandbox {
+                    level,
+                    policy,
+                    sandbox_rule_text,
+                    ..
+                } => (*level, policy.clone(), sandbox_rule_text.clone()),
+            };
+            if !seen.insert(dedup_key) {
+                continue;
+            }
+
             let result = match leaf {
                 LeafInfo::Regular {
                     level,
@@ -1131,6 +1157,432 @@ impl App {
                 );
             }
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Inline node editing
+    // -------------------------------------------------------------------
+
+    /// Enter inline edit mode for the focused tree node.
+    ///
+    /// Dispatches on the node kind:
+    /// - Text nodes (Binary, Arg, HasArg, NetDomain, ToolName): text input
+    /// - PathNode: text input prefilled with s-expr
+    /// - FsOp: selector cycling through operations
+    /// - Leaf/SandboxLeaf: delegates to effect selector (same as Tab)
+    /// - Others: shows "not editable" status error
+    pub fn start_edit_node(&mut self) {
+        let Some(row) = self.tree.flat_rows.get(self.tree.cursor) else {
+            return;
+        };
+        let node_id = row.node_id;
+        let kind = &self.tree.arena[node_id].kind;
+        match kind {
+            TreeNodeKind::Binary(s)
+            | TreeNodeKind::Arg(s)
+            | TreeNodeKind::HasArg(s)
+            | TreeNodeKind::NetDomain(s)
+            | TreeNodeKind::ToolName(s) => {
+                let literal = unquote_pattern_display(s);
+                self.mode = Mode::EditNodeText(EditNodeTextState {
+                    input: TextInput::new(&literal),
+                    node_id,
+                    error: None,
+                });
+            }
+            TreeNodeKind::PathNode(pf) => {
+                self.mode = Mode::EditNodeText(EditNodeTextState {
+                    input: TextInput::new(&pf.to_string()),
+                    node_id,
+                    error: None,
+                });
+            }
+            TreeNodeKind::FsOp(s) => {
+                let op_index = FS_OPS.iter().position(|&op| op == s).unwrap_or(0);
+                self.mode = Mode::SelectFsOp(SelectFsOpState { op_index, node_id });
+            }
+            TreeNodeKind::Leaf { .. } | TreeNodeKind::SandboxLeaf { .. } => {
+                self.start_select_effect();
+            }
+            _ => {
+                self.set_status("Not editable", true);
+            }
+        }
+    }
+
+    /// Apply a confirmed inline text edit to all rules under the edited node.
+    pub fn confirm_edit_node_text(&mut self) {
+        let Mode::EditNodeText(state) = &self.mode else {
+            return;
+        };
+
+        let new_text = state.input.value().to_string();
+        let node_id = state.node_id;
+        let node_kind = self.tree.arena[node_id].kind.clone();
+
+        if new_text.is_empty() {
+            if let Mode::EditNodeText(state) = &mut self.mode {
+                state.error = Some("Value cannot be empty".into());
+            }
+            return;
+        }
+
+        self.mode = Mode::Normal;
+        self.apply_node_edit(node_id, &node_kind, &new_text);
+    }
+
+    /// Apply a confirmed FsOp selection to all rules under the edited node.
+    pub fn confirm_select_fs_op(&mut self) {
+        let Mode::SelectFsOp(state) = &self.mode else {
+            return;
+        };
+
+        let op_index = state.op_index;
+        let node_id = state.node_id;
+        let node_kind = self.tree.arena[node_id].kind.clone();
+        let new_value = FS_OPS[op_index];
+
+        self.mode = Mode::Normal;
+        self.apply_node_edit(node_id, &node_kind, new_value);
+    }
+
+    /// Shared implementation: apply an inline node edit to all leaves under the node.
+    fn apply_node_edit(&mut self, node_id: NodeId, node_kind: &TreeNodeKind, new_value: &str) {
+        let leaves = self.tree.arena.collect_leaves(node_id);
+        if leaves.is_empty() {
+            self.set_status("No rules to change", true);
+            return;
+        }
+
+        // Filter to editable (regular) leaves
+        let regular_leaves: Vec<&LeafInfo> = leaves
+            .iter()
+            .filter(|l| matches!(l, LeafInfo::Regular { .. }))
+            .collect();
+        if regular_leaves.is_empty() {
+            self.set_status("No editable rules under this node", true);
+            return;
+        }
+
+        self.push_undo();
+        let mut changed = 0;
+        let mut errors = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for leaf in &regular_leaves {
+            let LeafInfo::Regular {
+                level,
+                policy,
+                rule_text,
+            } = leaf
+            else {
+                continue;
+            };
+
+            // Or-expansion can produce duplicate leaves for the same rule; skip.
+            if !seen.insert((*level, policy.clone(), rule_text.clone())) {
+                continue;
+            }
+
+            let old_rule = match parse_rule_text(rule_text) {
+                Ok(r) => r,
+                Err(e) => {
+                    errors.push(format!("parse: {e}"));
+                    continue;
+                }
+            };
+
+            let new_rule = match modify_rule_node(&old_rule, node_kind, new_value) {
+                Ok(r) => r,
+                Err(e) => {
+                    errors.push(e);
+                    continue;
+                }
+            };
+
+            if new_rule.to_string() == old_rule.to_string() {
+                continue;
+            }
+
+            let ls = self.levels.iter_mut().find(|ls| ls.level == *level);
+            if let Some(ls) = ls {
+                match edit::remove_rule(&ls.source, policy, rule_text)
+                    .and_then(|s| edit::add_rule(&s, policy, &new_rule))
+                {
+                    Ok(new_source) => {
+                        ls.source = new_source;
+                        changed += 1;
+                    }
+                    Err(e) => errors.push(format!("{e}")),
+                }
+            }
+        }
+
+        // Validate all modified sources
+        let mut valid = true;
+        for ls in &self.levels {
+            if let Err(e) = compile_policy(&ls.source) {
+                errors.push(format!("validation: {e}"));
+                valid = false;
+            }
+        }
+
+        if !valid {
+            // Roll back
+            if let Some(entry) = self.history.undo_stack.pop() {
+                for (level, source) in &entry.sources {
+                    if let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == *level) {
+                        ls.source = source.clone();
+                    }
+                }
+            }
+            self.set_status(&format!("Edit failed: {}", errors.join("; ")), true);
+            return;
+        }
+
+        self.rebuild_tree();
+        if errors.is_empty() {
+            self.set_status(
+                &format!(
+                    "Updated {changed} rule{}",
+                    if changed == 1 { "" } else { "s" }
+                ),
+                false,
+            );
+        } else {
+            self.set_status(
+                &format!("Updated {changed}, errors: {}", errors.join("; ")),
+                true,
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Node edit helpers: modify a rule based on which tree node was edited
+// ---------------------------------------------------------------------------
+
+/// Modify a rule based on which tree node was edited, returning the new rule.
+fn modify_rule_node(
+    rule: &Rule,
+    node_kind: &TreeNodeKind,
+    new_value: &str,
+) -> Result<Rule, String> {
+    match node_kind {
+        TreeNodeKind::Binary(old) => {
+            let CapMatcher::Exec(ref exec) = rule.matcher else {
+                return Ok(rule.clone());
+            };
+            let new_bin = replace_in_pattern(&exec.bin, old, new_value);
+            Ok(Rule {
+                effect: rule.effect,
+                matcher: CapMatcher::Exec(ExecMatcher {
+                    bin: new_bin,
+                    args: exec.args.clone(),
+                    has_args: exec.has_args.clone(),
+                }),
+                sandbox: rule.sandbox.clone(),
+            })
+        }
+        TreeNodeKind::Arg(old) => {
+            let CapMatcher::Exec(ref exec) = rule.matcher else {
+                return Ok(rule.clone());
+            };
+            let new_args: Vec<Pattern> = exec
+                .args
+                .iter()
+                .map(|p| replace_in_pattern(p, old, new_value))
+                .collect();
+            Ok(Rule {
+                effect: rule.effect,
+                matcher: CapMatcher::Exec(ExecMatcher {
+                    bin: exec.bin.clone(),
+                    args: new_args,
+                    has_args: exec.has_args.clone(),
+                }),
+                sandbox: rule.sandbox.clone(),
+            })
+        }
+        TreeNodeKind::HasArg(old) => {
+            let CapMatcher::Exec(ref exec) = rule.matcher else {
+                return Ok(rule.clone());
+            };
+            let new_has_args: Vec<Pattern> = exec
+                .has_args
+                .iter()
+                .map(|p| replace_in_pattern(p, old, new_value))
+                .collect();
+            Ok(Rule {
+                effect: rule.effect,
+                matcher: CapMatcher::Exec(ExecMatcher {
+                    bin: exec.bin.clone(),
+                    args: exec.args.clone(),
+                    has_args: new_has_args,
+                }),
+                sandbox: rule.sandbox.clone(),
+            })
+        }
+        TreeNodeKind::FsOp(old) => {
+            let CapMatcher::Fs(ref fs) = rule.matcher else {
+                return Ok(rule.clone());
+            };
+            let new_op = replace_in_op(&fs.op, old, new_value);
+            Ok(Rule {
+                effect: rule.effect,
+                matcher: CapMatcher::Fs(FsMatcher {
+                    op: new_op,
+                    path: fs.path.clone(),
+                }),
+                sandbox: rule.sandbox.clone(),
+            })
+        }
+        TreeNodeKind::PathNode(old_pf) => {
+            let CapMatcher::Fs(ref fs) = rule.matcher else {
+                return Ok(rule.clone());
+            };
+            let new_pf = parse_path_filter(new_value)
+                .ok_or_else(|| format!("Invalid path filter: {new_value}"))?;
+            let new_path = replace_in_path_filter(&fs.path, &old_pf.to_string(), new_pf);
+            Ok(Rule {
+                effect: rule.effect,
+                matcher: CapMatcher::Fs(FsMatcher {
+                    op: fs.op.clone(),
+                    path: new_path,
+                }),
+                sandbox: rule.sandbox.clone(),
+            })
+        }
+        TreeNodeKind::NetDomain(old) => {
+            let CapMatcher::Net(ref net) = rule.matcher else {
+                return Ok(rule.clone());
+            };
+            let new_domain = replace_in_pattern(&net.domain, old, new_value);
+            Ok(Rule {
+                effect: rule.effect,
+                matcher: CapMatcher::Net(NetMatcher {
+                    domain: new_domain,
+                    path: net.path.clone(),
+                }),
+                sandbox: rule.sandbox.clone(),
+            })
+        }
+        TreeNodeKind::ToolName(old) => {
+            let CapMatcher::Tool(ref tool) = rule.matcher else {
+                return Ok(rule.clone());
+            };
+            let new_name = replace_in_pattern(&tool.name, old, new_value);
+            Ok(Rule {
+                effect: rule.effect,
+                matcher: CapMatcher::Tool(ToolMatcher { name: new_name }),
+                sandbox: rule.sandbox.clone(),
+            })
+        }
+        _ => Ok(rule.clone()),
+    }
+}
+
+/// Replace a matching pattern alternative with a new value.
+fn replace_in_pattern(pat: &Pattern, old_display: &str, new_text: &str) -> Pattern {
+    match pat {
+        Pattern::Or(alts) => {
+            let new_alts: Vec<Pattern> = alts
+                .iter()
+                .map(|a| replace_in_pattern(a, old_display, new_text))
+                .collect();
+            Pattern::Or(new_alts)
+        }
+        _ if pat.to_string() == old_display => parse_pattern_text(new_text),
+        _ => pat.clone(),
+    }
+}
+
+/// Strip s-expression quoting from a pattern display string for inline editing.
+/// `"git"` → `git`, `"foo\"bar"` → `foo"bar`, `*` → `*`, `/regex/` → `/regex/`
+fn unquote_pattern_display(s: &str) -> String {
+    if let Some(inner) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        inner.replace("\\\"", "\"").replace("\\\\", "\\")
+    } else {
+        s.to_string()
+    }
+}
+
+/// Parse a pattern from user text input.
+fn parse_pattern_text(s: &str) -> Pattern {
+    let s = s.trim();
+    if s == "*" {
+        Pattern::Any
+    } else if let Some(inner) = s.strip_prefix('/').and_then(|s| s.strip_suffix('/')) {
+        Pattern::Regex(inner.to_string())
+    } else {
+        // Strip surrounding quotes if present
+        let unquoted = s
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(s);
+        Pattern::Literal(unquoted.to_string())
+    }
+}
+
+/// Replace a matching op in an OpPattern.
+fn replace_in_op(op: &OpPattern, old_display: &str, new_op_str: &str) -> OpPattern {
+    match op {
+        OpPattern::Any if old_display == "*" => parse_op_text(new_op_str),
+        OpPattern::Single(fs_op) if fs_op.to_string() == old_display => parse_op_text(new_op_str),
+        OpPattern::Or(ops) => {
+            let new_ops: Vec<FsOp> = ops
+                .iter()
+                .map(|o| {
+                    if o.to_string() == old_display {
+                        match parse_op_text(new_op_str) {
+                            OpPattern::Single(new_op) => new_op,
+                            _ => *o,
+                        }
+                    } else {
+                        *o
+                    }
+                })
+                .collect();
+            OpPattern::Or(new_ops)
+        }
+        _ => op.clone(),
+    }
+}
+
+/// Parse an op from user text input.
+fn parse_op_text(s: &str) -> OpPattern {
+    match s.trim() {
+        "*" => OpPattern::Any,
+        "read" => OpPattern::Single(FsOp::Read),
+        "write" => OpPattern::Single(FsOp::Write),
+        "create" => OpPattern::Single(FsOp::Create),
+        "delete" => OpPattern::Single(FsOp::Delete),
+        _ => OpPattern::Any,
+    }
+}
+
+/// Replace a matching path filter in an optional PathFilter.
+fn replace_in_path_filter(
+    pf: &Option<PathFilter>,
+    old_pf_text: &str,
+    new_pf: PathFilter,
+) -> Option<PathFilter> {
+    match pf {
+        None => Some(new_pf),
+        Some(PathFilter::Or(filters)) => {
+            let new_filters: Vec<PathFilter> = filters
+                .iter()
+                .map(|f| {
+                    if f.to_string() == old_pf_text {
+                        new_pf.clone()
+                    } else {
+                        f.clone()
+                    }
+                })
+                .collect();
+            Some(PathFilter::Or(new_filters))
+        }
+        Some(f) if f.to_string() == old_pf_text => Some(new_pf),
+        other => other.clone(),
     }
 }
 

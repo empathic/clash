@@ -25,4 +25,4 @@ expression: output
 │1 rule: 1 ask                                                                 │
 │"ls"                                                                          │
 │                                                                              │
-j/k move  h collapse  z/Z fold  Tab effect  d delete  [/] all  a add  / search
+j/k move  h collapse  z/Z fold  Tab effect  e edit  d delete  [/] all  a add  /

@@ -15,7 +15,7 @@ use crate::settings::{LoadedPolicy, PolicyLevel};
 // Human-readable PathFilter display
 // ---------------------------------------------------------------------------
 
-/// Produce a concise tree label for a PathFilter, e.g. `"subpath env PWD"`.
+/// Produce a concise tree label for a PathFilter, e.g. `"subpath ${PWD}"`.
 pub fn display_path_filter_short(pf: &PathFilter) -> String {
     match pf {
         PathFilter::Subpath(expr, worktree) => {
@@ -26,7 +26,7 @@ pub fn display_path_filter_short(pf: &PathFilter) -> String {
                 format!("subpath {expr_s}")
             }
         }
-        PathFilter::Literal(s) => s.clone(),
+        PathFilter::Literal(s) => format!("\"{s}\""),
         PathFilter::Regex(r) => format!("/{r}/"),
         PathFilter::Or(fs) => {
             let parts: Vec<String> = fs.iter().map(display_path_filter_short).collect();
@@ -42,7 +42,7 @@ pub fn display_path_filter_short(pf: &PathFilter) -> String {
 fn display_path_expr_short(expr: &PathExpr) -> String {
     match expr {
         PathExpr::Static(s) => s.clone(),
-        PathExpr::Env(name) => format!("env {name}"),
+        PathExpr::Env(name) => format!("${{{name}}}"),
         PathExpr::Join(parts) => parts.iter().map(display_path_expr_short).collect(),
     }
 }

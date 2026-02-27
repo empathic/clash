@@ -31,4 +31,4 @@ expression: output
 │Source:│                                                              │       │
 │Rule: (└──────────────────────────────────────────────────────────────┘       │
 │"cargo" > Exec > allow                                                        │
-j/k move  Tab effect  e edit  d delete  [/] all  a add  / search  w save  ? help
+j/k move  Tab effect  e edit  E edit rule  d delete  [/] all  a add  / search  w

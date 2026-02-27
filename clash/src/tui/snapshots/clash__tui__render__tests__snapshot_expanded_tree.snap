@@ -17,7 +17,7 @@ expression: output
 │     ▼ Exec                                                                   │
 │         ask         [user:main]                                              │
 │ ▼ *                                                                          │
-│ │ ▼ subpath env PWD                                                          │
+│ │ ▼ subpath ${PWD}                                                           │
 │ │   ▼ read                                                                   │
 │ │     ▼ Filesystem                                                           │
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -25,4 +25,4 @@ expression: output
 │1 rule: 1 auto allow                                                          │
 │"git"                                                                         │
 │                                                                              │
-j/k move  h collapse  z/Z fold  Tab effect  d delete  [/] all  a add  / search
+j/k move  h collapse  z/Z fold  Tab effect  e edit  d delete  [/] all  a add  /
