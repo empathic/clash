@@ -162,12 +162,25 @@ fn render_tree(f: &mut Frame, app: &App, area: Rect) {
         Mode::SelectEffect(state) => Some(state.effect_index),
         _ => None,
     };
+    let branch_selecting = match &app.mode {
+        Mode::SelectBranchEffect(state) => Some(state.effect_index),
+        _ => None,
+    };
 
     for i in scroll..end {
         let row = &app.tree.flat_rows[i];
         let is_selected = i == app.tree.cursor;
         let is_match = app.search.matches.contains(&i);
-        let inline_select = if is_selected { selecting } else { None };
+        // Leaf nodes get the leaf-level selector; branch nodes get the branch selector
+        let inline_select = if is_selected {
+            let kind = &app.tree.arena[row.node_id].kind;
+            match kind {
+                TreeNodeKind::Leaf { .. } | TreeNodeKind::SandboxLeaf { .. } => selecting,
+                _ => branch_selecting,
+            }
+        } else {
+            None
+        };
         let summary = if !row.expanded && row.has_children {
             collapsed_summary(&app.tree.arena, row.node_id)
         } else {
@@ -354,8 +367,31 @@ pub(crate) fn render_row(
         }
     }
 
+    // Show inline effect selector on branch nodes during branch effect change
+    if let Some(sel_idx) = inline_select
+        && !matches!(
+            kind,
+            TreeNodeKind::Leaf { .. } | TreeNodeKind::SandboxLeaf { .. }
+        )
+    {
+        spans.push(Span::raw("  "));
+        for (i, &name) in EFFECT_DISPLAY.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw(" "));
+            }
+            let style = if i == sel_idx {
+                Style::default()
+                    .add_modifier(Modifier::REVERSED)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                tui_style::DIM
+            };
+            spans.push(Span::styled(format!(" {name} "), style));
+        }
+    }
+
     // Append collapsed summary for any non-leaf collapsed node
-    if !row.expanded && row.has_children {
+    if inline_select.is_none() && !row.expanded && row.has_children {
         spans.extend(summary.iter().cloned());
     }
 
@@ -674,6 +710,7 @@ pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
                         }
                         hints.push(("z/Z", "fold"));
                     }
+                    hints.push(("Tab", "effect"));
                     hints.push(("d", "delete"));
                 }
                 TreeNodeKind::Leaf { .. } => {

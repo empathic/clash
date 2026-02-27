@@ -25,4 +25,4 @@ expression: output
 │1 rule: 1 auto allow                                                          │
 │"git"                                                                         │
 │                                                                              │
-j/k move  l expand  z/Z fold  d delete  [/] all  a add  / search  w save  ? help
+j/k move  l expand  z/Z fold  Tab effect  d delete  [/] all  a add  / search  w

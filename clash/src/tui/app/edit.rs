@@ -19,7 +19,7 @@ use super::super::input::InputResult;
 use super::super::tree::{LeafInfo, TreeNodeKind};
 use super::{
     AddRuleForm, AddRuleStep, App, DiffHunk, DiffLine, EditRuleState, Mode, RuleTarget,
-    SandboxMutation, SaveDiff, SelectEffectState, StatusMessage,
+    SandboxMutation, SaveDiff, SelectBranchEffectState, SelectEffectState, StatusMessage,
 };
 
 // -----------------------------------------------------------------------
@@ -179,8 +179,123 @@ impl App {
                 });
             }
             _ => {
-                self.set_status("Not a rule leaf", true);
+                let node_id = row.node_id;
+                let leaves = self.tree.arena.collect_leaves(node_id);
+                // Filter to regular leaves only (sandbox leaves are excluded)
+                let regular_leaves: Vec<LeafInfo> = leaves
+                    .into_iter()
+                    .filter(|l| matches!(l, LeafInfo::Regular { .. }))
+                    .collect();
+                if regular_leaves.is_empty() {
+                    self.set_status("No rules to change", true);
+                    return;
+                }
+                self.mode = Mode::SelectBranchEffect(SelectBranchEffectState {
+                    effect_index: 0,
+                    leaves: regular_leaves,
+                });
             }
+        }
+    }
+
+    /// Apply the selected branch effect change.
+    pub fn confirm_branch_effect_change(&mut self) {
+        let Mode::SelectBranchEffect(state) = &self.mode else {
+            return;
+        };
+
+        let effect_index = state.effect_index;
+        let new_effect = effect_from_display_index(effect_index);
+        let leaves = std::mem::replace(&mut self.mode, Mode::Normal);
+        let Mode::SelectBranchEffect(state) = leaves else {
+            return;
+        };
+
+        self.push_undo();
+        let mut changed = 0;
+        let mut errors = Vec::new();
+
+        for leaf in &state.leaves {
+            let LeafInfo::Regular {
+                level,
+                policy,
+                rule_text,
+            } = leaf
+            else {
+                continue;
+            };
+
+            let old_rule = match parse_rule_text(rule_text) {
+                Ok(r) => r,
+                Err(e) => {
+                    errors.push(format!("parse: {e}"));
+                    continue;
+                }
+            };
+
+            if old_rule.effect == new_effect {
+                continue;
+            }
+
+            let new_rule = Rule {
+                effect: new_effect,
+                matcher: old_rule.matcher.clone(),
+                sandbox: old_rule.sandbox.clone(),
+            };
+
+            let ls = self.levels.iter_mut().find(|ls| ls.level == *level);
+            if let Some(ls) = ls {
+                match edit::remove_rule(&ls.source, policy, rule_text)
+                    .and_then(|s| edit::add_rule(&s, policy, &new_rule))
+                {
+                    Ok(new_source) => {
+                        ls.source = new_source;
+                        changed += 1;
+                    }
+                    Err(e) => errors.push(format!("{e}")),
+                }
+            }
+        }
+
+        // Validate all modified sources
+        let mut valid = true;
+        for ls in &self.levels {
+            if let Err(e) = compile_policy(&ls.source) {
+                errors.push(format!("validation: {e}"));
+                valid = false;
+            }
+        }
+
+        if !valid {
+            if let Some(entry) = self.history.undo_stack.pop() {
+                for (level, source) in &entry.sources {
+                    if let Some(ls) = self.levels.iter_mut().find(|ls| ls.level == *level) {
+                        ls.source = source.clone();
+                    }
+                }
+            }
+            self.set_status(
+                &format!("Effect change failed: {}", errors.join("; ")),
+                true,
+            );
+            return;
+        }
+
+        self.rebuild_tree();
+        let display_name = EFFECT_DISPLAY[effect_index];
+        if errors.is_empty() {
+            self.set_status(
+                &format!(
+                    "Changed {changed} rule{} to {display_name}",
+                    if changed == 1 { "" } else { "s" }
+                ),
+                false,
+            );
+        } else {
+            self.set_status(
+                &format!("Changed {changed}, errors: {}", errors.join("; ")),
+                true,
+            );
         }
     }
 
@@ -610,34 +725,34 @@ impl App {
         }
 
         // Try next sibling label at same depth
-        if let Some(ref label) = anchor.next_sibling_label {
-            if let Some(idx) = rows.iter().position(|r| {
+        if let Some(ref label) = anchor.next_sibling_label
+            && let Some(idx) = rows.iter().position(|r| {
                 r.depth == anchor.depth && node_label(&self.tree.arena[r.node_id].kind) == *label
-            }) {
-                self.tree.cursor = idx;
-                return;
-            }
+            })
+        {
+            self.tree.cursor = idx;
+            return;
         }
 
         // Try prev sibling label at same depth
-        if let Some(ref label) = anchor.prev_sibling_label {
-            if let Some(idx) = rows.iter().position(|r| {
+        if let Some(ref label) = anchor.prev_sibling_label
+            && let Some(idx) = rows.iter().position(|r| {
                 r.depth == anchor.depth && node_label(&self.tree.arena[r.node_id].kind) == *label
-            }) {
-                self.tree.cursor = idx;
-                return;
-            }
+            })
+        {
+            self.tree.cursor = idx;
+            return;
         }
 
         // Try parent label at parent depth
-        if let Some(ref label) = anchor.parent_label {
-            if let Some(idx) = rows.iter().position(|r| {
+        if let Some(ref label) = anchor.parent_label
+            && let Some(idx) = rows.iter().position(|r| {
                 r.depth == anchor.depth.saturating_sub(1)
                     && node_label(&self.tree.arena[r.node_id].kind) == *label
-            }) {
-                self.tree.cursor = idx;
-                return;
-            }
+            })
+        {
+            self.tree.cursor = idx;
+            return;
         }
 
         // Fallback: stay near original position

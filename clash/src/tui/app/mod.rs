@@ -39,6 +39,7 @@ pub enum Mode {
     AddRule(AddRuleForm),
     EditRule(EditRuleState),
     SelectEffect(SelectEffectState),
+    SelectBranchEffect(SelectBranchEffectState),
     Search,
 }
 
@@ -147,6 +148,11 @@ pub struct SelectEffectState {
     pub effect_index: usize,
     pub rule: Rule,
     pub target: RuleTarget,
+}
+
+pub struct SelectBranchEffectState {
+    pub effect_index: usize,
+    pub leaves: Vec<LeafInfo>,
 }
 
 enum SandboxMutation {

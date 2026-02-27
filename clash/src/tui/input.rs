@@ -26,7 +26,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputResult {
     // Clear status message on any keypress (except in text-input modes)
     if matches!(
         app.mode,
-        Mode::Normal | Mode::Confirm(_) | Mode::ConfirmSave(_) | Mode::SelectEffect(_)
+        Mode::Normal
+            | Mode::Confirm(_)
+            | Mode::ConfirmSave(_)
+            | Mode::SelectEffect(_)
+            | Mode::SelectBranchEffect(_)
     ) {
         app.status_message = None;
     }
@@ -38,6 +42,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> InputResult {
         Mode::AddRule(_) => handle_add_rule(app, key),
         Mode::EditRule(_) => handle_edit_rule(app, key),
         Mode::SelectEffect(_) => handle_select_effect(app, key),
+        Mode::SelectBranchEffect(_) => handle_select_branch_effect(app, key),
         Mode::Search => handle_search(app, key),
     }
 }
@@ -328,6 +333,35 @@ fn handle_select_effect(app: &mut App, key: KeyEvent) -> InputResult {
             state.effect_index = (state.effect_index + 1) % EFFECT_DISPLAY.len();
         }
         KeyCode::Enter => app.confirm_select_effect(),
+        KeyCode::Esc => app.mode = Mode::Normal,
+        _ => {}
+    }
+    InputResult::Continue
+}
+
+// ---------------------------------------------------------------------------
+// Select branch effect mode
+// ---------------------------------------------------------------------------
+
+fn handle_select_branch_effect(app: &mut App, key: KeyEvent) -> InputResult {
+    let Mode::SelectBranchEffect(state) = &mut app.mode else {
+        return InputResult::Continue;
+    };
+    match key.code {
+        KeyCode::Left | KeyCode::Char('h') => {
+            if state.effect_index > 0 {
+                state.effect_index -= 1;
+            }
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            if state.effect_index < EFFECT_DISPLAY.len() - 1 {
+                state.effect_index += 1;
+            }
+        }
+        KeyCode::Tab => {
+            state.effect_index = (state.effect_index + 1) % EFFECT_DISPLAY.len();
+        }
+        KeyCode::Enter => app.confirm_branch_effect_change(),
         KeyCode::Esc => app.mode = Mode::Normal,
         _ => {}
     }
