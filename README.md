@@ -38,9 +38,15 @@ There are two ways to run clash depending on what you're doing:
 ### Install (use clash in your day-to-day work)
 
 ```bash
-cargo install clash
+curl -fsSL https://raw.githubusercontent.com/empathic/clash/main/install.sh | bash
 clash init
 claude
+```
+
+This downloads the latest release binary to `~/.local/bin/` (Apple Silicon Mac, Linux x86_64, Linux aarch64). On Intel Mac or other platforms, install via Cargo:
+
+```bash
+cargo install clash
 ```
 
 `clash init` writes a default policy, installs the Claude Code plugin from GitHub, installs the status line, and walks you through initial configuration. After init, every `claude` session automatically loads clash.
@@ -223,9 +229,13 @@ It checks policy files, plugin registration, PATH, file permissions, and sandbox
 
 ### "command not found: clash"
 
-Make sure `~/.cargo/bin` is on your `PATH`:
+Make sure the install directory is on your `PATH`:
 
 ```bash
+# If installed via the install script
+export PATH="$HOME/.local/bin:$PATH"
+
+# If installed via cargo
 export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
@@ -284,7 +294,8 @@ Clash stays installed but becomes a complete pass-through — no policy enforcem
 claude plugin uninstall clash
 
 # 2. Remove the binary
-cargo uninstall clash
+cargo uninstall clash          # if installed via cargo
+rm -f ~/.local/bin/clash       # if installed via the install script
 
 # 3. (Optional) Remove the plugin marketplace entry
 claude plugin marketplace remove clash
