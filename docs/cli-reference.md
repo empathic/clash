@@ -152,6 +152,21 @@ The screen is divided into four regions:
 | `?` | Toggle help overlay |
 | `q` | Quit (prompts if unsaved changes) |
 
+**Review Changes overlay (`w` key):**
+
+When you press `w` to save, a diff overlay appears showing the full policy file with additions (`+`) and removals (`-`), along with the policy level and file path. The hint bar is pinned at the bottom of the overlay so it's always visible regardless of scroll position.
+
+| Key | Action |
+|-----|--------|
+| `j` / `Down` | Scroll down |
+| `k` / `Up` | Scroll up |
+| `PgDn` / `Ctrl+d` | Scroll down 10 lines |
+| `PgUp` / `Ctrl+u` | Scroll up 10 lines |
+| `g` | Jump to top |
+| `G` | Jump to bottom |
+| `y` | Confirm and save |
+| `n` / `Esc` | Cancel |
+
 **Inline node editing (`e` key):**
 
 The behavior of `e` depends on the selected node type:
