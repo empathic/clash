@@ -3,6 +3,7 @@
 mod edit;
 mod search;
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -51,13 +52,18 @@ pub enum Mode {
 /// Diff information for the save confirmation overlay.
 pub struct SaveDiff {
     pub hunks: Vec<DiffHunk>,
-    /// Scroll position within the diff overlay.
-    pub scroll: usize,
+    /// Scroll position within the diff overlay. Uses `Cell` so the renderer can
+    /// clamp it to `max_scroll` (which depends on viewport height) through `&self`.
+    pub scroll: Cell<usize>,
+    /// Maximum scroll value, written by the renderer each frame so the input
+    /// handler can clamp without recomputing layout.
+    pub max_scroll: Cell<usize>,
 }
 
 /// A diff hunk for one policy level.
 pub struct DiffHunk {
     pub level: PolicyLevel,
+    pub path: PathBuf,
     pub lines: Vec<DiffLine>,
 }
 
@@ -806,11 +812,11 @@ impl App {
                     Event::Mouse(MouseEvent {
                         kind: MouseEventKind::ScrollUp,
                         ..
-                    }) => self.tree.move_cursor_up(),
+                    }) => self.handle_mouse_scroll_up(),
                     Event::Mouse(MouseEvent {
                         kind: MouseEventKind::ScrollDown,
                         ..
-                    }) => self.tree.move_cursor_down(),
+                    }) => self.handle_mouse_scroll_down(),
                     Event::Mouse(MouseEvent {
                         kind: MouseEventKind::Down(_),
                         row,
@@ -835,6 +841,40 @@ impl App {
             && status.created_at.elapsed() >= STATUS_MESSAGE_TTL
         {
             self.status_message = None;
+        }
+    }
+
+    /// Handle mouse scroll-up, dispatched by mode.
+    fn handle_mouse_scroll_up(&mut self) {
+        match &mut self.mode {
+            Mode::Normal | Mode::Search => self.tree.move_cursor_up(),
+            Mode::AddRule(_) => self.retreat_add_rule(),
+            Mode::ConfirmSave(diff) => {
+                diff.scroll.set(diff.scroll.get().saturating_sub(1));
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle mouse scroll-down, dispatched by mode.
+    fn handle_mouse_scroll_down(&mut self) {
+        let can_advance = matches!(&self.mode, Mode::AddRule(form)
+            if edit::next_add_rule_step_full(
+                form.step,
+                form.domain_index,
+                form.path_type_index,
+                form.path_source_index,
+                form.env_var_index,
+            ).is_some()
+        );
+        match &mut self.mode {
+            Mode::Normal | Mode::Search => self.tree.move_cursor_down(),
+            Mode::AddRule(_) if can_advance => self.advance_add_rule(),
+            Mode::ConfirmSave(diff) => {
+                let new = diff.scroll.get().saturating_add(1).min(diff.max_scroll.get());
+                diff.scroll.set(new);
+            }
+            _ => {}
         }
     }
 }
@@ -3238,13 +3278,19 @@ mod tests {
         app.save_all();
         assert!(matches!(app.mode, Mode::ConfirmSave(_)));
 
+        let initial_scroll = if let Mode::ConfirmSave(diff) = &app.mode {
+            diff.scroll.get()
+        } else {
+            panic!("expected ConfirmSave");
+        };
+
         // Scroll down
         input::handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
         );
         if let Mode::ConfirmSave(diff) = &app.mode {
-            assert_eq!(diff.scroll, 1, "j should scroll down");
+            assert_eq!(diff.scroll.get(), initial_scroll + 1, "j should scroll down");
         }
 
         // Scroll up
@@ -3253,7 +3299,18 @@ mod tests {
             KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
         );
         if let Mode::ConfirmSave(diff) = &app.mode {
-            assert_eq!(diff.scroll, 0, "k should scroll up");
+            assert_eq!(diff.scroll.get(), initial_scroll, "k should scroll up");
+        }
+
+        // Scroll up to 0
+        for _ in 0..initial_scroll {
+            input::handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+            );
+        }
+        if let Mode::ConfirmSave(diff) = &app.mode {
+            assert_eq!(diff.scroll.get(), 0, "should reach 0");
         }
 
         // Scroll up past 0 stays at 0
@@ -3262,7 +3319,7 @@ mod tests {
             KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
         );
         if let Mode::ConfirmSave(diff) = &app.mode {
-            assert_eq!(diff.scroll, 0, "k should not go below 0");
+            assert_eq!(diff.scroll.get(), 0, "k should not go below 0");
         }
     }
 

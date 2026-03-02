@@ -11,8 +11,9 @@ use crate::policy::ast::{PathExpr, PathFilter, SandboxRef};
 use crate::wizard::describe_rule;
 
 use super::app::{
-    AddRuleStep, App, COMMON_ENV_VARS, ConfirmAction, DOMAIN_NAMES, DiffLine, EFFECT_DISPLAY,
-    EFFECT_NAMES, FS_OPS, Mode, PATH_SOURCES, PATH_TYPES, WORKTREE_OPTIONS,
+    AddRuleForm, AddRuleStep, App, COMMON_ENV_VARS, ConfirmAction, DOMAIN_NAMES, DiffHunk,
+    DiffLine, EFFECT_DISPLAY, EFFECT_NAMES, FS_OPS, Mode, PATH_SOURCES, PATH_TYPES, SaveDiff,
+    WORKTREE_OPTIONS,
 };
 use super::editor::TextInput;
 use super::style as tui_style;
@@ -32,7 +33,7 @@ pub fn render(f: &mut Frame, app: &App) {
     render_base(f, app);
     let area = f.area();
     for overlay in active_overlays(app) {
-        overlay.render(f, area, app);
+        overlay.render(f, area);
     }
 }
 
@@ -67,17 +68,17 @@ fn render_base(f: &mut Frame, app: &App) {
 enum Overlay<'a> {
     Help,
     Confirm(&'a ConfirmAction),
-    AddRule,
-    SaveDiff,
+    AddRule(&'a AddRuleForm),
+    SaveDiff(&'a SaveDiff),
 }
 
 impl Overlay<'_> {
-    fn render(&self, f: &mut Frame, area: Rect, app: &App) {
+    fn render(&self, f: &mut Frame, area: Rect) {
         match self {
             Overlay::Help => render_help_overlay(f, area),
             Overlay::Confirm(action) => render_confirm_overlay(f, area, action),
-            Overlay::AddRule => render_add_rule_overlay(f, app, area),
-            Overlay::SaveDiff => render_save_diff_overlay(f, app, area),
+            Overlay::AddRule(form) => render_add_rule_overlay(f, form, area),
+            Overlay::SaveDiff(diff) => render_save_diff_overlay(f, diff, area),
         }
     }
 }
@@ -87,8 +88,8 @@ fn active_overlays(app: &App) -> Vec<Overlay<'_>> {
     let mut overlays = Vec::new();
     match &app.mode {
         Mode::Confirm(action) => overlays.push(Overlay::Confirm(action)),
-        Mode::AddRule(_) => overlays.push(Overlay::AddRule),
-        Mode::ConfirmSave(_) => overlays.push(Overlay::SaveDiff),
+        Mode::AddRule(form) => overlays.push(Overlay::AddRule(form)),
+        Mode::ConfirmSave(diff) => overlays.push(Overlay::SaveDiff(diff)),
         _ => {}
     }
     if app.show_help {
@@ -980,12 +981,40 @@ fn render_search_bar(f: &mut Frame, app: &App, area: Rect) {
 }
 
 // ---------------------------------------------------------------------------
-// Help overlay
+// Shared scrollable overlay
 // ---------------------------------------------------------------------------
 
-fn render_help_overlay(f: &mut Frame, area: Rect) {
-    let width = 50u16.min(area.width.saturating_sub(4));
-    let height = 34u16.min(area.height.saturating_sub(4));
+use std::cell::Cell;
+
+/// Options for the scrollable overlay beyond the core content.
+struct OverlayScroll<'a> {
+    /// Current scroll position (read/written by renderer to clamp).
+    cell: &'a Cell<usize>,
+    /// Show ▲/▼ overflow indicators.
+    show_indicators: bool,
+    /// If set, the computed max_scroll is written here for the input handler.
+    max_scroll_out: Option<&'a Cell<usize>>,
+}
+
+/// Shared scrollable overlay renderer.
+///
+/// Computes a centered rect from `max_width` × content height (capped to terminal),
+/// renders Clear + Block with title/border, renders content via `Paragraph::scroll()`,
+/// clamping `scroll` via the Cell, and draws ▲/▼ indicators when content overflows.
+fn render_scrollable_overlay(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    border_style: Style,
+    max_width: u16,
+    lines: Vec<Line<'_>>,
+    scroll: OverlayScroll<'_>,
+) {
+    let width = max_width.min(area.width.saturating_sub(4));
+    // Fit content height (+ 2 for border) but cap to terminal minus margin.
+    let content_height = lines.len() as u16 + 2;
+    let max_height = area.height.saturating_sub(4).max(6);
+    let height = content_height.min(max_height);
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
     let overlay = Rect::new(x, y, width, height);
@@ -993,12 +1022,43 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
     f.render_widget(Clear, overlay);
 
     let block = Block::default()
-        .title(" Keyboard Shortcuts ")
+        .title(title)
         .borders(Borders::ALL)
-        .border_style(tui_style::DOMAIN);
+        .border_style(border_style);
     let inner = block.inner(overlay);
     f.render_widget(block, overlay);
 
+    let total = lines.len();
+    let visible = inner.height as usize;
+    let max_scroll_val = total.saturating_sub(visible);
+    let s = scroll.cell.get().min(max_scroll_val);
+    scroll.cell.set(s);
+    if let Some(out) = scroll.max_scroll_out {
+        out.set(max_scroll_val);
+    }
+
+    let para = Paragraph::new(lines).scroll((s as u16, 0));
+    f.render_widget(para, inner);
+
+    // Overflow indicators
+    if scroll.show_indicators {
+        let dim = tui_style::DIM;
+        if s > 0 {
+            let r = Rect::new(inner.right() - 1, inner.y, 1, 1);
+            f.render_widget(Paragraph::new("▲").style(dim), r);
+        }
+        if s + visible < total {
+            let r = Rect::new(inner.right() - 1, inner.bottom() - 1, 1, 1);
+            f.render_widget(Paragraph::new("▼").style(dim), r);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Help overlay
+// ---------------------------------------------------------------------------
+
+fn render_help_overlay(f: &mut Frame, area: Rect) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
 
     let lines = vec![
@@ -1036,8 +1096,12 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(Span::styled("  Press any key to close", tui_style::DIM)),
     ];
 
-    let help = Paragraph::new(lines);
-    f.render_widget(help, inner);
+    let scroll = Cell::new(0);
+    render_scrollable_overlay(f, area, " Keyboard Shortcuts ", tui_style::DOMAIN, 50, lines, OverlayScroll {
+        cell: &scroll,
+        show_indicators: false,
+        max_scroll_out: None,
+    });
 }
 
 fn help_line<'a>(key_style: Style, key: &'a str, desc: &'a str) -> Line<'a> {
@@ -1078,57 +1142,107 @@ fn render_confirm_overlay(f: &mut Frame, area: Rect, action: &ConfirmAction) {
         ),
     };
 
-    let width = 50u16.min(area.width.saturating_sub(4));
-    let height = 9u16.min(area.height.saturating_sub(4));
-    let x = (area.width.saturating_sub(width)) / 2;
-    let y = (area.height.saturating_sub(height)) / 2;
-    let overlay = Rect::new(x, y, width, height);
-
-    f.render_widget(Clear, overlay);
-
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
-    let inner = block.inner(overlay);
-    f.render_widget(block, overlay);
-
-    let para = Paragraph::new(message).wrap(Wrap { trim: false });
-    f.render_widget(para, inner);
+    let lines: Vec<Line> = message.lines().map(|l| Line::from(l.to_string())).collect();
+    let scroll = Cell::new(0);
+    render_scrollable_overlay(
+        f,
+        area,
+        title,
+        Style::default().fg(Color::Yellow),
+        50,
+        lines,
+        OverlayScroll {
+            cell: &scroll,
+            show_indicators: false,
+            max_scroll_out: None,
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
 // Save diff overlay
 // ---------------------------------------------------------------------------
 
-fn render_save_diff_overlay(f: &mut Frame, app: &App, area: Rect) {
-    let Mode::ConfirmSave(diff) = &app.mode else {
-        return;
-    };
+fn render_save_diff_overlay(f: &mut Frame, diff: &SaveDiff, area: Rect) {
+    let lines = build_save_diff_lines(&diff.hunks);
 
-    let width = 64u16.min(area.width.saturating_sub(4));
-    let height = (area.height - 4).max(10).min(area.height.saturating_sub(2));
+    // Use maximum available height so the user can always scroll through the
+    // full diff — don't shrink-to-fit like other overlays.
+    let max_width: u16 = 64;
+    let width = max_width.min(area.width.saturating_sub(4));
+    let height = area.height.saturating_sub(4).max(6);
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
     let overlay = Rect::new(x, y, width, height);
 
     f.render_widget(Clear, overlay);
 
+    let border_style = Style::default().fg(Color::Yellow);
     let block = Block::default()
         .title(" Review Changes ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(border_style);
     let inner = block.inner(overlay);
     f.render_widget(block, overlay);
 
+    // Reserve bottom row for the fixed hint line.
+    let hint_row = Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
+    let content_area = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
+
+    let total = lines.len();
+    let visible = content_area.height as usize;
+    let max_scroll_val = total.saturating_sub(visible);
+    let s = diff.scroll.get().min(max_scroll_val);
+    diff.scroll.set(s);
+    diff.max_scroll.set(max_scroll_val);
+
+    let para = Paragraph::new(lines).scroll((s as u16, 0));
+    f.render_widget(para, content_area);
+
+    // Fixed hint line at bottom of overlay
+    let hint = Line::from(vec![
+        Span::styled("  Save? ", tui_style::DIM),
+        Span::styled("y", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(" confirm  ", tui_style::DIM),
+        Span::styled("n", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled("/", tui_style::DIM),
+        Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(" cancel  ", tui_style::DIM),
+        Span::styled("j/k", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(" scroll  ", tui_style::DIM),
+        Span::styled("g/G", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(" top/bottom", tui_style::DIM),
+    ]);
+    f.render_widget(Paragraph::new(hint), hint_row);
+
+    // Overflow indicators
+    let dim = tui_style::DIM;
+    if s > 0 {
+        let r = Rect::new(content_area.right() - 1, content_area.y, 1, 1);
+        f.render_widget(Paragraph::new("▲").style(dim), r);
+    }
+    if s + visible < total {
+        let r = Rect::new(content_area.right() - 1, content_area.bottom() - 1, 1, 1);
+        f.render_widget(Paragraph::new("▼").style(dim), r);
+    }
+}
+
+/// Build the styled diff lines for the SaveDiff overlay. Pure function — no Frame needed.
+pub(crate) fn build_save_diff_lines(hunks: &[DiffHunk]) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
-    for hunk in &diff.hunks {
-        lines.push(Line::from(Span::styled(
-            format!("  {} policy:", hunk.level),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )));
+    for hunk in hunks {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} policy: ", hunk.level),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                hunk.path.display().to_string(),
+                tui_style::DIM,
+            ),
+        ]));
         for dl in &hunk.lines {
             let (prefix, text, style) = match dl {
                 DiffLine::Context(t) => ("  ", t.as_str(), tui_style::DIM),
@@ -1142,27 +1256,7 @@ fn render_save_diff_overlay(f: &mut Frame, app: &App, area: Rect) {
         }
         lines.push(Line::from(""));
     }
-    lines.push(Line::from(vec![
-        Span::styled("  Save? ", tui_style::DIM),
-        Span::styled("y", Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled(" confirm  ", tui_style::DIM),
-        Span::styled("n", Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled("/", tui_style::DIM),
-        Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled(" cancel  ", tui_style::DIM),
-        Span::styled("j/k", Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled(" scroll", tui_style::DIM),
-    ]));
-
-    let total = lines.len();
-    let visible = inner.height as usize;
-    let max_scroll = total.saturating_sub(visible);
-    let scroll = diff.scroll.min(max_scroll);
-
-    let para = Paragraph::new(lines)
-        .scroll((scroll as u16, 0))
-        .wrap(Wrap { trim: false });
-    f.render_widget(para, inner);
+    lines
 }
 
 // ---------------------------------------------------------------------------
@@ -1218,44 +1312,30 @@ fn describe_path_expr(expr: &PathExpr) -> String {
 // Add rule overlay
 // ---------------------------------------------------------------------------
 
-fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
-    let Mode::AddRule(form) = &app.mode else {
-        return;
-    };
+fn render_add_rule_overlay(f: &mut Frame, form: &AddRuleForm, area: Rect) {
+    let (lines, active_line) = build_add_rule_lines(form);
+    let scroll = Cell::new(active_line.saturating_sub(1));
+    render_scrollable_overlay(
+        f,
+        area,
+        " Add Rule ",
+        Style::default().fg(Color::Cyan),
+        58,
+        lines,
+        OverlayScroll {
+            cell: &scroll,
+            show_indicators: true,
+            max_scroll_out: None,
+        },
+    );
+}
 
-    let width = 58u16.min(area.width.saturating_sub(4));
-    // Dynamic height based on domain and path type
-    let base_height: u16 = match form.domain_index {
-        1 => {
-            let path_steps: u16 = match form.path_type_index {
-                0 => 9, // subpath: type + source + env/path + worktree
-                1 => 3, // exact: type + path input
-                2 => 3, // regex: type + regex input
-                3 => 1, // any: just type selector
-                _ => 3, // raw: type + text input
-            };
-            20 + path_steps
-        }
-        _ => 23,
-    };
-    let height = base_height.min(area.height.saturating_sub(4));
-    let x = (area.width.saturating_sub(width)) / 2;
-    let y = (area.height.saturating_sub(height)) / 2;
-    let overlay = Rect::new(x, y, width, height);
-
-    f.render_widget(Clear, overlay);
-
-    let block = Block::default()
-        .title(" Add Rule ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-    let inner = block.inner(overlay);
-    f.render_widget(block, overlay);
-
+/// Build the lines and active-step line index for the AddRule overlay.
+/// Pure function — no Frame needed, fully testable.
+pub(crate) fn build_add_rule_lines(form: &AddRuleForm) -> (Vec<Line<'static>>, usize) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let dim = tui_style::DIM;
 
-    // Copy all needed form data to avoid borrow issues with `app`
     let step = form.step;
     let domain_index = form.domain_index;
     let effect_index = form.effect_index;
@@ -1282,12 +1362,22 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
     let mut step_num = 1;
+    let mut active_line: usize = 0;
+
+    // Helper: push a step label and track active line index
+    let mut push_step = |lines: &mut Vec<Line>, label: String, is_active: bool| {
+        if is_active {
+            active_line = lines.len();
+        }
+        lines.push(step_label(&label, is_active));
+    };
 
     // 1. Command
-    lines.push(step_label(
-        &format!("{step_num}. Command"),
+    push_step(
+        &mut lines,
+        format!("{step_num}. Command"),
         matches!(step, AddRuleStep::EnterBinary),
-    ));
+    );
     render_text_step(
         &mut lines,
         &binary_val,
@@ -1300,10 +1390,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
     step_num += 1;
 
     // 2. Args
-    lines.push(step_label(
-        &format!("{step_num}. Args"),
+    push_step(
+        &mut lines,
+        format!("{step_num}. Args"),
         matches!(step, AddRuleStep::EnterArgs),
-    ));
+    );
     render_text_step(
         &mut lines,
         &args_val,
@@ -1316,10 +1407,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
     step_num += 1;
 
     // 3. Domain
-    lines.push(step_label(
-        &format!("{step_num}. Domain"),
+    push_step(
+        &mut lines,
+        format!("{step_num}. Domain"),
         matches!(step, AddRuleStep::SelectDomain),
-    ));
+    );
     lines.push(selector_line(
         DOMAIN_NAMES,
         domain_index,
@@ -1332,7 +1424,7 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
     match domain_index {
         0 => {
             // Exec: command+args already cover it
-            lines.push(step_label(&format!("{step_num}. Permissions"), false));
+            push_step(&mut lines, format!("{step_num}. Permissions"), false);
             lines.push(Line::from(Span::styled(
                 "   (covered by command + args)",
                 dim,
@@ -1342,10 +1434,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
         }
         1 => {
             // Fs: Operation
-            lines.push(step_label(
-                &format!("{step_num}. Operation"),
+            push_step(
+                &mut lines,
+                format!("{step_num}. Operation"),
                 matches!(step, AddRuleStep::SelectFsOp),
-            ));
+            );
             lines.push(selector_line(
                 FS_OPS,
                 fs_op_index,
@@ -1355,10 +1448,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
             step_num += 1;
 
             // Path type selector
-            lines.push(step_label(
-                &format!("{step_num}. Path type"),
+            push_step(
+                &mut lines,
+                format!("{step_num}. Path type"),
                 matches!(step, AddRuleStep::SelectPathType),
-            ));
+            );
             lines.push(selector_line(
                 PATH_TYPES,
                 path_type_index,
@@ -1371,10 +1465,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
             match path_type_index {
                 0 => {
                     // subpath: source → env/static → worktree
-                    lines.push(step_label(
-                        &format!("{step_num}. Path source"),
+                    push_step(
+                        &mut lines,
+                        format!("{step_num}. Path source"),
                         matches!(step, AddRuleStep::SelectPathSource),
-                    ));
+                    );
                     lines.push(selector_line(
                         PATH_SOURCES,
                         path_source_index,
@@ -1386,10 +1481,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
                     match path_source_index {
                         0 => {
                             // env variable
-                            lines.push(step_label(
-                                &format!("{step_num}. Env variable"),
+                            push_step(
+                                &mut lines,
+                                format!("{step_num}. Env variable"),
                                 matches!(step, AddRuleStep::SelectEnvVar),
-                            ));
+                            );
                             lines.push(selector_line(
                                 COMMON_ENV_VARS,
                                 env_var_index,
@@ -1400,10 +1496,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
 
                             if env_var_index == COMMON_ENV_VARS.len() - 1 {
                                 // custom env var
-                                lines.push(step_label(
-                                    &format!("{step_num}. Custom env var"),
+                                push_step(
+                                    &mut lines,
+                                    format!("{step_num}. Custom env var"),
                                     matches!(step, AddRuleStep::EnterCustomEnvVar),
-                                ));
+                                );
                                 render_text_step(
                                     &mut lines,
                                     &custom_env_val,
@@ -1418,10 +1515,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
                         }
                         _ => {
                             // static path
-                            lines.push(step_label(
-                                &format!("{step_num}. Static path"),
+                            push_step(
+                                &mut lines,
+                                format!("{step_num}. Static path"),
                                 matches!(step, AddRuleStep::EnterStaticPath),
-                            ));
+                            );
                             render_text_step(
                                 &mut lines,
                                 &static_path_val,
@@ -1437,10 +1535,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
 
                     // Worktree toggle
                     let wt_idx = if worktree { 1 } else { 0 };
-                    lines.push(step_label(
-                        &format!("{step_num}. Worktree?"),
+                    push_step(
+                        &mut lines,
+                        format!("{step_num}. Worktree?"),
                         matches!(step, AddRuleStep::ToggleWorktree),
-                    ));
+                    );
                     lines.push(selector_line(
                         WORKTREE_OPTIONS,
                         wt_idx,
@@ -1451,10 +1550,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
                 }
                 1 => {
                     // exact: static path input
-                    lines.push(step_label(
-                        &format!("{step_num}. Exact path"),
+                    push_step(
+                        &mut lines,
+                        format!("{step_num}. Exact path"),
                         matches!(step, AddRuleStep::EnterStaticPath),
-                    ));
+                    );
                     render_text_step(
                         &mut lines,
                         &static_path_val,
@@ -1468,10 +1568,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
                 }
                 2 => {
                     // regex: regex input
-                    lines.push(step_label(
-                        &format!("{step_num}. Regex pattern"),
+                    push_step(
+                        &mut lines,
+                        format!("{step_num}. Regex pattern"),
                         matches!(step, AddRuleStep::EnterRegexPath),
-                    ));
+                    );
                     render_text_step(
                         &mut lines,
                         &regex_path_val,
@@ -1488,10 +1589,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
                 }
                 _ => {
                     // raw s-expr: legacy text input
-                    lines.push(step_label(
-                        &format!("{step_num}. Path (s-expr)"),
+                    push_step(
+                        &mut lines,
+                        format!("{step_num}. Path (s-expr)"),
                         matches!(step, AddRuleStep::EnterPath),
-                    ));
+                    );
                     render_text_step(
                         &mut lines,
                         &path_val,
@@ -1507,10 +1609,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
         }
         2 => {
             // Net: host
-            lines.push(step_label(
-                &format!("{step_num}. Host"),
+            push_step(
+                &mut lines,
+                format!("{step_num}. Host"),
                 matches!(step, AddRuleStep::EnterNetDomain),
-            ));
+            );
             render_text_step(
                 &mut lines,
                 &net_domain_val,
@@ -1524,10 +1627,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
         }
         _ => {
             // Tool: name
-            lines.push(step_label(
-                &format!("{step_num}. Tool name"),
+            push_step(
+                &mut lines,
+                format!("{step_num}. Tool name"),
                 matches!(step, AddRuleStep::EnterToolName),
-            ));
+            );
             render_text_step(
                 &mut lines,
                 &tool_name_val,
@@ -1542,10 +1646,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // Effect
-    lines.push(step_label(
-        &format!("{step_num}. Effect"),
+    push_step(
+        &mut lines,
+        format!("{step_num}. Effect"),
         matches!(step, AddRuleStep::SelectEffect),
-    ));
+    );
     lines.push(selector_line(
         EFFECT_NAMES,
         effect_index,
@@ -1555,10 +1660,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
     step_num += 1;
 
     // Level
-    lines.push(step_label(
-        &format!("{step_num}. Level"),
+    push_step(
+        &mut lines,
+        format!("{step_num}. Level"),
         matches!(step, AddRuleStep::SelectLevel),
-    ));
+    );
     let level_strs: Vec<&str> = level_names.iter().map(|s| s.as_str()).collect();
     lines.push(selector_line(
         &level_strs,
@@ -1575,8 +1681,11 @@ fn render_add_rule_overlay(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    let para = Paragraph::new(lines);
-    f.render_widget(para, inner);
+    // Suppress unused variable warning — step_num is incremented to keep
+    // numbering correct but its final value is intentionally unused.
+    let _ = step_num;
+
+    (lines, active_line)
 }
 
 /// Render a text input step: shows the input value (with cursor when active) and a hint line.
@@ -1923,6 +2032,141 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Pure content-builder tests (no Frame needed)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn build_add_rule_lines_default_form() {
+        let mut app = make_app(r#"(policy "main")"#);
+        app.start_add_rule();
+        let form = match &app.mode {
+            Mode::AddRule(f) => f,
+            _ => panic!("expected AddRule mode"),
+        };
+        let (lines, active_line) = build_add_rule_lines(form);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        // Default form starts on EnterBinary step
+        assert!(text.contains("Command"), "should have Command step: {text}");
+        assert!(text.contains("Args"), "should have Args step: {text}");
+        assert!(text.contains("Domain"), "should have Domain step: {text}");
+        assert!(text.contains("Effect"), "should have Effect step: {text}");
+        assert!(text.contains("Level"), "should have Level step: {text}");
+        // active_line should be 0 (first step)
+        assert_eq!(active_line, 0, "active line should be first step");
+    }
+
+    #[test]
+    fn build_add_rule_lines_fs_domain() {
+        let mut app = make_app(r#"(policy "main")"#);
+        app.start_add_rule();
+        // Advance past Binary, Args, select Fs domain (index 1)
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.step = AddRuleStep::SelectFsOp;
+            form.domain_index = 1;
+        }
+        let form = match &app.mode {
+            Mode::AddRule(f) => f,
+            _ => panic!("expected AddRule mode"),
+        };
+        let (lines, _) = build_add_rule_lines(form);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(
+            text.contains("Operation"),
+            "Fs domain should show Operation step: {text}"
+        );
+        assert!(
+            text.contains("Path type"),
+            "Fs domain should show Path type step: {text}"
+        );
+    }
+
+    #[test]
+    fn build_add_rule_lines_exec_domain_covered() {
+        let mut app = make_app(r#"(policy "main")"#);
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.step = AddRuleStep::SelectEffect;
+            form.domain_index = 0; // Exec
+        }
+        let form = match &app.mode {
+            Mode::AddRule(f) => f,
+            _ => panic!("expected AddRule mode"),
+        };
+        let (lines, _) = build_add_rule_lines(form);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(
+            text.contains("covered by command + args"),
+            "Exec domain should show covered message: {text}"
+        );
+    }
+
+    #[test]
+    fn build_add_rule_lines_active_line_tracks_step() {
+        let mut app = make_app(r#"(policy "main")"#);
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.step = AddRuleStep::SelectEffect;
+            form.domain_index = 0;
+        }
+        let form = match &app.mode {
+            Mode::AddRule(f) => f,
+            _ => panic!("expected AddRule mode"),
+        };
+        let (lines, active_line) = build_add_rule_lines(form);
+        // The active line should correspond to the Effect step label
+        let active_text: String = lines[active_line]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(
+            active_text.contains("Effect"),
+            "active line should be the Effect step, got: {active_text}"
+        );
+    }
+
+    #[test]
+    fn build_save_diff_lines_structure() {
+        use crate::tui::app::{DiffHunk, DiffLine};
+        let hunks = vec![DiffHunk {
+            level: PolicyLevel::User,
+            path: PathBuf::from("/home/user/.config/clash/policy.clj"),
+            lines: vec![
+                DiffLine::Context("(policy \"main\"".to_string()),
+                DiffLine::Added("  (allow (exec \"git\"))".to_string()),
+                DiffLine::Removed("  (deny (exec \"rm\"))".to_string()),
+            ],
+        }];
+        let lines = build_save_diff_lines(&hunks);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(
+            text.contains("user policy:"),
+            "should have level header: {text}"
+        );
+        assert!(
+            text.contains("policy.clj"),
+            "should have file path: {text}"
+        );
+        assert!(text.contains("git"), "should contain added line: {text}");
+        assert!(
+            text.contains("rm"),
+            "should contain removed line: {text}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // TestBackend integration tests
     // -----------------------------------------------------------------------
 
@@ -2209,5 +2453,103 @@ mod tests {
         }
         let output = render_to_string(&app, 80, 24);
         insta::assert_snapshot!(output);
+    }
+
+    /// Regression: scrolling in SaveDiff must work after a render sets max_scroll.
+    #[test]
+    fn save_diff_scroll_after_render() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = make_app(REALISTIC_POLICY);
+        app.start_add_rule();
+        if let Mode::AddRule(form) = &mut app.mode {
+            form.binary_input = super::super::editor::TextInput::new("cargo");
+        }
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.advance_add_rule();
+        app.save_all();
+        assert!(matches!(app.mode, Mode::ConfirmSave(_)));
+
+        // Count total diff content lines
+        let total_lines = if let Mode::ConfirmSave(diff) = &app.mode {
+            build_save_diff_lines(&diff.hunks).len()
+        } else {
+            panic!("expected ConfirmSave");
+        };
+
+        // Render to a SHORT terminal so content overflows and max_scroll is set
+        let term_height: u16 = 15;
+        let backend = TestBackend::new(80, term_height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+
+        // After rendering, max_scroll should be set to a real (non-usize::MAX) value
+        let max_scroll = if let Mode::ConfirmSave(diff) = &app.mode {
+            diff.max_scroll.get()
+        } else {
+            panic!("expected ConfirmSave");
+        };
+        assert!(
+            max_scroll < usize::MAX,
+            "render should set max_scroll to a real value, got {max_scroll}"
+        );
+        assert!(
+            max_scroll > 0,
+            "content ({total_lines} lines) should overflow {term_height}-line terminal, \
+             max_scroll={max_scroll}"
+        );
+
+        // Reset scroll to 0 so we can test from a known position
+        if let Mode::ConfirmSave(diff) = &app.mode {
+            diff.scroll.set(0);
+        }
+
+        // Now scroll down — should work since max_scroll > 0
+        super::super::input::handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        let after_j = if let Mode::ConfirmSave(diff) = &app.mode {
+            diff.scroll.get()
+        } else {
+            panic!("expected ConfirmSave");
+        };
+        assert_eq!(after_j, 1, "j should scroll down from 0 to 1");
+
+        // Scroll all the way down
+        for _ in 0..max_scroll + 5 {
+            super::super::input::handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            );
+        }
+        let at_bottom = if let Mode::ConfirmSave(diff) = &app.mode {
+            diff.scroll.get()
+        } else {
+            panic!("expected ConfirmSave");
+        };
+        assert_eq!(
+            at_bottom, max_scroll,
+            "scroll should clamp at max_scroll={max_scroll}"
+        );
+
+        // Scroll back up
+        super::super::input::handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        );
+        let after_k = if let Mode::ConfirmSave(diff) = &app.mode {
+            diff.scroll.get()
+        } else {
+            panic!("expected ConfirmSave");
+        };
+        assert_eq!(
+            after_k,
+            max_scroll - 1,
+            "k should scroll up from max"
+        );
     }
 }

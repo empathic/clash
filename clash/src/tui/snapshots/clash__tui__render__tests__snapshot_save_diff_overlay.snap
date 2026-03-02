@@ -5,7 +5,7 @@ expression: output
  clash tui  user [modified]  16/27                                       ? help 
 │ ▼ "rm"                                                                       │
 │   ▼ "-┌ Review Changes ──────────────────────────────────────────────┐       │
-│     ▼ │  user policy:                                                │       │
+│     ▼ │  user policy: /tmp/test                                      │       │
 │       │    (policy "main"                                            │       │
 │       │      (allow (exec "git" *))                                  │       │
 │ ▼ "sud│      (deny (exec "rm" "-rf" *))                              │       │
@@ -16,7 +16,7 @@ expression: output
 │   ▼ Ex│  +   (allow (exec "cargo"))                                  │       │
 │       │    )                                                         │       │
 │ ▼ *   │                                                              │       │
-│ │ ▼ su│  Save? y confirm  n/Esc cancel  j/k scroll                   │       │
+│ │ ▼ su│                                                              │       │
 │ │   ▼ │                                                              │       │
 │ │     │                                                              │       │
 │ │     │                                                              │       │
@@ -28,7 +28,7 @@ expression: output
 │       │                                                              │       │
 ┌───────│                                                              │───────┐
 │AUTO AL│                                                              │       │
-│Source:│                                                              │       │
+│Source:│  Save? y confirm  n/Esc cancel  j/k scroll  g/G top/bottom   │       │
 │Rule: (└──────────────────────────────────────────────────────────────┘       │
 │"cargo" > Exec > allow                                                        │
 j/k move  Tab effect  e edit  E edit rule  d delete  [/] all  a add  / search  w

@@ -1,5 +1,6 @@
 //! Editing operations: undo/redo, effect selection, delete, add, edit, save.
 
+use std::cell::Cell;
 use std::fs;
 
 use similar::TextDiff;
@@ -825,11 +826,33 @@ impl App {
             }
             hunks.push(DiffHunk {
                 level: ls.level,
+                path: ls.path.clone(),
                 lines,
             });
         }
 
-        self.mode = Mode::ConfirmSave(SaveDiff { hunks, scroll: 0 });
+        // Auto-scroll to the first changed line so it's visible immediately.
+        // Count rendered lines (1 header + diff lines + 1 blank per hunk, + 1 prompt)
+        // to find the offset of the first non-context line.
+        let mut first_change: Option<usize> = None;
+        let mut rendered = 0usize;
+        for hunk in &hunks {
+            rendered += 1; // level header
+            for line in &hunk.lines {
+                if first_change.is_none() && !matches!(line, DiffLine::Context(_)) {
+                    first_change = Some(rendered);
+                }
+                rendered += 1;
+            }
+            rendered += 1; // blank separator
+        }
+        let scroll = first_change.unwrap_or(0).saturating_sub(1);
+
+        self.mode = Mode::ConfirmSave(SaveDiff {
+            hunks,
+            scroll: Cell::new(scroll),
+            max_scroll: Cell::new(usize::MAX),
+        });
     }
 
     /// Actually write all modified levels to disk (called after user confirms).

@@ -180,14 +180,40 @@ fn handle_confirm_save(app: &mut App, key: KeyEvent) -> InputResult {
             InputResult::Continue
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            if let Mode::ConfirmSave(diff) = &mut app.mode {
-                diff.scroll = diff.scroll.saturating_add(1);
+            if let Mode::ConfirmSave(diff) = &app.mode {
+                let new = diff.scroll.get().saturating_add(1).min(diff.max_scroll.get());
+                diff.scroll.set(new);
             }
             InputResult::Continue
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            if let Mode::ConfirmSave(diff) = &mut app.mode {
-                diff.scroll = diff.scroll.saturating_sub(1);
+            if let Mode::ConfirmSave(diff) = &app.mode {
+                diff.scroll.set(diff.scroll.get().saturating_sub(1));
+            }
+            InputResult::Continue
+        }
+        KeyCode::PageDown | KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Mode::ConfirmSave(diff) = &app.mode {
+                let new = diff.scroll.get().saturating_add(10).min(diff.max_scroll.get());
+                diff.scroll.set(new);
+            }
+            InputResult::Continue
+        }
+        KeyCode::PageUp | KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Mode::ConfirmSave(diff) = &app.mode {
+                diff.scroll.set(diff.scroll.get().saturating_sub(10));
+            }
+            InputResult::Continue
+        }
+        KeyCode::Char('g') => {
+            if let Mode::ConfirmSave(diff) = &app.mode {
+                diff.scroll.set(0);
+            }
+            InputResult::Continue
+        }
+        KeyCode::Char('G') => {
+            if let Mode::ConfirmSave(diff) = &app.mode {
+                diff.scroll.set(diff.max_scroll.get());
             }
             InputResult::Continue
         }
