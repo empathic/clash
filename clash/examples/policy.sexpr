@@ -1,29 +1,26 @@
-; Clash policy example — developer workstation
+; Clash policy example — developer workstation (v2 syntax)
 ;
 ; Guards: when (scope to matching invocations)
-; Dispatch: match (branch on observed values)
-; Effects: :allow, :deny, :ask
+; Dispatch: match (branch on observed values inside sandbox)
+; Effects: :allow, :deny
 ;
 ; Evaluation: deny > ask > allow. More specific rules beat less specific.
 ; If no rule matches, the default effect is used.
 
-(default (decision :deny) (policy "main"))
+(version 2)
+(default deny "main")
 
 (def tmpdirs ["/tmp" "/var/folders" "/var/private/folders"])
 
 (policy "rust"
   (when (command (or "cargo" "rustc"))
     (sandbox
-      (match proxy.method
-        (not "GET") :deny)
       (match proxy.domain
         (or "github.com" "crates.io") :allow)
       (match [fs.action fs.path]
         ["read" (subpath $PWD)] :allow
-        [* (subpath (joinpath $PWD "targets"))] :allow
-        [* (subpath tempdirs)] :allow
-        [* (subpath $PWD)] (when (command "cargo" (or "fix" "fmt") *) :allow)
-        ))))
+        [* (subpath (joinpath $PWD "target"))] :allow
+        [* (subpath tmpdirs)] :allow))))
 
 (policy "web"
   (when (tool (or "WebSearch" "WebFetch"))
@@ -31,7 +28,7 @@
       (match proxy.domain
         "github.com" :allow
         "wikipedia.org" :allow
-        * :ask))))
+        * :deny))))
 
 (policy "main"
   (include "rust")

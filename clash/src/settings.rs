@@ -352,9 +352,9 @@ impl ClashSettings {
 
     /// Set the policy source directly (compile from s-expression text).
     pub fn set_policy_source(&mut self, source: &str) {
-        match crate::policy::compile_policy(source) {
+        match crate::policy::compile_to_tree(source, &crate::policy::compile::StdEnvResolver) {
             Ok(tree) => {
-                self.compiled = Some(PolicyTree::from_decision_tree(tree));
+                self.compiled = Some(tree);
                 self.policy_error = None;
             }
             Err(e) => {
@@ -463,10 +463,13 @@ impl ClashSettings {
                 // policy.yaml for notification/audit config.
                 self.load_notification_audit_config();
 
-                match crate::policy::compile_policy(&contents) {
+                match crate::policy::compile_to_tree(
+                    &contents,
+                    &crate::policy::compile::StdEnvResolver,
+                ) {
                     Ok(tree) => {
                         info!(path = %path.display(), "Loaded policy");
-                        self.compiled = Some(PolicyTree::from_decision_tree(tree));
+                        self.compiled = Some(tree);
                         true
                     }
                     Err(e) => {
@@ -575,16 +578,16 @@ impl ClashSettings {
         // Use a session-aware resolver that provides TRANSCRIPT_DIR etc.
         let resolver = SessionEnvResolver { hook_ctx };
 
-        // Compile (single-level or multi-level).
+        // Compile (single-level or multi-level) directly to PolicyTree.
         let result = if level_sources.len() == 1 {
             let (_, source) = &level_sources[0];
-            crate::policy::compile_policy_with_internals(source, &resolver, INTERNAL_POLICIES)
+            crate::policy::compile_to_tree_with_internals(source, &resolver, INTERNAL_POLICIES)
         } else {
             let level_refs: Vec<(PolicyLevel, &str)> = level_sources
                 .iter()
                 .map(|(l, s)| (*l, s.as_str()))
                 .collect();
-            crate::policy::compile_multi_level_with_internals(
+            crate::policy::compile_multi_level_to_tree(
                 &level_refs,
                 &resolver,
                 INTERNAL_POLICIES,
@@ -593,7 +596,7 @@ impl ClashSettings {
 
         match result {
             Ok(tree) => {
-                this.compiled = Some(PolicyTree::from_decision_tree(tree));
+                this.compiled = Some(tree);
                 this.policy_error = None;
             }
             Err(e) => {

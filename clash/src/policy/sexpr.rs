@@ -82,6 +82,10 @@ const REGEX_PREFIX: &str = "__CLASH_REGEX__";
 /// Sentinel symbol used to escape standalone `.` atoms.
 const DOT_PLACEHOLDER: &str = "__CLASH_DOT__";
 
+/// Sentinel atom inserted at the head of `[...]` bracket lists so the parser
+/// can distinguish them from `(...)` parenthesized lists.
+pub(crate) const BRACKET_MARKER: &str = "__CLASH_BRACKET__";
+
 /// Pre-process the input to handle `/pattern/` regex literals and standalone dots.
 ///
 /// Regex literals are converted to `"__CLASH_REGEX__pattern"` strings, and
@@ -160,6 +164,20 @@ fn preprocess(input: &str) -> String {
                     continue;
                 }
             }
+        }
+
+        // Handle `[...]` bracket syntax → `(__CLASH_BRACKET__ ...)`
+        if b == b'[' {
+            out.push('(');
+            out.push_str(BRACKET_MARKER);
+            out.push(' ');
+            i += 1;
+            continue;
+        }
+        if b == b']' {
+            out.push(')');
+            i += 1;
+            continue;
         }
 
         // Handle standalone dots

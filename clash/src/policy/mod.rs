@@ -22,8 +22,9 @@ pub mod tree;
 pub mod version;
 
 pub use compile::{
-    AllShadows, ShadowInfo, compile_multi_level, compile_multi_level_with_internals,
-    compile_policy, compile_policy_with_internals, detect_all_shadows,
+    AllShadows, ShadowInfo, compile_multi_level, compile_multi_level_to_tree,
+    compile_multi_level_with_internals, compile_policy, compile_policy_with_internals,
+    compile_to_tree, compile_to_tree_with_internals, detect_all_shadows,
     detect_all_shadows_from_rules,
 };
 pub use decision_tree::DecisionTree;

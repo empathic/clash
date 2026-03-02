@@ -72,8 +72,11 @@ pub enum Node {
         observable: Observable,
         arms: Vec<MatchArm>,
     },
-    /// Return Allow + attached sandbox policy. (Phase 2)
-    Sandbox { id: NodeId },
+    /// Return Allow + attached pre-compiled sandbox policy.
+    Sandbox {
+        id: NodeId,
+        policy: SandboxPolicy,
+    },
     /// Return the effect unconditionally.
     Leaf { id: NodeId, effect: Effect },
 }
@@ -136,6 +139,15 @@ pub struct NodeMeta {
     pub sandbox_name: Option<String>,
 }
 
+/// How a sandbox was resolved during evaluation.
+#[derive(Debug, Clone)]
+pub enum SandboxOut {
+    /// v1: lookup by name from `sandbox_policies` map.
+    Named(String),
+    /// v2: pre-compiled sandbox policy from a `Node::Sandbox`.
+    Compiled(SandboxPolicy),
+}
+
 /// Query context built from a tool invocation, used by predicate matching.
 #[derive(Debug)]
 pub struct QueryContext {
@@ -153,20 +165,20 @@ pub struct QueryContext {
 // ID allocator (used during tree construction)
 // ---------------------------------------------------------------------------
 
-struct IdAllocator {
-    next_id: NodeId,
-    node_meta: Vec<NodeMeta>,
+pub(crate) struct IdAllocator {
+    pub(crate) next_id: NodeId,
+    pub(crate) node_meta: Vec<NodeMeta>,
 }
 
 impl IdAllocator {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             next_id: 0,
             node_meta: Vec::new(),
         }
     }
 
-    fn alloc(&mut self, mut meta: NodeMeta) -> NodeId {
+    pub(crate) fn alloc(&mut self, mut meta: NodeMeta) -> NodeId {
         let id = self.next_id;
         self.next_id += 1;
         meta.id = id;
@@ -314,6 +326,112 @@ impl PolicyTree {
             sandbox_policies: dt.sandbox_policies,
         }
     }
+
+    /// Merge multiple `PolicyTree`s into a single tree with a `DenyOverrides` root.
+    ///
+    /// Trees should be ordered highest-precedence first. Node IDs are renumbered
+    /// to avoid collisions. Flat rule lists are merged and re-sorted by specificity.
+    pub(crate) fn merge_levels(mut trees: Vec<PolicyTree>) -> Self {
+        assert!(!trees.is_empty());
+
+        if trees.len() == 1 {
+            return trees.remove(0);
+        }
+
+        // Take metadata from highest-precedence (first) tree.
+        let version = trees[0].version;
+        let default = trees[0].default;
+        let policy_name = trees[0].policy_name.clone();
+
+        let mut combined_meta: Vec<NodeMeta> = Vec::new();
+        let mut children = Vec::new();
+        let mut all_exec = Vec::new();
+        let mut all_fs = Vec::new();
+        let mut all_net = Vec::new();
+        let mut all_tool = Vec::new();
+        let mut all_sandbox: HashMap<String, Vec<CompiledRule>> = HashMap::new();
+
+        for mut tree in trees {
+            let offset = combined_meta.len() as NodeId;
+            if offset > 0 {
+                renumber_node(&mut tree.root, offset);
+                for m in &mut tree.node_meta {
+                    m.id += offset;
+                }
+            }
+            children.push(tree.root);
+            combined_meta.extend(tree.node_meta);
+            all_exec.extend(tree.exec_rules);
+            all_fs.extend(tree.fs_rules);
+            all_net.extend(tree.net_rules);
+            all_tool.extend(tree.tool_rules);
+            for (name, rules) in tree.sandbox_policies {
+                all_sandbox.entry(name).or_insert(rules);
+            }
+        }
+
+        // Add root DenyOverrides node.
+        let root_id = combined_meta.len() as NodeId;
+        combined_meta.push(NodeMeta {
+            id: root_id,
+            description: "multi-level merge".into(),
+            ..Default::default()
+        });
+
+        let root = Node::DenyOverrides {
+            id: root_id,
+            children,
+        };
+
+        // Sort flat rules by specificity (most specific first).
+        let sort_fn = |a: &CompiledRule, b: &CompiledRule| {
+            b.specificity
+                .partial_cmp(&a.specificity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        };
+        all_exec.sort_by(sort_fn);
+        all_fs.sort_by(sort_fn);
+        all_net.sort_by(sort_fn);
+        all_tool.sort_by(sort_fn);
+
+        PolicyTree {
+            version,
+            default,
+            policy_name,
+            root,
+            node_meta: combined_meta,
+            exec_rules: all_exec,
+            fs_rules: all_fs,
+            net_rules: all_net,
+            tool_rules: all_tool,
+            sandbox_policies: all_sandbox,
+        }
+    }
+}
+
+/// Recursively offset all `NodeId`s in a node tree by `offset`.
+fn renumber_node(node: &mut Node, offset: NodeId) {
+    match node {
+        Node::Sequence { id, children } | Node::DenyOverrides { id, children } => {
+            *id += offset;
+            for child in children {
+                renumber_node(child, offset);
+            }
+        }
+        Node::When { id, body, .. } => {
+            *id += offset;
+            renumber_node(body, offset);
+        }
+        Node::Match { id, arms, .. } => {
+            *id += offset;
+            for arm in arms {
+                renumber_node(&mut arm.body, offset);
+            }
+        }
+        Node::Sandbox { id, .. } | Node::Leaf { id, .. } => {
+            *id += offset;
+        }
+    }
 }
 
 /// Convert a domain's flat rule list into a `Sequence` of `When { Leaf }` nodes.
@@ -418,14 +536,14 @@ impl PolicyTree {
         let ctx = QueryContext::from_queries(tool_name, &queries, cwd);
         let mut matched_rules = Vec::new();
         let mut skipped_rules = Vec::new();
-        let mut sandbox_name: Option<String> = None;
+        let mut sandbox_out: Option<SandboxOut> = None;
 
         self.eval_node(
             &self.root,
             &ctx,
             &mut matched_rules,
             &mut skipped_rules,
-            &mut sandbox_name,
+            &mut sandbox_out,
         );
 
         // No rules matched -> use default.
@@ -471,9 +589,13 @@ impl PolicyTree {
 
         // Build sandbox policy if allowed.
         let sandbox = if effect == Effect::Allow {
-            sandbox_name
-                .and_then(|name| self.build_sandbox_policy(&name, cwd))
-                .or_else(|| self.build_implicit_sandbox())
+            match sandbox_out {
+                Some(SandboxOut::Named(name)) => self
+                    .build_sandbox_policy(&name, cwd)
+                    .or_else(|| self.build_implicit_sandbox()),
+                Some(SandboxOut::Compiled(policy)) => Some(policy),
+                None => self.build_implicit_sandbox(),
+            }
         } else {
             None
         };
@@ -499,14 +621,14 @@ impl PolicyTree {
         ctx: &QueryContext,
         matched: &mut Vec<RuleMatch>,
         skipped: &mut Vec<RuleSkip>,
-        sandbox_name: &mut Option<String>,
+        sandbox_out: &mut Option<SandboxOut>,
     ) -> Option<Effect> {
         match node {
             Node::DenyOverrides { children, .. } => {
                 let mut effects = Vec::new();
                 for child in children {
                     if let Some(eff) =
-                        self.eval_node(child, ctx, matched, skipped, sandbox_name)
+                        self.eval_node(child, ctx, matched, skipped, sandbox_out)
                     {
                         effects.push(eff);
                     }
@@ -530,7 +652,7 @@ impl PolicyTree {
             Node::Sequence { children, .. } => {
                 for child in children {
                     if let Some(eff) =
-                        self.eval_node(child, ctx, matched, skipped, sandbox_name)
+                        self.eval_node(child, ctx, matched, skipped, sandbox_out)
                     {
                         return Some(eff);
                     }
@@ -558,8 +680,8 @@ impl PolicyTree {
                     );
 
                     // Capture sandbox name from first matching exec rule.
-                    if meta.sandbox_name.is_some() && sandbox_name.is_none() {
-                        *sandbox_name = meta.sandbox_name.clone();
+                    if meta.sandbox_name.is_some() && sandbox_out.is_none() {
+                        *sandbox_out = meta.sandbox_name.clone().map(SandboxOut::Named);
                     }
 
                     // For flat-bridge When+Leaf nodes, record the match at
@@ -568,7 +690,7 @@ impl PolicyTree {
                         let effect = match body.as_ref() {
                             Node::Leaf { effect, .. } => *effect,
                             _ => {
-                                return self.eval_node(body, ctx, matched, skipped, sandbox_name);
+                                return self.eval_node(body, ctx, matched, skipped, sandbox_out);
                             }
                         };
 
@@ -582,12 +704,29 @@ impl PolicyTree {
                             description,
                             effect,
                             has_active_constraints: false,
+                            node_id: Some(*id),
                         });
 
                         Some(effect)
                     } else {
-                        // Generic When (Phase 2): just eval the body.
-                        self.eval_node(body, ctx, matched, skipped, sandbox_name)
+                        // Generic When (v2): eval the body, recording a match
+                        // if the body didn't already record one (e.g. Leaf nodes
+                        // don't record matches, but Sandbox nodes do).
+                        let pre_len = matched.len();
+                        let result =
+                            self.eval_node(body, ctx, matched, skipped, sandbox_out);
+                        if let Some(effect) = result {
+                            if matched.len() == pre_len {
+                                matched.push(RuleMatch {
+                                    rule_index: 0,
+                                    description: meta.description.clone(),
+                                    effect,
+                                    has_active_constraints: sandbox_out.is_some(),
+                                    node_id: Some(*id),
+                                });
+                            }
+                        }
+                        result
                     }
                 } else {
                     // Record skip (only for flat-bridge nodes with a rule_index).
@@ -611,8 +750,91 @@ impl PolicyTree {
                 Some(*effect)
             }
 
-            // Phase 2 nodes — not yet implemented.
-            Node::Match { .. } | Node::Sandbox { .. } => None,
+            Node::Match {
+                id,
+                observable,
+                arms,
+            } => {
+                let values = resolve_observable(observable, ctx);
+                let values = match values {
+                    Some(v) => v,
+                    None => return None, // observable not available (e.g. ProxyMethod deferred)
+                };
+
+                for arm in arms {
+                    if match_pattern(&arm.pattern, &values) {
+                        trace!(
+                            node_id = id,
+                            "match arm matched"
+                        );
+                        return self.eval_node(&arm.body, ctx, matched, skipped, sandbox_out);
+                    }
+                }
+                None
+            }
+
+            Node::Sandbox { id, policy } => {
+                let meta = &self.node_meta[*id as usize];
+                matched.push(RuleMatch {
+                    rule_index: 0,
+                    description: meta.description.clone(),
+                    effect: Effect::Allow,
+                    has_active_constraints: true,
+                    node_id: Some(*id),
+                });
+                *sandbox_out = Some(SandboxOut::Compiled(policy.clone()));
+                Some(Effect::Allow)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Match node helpers
+// ---------------------------------------------------------------------------
+
+/// Resolve an observable to a list of concrete string values from the query context.
+///
+/// Returns `None` if the observable cannot be resolved (e.g. `ProxyMethod` is deferred).
+fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec<String>> {
+    match observable {
+        Observable::ProxyMethod => None, // deferred for MVP
+        Observable::ProxyDomain => ctx.net_domain.as_ref().map(|d| vec![d.clone()]),
+        Observable::FsAction => ctx.fs_op.map(|op| {
+            vec![match op {
+                FsOp::Read => "read".to_string(),
+                FsOp::Write => "write".to_string(),
+                FsOp::Create => "create".to_string(),
+                FsOp::Delete => "delete".to_string(),
+            }]
+        }),
+        Observable::FsPath => ctx.fs_path.as_ref().map(|p| vec![p.clone()]),
+        Observable::Tuple(obs) => {
+            let mut values = Vec::with_capacity(obs.len());
+            for o in obs {
+                let resolved = resolve_observable(o, ctx)?;
+                // Each scalar observable should produce exactly one value.
+                values.push(resolved.into_iter().next()?);
+            }
+            Some(values)
+        }
+    }
+}
+
+/// Test whether a match pattern matches a list of resolved values.
+fn match_pattern(pattern: &MatchPattern, values: &[String]) -> bool {
+    match pattern {
+        MatchPattern::Single(cp) => {
+            // Single pattern matches the first (and only) value.
+            values.first().is_some_and(|v| cp.matches(v))
+        }
+        MatchPattern::Tuple(pats) => {
+            if pats.len() != values.len() {
+                return false;
+            }
+            pats.iter()
+                .zip(values.iter())
+                .all(|(pat, val)| pat.matches(val))
         }
     }
 }

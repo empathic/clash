@@ -376,6 +376,7 @@ impl DecisionTree {
                         description,
                         effect: rule.effect,
                         has_active_constraints: false,
+                        node_id: None,
                     });
                     // First match wins within a capability domain (rules are
                     // sorted by specificity, most specific first).

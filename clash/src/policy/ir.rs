@@ -5,6 +5,7 @@
 
 use crate::policy::Effect;
 use crate::policy::sandbox_types::SandboxPolicy;
+use crate::policy::tree::NodeId;
 
 /// The result of evaluating a policy.
 #[derive(Debug, Clone)]
@@ -43,6 +44,8 @@ pub struct RuleMatch {
     pub effect: Effect,
     /// Whether this rule had inline constraints that were actively checked.
     pub has_active_constraints: bool,
+    /// Tree node ID for tree-native matches (v2). `None` for flat-bridge matches.
+    pub node_id: Option<NodeId>,
 }
 
 /// A rule that was skipped during evaluation.

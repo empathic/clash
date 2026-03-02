@@ -510,7 +510,23 @@ impl ShellSession {
                                     output.push_str(&format!("    (include \"{name}\")\n"));
                                 }
                             }
+                            // v2 items display via their Display impl
+                            item @ (PolicyItem::When { .. } | PolicyItem::Sandbox { .. }) => {
+                                output.push_str(&format!("    {item}\n"));
+                            }
                         }
+                    }
+                }
+                TopLevel::Def { name, values } => {
+                    if self.interactive {
+                        output.push_str(&format!(
+                            "  {} {} = [{}]\n",
+                            style::bold("Def"),
+                            style::cyan(name),
+                            values.join(", ")
+                        ));
+                    } else {
+                        output.push_str(&format!("  Def {name} = [{}]\n", values.join(", ")));
                     }
                 }
             }

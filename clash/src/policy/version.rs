@@ -17,7 +17,7 @@ use super::ast::TopLevel;
 /// Bump this when making backwards-incompatible changes to the policy language.
 /// Every bump must be accompanied by deprecation entries that describe what changed
 /// and (ideally) an auto-fix function for `clash policy upgrade`.
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
 
 /// A deprecated feature in the policy language.
 pub struct Deprecation {
@@ -216,16 +216,17 @@ mod tests {
     fn upgrade_adds_version_declaration() {
         let source = "(default deny \"main\")\n(policy \"main\")\n";
         let (upgraded, changes) = upgrade_policy(source).unwrap();
-        assert!(upgraded.contains("(version 1)"));
-        assert_eq!(changes.len(), 1);
-        assert!(changes[0].contains("Added"));
+        assert!(upgraded.contains(&format!("(version {CURRENT_VERSION})")));
+        assert!(!changes.is_empty());
     }
 
     #[test]
     fn upgrade_already_current_is_noop() {
-        let source = "(version 1)\n(default deny \"main\")\n(policy \"main\")\n";
+        let source = &format!(
+            "(version {CURRENT_VERSION})\n(default deny \"main\")\n(policy \"main\")\n"
+        );
         let (upgraded, changes) = upgrade_policy(source).unwrap();
-        assert_eq!(upgraded, source);
+        assert_eq!(upgraded, *source);
         assert!(changes.is_empty());
     }
 }
