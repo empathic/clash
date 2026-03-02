@@ -33,7 +33,6 @@ target
 .env
 
 # Agents stuff
-.claude
 .clash
 
 # Local-only files
