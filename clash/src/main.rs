@@ -43,6 +43,7 @@ fn main() -> Result<()> {
                 clash::shell::ShellSession::new(scope.as_deref(), dry_run, true)
                     .and_then(|mut s| s.run_interactive())
             }
+            Commands::Tui => clash::tui::run(),
             Commands::ShowCommands { json, all } => cmd::commands::run(json, all),
             Commands::Explain { json, tool, args } => {
                 let input = if args.is_empty() {
