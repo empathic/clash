@@ -794,11 +794,26 @@ pub fn detect_shadows(rules: &[CompiledRule]) -> HashMap<usize, ShadowInfo> {
 
 /// Detect all shadows across all rule categories in a decision tree.
 pub fn detect_all_shadows(tree: &DecisionTree) -> AllShadows {
+    detect_all_shadows_from_rules(
+        &tree.exec_rules,
+        &tree.fs_rules,
+        &tree.net_rules,
+        &tree.tool_rules,
+    )
+}
+
+/// Detect shadows from flat rule slices (used by both DecisionTree and PolicyTree).
+pub fn detect_all_shadows_from_rules(
+    exec_rules: &[CompiledRule],
+    fs_rules: &[CompiledRule],
+    net_rules: &[CompiledRule],
+    tool_rules: &[CompiledRule],
+) -> AllShadows {
     AllShadows {
-        exec: detect_shadows(&tree.exec_rules),
-        fs: detect_shadows(&tree.fs_rules),
-        net: detect_shadows(&tree.net_rules),
-        tool: detect_shadows(&tree.tool_rules),
+        exec: detect_shadows(exec_rules),
+        fs: detect_shadows(fs_rules),
+        net: detect_shadows(net_rules),
+        tool: detect_shadows(tool_rules),
     }
 }
 

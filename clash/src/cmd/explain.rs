@@ -72,7 +72,7 @@ pub fn run(json_output: bool, tool: Option<String>, input_arg: Option<String>) -
     };
 
     let settings = ClashSettings::load_or_create()?;
-    let tree = match settings.decision_tree() {
+    let tree = match settings.policy_tree() {
         Some(t) => t,
         None => {
             if json_output {

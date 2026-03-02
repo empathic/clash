@@ -458,7 +458,7 @@ fn handle_remove(rule_str: &str, dry_run: bool, scope: Option<&str>) -> Result<(
 /// Handle `clash policy list`.
 fn handle_list(json: bool) -> Result<()> {
     let settings = ClashSettings::load_or_create()?;
-    let tree = match settings.decision_tree() {
+    let tree = match settings.policy_tree() {
         Some(t) => t,
         None => {
             if let Some(err) = settings.policy_error() {
@@ -533,7 +533,7 @@ fn handle_list(json: bool) -> Result<()> {
 /// Handle `clash policy show`.
 fn handle_show(json: bool) -> Result<()> {
     let settings = ClashSettings::load_or_create()?;
-    let tree = match settings.decision_tree() {
+    let tree = match settings.policy_tree() {
         Some(t) => t,
         None => {
             if let Some(err) = settings.policy_error() {

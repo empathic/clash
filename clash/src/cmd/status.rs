@@ -27,7 +27,7 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     }
 
     let settings = ClashSettings::load_or_create()?;
-    let tree = match settings.decision_tree() {
+    let tree = match settings.policy_tree() {
         Some(t) => t,
         None => {
             if let Some(err) = settings.policy_error() {
@@ -108,7 +108,12 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     );
     println!("{}", style::dim("─────────────────────────────────"));
 
-    let shadows = crate::policy::detect_all_shadows(tree);
+    let shadows = crate::policy::detect_all_shadows_from_rules(
+        &tree.exec_rules,
+        &tree.fs_rules,
+        &tree.net_rules,
+        &tree.tool_rules,
+    );
 
     let print_rules =
         |label: &str,

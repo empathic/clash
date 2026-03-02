@@ -70,7 +70,7 @@ pub fn check_for_sandbox_network_hint(
 
     // Re-evaluate the policy to check if this command would run under
     // a sandbox with NetworkPolicy::Deny
-    let tree = settings.decision_tree()?;
+    let tree = settings.policy_tree()?;
     let decision = tree.evaluate(&input.tool_name, &input.tool_input, &input.cwd);
 
     let network_policy = decision.sandbox.as_ref().map(|s| &s.network);

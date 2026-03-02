@@ -2,10 +2,11 @@
 
 use std::fmt;
 
-use super::decision_tree::{CompiledRule, DecisionTree};
+use super::decision_tree::CompiledRule;
+use super::tree::PolicyTree;
 
-/// Format a decision tree as a human-readable summary.
-pub fn print_tree(tree: &DecisionTree) -> String {
+/// Format a policy tree as a human-readable summary.
+pub fn print_tree(tree: &PolicyTree) -> String {
     let mut out = String::new();
     out.push_str(&format!("Policy: {}\n", tree.policy_name));
     out.push_str(&format!("Default: {}\n", tree.default));
@@ -47,7 +48,7 @@ fn print_section(out: &mut String, title: &str, rules: &[CompiledRule]) {
     }
 }
 
-impl fmt::Display for DecisionTree {
+impl fmt::Display for PolicyTree {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", print_tree(self))
     }
@@ -79,7 +80,8 @@ mod tests {
   (allow (net "github.com")))
 "#;
         let env = TestEnv(HashMap::from([("PWD".into(), "/tmp".into())]));
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let dt = compile_policy_with_env(source, &env).unwrap();
+        let tree = PolicyTree::from_decision_tree(dt);
         let output = print_tree(&tree);
         assert!(output.contains("Policy: main"));
         assert!(output.contains("Default: deny"));
@@ -102,9 +104,10 @@ mod tests {
   (allow (fs read (subpath "/test"))))
 "#;
         let env = TestEnv(HashMap::new());
-        let tree =
+        let dt =
             compile_policy_with_internals(user_source, &env, &[("__internal_test__", internal)])
                 .unwrap();
+        let tree = PolicyTree::from_decision_tree(dt);
         let output = print_tree(&tree);
         assert!(
             output.contains("[builtin]"),

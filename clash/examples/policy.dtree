@@ -1,0 +1,22 @@
+policy:
+    tmpdir:
+        fs:
+
+
+    rust:
+        default: deny
+        exec:
+            cargo:
+                net:
+                    domain:
+                        github.com: allow
+                        crates.io: allow
+                fs:
+                    subpath($CWD + "targets"): allow
+                    subpath($TEMPDIR): allow
+
+        tool: 
+            read:
+                subpath($CWD): allow
+            write:
+                subpath($CWD): allow

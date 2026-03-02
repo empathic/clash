@@ -10,7 +10,7 @@ pub fn check_permission(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
 ) -> anyhow::Result<HookOutput> {
-    let tree = match settings.decision_tree() {
+    let tree = match settings.policy_tree() {
         Some(t) => t,
         None => {
             let (reason, context) = match settings.policy_error() {

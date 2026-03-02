@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::policy::DecisionTree;
+use crate::policy::tree::PolicyTree;
 use anyhow::{Context, Result};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
@@ -154,8 +154,8 @@ pub struct LoadedPolicy {
 
 #[derive(Debug, Default)]
 pub struct ClashSettings {
-    /// Pre-compiled decision tree for fast evaluation.
-    compiled: Option<DecisionTree>,
+    /// Pre-compiled policy tree for fast evaluation.
+    compiled: Option<PolicyTree>,
 
     /// Policy sources loaded from each level (ordered by precedence, highest first).
     loaded_policies: Vec<LoadedPolicy>,
@@ -354,7 +354,7 @@ impl ClashSettings {
     pub fn set_policy_source(&mut self, source: &str) {
         match crate::policy::compile_policy(source) {
             Ok(tree) => {
-                self.compiled = Some(tree);
+                self.compiled = Some(PolicyTree::from_decision_tree(tree));
                 self.policy_error = None;
             }
             Err(e) => {
@@ -369,8 +369,14 @@ impl ClashSettings {
     /// Maximum policy file size (1 MiB).
     const MAX_POLICY_SIZE: u64 = 1024 * 1024;
 
-    /// Return the pre-compiled decision tree, if one was successfully compiled.
-    pub fn decision_tree(&self) -> Option<&DecisionTree> {
+    /// Return the pre-compiled policy tree, if one was successfully compiled.
+    pub fn policy_tree(&self) -> Option<&PolicyTree> {
+        self.compiled.as_ref()
+    }
+
+    /// Backward-compat alias for `policy_tree()`.
+    #[doc(hidden)]
+    pub fn decision_tree(&self) -> Option<&PolicyTree> {
         self.compiled.as_ref()
     }
 
@@ -460,7 +466,7 @@ impl ClashSettings {
                 match crate::policy::compile_policy(&contents) {
                     Ok(tree) => {
                         info!(path = %path.display(), "Loaded policy");
-                        self.compiled = Some(tree);
+                        self.compiled = Some(PolicyTree::from_decision_tree(tree));
                         true
                     }
                     Err(e) => {
@@ -587,7 +593,7 @@ impl ClashSettings {
 
         match result {
             Ok(tree) => {
-                this.compiled = Some(tree);
+                this.compiled = Some(PolicyTree::from_decision_tree(tree));
                 this.policy_error = None;
             }
             Err(e) => {

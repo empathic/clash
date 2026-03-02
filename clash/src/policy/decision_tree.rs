@@ -141,7 +141,7 @@ impl DecisionTree {
 
     /// Shared implementation: convert a set of compiled rules into a
     /// `SandboxPolicy` by extracting fs and net constraints.
-    fn sandbox_from_rules<'a>(
+    pub(crate) fn sandbox_from_rules<'a>(
         rules: impl Iterator<Item = &'a CompiledRule>,
     ) -> Option<SandboxPolicy> {
         let mut sandbox_rules: Vec<SandboxRule> = Vec::new();

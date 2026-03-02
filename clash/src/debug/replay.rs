@@ -6,10 +6,10 @@
 
 use anyhow::{Context, Result};
 
-use crate::policy::DecisionTree;
 use crate::policy::eval::CapQuery;
 use crate::policy::ir::PolicyDecision;
 use crate::policy::sandbox_types::SandboxPolicy;
+use crate::policy::tree::PolicyTree;
 use crate::settings::{ClashSettings, PolicyLevel};
 use crate::style;
 
@@ -23,8 +23,8 @@ pub struct ReplayResult {
     pub decision: PolicyDecision,
     /// Whether multiple policy levels are active.
     pub multi_level: bool,
-    /// Reference to the decision tree (for origin lookups).
-    tree: DecisionTree,
+    /// Reference to the policy tree (for origin lookups).
+    tree: PolicyTree,
 }
 
 impl ReplayResult {
@@ -220,7 +220,7 @@ pub fn replay_from_args(tool: &str, input: Option<&str>, cwd: &str) -> Result<Re
 
     let settings = ClashSettings::load_or_create()?;
     let tree = settings
-        .decision_tree()
+        .policy_tree()
         .ok_or_else(|| anyhow::anyhow!("no compiled policy available — run `clash init`"))?
         .clone();
 
