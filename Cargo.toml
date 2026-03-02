@@ -64,6 +64,9 @@ crossterm = "0.29"
 reedline = "0.45"
 shlex = "1"
 similar = "2"
+chrono = "0.4"
+toolpath = "0.1"
+toolpath-claude = { version = "0.4", default-features = false }
 
 nucleo-matcher = "0.3"
 

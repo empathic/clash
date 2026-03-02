@@ -49,6 +49,7 @@ pub mod settings;
 pub mod shell;
 pub mod shell_complete;
 pub mod style;
+pub mod trace;
 pub mod tracing_init;
 pub mod tui;
 pub mod version;
