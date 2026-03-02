@@ -11,6 +11,7 @@ pub fn run(
     description: Option<String>,
     include_config: bool,
     include_logs: bool,
+    include_trace: bool,
 ) -> Result<()> {
     // Build the description by combining user text with optional config/logs.
     let mut desc_parts: Vec<String> = Vec::new();
@@ -36,6 +37,18 @@ pub fn run(
                 desc_parts.push(format!("### Debug Logs\n\n```\n{}\n```", contents));
             }
             Err(e) => eprintln!("Warning: could not read logs: {}", e),
+        }
+    }
+
+    if include_trace {
+        match ClashSettings::active_session_id()
+            .and_then(|sid| crate::trace::export_trace(&sid))
+            .and_then(|doc| doc.to_json().context("serializing trace"))
+        {
+            Ok(json) => {
+                desc_parts.push(format!("### Session Trace\n\n```json\n{}\n```", json));
+            }
+            Err(e) => eprintln!("Warning: could not export trace: {}", e),
         }
     }
 

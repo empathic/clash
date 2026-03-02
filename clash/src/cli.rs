@@ -33,6 +33,10 @@ pub enum HooksCmd {
     /// Handle SessionStart hook - called when a Claude Code session begins
     #[command(name = "session-start")]
     SessionStart,
+
+    /// Handle Stop hook - called when a conversation turn ends without a tool call
+    #[command(name = "stop")]
+    Stop,
 }
 
 #[derive(Subcommand, Debug)]
@@ -242,5 +246,8 @@ pub enum Commands {
         /// Include recent debug logs in the report
         #[arg(long)]
         include_logs: bool,
+        /// Include the session toolpath trace in the report
+        #[arg(long)]
+        include_trace: bool,
     },
 }

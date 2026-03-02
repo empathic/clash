@@ -59,7 +59,14 @@ fn main() -> Result<()> {
                 description,
                 include_config,
                 include_logs,
-            } => cmd::bug::run(title, description, include_config, include_logs),
+                include_trace,
+            } => cmd::bug::run(
+                title,
+                description,
+                include_config,
+                include_logs,
+                include_trace,
+            ),
         };
         if let Err(err) = resp {
             error!("{:?}", err);
