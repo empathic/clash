@@ -2139,7 +2139,7 @@ mod tests {
         use crate::tui::app::{DiffHunk, DiffLine};
         let hunks = vec![DiffHunk {
             level: PolicyLevel::User,
-            path: PathBuf::from("/home/user/.config/clash/policy.clj"),
+            path: PathBuf::from("/home/user/.config/clash/policy.sexpr"),
             lines: vec![
                 DiffLine::Context("(policy \"main\"".to_string()),
                 DiffLine::Added("  (allow (exec \"git\"))".to_string()),
@@ -2156,7 +2156,7 @@ mod tests {
             "should have level header: {text}"
         );
         assert!(
-            text.contains("policy.clj"),
+            text.contains("policy.sexpr"),
             "should have file path: {text}"
         );
         assert!(text.contains("git"), "should contain added line: {text}");
