@@ -181,7 +181,11 @@ fn handle_confirm_save(app: &mut App, key: KeyEvent) -> InputResult {
         }
         KeyCode::Char('j') | KeyCode::Down => {
             if let Mode::ConfirmSave(diff) = &app.mode {
-                let new = diff.scroll.get().saturating_add(1).min(diff.max_scroll.get());
+                let new = diff
+                    .scroll
+                    .get()
+                    .saturating_add(1)
+                    .min(diff.max_scroll.get());
                 diff.scroll.set(new);
             }
             InputResult::Continue
@@ -194,7 +198,11 @@ fn handle_confirm_save(app: &mut App, key: KeyEvent) -> InputResult {
         }
         KeyCode::PageDown | KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if let Mode::ConfirmSave(diff) = &app.mode {
-                let new = diff.scroll.get().saturating_add(10).min(diff.max_scroll.get());
+                let new = diff
+                    .scroll
+                    .get()
+                    .saturating_add(10)
+                    .min(diff.max_scroll.get());
                 diff.scroll.set(new);
             }
             InputResult::Continue
