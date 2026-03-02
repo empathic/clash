@@ -887,7 +887,7 @@ pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
                     }
                     hints.push(("Tab", "effect"));
                     hints.push(("e", "edit"));
-                    hints.push(("d", "delete"));
+                    hints.push(("x", "delete"));
                 }
                 TreeNodeKind::Domain(_) | TreeNodeKind::PolicyBlock { .. } => {
                     if row.has_children {
@@ -899,7 +899,7 @@ pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
                         hints.push(("z/Z", "fold"));
                     }
                     hints.push(("Tab", "effect"));
-                    hints.push(("d", "delete"));
+                    hints.push(("x", "delete"));
                 }
                 TreeNodeKind::Leaf { .. } => {
                     if row.has_children {
@@ -912,13 +912,13 @@ pub(crate) fn context_hints(app: &App) -> Vec<(&'static str, &'static str)> {
                     hints.push(("Tab", "effect"));
                     hints.push(("e", "edit"));
                     hints.push(("E", "edit rule"));
-                    hints.push(("d", "delete"));
+                    hints.push(("x", "delete"));
                 }
                 TreeNodeKind::SandboxLeaf { .. } => {
                     hints.push(("Tab", "effect"));
                     hints.push(("e", "edit"));
                     hints.push(("E", "edit rule"));
-                    hints.push(("d", "delete"));
+                    hints.push(("x", "delete"));
                 }
                 TreeNodeKind::SandboxGroup => {
                     if row.has_children {
@@ -1071,15 +1071,16 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         help_line(bold, "  Space       ", "Toggle expand/collapse"),
         help_line(bold, "  g           ", "Jump to top"),
         help_line(bold, "  G           ", "Jump to bottom"),
-        help_line(bold, "  PgUp/PgDn   ", "Page up/down"),
+        help_line(bold, "  u / PgUp    ", "Page up"),
+        help_line(bold, "  d / PgDn    ", "Page down"),
         Line::from(""),
         help_line(bold, "  Tab         ", "Select effect (dropdown)"),
         help_line(bold, "  e           ", "Edit node value inline"),
         help_line(bold, "  E           ", "Edit full rule s-expr"),
         help_line(bold, "  a           ", "Add a new rule"),
-        help_line(bold, "  d           ", "Delete rule at cursor"),
+        help_line(bold, "  x           ", "Delete rule at cursor"),
         help_line(bold, "  w           ", "Save all changes"),
-        help_line(bold, "  u           ", "Undo last edit"),
+        help_line(bold, "  Ctrl+z      ", "Undo last edit"),
         help_line(bold, "  Ctrl+r      ", "Redo"),
         Line::from(""),
         help_line(bold, "  z           ", "Fold/unfold children"),
@@ -1146,7 +1147,8 @@ fn render_confirm_overlay(f: &mut Frame, area: Rect, action: &ConfirmAction) {
         ),
         ConfirmAction::QuitUnsaved => (
             " Unsaved Changes ",
-            "You have unsaved changes.\n\nQuit without saving?\n\ny/n".to_string(),
+            "You have unsaved changes.\n\ns = save & quit\ny = quit without saving\nn = cancel"
+                .to_string(),
         ),
     };
 
@@ -1964,7 +1966,7 @@ mod tests {
         let keys: Vec<&str> = hints.iter().map(|(k, _)| *k).collect();
         assert!(keys.contains(&"Tab"), "leaf should have Tab hint");
         assert!(keys.contains(&"e"), "leaf should have e hint");
-        assert!(keys.contains(&"d"), "leaf should have d hint");
+        assert!(keys.contains(&"x"), "leaf should have x hint");
     }
 
     #[test]
@@ -1998,7 +2000,7 @@ mod tests {
         let keys: Vec<&str> = hints.iter().map(|(k, _)| *k).collect();
         assert!(keys.contains(&"Tab"), "sandbox leaf should have Tab hint");
         assert!(keys.contains(&"e"), "sandbox leaf should have e hint");
-        assert!(keys.contains(&"d"), "sandbox leaf should have d hint");
+        assert!(keys.contains(&"x"), "sandbox leaf should have x hint");
     }
 
     #[test]

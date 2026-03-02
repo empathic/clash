@@ -31,4 +31,4 @@ expression: output
 │Source:│  Save? y confirm  n/Esc cancel  j/k scroll  g/G top/bottom   │       │
 │Rule: (└──────────────────────────────────────────────────────────────┘       │
 │"cargo" > Exec > allow                                                        │
-j/k move  Tab effect  e edit  E edit rule  d delete  [/] all  a add  / search  w
+j/k move  Tab effect  e edit  E edit rule  x delete  [/] all  a add  / search  w

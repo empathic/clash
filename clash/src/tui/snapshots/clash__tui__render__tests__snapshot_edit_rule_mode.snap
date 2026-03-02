@@ -25,4 +25,4 @@ expression: output
 │> (ask (tool "Bash"))_                                                        │
 │                                                                              │
 │                                                                              │
-j/k move  Tab effect  e edit  E edit rule  d delete  [/] all  a add  / search  w
+j/k move  Tab effect  e edit  E edit rule  x delete  [/] all  a add  / search  w

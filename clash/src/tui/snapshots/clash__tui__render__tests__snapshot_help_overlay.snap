@@ -4,10 +4,9 @@ expression: output
 ---
  clash tui  user  1/4                                                    ? help 
 │ ▶ "git"  1 auto allow                                                        │
-│ ▶ "rm"  1 auto deny                                                          │
-│ ▶ "sudo"  1 a┌ Keyboard Shortcuts ────────────────────────────┐              │
-│ ▶ *  1 auto a│                                                │              │
-│              │  j / Down    Move cursor down                  │              │
+│ ▶ "rm"  1 aut┌ Keyboard Shortcuts ────────────────────────────┐              │
+│ ▶ "sudo"  1 a│                                                │              │
+│ ▶ *  1 auto a│  j / Down    Move cursor down                  │              │
 │              │  k / Up      Move cursor up                    │              │
 │              │  l / Right   Expand node or enter children     │              │
 │              │  h / Left    Collapse node or go to parent     │              │
@@ -15,15 +14,16 @@ expression: output
 │              │  Space       Toggle expand/collapse            │              │
 │              │  g           Jump to top                       │              │
 │              │  G           Jump to bottom                    │              │
-│              │  PgUp/PgDn   Page up/down                      │              │
+│              │  u / PgUp    Page up                           │              │
+│              │  d / PgDn    Page down                         │              │
 │              │                                                │              │
 │              │  Tab         Select effect (dropdown)          │              │
 │              │  e           Edit node value inline            │              │
 │              │  E           Edit full rule s-expr             │              │
 │              │  a           Add a new rule                    │              │
-│              │  d           Delete rule at cursor             │              │
+│              │  x           Delete rule at cursor             │              │
 │              │  w           Save all changes                  │              │
-│              │  u           Undo last edit                    │              │
+│              │  Ctrl+z      Undo last edit                    │              │
 │              │  Ctrl+r      Redo                              │              │
 │              │                                                │              │
 │              │  z           Fold/unfold children              │              │
@@ -41,4 +41,4 @@ expression: output
 │1 rule: 1 auto└────────────────────────────────────────────────┘              │
 │"git"                                                                         │
 │                                                                              │
-j/k move  l expand  z/Z fold  Tab effect  e edit  d delete  [/] all  a add  / se
+j/k move  l expand  z/Z fold  Tab effect  e edit  x delete  [/] all  a add  / se

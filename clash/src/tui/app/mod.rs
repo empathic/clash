@@ -417,8 +417,8 @@ impl TreeState {
         self.rebuild_flat();
     }
 
-    /// Handle a mouse click at the given terminal row.
-    pub fn handle_mouse_click(&mut self, row: u16) {
+    /// Handle a mouse click at the given terminal row and column.
+    pub fn handle_mouse_click(&mut self, row: u16, column: u16) {
         // Tree view starts at y=1 (after 1-line header), no top border
         let tree_y = 1u16;
         let visible_height = self.viewport_height;
@@ -432,6 +432,20 @@ impl TreeState {
         let flat_idx = scroll + row_in_tree;
         if flat_idx < self.flat_rows.len() {
             self.cursor = flat_idx;
+
+            // Check if the click landed on the fold arrow (▶/▼).
+            // Layout: 1 leading space + 2 chars per depth level + 2-char arrow.
+            // The left border occupies column 0, so the tree inner area starts at column 1.
+            let flat_row = &self.flat_rows[flat_idx];
+            if flat_row.has_children {
+                let arrow_col = 1 + 1 + flat_row.depth * 2; // border + leading space + indent
+                let col = column as usize;
+                if col >= arrow_col && col < arrow_col + 2 {
+                    let node_id = flat_row.node_id;
+                    self.arena[node_id].expanded = !self.arena[node_id].expanded;
+                    self.rebuild_flat();
+                }
+            }
         }
     }
 
@@ -820,10 +834,11 @@ impl App {
                     Event::Mouse(MouseEvent {
                         kind: MouseEventKind::Down(_),
                         row,
+                        column,
                         ..
                     }) => {
                         if matches!(self.mode, Mode::Normal) {
-                            self.tree.handle_mouse_click(row);
+                            self.tree.handle_mouse_click(row, column);
                         }
                     }
                     _ => {}
