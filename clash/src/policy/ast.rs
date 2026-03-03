@@ -195,21 +195,50 @@ pub enum PathExpr {
 ///
 /// Replaces the former `WhenPredicate` (command/tool only) and `ObservableRef`
 /// (proxy/fs only) with a single enum covering all observable domains.
+///
+/// Observable names follow the `ctx.*` namespace defined in the v2 language spec.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Observable {
-    /// `command` — matches exec queries (binary + args).
+    /// `command` — invocation-type predicate matching exec queries (binary + args).
     Command,
-    /// `tool` — matches tool queries by name.
+    /// `tool` — invocation-type predicate matching tool queries by name.
     Tool,
-    /// `proxy.method`
-    ProxyMethod,
-    /// `proxy.domain`
-    ProxyDomain,
-    /// `fs.action`
+
+    // -- ctx.http namespace --------------------------------------------------
+    /// `ctx.http.domain` — destination domain (formerly `proxy.domain`).
+    HttpDomain,
+    /// `ctx.http.method` — HTTP method (formerly `proxy.method`).
+    HttpMethod,
+    /// `ctx.http.port` — destination port.
+    HttpPort,
+    /// `ctx.http.path` — URL path.
+    HttpPath,
+
+    // -- ctx.fs namespace ----------------------------------------------------
+    /// `ctx.fs.action` — operation type (formerly `fs.action`).
     FsAction,
-    /// `fs.path`
+    /// `ctx.fs.path` — file path (formerly `fs.path`).
     FsPath,
-    /// `[fs.action fs.path]` — tuple of observables.
+    /// `ctx.fs.exists` — whether the target exists.
+    FsExists,
+
+    // -- ctx.process namespace -----------------------------------------------
+    /// `ctx.process.command` — executable name.
+    ProcessCommand,
+    /// `ctx.process.args` — argument list.
+    ProcessArgs,
+
+    // -- ctx.tool namespace --------------------------------------------------
+    /// `ctx.tool.name` — tool name.
+    ToolName,
+    /// `ctx.tool.args` — tool arguments (dynamic, nullable accessors).
+    ToolArgs,
+
+    // -- ctx.state -----------------------------------------------------------
+    /// `ctx.state` — agent state.
+    State,
+
+    /// `[ctx.fs.action ctx.fs.path]` — tuple of observables.
     Tuple(Vec<Observable>),
 }
 
@@ -376,10 +405,18 @@ impl fmt::Display for Observable {
         match self {
             Observable::Command => write!(f, "command"),
             Observable::Tool => write!(f, "tool"),
-            Observable::ProxyMethod => write!(f, "proxy.method"),
-            Observable::ProxyDomain => write!(f, "proxy.domain"),
-            Observable::FsAction => write!(f, "fs.action"),
-            Observable::FsPath => write!(f, "fs.path"),
+            Observable::HttpDomain => write!(f, "ctx.http.domain"),
+            Observable::HttpMethod => write!(f, "ctx.http.method"),
+            Observable::HttpPort => write!(f, "ctx.http.port"),
+            Observable::HttpPath => write!(f, "ctx.http.path"),
+            Observable::FsAction => write!(f, "ctx.fs.action"),
+            Observable::FsPath => write!(f, "ctx.fs.path"),
+            Observable::FsExists => write!(f, "ctx.fs.exists"),
+            Observable::ProcessCommand => write!(f, "ctx.process.command"),
+            Observable::ProcessArgs => write!(f, "ctx.process.args"),
+            Observable::ToolName => write!(f, "ctx.tool.name"),
+            Observable::ToolArgs => write!(f, "ctx.tool.args"),
+            Observable::State => write!(f, "ctx.state"),
             Observable::Tuple(obs) => {
                 write!(f, "[")?;
                 for (i, o) in obs.iter().enumerate() {

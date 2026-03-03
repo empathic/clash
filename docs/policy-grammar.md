@@ -447,7 +447,7 @@ when_block      = "(" "when" when_guard when_body+ ")"
 when_guard      = "(" "command" pattern? args_spec ")"
                 | "(" "tool" pattern? ")"
                 | "(" observable pattern ")"
-                | "(" observable path_filter ")"        ; for fs.path
+                | "(" observable path_filter ")"        ; for ctx.fs.path
 when_body       = effect_kw                             ; inline effect
                 | sandbox_block                         ; nested sandbox
                 | when_block                            ; nested when
@@ -461,8 +461,11 @@ sandbox_item    = rule                                  ; flat capability rule
 match_block     = "(" "match" observable match_arm+ ")"     ; policy level (allows :ask)
 sandbox_match_block = "(" "match" observable sandbox_match_arm+ ")"  ; sandbox level (no :ask)
 observable      = "command" | "tool"
-                | "proxy.method" | "proxy.domain"
-                | "fs.action" | "fs.path"
+                | "ctx.http.domain" | "ctx.http.method" | "ctx.http.port" | "ctx.http.path"
+                | "ctx.fs.action" | "ctx.fs.path" | "ctx.fs.exists"
+                | "ctx.process.command" | "ctx.process.args"
+                | "ctx.tool.name" | "ctx.tool.args"
+                | "ctx.state"
                 | "[" observable observable+ "]"         ; tuple
 match_arm       = arm_pattern effect_kw
 sandbox_match_arm = arm_pattern sandbox_effect_kw
@@ -500,14 +503,14 @@ The body contains one or more items: an effect keyword (`:allow`, `:deny`, `:ask
 ; Allow multiple tools
 (when (tool (or "Read" "Glob" "Grep")) :allow)
 
-; Guard on proxy domain
-(when (proxy.domain "github.com") :allow)
+; Guard on HTTP domain
+(when (ctx.http.domain "github.com") :allow)
 
 ; Guard on filesystem action
-(when (fs.action "read") :allow)
+(when (ctx.fs.action "read") :allow)
 
 ; Guard on filesystem path
-(when (fs.path (subpath (env PWD))) :allow)
+(when (ctx.fs.path (subpath (env PWD))) :allow)
 
 ; Allow with a sandbox
 (when (command "cargo" *)
@@ -531,7 +534,7 @@ Sandbox blocks can also contain `(match ...)` blocks for observable-based dispat
   (sandbox
     (allow (fs (or read write) (subpath (env PWD))))
     (allow (net "github.com"))
-    (match proxy.domain
+    (match ctx.http.domain
       "crates.io" :allow
       "github.com" :allow
       *           :deny)))
@@ -549,26 +552,34 @@ At **policy level**, match arms may use `:allow`, `:deny`, or `:ask` effects. In
 |-----------|------|-------------|
 | `command` | exec | Command execution (binary + args) |
 | `tool` | string | Agent tool name |
-| `proxy.domain` | string | Domain of an HTTP request (sandbox proxy) |
-| `proxy.method` | string | HTTP method (GET, POST, etc.) |
-| `fs.action` | string | Filesystem operation: `"read"`, `"write"`, `"create"`, `"delete"` |
-| `fs.path` | path | Filesystem path being accessed |
+| `ctx.http.domain` | string | Domain of an HTTP request |
+| `ctx.http.method` | string | HTTP method (GET, POST, etc.) |
+| `ctx.http.port` | int | Destination port |
+| `ctx.http.path` | string | URL path |
+| `ctx.fs.action` | string | Filesystem operation: `"read"`, `"write"`, `"create"`, `"delete"` |
+| `ctx.fs.path` | path | Filesystem path being accessed |
+| `ctx.fs.exists` | bool | Whether the target file exists |
+| `ctx.process.command` | string | Executable name |
+| `ctx.process.args` | [string] | Argument list |
+| `ctx.tool.name` | string | Tool name |
+| `ctx.tool.args` | {string?} | Tool arguments (dynamic, nullable) |
+| `ctx.state` | string | Agent state |
 
 #### Scalar match
 
 Match a single observable against patterns:
 
 ```
-(match proxy.domain
+(match ctx.http.domain
   "github.com" :allow
   "crates.io"  :allow
   *            :deny)
 
-(match fs.action
+(match ctx.fs.action
   "read"  :allow
   "write" :deny)
 
-(match fs.path
+(match ctx.fs.path
   (subpath (env PWD)) :allow
   *                   :deny)
 ```
@@ -603,7 +614,7 @@ Match agent tools by name:
 Match multiple observables simultaneously using bracket syntax:
 
 ```
-(match [fs.action fs.path]
+(match [ctx.fs.action ctx.fs.path]
   ["read"  (subpath (env PWD))]   :allow
   ["write" (subpath (env PWD))]   :allow
   ["read"  *]                     :deny
@@ -674,7 +685,7 @@ In v2 contexts (when bodies, match arms), effects use keyword syntax:
     :allow
     (sandbox
       (allow (fs (or read write) (subpath (env PWD))))
-      (match proxy.domain
+      (match ctx.http.domain
         "crates.io"  :allow
         "github.com" :allow
         *            :deny)))
@@ -685,8 +696,8 @@ In v2 contexts (when bodies, match arms), effects use keyword syntax:
     (or "WebFetch" "WebSearch")    :allow
     *                              :deny)
 
-  ; Guard on proxy domain
-  (when (proxy.domain "github.com") :allow)
+  ; Guard on HTTP domain
+  (when (ctx.http.domain "github.com") :allow)
 
   :deny)                             ; fallback for unmatched requests
 ```

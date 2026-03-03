@@ -204,7 +204,7 @@ mod tests {
 (policy "main"
   (when (command "cargo")
     (sandbox
-      (match proxy.domain
+      (match ctx.http.domain
         "crates.io" :allow
         * :deny))))
 "#;

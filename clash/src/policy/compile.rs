@@ -494,7 +494,7 @@ fn compile_match_to_sandbox(
     network: &mut NetworkPolicy,
 ) -> Result<()> {
     match &block.observable {
-        Observable::ProxyDomain => {
+        Observable::HttpDomain => {
             // Each arm adds to NetworkPolicy.
             for arm in &block.arms {
                 let effect = match arm.effect {
@@ -520,13 +520,13 @@ fn compile_match_to_sandbox(
                                 }
                             }
                         }
-                        _ => bail!("proxy.domain match arm must be a single pattern"),
+                        _ => bail!("ctx.http.domain match arm must be a single pattern"),
                     }
                 }
-                // :deny arms for proxy.domain are implicitly handled by deny-default.
+                // :deny arms for ctx.http.domain are implicitly handled by deny-default.
             }
         }
-        Observable::ProxyMethod => {
+        Observable::HttpMethod | Observable::HttpPort | Observable::HttpPath => {
             // Deferred for MVP — skip.
         }
         Observable::FsPath => {
@@ -558,7 +558,7 @@ fn compile_match_to_sandbox(
             }
         }
         Observable::Tuple(obs) => {
-            // Handle [fs.action fs.path] tuple.
+            // Handle [ctx.fs.action ctx.fs.path] tuple.
             if obs.len() == 2
                 && matches!(obs[0], Observable::FsAction)
                 && matches!(obs[1], Observable::FsPath)
@@ -571,14 +571,14 @@ fn compile_match_to_sandbox(
                     };
                     match &arm.pattern {
                         ArmPattern::Tuple(elems) if elems.len() == 2 => {
-                            // First element: fs.action → caps.
+                            // First element: ctx.fs.action → caps.
                             let caps = match &elems[0] {
                                 ArmPatternElement::Pat(pat) => {
                                     action_pattern_to_caps_from_pat(pat)?
                                 }
                                 _ => Cap::all(),
                             };
-                            // Second element: fs.path → sandbox rules.
+                            // Second element: ctx.fs.path → sandbox rules.
                             match &elems[1] {
                                 ArmPatternElement::Path(pf) => {
                                     let compiled_pf = compile_path_filter(pf, env)?;
@@ -607,7 +607,7 @@ fn compile_match_to_sandbox(
                                 }
                                 other => {
                                     bail!(
-                                        "unsupported path pattern in [fs.action fs.path] arm: {other:?}"
+                                        "unsupported path pattern in [ctx.fs.action ctx.fs.path] arm: {other:?}"
                                     )
                                 }
                             }
@@ -622,13 +622,25 @@ fn compile_match_to_sandbox(
                             });
                         }
                         other => {
-                            bail!("expected tuple pattern for [fs.action fs.path], got: {other:?}")
+                            bail!("expected tuple pattern for [ctx.fs.action ctx.fs.path], got: {other:?}")
                         }
                     }
                 }
             } else {
-                bail!("unsupported observable tuple: only [fs.action fs.path] is supported")
+                bail!("unsupported observable tuple: only [ctx.fs.action ctx.fs.path] is supported")
             }
+        }
+        Observable::FsExists => {
+            // Deferred — requires runtime stat check.
+        }
+        Observable::ProcessCommand | Observable::ProcessArgs => {
+            // Process observables don't apply to sandbox rules.
+        }
+        Observable::ToolName | Observable::ToolArgs => {
+            // Tool context observables don't apply to sandbox rules.
+        }
+        Observable::State => {
+            // State observable doesn't apply to sandbox rules.
         }
         Observable::Command | Observable::Tool => {
             // Command/tool observables don't apply to sandbox rules (sandbox restricts fs/net only).
@@ -675,11 +687,11 @@ fn compile_arm_path_to_sandbox(
 fn action_pattern_to_caps(pattern: &ArmPattern) -> Result<Cap> {
     match pattern {
         ArmPattern::Single(pat) => action_pattern_to_caps_from_pat(pat),
-        _ => bail!("expected single pattern for fs.action arm"),
+        _ => bail!("expected single pattern for ctx.fs.action arm"),
     }
 }
 
-/// Convert a Pattern (from fs.action position) to Cap flags.
+/// Convert a Pattern (from ctx.fs.action position) to Cap flags.
 fn action_pattern_to_caps_from_pat(pat: &Pattern) -> Result<Cap> {
     match pat {
         Pattern::Any => Ok(Cap::all()),
@@ -897,22 +909,22 @@ fn compile_when_guard(
                 name: pat.clone(),
             })?))
         }
-        Observable::ProxyDomain => {
+        Observable::HttpDomain => {
             let pat = match pattern {
                 ArmPattern::Single(p) => p,
-                _ => bail!("proxy.domain observable requires a single pattern"),
+                _ => bail!("ctx.http.domain observable requires a single pattern"),
             };
             let domain = compile_pattern(pat)?;
             Ok(Predicate::Net(CompiledNet { domain, path: None }))
         }
-        Observable::ProxyMethod => {
+        Observable::HttpMethod | Observable::HttpPort | Observable::HttpPath => {
             // Deferred — always true for now
             Ok(Predicate::True)
         }
         Observable::FsAction => {
             let pat = match pattern {
                 ArmPattern::Single(p) => p,
-                _ => bail!("fs.action observable requires a single pattern"),
+                _ => bail!("ctx.fs.action observable requires a single pattern"),
             };
             let op = pattern_to_op_pattern(pat)?;
             Ok(Predicate::Fs(CompiledFs { op, path: None }))
@@ -926,7 +938,7 @@ fn compile_when_guard(
                         path: None,
                     }));
                 }
-                _ => bail!("fs.path observable requires a path filter pattern"),
+                _ => bail!("ctx.fs.path observable requires a path filter pattern"),
             };
             let compiled_pf = compile_path_filter(pf, env)?;
             Ok(Predicate::Fs(CompiledFs {
@@ -934,13 +946,43 @@ fn compile_when_guard(
                 path: Some(compiled_pf),
             }))
         }
+        Observable::FsExists => {
+            // Deferred — always true for now
+            Ok(Predicate::True)
+        }
+        Observable::ProcessCommand => {
+            // ctx.process.command in a when guard: match on binary name
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("ctx.process.command observable requires a single pattern"),
+            };
+            let compiled = compile_pattern(pat)?;
+            Ok(Predicate::Command(CompiledExec {
+                bin: compiled,
+                args: vec![],
+                has_args: vec![],
+            }))
+        }
+        Observable::ProcessArgs | Observable::ToolArgs | Observable::State => {
+            // Deferred — always true for now
+            Ok(Predicate::True)
+        }
+        Observable::ToolName => {
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("ctx.tool.name observable requires a single pattern"),
+            };
+            Ok(Predicate::Tool(compile_tool_to_compiled(&ToolMatcher {
+                name: pat.clone(),
+            })?))
+        }
         Observable::Tuple(_) => {
             bail!("tuple observables are not supported in when guards")
         }
     }
 }
 
-/// Convert a Pattern to an OpPattern (for fs.action when guards).
+/// Convert a Pattern to an OpPattern (for ctx.fs.action when guards).
 fn pattern_to_op_pattern(pat: &Pattern) -> Result<OpPattern> {
     match pat {
         Pattern::Any => Ok(OpPattern::Any),
@@ -972,7 +1014,7 @@ fn pattern_to_op_pattern(pat: &Pattern) -> Result<OpPattern> {
             }
             Ok(OpPattern::Or(ops))
         }
-        _ => bail!("unsupported pattern type for fs.action"),
+        _ => bail!("unsupported pattern type for ctx.fs.action"),
     }
 }
 
@@ -1022,10 +1064,18 @@ fn compile_observable_to_ir(obs: &Observable) -> Result<crate::policy::tree::Obs
     match obs {
         Observable::Command => Ok(ir::Observable::Command),
         Observable::Tool => Ok(ir::Observable::Tool),
-        Observable::ProxyMethod => Ok(ir::Observable::ProxyMethod),
-        Observable::ProxyDomain => Ok(ir::Observable::ProxyDomain),
+        Observable::HttpDomain => Ok(ir::Observable::HttpDomain),
+        Observable::HttpMethod => Ok(ir::Observable::HttpMethod),
+        Observable::HttpPort => Ok(ir::Observable::HttpPort),
+        Observable::HttpPath => Ok(ir::Observable::HttpPath),
         Observable::FsAction => Ok(ir::Observable::FsAction),
         Observable::FsPath => Ok(ir::Observable::FsPath),
+        Observable::FsExists => Ok(ir::Observable::FsExists),
+        Observable::ProcessCommand => Ok(ir::Observable::ProcessCommand),
+        Observable::ProcessArgs => Ok(ir::Observable::ProcessArgs),
+        Observable::ToolName => Ok(ir::Observable::ToolName),
+        Observable::ToolArgs => Ok(ir::Observable::ToolArgs),
+        Observable::State => Ok(ir::Observable::State),
         Observable::Tuple(obs) => {
             let inner = obs
                 .iter()
@@ -2845,7 +2895,7 @@ mod tests {
   (when (command "git" *) :allow)
   (when (command "cargo")
     (sandbox
-      (match proxy.domain
+      (match ctx.http.domain
         "crates.io" :allow
         * :deny))))
 "#;
@@ -2866,15 +2916,15 @@ mod tests {
 (policy "rust"
   (when (command (or "cargo" "rustc"))
     (sandbox
-      (match proxy.domain
+      (match ctx.http.domain
         (or "github.com" "crates.io") :allow)
-      (match [fs.action fs.path]
+      (match [ctx.fs.action ctx.fs.path]
         ["read" (subpath "/home/user/project")] :allow
         [* (subpath "/tmp")] :allow))))
 (policy "web"
   (when (tool (or "WebSearch" "WebFetch"))
     (sandbox
-      (match proxy.domain
+      (match ctx.http.domain
         "github.com" :allow
         * :deny))))
 (policy "main"
@@ -2896,10 +2946,10 @@ mod tests {
 (policy "main"
   (when (command "cargo")
     (sandbox
-      (match proxy.domain
+      (match ctx.http.domain
         "crates.io" :allow
         * :deny)
-      (match [fs.action fs.path]
+      (match [ctx.fs.action ctx.fs.path]
         ["read" (subpath "/home/user")] :allow
         [* (subpath "/tmp")] :allow))))
 "#;
@@ -2927,7 +2977,7 @@ mod tests {
 (policy "main"
   (when (command "cargo")
     (sandbox
-      (match proxy.domain
+      (match ctx.http.domain
         "crates.io" :allow))))
 "#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
@@ -2949,7 +2999,7 @@ mod tests {
 (policy "main"
   (when (command "cargo")
     (sandbox
-      (match proxy.domain
+      (match ctx.http.domain
         "crates.io" :allow))))
 "#;
         let internals: &[(&str, &str)] = &[(
