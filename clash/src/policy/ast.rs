@@ -5,6 +5,7 @@
 use std::fmt;
 
 use crate::policy::Effect;
+use crate::policy::sexpr::SExpr;
 
 /// A top-level declaration in a policy file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,8 +19,8 @@ pub enum TopLevel {
     Use(String),
     /// `(policy name ...)` — a named policy containing rules and includes.
     Policy { name: String, body: Vec<PolicyItem> },
-    /// `(def name [val1 val2 ...])` — v2 macro definition for pattern expansion.
-    Def { name: String, values: Vec<String> },
+    /// `(def name <expr>)` — v2 macro definition binding a name to any expression.
+    Def { name: String, value: SExpr },
 }
 
 /// An item inside a `(policy ...)` block.
@@ -280,15 +281,8 @@ impl fmt::Display for TopLevel {
                     write!(f, "\n)")
                 }
             }
-            TopLevel::Def { name, values } => {
-                write!(f, "(def {name} [")?;
-                for (i, v) in values.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))?;
-                }
-                write!(f, "])")
+            TopLevel::Def { name, value } => {
+                write!(f, "(def {name} {value})")
             }
         }
     }

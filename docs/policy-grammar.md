@@ -29,7 +29,7 @@ version_decl    = "(" "version" INTEGER ")"
 default_decl    = "(" "default" effect QUOTED_STRING ")"          ; deprecated in v2
 use_decl        = "(" "use" QUOTED_STRING ")"                     ; v2 only
 policy_decl     = "(" "policy" QUOTED_STRING policy_item* ")"
-def_decl        = "(" "def" ATOM "[" QUOTED_STRING* "]" ")"      ; v2 only
+def_decl        = "(" "def" ATOM expression ")"                  ; v2 only, any expression
 
 ; v1 policy items
 policy_item     = include | rule                                  ; v1
@@ -472,7 +472,13 @@ arm_pattern     = pattern | path_filter                 ; scalar observable
                 | "[" arm_element+ "]"                  ; tuple observable
 exec_arm_pattern = "(" pattern? args_spec ")"           ; like exec_matcher sans "exec"
 
-def_decl        = "(" "def" ATOM "[" QUOTED_STRING* "]" ")"
+def_decl        = "(" "def" ATOM expression ")"
+
+expression      = "[" QUOTED_STRING* "]"                 ; bracket list (expands to or-pattern)
+                | pattern                                ; general pattern
+                | when_block                             ; compound when block
+                | match_block                            ; compound match block
+                | sandbox_block                          ; compound sandbox block
 ```
 
 ### `when` blocks
@@ -617,16 +623,29 @@ Tuple patterns use `[...]` brackets and must have one element per observable in 
 
 ### `def` declarations
 
-A `def` declaration creates a named pattern macro that can be referenced elsewhere in the policy. Definitions are top-level forms.
+A `def` declaration binds a name to any expression. When the name is referenced in a policy body, the bound expression is spliced in and parsed in context. Definitions are top-level forms.
+
+Values may be bracket lists (backwards compatible), patterns, or compound forms like `match` and `when` blocks:
 
 ```
+; Bracket list — expands to (or ...) pattern in pattern context
 (def builders ["cargo" "make" "cmake" "ninja"])
 
+; Compound pattern
+(def github-domains (or "github.com" "api.github.com"))
+
+; Compound match block — spliced into policy/when body
+(def github-net
+  (match proxy.domain
+    "github.com" :allow))
+
 (policy "main"
-  (when (command builders *) :allow))
+  (when (command builders *) :allow)   ; builders → Or(["cargo", ...])
+  (when (command "curl" *)
+    github-net))                        ; spliced as match block
 ```
 
-The name is a bare atom. The value is a bracket-delimited list of quoted strings, which expands to an `(or ...)` pattern at parse time.
+The name is a bare atom matching `[a-zA-Z][a-zA-Z0-9\-]*`. The value is any valid s-expression.
 
 ### Effect keywords
 
