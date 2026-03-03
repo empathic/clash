@@ -74,16 +74,78 @@ pub fn validate_version(version: u32) -> anyhow::Result<()> {
 /// valid v2 syntax. The version bump is handled as a feature upgrade in
 /// `upgrade_policy()` instead.
 pub fn all_deprecations() -> Vec<Deprecation> {
-    vec![]
+    vec![Deprecation {
+        deprecated_in: 2,
+        message: "`(default ...)` is deprecated in v2. Use `(use \"name\")` and a bare effect in the policy body.".into(),
+        check: |source| source.contains("(default "),
+        fix: Some(fix_default_to_use),
+    }]
+}
+
+/// Migrate `(default effect "name")` → `(use "name")` + bare effect in the entry policy body.
+fn fix_default_to_use(source: &str) -> String {
+    let mut ast = match super::parse::parse(source) {
+        Ok(a) => a,
+        Err(_) => return source.to_string(),
+    };
+
+    // Find and remove the Default declaration, capturing its values.
+    let default_info = ast.iter().find_map(|tl| match tl {
+        TopLevel::Default { effect, policy } => Some((*effect, policy.clone())),
+        _ => None,
+    });
+
+    let Some((effect, policy_name)) = default_info else {
+        return source.to_string();
+    };
+
+    // Check if a (use ...) already exists — if so, only strip (default ...).
+    let has_use = ast.iter().any(|tl| matches!(tl, TopLevel::Use(_)));
+
+    // Replace Default with Use (or just remove Default if Use already exists).
+    ast.retain(|tl| !matches!(tl, TopLevel::Default { .. }));
+    if !has_use {
+        // Insert (use "name") after (version N) if present, else at position 0.
+        let pos = ast
+            .iter()
+            .position(|tl| !matches!(tl, TopLevel::Version(_)))
+            .unwrap_or(0);
+        ast.insert(pos, TopLevel::Use(policy_name.clone()));
+    }
+
+    // Append the effect to the entry policy body if not already present.
+    let entry_name = ast
+        .iter()
+        .find_map(|tl| match tl {
+            TopLevel::Use(n) => Some(n.clone()),
+            _ => None,
+        })
+        .unwrap_or(policy_name);
+
+    for tl in &mut ast {
+        if let TopLevel::Policy { name, body } = tl {
+            if *name == entry_name {
+                let has_body_effect = body.iter().any(|item| matches!(item, PolicyItem::Effect(_)));
+                if !has_body_effect {
+                    body.push(PolicyItem::Effect(effect));
+                }
+                break;
+            }
+        }
+    }
+
+    super::edit::serialize_ast(&ast)
 }
 
 /// Check a policy source for deprecated features at the given version.
 ///
 /// Returns a list of warning messages for any deprecated patterns found.
+/// Fires when the policy's declared version is at or above the deprecation
+/// boundary (the feature is deprecated *in* that version and later).
 pub fn check_deprecations(source: &str, version: u32) -> Vec<String> {
     all_deprecations()
         .into_iter()
-        .filter(|d| d.deprecated_in > version && (d.check)(source))
+        .filter(|d| version >= d.deprecated_in && (d.check)(source))
         .map(|d| d.message)
         .collect()
 }
@@ -100,30 +162,40 @@ pub fn upgrade_policy(source: &str) -> anyhow::Result<(String, Vec<String>)> {
 
     let has_version_decl = ast.iter().any(|tl| matches!(tl, TopLevel::Version(_)));
 
-    if version == CURRENT_VERSION && has_version_decl {
+    // Check if any deprecation fixes are needed even at current version.
+    let has_deprecations = all_deprecations()
+        .iter()
+        .any(|d| version >= d.deprecated_in && (d.check)(source));
+
+    if version == CURRENT_VERSION && has_version_decl && !has_deprecations {
         return Ok((source.to_string(), vec![]));
     }
 
     let mut changes = Vec::new();
 
-    // Apply deprecation fixes.
-    // (Currently none, but the framework is here for future use.)
-    let mut text = source.to_string();
-    for dep in all_deprecations() {
-        if dep.deprecated_in > version && dep.deprecated_in <= CURRENT_VERSION && (dep.check)(&text)
-        {
-            if let Some(fix) = dep.fix {
-                text = fix(&text);
-                changes.push(dep.message);
-                // Re-parse after text-level fixes.
-                ast = super::parse::parse(&text)?;
-            } else {
-                changes.push(format!("{} (manual fix required)", dep.message));
-            }
+    // Set version declaration first so that fixes producing v2 syntax can be re-parsed.
+    let mut found_version = false;
+    for tl in &mut ast {
+        if let TopLevel::Version(v) = tl {
+            *v = CURRENT_VERSION;
+            found_version = true;
+            break;
         }
     }
+    if !found_version {
+        ast.insert(0, TopLevel::Version(CURRENT_VERSION));
+    }
 
-    // Transform v1 flat rules to v2 structured syntax.
+    if version < CURRENT_VERSION {
+        changes.push(format!("Set (version {CURRENT_VERSION})."));
+    } else if !has_version_decl {
+        changes.push(format!(
+            "Added (version {CURRENT_VERSION}) declaration to policy."
+        ));
+    }
+
+    // Transform v1 flat rules to v2 structured syntax BEFORE re-serializing,
+    // because the v2 parser rejects flat rules.
     if version < 2 {
         let transformed = transform_v1_to_v2(&mut ast);
         if transformed {
@@ -133,25 +205,21 @@ pub fn upgrade_policy(source: &str) -> anyhow::Result<(String, Vec<String>)> {
         }
     }
 
-    // Set version declaration.
-    let mut found = false;
-    for tl in &mut ast {
-        if let TopLevel::Version(v) = tl {
-            *v = CURRENT_VERSION;
-            found = true;
-            break;
-        }
-    }
-    if !found {
-        ast.insert(0, TopLevel::Version(CURRENT_VERSION));
-    }
+    // Re-serialize with version set, so deprecation fixes can re-parse as v2.
+    let mut text = super::edit::serialize_ast(&ast);
 
-    if version < CURRENT_VERSION {
-        changes.insert(0, format!("Set (version {CURRENT_VERSION})."));
-    } else if !has_version_decl {
-        changes.push(format!(
-            "Added (version {CURRENT_VERSION}) declaration to policy."
-        ));
+    // Apply deprecation fixes.
+    for dep in all_deprecations() {
+        if dep.deprecated_in <= CURRENT_VERSION && (dep.check)(&text) {
+            if let Some(fix) = dep.fix {
+                text = fix(&text);
+                changes.push(dep.message);
+                // Re-parse after text-level fixes.
+                ast = super::parse::parse(&text)?;
+            } else {
+                changes.push(format!("{} (manual fix required)", dep.message));
+            }
+        }
     }
 
     Ok((super::edit::serialize_ast(&ast), changes))
@@ -208,7 +276,8 @@ fn transform_policy_body(body: &[PolicyItem]) -> Vec<PolicyItem> {
 
     if !sandbox_body.is_empty() {
         result.push(PolicyItem::When {
-            predicate: WhenPredicate::Command(ExecMatcher {
+            observable: Observable::Command,
+            pattern: ArmPattern::Exec(ExecMatcher {
                 bin: Pattern::Any,
                 args: vec![],
                 has_args: vec![],
@@ -233,7 +302,6 @@ fn transform_rule(
 ) {
     match &rule.matcher {
         CapMatcher::Exec(exec_matcher) => {
-            let predicate = WhenPredicate::Command(exec_matcher.clone());
             let mut when_body = vec![PolicyItem::Effect(rule.effect)];
 
             // Inline sandbox rules transfer to a (sandbox ...) block.
@@ -248,13 +316,15 @@ fn transform_rule(
             // (Named refs are rare in practice; drop with a comment if unresolvable.)
 
             result.push(PolicyItem::When {
-                predicate,
+                observable: Observable::Command,
+                pattern: ArmPattern::Exec(exec_matcher.clone()),
                 body: when_body,
             });
         }
         CapMatcher::Tool(tool_matcher) => {
             result.push(PolicyItem::When {
-                predicate: WhenPredicate::Tool(tool_matcher.clone()),
+                observable: Observable::Tool,
+                pattern: ArmPattern::Single(tool_matcher.name.clone()),
                 body: vec![PolicyItem::Effect(rule.effect)],
             });
         }
@@ -262,7 +332,8 @@ fn transform_rule(
             let tool_names = fs_op_to_tool_names(&fs_matcher.op);
             let tool_pattern = names_to_pattern(&tool_names);
             result.push(PolicyItem::When {
-                predicate: WhenPredicate::Tool(ToolMatcher { name: tool_pattern }),
+                observable: Observable::Tool,
+                pattern: ArmPattern::Single(tool_pattern),
                 body: vec![PolicyItem::Effect(rule.effect)],
             });
 
@@ -279,7 +350,8 @@ fn transform_rule(
         CapMatcher::Net(_) => {
             let tool_pattern = names_to_pattern(&["WebFetch", "WebSearch"]);
             result.push(PolicyItem::When {
-                predicate: WhenPredicate::Tool(ToolMatcher { name: tool_pattern }),
+                observable: Observable::Tool,
+                pattern: ArmPattern::Single(tool_pattern),
                 body: vec![PolicyItem::Effect(rule.effect)],
             });
 
@@ -381,6 +453,15 @@ mod tests {
             upgraded.contains(&format!("(version {CURRENT_VERSION})")),
             "expected (version {CURRENT_VERSION}), got:\n{upgraded}"
         );
+        // (default ...) should be migrated to (use ...) + body effect.
+        assert!(
+            upgraded.contains("(use \"main\")"),
+            "expected (use \"main\") after upgrade, got:\n{upgraded}"
+        );
+        assert!(
+            !upgraded.contains("(default "),
+            "expected (default ...) removed after upgrade, got:\n{upgraded}"
+        );
         assert!(!changes.is_empty());
         assert!(
             changes[0].contains(&format!("(version {CURRENT_VERSION})")),
@@ -392,7 +473,7 @@ mod tests {
     #[test]
     fn upgrade_already_current_is_noop() {
         let source =
-            &format!("(version {CURRENT_VERSION})\n(default deny \"main\")\n(policy \"main\")\n");
+            &format!("(version {CURRENT_VERSION})\n(use \"main\")\n(policy \"main\"\n  :deny)\n");
         let (upgraded, changes) = upgrade_policy(source).unwrap();
         assert_eq!(upgraded, *source);
         assert!(changes.is_empty());

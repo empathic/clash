@@ -65,6 +65,10 @@ fn parse_top_level(expr: &SExpr, ctx: &ParseContext) -> Result<TopLevel> {
         "version" => parse_version(list),
         "default" => parse_default(list),
         "policy" => parse_policy(list, ctx),
+        "use" => {
+            require_v2(ctx, "use")?;
+            parse_use(list)
+        }
         "def" => {
             require_v2(ctx, "def")?;
             parse_def(list)
@@ -104,6 +108,15 @@ fn parse_default(list: &[SExpr]) -> Result<TopLevel> {
     })
 }
 
+fn parse_use(list: &[SExpr]) -> Result<TopLevel> {
+    ensure!(
+        list.len() == 2,
+        "(use) expects exactly 1 argument: policy name"
+    );
+    let name = require_string(&list[1], "policy name")?;
+    Ok(TopLevel::Use(name.to_string()))
+}
+
 fn parse_def(list: &[SExpr]) -> Result<TopLevel> {
     ensure!(
         list.len() == 3,
@@ -141,6 +154,17 @@ fn parse_policy(list: &[SExpr], ctx: &ParseContext) -> Result<TopLevel> {
 }
 
 fn parse_policy_item(expr: &SExpr, ctx: &ParseContext) -> Result<PolicyItem> {
+    // v2: bare effect keywords (:allow, :deny, :ask) as policy body items.
+    if ctx.version >= 2 {
+        if let SExpr::Atom(s, _) = expr {
+            match s.as_str() {
+                ":allow" => return Ok(PolicyItem::Effect(Effect::Allow)),
+                ":deny" => return Ok(PolicyItem::Effect(Effect::Deny)),
+                ":ask" => return Ok(PolicyItem::Effect(Effect::Ask)),
+                _ => {}
+            }
+        }
+    }
     let list = require_list(expr, "policy item")?;
     let head = require_atom(&list[0], "policy item keyword")?;
     match head {
@@ -152,6 +176,11 @@ fn parse_policy_item(expr: &SExpr, ctx: &ParseContext) -> Result<PolicyItem> {
         "when" => {
             require_v2(ctx, "when")?;
             parse_when_block(list, ctx)
+        }
+        "match" => {
+            require_v2(ctx, "match")?;
+            let block = parse_match_block(list, ctx)?;
+            Ok(PolicyItem::Match(block))
         }
         "sandbox" => {
             require_v2(ctx, "sandbox")?;
@@ -503,20 +532,24 @@ fn parse_path_expr(expr: &SExpr, ctx: &ParseContext) -> Result<PathExpr> {
 // v2 parse functions: when / sandbox / match
 // ---------------------------------------------------------------------------
 
-/// Parse `(when (predicate) body...)` → `PolicyItem::When`.
+/// Parse `(when (observable pattern) body...)` → `PolicyItem::When`.
 ///
 /// Body items can be regular policy items or effect keywords (`:allow`/`:deny`/`:ask`).
 fn parse_when_block(list: &[SExpr], ctx: &ParseContext) -> Result<PolicyItem> {
     ensure!(
         list.len() >= 3,
-        "(when) expects a predicate and at least one body item"
+        "(when) expects a guard and at least one body item"
     );
-    let predicate = parse_when_predicate(&list[1], ctx)?;
+    let (observable, pattern) = parse_when_guard(&list[1], ctx)?;
     let body = list[2..]
         .iter()
         .map(|e| parse_when_body_item(e, ctx))
         .collect::<Result<_>>()?;
-    Ok(PolicyItem::When { predicate, body })
+    Ok(PolicyItem::When {
+        observable,
+        pattern,
+        body,
+    })
 }
 
 /// Parse a single body item inside a `(when ...)` block.
@@ -535,21 +568,51 @@ fn parse_when_body_item(expr: &SExpr, ctx: &ParseContext) -> Result<PolicyItem> 
     parse_policy_item(expr, ctx)
 }
 
-/// Parse `(command ...)` or `(tool ...)` → `WhenPredicate`.
-fn parse_when_predicate(expr: &SExpr, ctx: &ParseContext) -> Result<WhenPredicate> {
-    let list = require_list(expr, "when predicate")?;
-    ensure!(!list.is_empty(), "empty when predicate");
-    let head = require_atom(&list[0], "predicate keyword")?;
+/// Parse a when guard `(observable pattern)` → `(Observable, ArmPattern)`.
+///
+/// Handles all observable types:
+/// - `(command ...)` → Observable::Command + ArmPattern::Exec
+/// - `(tool ...)` → Observable::Tool + ArmPattern::Single
+/// - `(proxy.domain ...)` → Observable::ProxyDomain + ArmPattern::Single
+/// - `(fs.action ...)` → Observable::FsAction + ArmPattern::Single
+/// - `(fs.path ...)` → Observable::FsPath + ArmPattern::SinglePath
+fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, ArmPattern)> {
+    let list = require_list(expr, "when guard")?;
+    ensure!(!list.is_empty(), "empty when guard");
+    let head = require_atom(&list[0], "guard keyword")?;
     match head {
         "command" => {
             let m = parse_exec_matcher(&list[1..], ctx)?;
-            Ok(WhenPredicate::Command(m))
+            Ok((Observable::Command, ArmPattern::Exec(m)))
         }
         "tool" => {
             let m = parse_tool_matcher(&list[1..], ctx)?;
-            Ok(WhenPredicate::Tool(m))
+            Ok((Observable::Tool, ArmPattern::Single(m.name)))
         }
-        other => bail!("unknown when predicate: {other} (expected 'command' or 'tool')"),
+        "proxy.domain" => {
+            ensure!(list.len() == 2, "(proxy.domain) guard expects exactly 1 pattern");
+            let pat = parse_pattern(&list[1], ctx)?;
+            Ok((Observable::ProxyDomain, ArmPattern::Single(pat)))
+        }
+        "proxy.method" => {
+            ensure!(list.len() == 2, "(proxy.method) guard expects exactly 1 pattern");
+            let pat = parse_pattern(&list[1], ctx)?;
+            Ok((Observable::ProxyMethod, ArmPattern::Single(pat)))
+        }
+        "fs.action" => {
+            ensure!(list.len() == 2, "(fs.action) guard expects exactly 1 pattern");
+            let pat = parse_pattern(&list[1], ctx)?;
+            Ok((Observable::FsAction, ArmPattern::Single(pat)))
+        }
+        "fs.path" => {
+            ensure!(list.len() == 2, "(fs.path) guard expects exactly 1 path filter");
+            let pf = parse_path_filter(&list[1], ctx)?;
+            Ok((Observable::FsPath, ArmPattern::SinglePath(pf)))
+        }
+        other => bail!(
+            "unknown when guard: {other} (expected 'command', 'tool', \
+             'proxy.domain', 'proxy.method', 'fs.action', or 'fs.path')"
+        ),
     }
 }
 
@@ -570,7 +633,7 @@ fn parse_sandbox_item(expr: &SExpr, ctx: &ParseContext) -> Result<SandboxItem> {
     let head = require_atom(&list[0], "sandbox item keyword")?;
     match head {
         "match" => {
-            let block = parse_match_block(list, ctx)?;
+            let block = parse_sandbox_match_block(list, ctx)?;
             Ok(SandboxItem::Match(block))
         }
         "allow" | "deny" | "ask" => {
@@ -591,25 +654,43 @@ fn parse_sandbox_item(expr: &SExpr, ctx: &ParseContext) -> Result<SandboxItem> {
 }
 
 /// Parse `(match observable arm...)` → `MatchBlock`.
-fn parse_match_block(list: &[SExpr], ctx: &ParseContext) -> Result<MatchBlock> {
+///
+/// When `in_sandbox` is true, `:ask` is rejected in arm effects.
+fn parse_match_block_inner(
+    list: &[SExpr],
+    ctx: &ParseContext,
+    in_sandbox: bool,
+) -> Result<MatchBlock> {
     ensure!(
         list.len() >= 4,
         "(match) expects an observable and at least one pattern/effect pair"
     );
     let observable = parse_observable(&list[1])?;
-    let arms = parse_match_arms(&list[2..], &observable, ctx)?;
+    let arms = parse_match_arms(&list[2..], &observable, ctx, in_sandbox)?;
     Ok(MatchBlock { observable, arms })
 }
 
-/// Parse an observable reference: `proxy.method`, `proxy.domain`, `fs.action`,
-/// `fs.path`, or `[fs.action fs.path]` (bracket tuple).
-fn parse_observable(expr: &SExpr) -> Result<ObservableRef> {
+/// Parse `(match ...)` at policy level (`:ask` allowed).
+fn parse_match_block(list: &[SExpr], ctx: &ParseContext) -> Result<MatchBlock> {
+    parse_match_block_inner(list, ctx, false)
+}
+
+/// Parse `(match ...)` inside a sandbox block (`:ask` rejected).
+fn parse_sandbox_match_block(list: &[SExpr], ctx: &ParseContext) -> Result<MatchBlock> {
+    parse_match_block_inner(list, ctx, true)
+}
+
+/// Parse an observable reference: `command`, `tool`, `proxy.method`, `proxy.domain`,
+/// `fs.action`, `fs.path`, or `[fs.action fs.path]` (bracket tuple).
+fn parse_observable(expr: &SExpr) -> Result<Observable> {
     match expr {
         SExpr::Atom(s, _) => match s.as_str() {
-            "proxy.method" => Ok(ObservableRef::ProxyMethod),
-            "proxy.domain" => Ok(ObservableRef::ProxyDomain),
-            "fs.action" => Ok(ObservableRef::FsAction),
-            "fs.path" => Ok(ObservableRef::FsPath),
+            "command" => Ok(Observable::Command),
+            "tool" => Ok(Observable::Tool),
+            "proxy.method" => Ok(Observable::ProxyMethod),
+            "proxy.domain" => Ok(Observable::ProxyDomain),
+            "fs.action" => Ok(Observable::FsAction),
+            "fs.path" => Ok(Observable::FsPath),
             other => bail!("unknown observable: {other}"),
         },
         SExpr::List(children, _) => {
@@ -627,7 +708,7 @@ fn parse_observable(expr: &SExpr) -> Result<ObservableRef> {
                 .iter()
                 .map(parse_observable)
                 .collect::<Result<_>>()?;
-            Ok(ObservableRef::Tuple(obs))
+            Ok(Observable::Tuple(obs))
         }
         _ => bail!("expected observable reference"),
     }
@@ -638,11 +719,15 @@ fn parse_observable(expr: &SExpr) -> Result<ObservableRef> {
 /// Each arm is `pattern :effect` where pattern can be:
 /// - A simple pattern: `"github.com"`, `*`, `(or ...)`, `(not ...)`
 /// - A path pattern: `(subpath $PWD)`
+/// - An exec pattern (for command observable): `("git" *)`, `*`
 /// - A tuple pattern: `["read" (subpath $PWD)]`
+///
+/// When `in_sandbox` is true, `:ask` is rejected in effect keywords.
 fn parse_match_arms(
     exprs: &[SExpr],
-    observable: &ObservableRef,
+    observable: &Observable,
     ctx: &ParseContext,
+    in_sandbox: bool,
 ) -> Result<Vec<MatchArmAst>> {
     ensure!(
         exprs.len() % 2 == 0,
@@ -651,7 +736,7 @@ fn parse_match_arms(
     let mut arms = Vec::new();
     for pair in exprs.chunks(2) {
         let pattern = parse_arm_pattern(&pair[0], observable, ctx)?;
-        let effect = parse_effect_keyword(&pair[1])?;
+        let effect = parse_match_effect_keyword(&pair[1], in_sandbox)?;
         arms.push(MatchArmAst { pattern, effect });
     }
     Ok(arms)
@@ -660,7 +745,7 @@ fn parse_match_arms(
 /// Parse a pattern in match-arm position, guided by the observable type.
 fn parse_arm_pattern(
     expr: &SExpr,
-    observable: &ObservableRef,
+    observable: &Observable,
     ctx: &ParseContext,
 ) -> Result<ArmPattern> {
     // Check for bracket tuple pattern: [...]
@@ -674,6 +759,11 @@ fn parse_arm_pattern(
         }
     }
 
+    // Command observable: parse as ExecMatcher
+    if matches!(observable, Observable::Command) {
+        return parse_command_arm_pattern(expr, ctx);
+    }
+
     // For path-capable observables, try to parse as path filter first
     if observable_is_path(observable) {
         if let Ok(pf) = try_parse_arm_path_filter(expr, ctx) {
@@ -681,19 +771,43 @@ fn parse_arm_pattern(
         }
     }
 
-    // Fall back to general pattern
+    // Fall back to general pattern (tool, proxy.domain, fs.action, etc.)
     let p = parse_pattern(expr, ctx)?;
     Ok(ArmPattern::Single(p))
+}
+
+/// Parse a command arm pattern: `("git" *)`, `("git" "push" :has "--force")`, or bare `*`.
+fn parse_command_arm_pattern(expr: &SExpr, ctx: &ParseContext) -> Result<ArmPattern> {
+    match expr {
+        // Bare `*` → match-all exec
+        SExpr::Atom(s, _) if s == "*" => Ok(ArmPattern::Exec(ExecMatcher {
+            bin: Pattern::Any,
+            args: vec![],
+            has_args: vec![],
+        })),
+        // Parenthesized list: ("git" "push" *) or ("git" :has "--force")
+        SExpr::List(children, _) if !children.is_empty() => {
+            // Must not be a bracket list
+            if let SExpr::Atom(s, _) = &children[0] {
+                if s == BRACKET_MARKER {
+                    bail!("tuple pattern [...] is not valid for command observable");
+                }
+            }
+            let m = parse_exec_matcher(children, ctx)?;
+            Ok(ArmPattern::Exec(m))
+        }
+        _ => bail!("expected exec pattern (\"bin\" args...) or * for command match arm"),
+    }
 }
 
 /// Parse a bracket tuple arm pattern: `["read" (subpath $PWD)]`.
 fn parse_tuple_arm_pattern(
     elements: &[SExpr],
-    observable: &ObservableRef,
+    observable: &Observable,
     ctx: &ParseContext,
 ) -> Result<ArmPattern> {
     let obs_components = match observable {
-        ObservableRef::Tuple(obs) => obs,
+        Observable::Tuple(obs) => obs,
         _ => bail!("tuple pattern [...] requires a tuple observable"),
     };
     ensure!(
@@ -746,21 +860,25 @@ fn try_parse_arm_path_filter(expr: &SExpr, ctx: &ParseContext) -> Result<PathFil
 }
 
 /// Check if an observable refers to a path value.
-fn observable_is_path(obs: &ObservableRef) -> bool {
-    matches!(obs, ObservableRef::FsPath)
+fn observable_is_path(obs: &Observable) -> bool {
+    matches!(obs, Observable::FsPath)
 }
 
-/// Parse an effect keyword: `:allow`, `:deny`.
-/// `:ask` is rejected inside sandbox context.
-fn parse_effect_keyword(expr: &SExpr) -> Result<Effect> {
+/// Parse an effect keyword in match arm position: `:allow`, `:deny`, `:ask`.
+///
+/// When `in_sandbox` is true, `:ask` is rejected (sandbox can only :allow or :deny).
+fn parse_match_effect_keyword(expr: &SExpr, in_sandbox: bool) -> Result<Effect> {
     let s = require_atom(expr, "effect keyword")?;
     match s {
         ":allow" => Ok(Effect::Allow),
         ":deny" => Ok(Effect::Deny),
         ":ask" => {
-            bail!(":ask is not allowed in sandbox match arms (sandbox can only :allow or :deny)")
+            if in_sandbox {
+                bail!(":ask is not allowed in sandbox match arms (sandbox can only :allow or :deny)")
+            }
+            Ok(Effect::Ask)
         }
-        other => bail!("expected :allow or :deny, got: {other}"),
+        other => bail!("expected :allow, :deny, or :ask, got: {other}"),
     }
 }
 
@@ -1550,13 +1668,18 @@ mod tests {
             _ => panic!(),
         };
         match &body[0] {
-            PolicyItem::When { predicate, body } => {
-                match predicate {
-                    WhenPredicate::Command(m) => {
+            PolicyItem::When {
+                observable,
+                pattern,
+                body,
+            } => {
+                assert!(matches!(observable, Observable::Command));
+                match pattern {
+                    ArmPattern::Exec(m) => {
                         assert_eq!(m.bin, Pattern::Literal("cargo".into()));
                         assert_eq!(m.args, vec![Pattern::Any]);
                     }
-                    _ => panic!("expected Command predicate"),
+                    _ => panic!("expected Exec pattern"),
                 }
                 assert_eq!(body.len(), 1);
                 assert!(matches!(&body[0], PolicyItem::Effect(Effect::Allow)));
@@ -1625,12 +1748,17 @@ mod tests {
             _ => panic!(),
         };
         match &body[0] {
-            PolicyItem::When { predicate, body } => {
-                match predicate {
-                    WhenPredicate::Tool(m) => {
-                        assert!(matches!(&m.name, Pattern::Or(ps) if ps.len() == 2));
+            PolicyItem::When {
+                observable,
+                pattern,
+                body,
+            } => {
+                assert!(matches!(observable, Observable::Tool));
+                match pattern {
+                    ArmPattern::Single(pat) => {
+                        assert!(matches!(pat, Pattern::Or(ps) if ps.len() == 2));
                     }
-                    _ => panic!("expected Tool predicate"),
+                    _ => panic!("expected Single pattern"),
                 }
                 assert_eq!(body.len(), 1);
                 assert!(matches!(&body[0], PolicyItem::Effect(Effect::Allow)));
@@ -1666,7 +1794,7 @@ mod tests {
         };
         match &sandbox_body[0] {
             SandboxItem::Match(block) => {
-                assert_eq!(block.observable, ObservableRef::ProxyDomain);
+                assert_eq!(block.observable, Observable::ProxyDomain);
                 assert_eq!(block.arms.len(), 2);
                 assert_eq!(block.arms[0].effect, Effect::Allow);
                 assert!(
@@ -1703,7 +1831,7 @@ mod tests {
         };
         match &sandbox_body[0] {
             SandboxItem::Match(block) => {
-                assert!(matches!(&block.observable, ObservableRef::Tuple(obs) if obs.len() == 2));
+                assert!(matches!(&block.observable, Observable::Tuple(obs) if obs.len() == 2));
                 assert_eq!(block.arms.len(), 2);
                 // First arm: ["read" (subpath (env PWD))]
                 match &block.arms[0].pattern {
@@ -1804,9 +1932,14 @@ mod tests {
             _ => panic!(),
         };
         match &body[0] {
-            PolicyItem::When { predicate, body } => {
-                match predicate {
-                    WhenPredicate::Command(m) => {
+            PolicyItem::When {
+                observable,
+                pattern,
+                body,
+            } => {
+                assert!(matches!(observable, Observable::Command));
+                match pattern {
+                    ArmPattern::Exec(m) => {
                         // def "builders" should expand to Or(["cargo", "rustc"])
                         match &m.bin {
                             Pattern::Or(ps) => {
@@ -1817,7 +1950,7 @@ mod tests {
                             other => panic!("expected Or pattern from def, got {other:?}"),
                         }
                     }
-                    _ => panic!("expected Command predicate"),
+                    _ => panic!("expected Exec pattern"),
                 }
                 assert_eq!(body.len(), 1);
                 assert!(matches!(&body[0], PolicyItem::Effect(Effect::Allow)));
@@ -1958,7 +2091,7 @@ mod tests {
         };
         match &sandbox_body[0] {
             SandboxItem::Match(block) => {
-                assert_eq!(block.observable, ObservableRef::ProxyMethod);
+                assert_eq!(block.observable, Observable::ProxyMethod);
                 assert!(matches!(&block.arms[0].pattern,
                     ArmPattern::Single(Pattern::Not(inner)) if matches!(&**inner, Pattern::Literal(s) if s == "GET")));
             }

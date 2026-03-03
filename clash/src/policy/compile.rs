@@ -13,7 +13,7 @@ use crate::policy::ast::FsOp;
 use crate::policy::sandbox_types::{
     Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy, SandboxRule,
 };
-use crate::policy::tree::{IdAllocator, Node, NodeMeta, PolicyTree, Predicate};
+use crate::policy::tree::{IdAllocator, MatchArm, Node, NodeMeta, PolicyTree, Predicate};
 
 use super::ast::*;
 use super::decision_tree::*;
@@ -88,14 +88,18 @@ pub fn compile_to_tree(source: &str, env: &dyn EnvResolver) -> Result<PolicyTree
 fn compile_tree_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<PolicyTree> {
     let version = super::version::extract_version(top_levels)?;
 
-    // Find default declaration.
-    let (default_effect, active_policy) = top_levels
-        .iter()
-        .find_map(|tl| match tl {
-            TopLevel::Default { effect, policy } => Some((*effect, policy.as_str())),
-            _ => None,
-        })
-        .unwrap_or((Effect::Deny, "main"));
+    // Resolve active policy: (use "name") takes priority, then (default _ "name"), then "main".
+    let use_policy = top_levels.iter().find_map(|tl| match tl {
+        TopLevel::Use(name) => Some(name.as_str()),
+        _ => None,
+    });
+    let default_decl = top_levels.iter().find_map(|tl| match tl {
+        TopLevel::Default { effect, policy } => Some((*effect, policy.as_str())),
+        _ => None,
+    });
+    let active_policy = use_policy
+        .or(default_decl.map(|(_, p)| p))
+        .unwrap_or("main");
 
     // Build policy name → body map.
     let mut policies: HashMap<&str, &[PolicyItem]> = HashMap::new();
@@ -109,6 +113,19 @@ fn compile_tree_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Po
     let mut items: Vec<(PolicyItem, String)> = Vec::new();
     let mut visited = Vec::new();
     flatten_policy_v2(active_policy, &policies, &mut items, &mut visited)?;
+
+    // Resolve default effect: last bare PolicyItem::Effect in the flattened body
+    // takes priority, then (default effect _), then Deny.
+    let body_effect = items
+        .iter()
+        .rev()
+        .find_map(|(item, _)| match item {
+            PolicyItem::Effect(e) => Some(*e),
+            _ => None,
+        });
+    let default_effect = body_effect
+        .or(default_decl.map(|(e, _)| e))
+        .unwrap_or(Effect::Deny);
 
     // Build the tree.
     let mut ids = IdAllocator::new();
@@ -277,12 +294,13 @@ fn compile_policy_item_to_node(
                 body: Box::new(leaf),
             }))
         }
-        PolicyItem::When { predicate, body } => {
-            // Compile the when predicate.
-            let compiled_pred = match predicate {
-                WhenPredicate::Command(m) => Predicate::Command(compile_exec_to_compiled(m, env)?),
-                WhenPredicate::Tool(m) => Predicate::Tool(compile_tool_to_compiled(m)?),
-            };
+        PolicyItem::When {
+            observable,
+            pattern,
+            body,
+        } => {
+            // Compile the when guard (observable + pattern) into a Predicate.
+            let compiled_pred = compile_when_guard(observable, pattern, env)?;
 
             // Compile body items recursively.
             let mut child_nodes = Vec::new();
@@ -319,7 +337,7 @@ fn compile_policy_item_to_node(
             };
 
             let when_id = ids.alloc(NodeMeta {
-                description: format!("(when {predicate} ...)"),
+                description: format!("(when ({observable} ...) ...)"),
                 origin_policy: Some(origin.to_string()),
                 ..Default::default()
             });
@@ -328,6 +346,10 @@ fn compile_policy_item_to_node(
                 predicate: compiled_pred,
                 body: Box::new(body_node),
             }))
+        }
+        PolicyItem::Match(block) => {
+            // Compile a policy-level match block into a Node::Match.
+            compile_policy_match_to_node(block, origin, env, ids)
         }
         PolicyItem::Sandbox { body } => {
             // Compile sandbox items into a SandboxPolicy.
@@ -475,7 +497,7 @@ fn compile_match_to_sandbox(
     network: &mut NetworkPolicy,
 ) -> Result<()> {
     match &block.observable {
-        ObservableRef::ProxyDomain => {
+        Observable::ProxyDomain => {
             // Each arm adds to NetworkPolicy.
             for arm in &block.arms {
                 let effect = match arm.effect {
@@ -507,10 +529,10 @@ fn compile_match_to_sandbox(
                 // :deny arms for proxy.domain are implicitly handled by deny-default.
             }
         }
-        ObservableRef::ProxyMethod => {
+        Observable::ProxyMethod => {
             // Deferred for MVP — skip.
         }
-        ObservableRef::FsPath => {
+        Observable::FsPath => {
             // Each arm → SandboxRule with all caps.
             for arm in &block.arms {
                 let effect = match arm.effect {
@@ -521,7 +543,7 @@ fn compile_match_to_sandbox(
                 compile_arm_path_to_sandbox(&arm.pattern, effect, Cap::all(), env, sandbox_rules)?;
             }
         }
-        ObservableRef::FsAction => {
+        Observable::FsAction => {
             // Each arm → SandboxRule for that op on all paths.
             for arm in &block.arms {
                 let effect = match arm.effect {
@@ -538,11 +560,11 @@ fn compile_match_to_sandbox(
                 });
             }
         }
-        ObservableRef::Tuple(obs) => {
+        Observable::Tuple(obs) => {
             // Handle [fs.action fs.path] tuple.
             if obs.len() == 2
-                && matches!(obs[0], ObservableRef::FsAction)
-                && matches!(obs[1], ObservableRef::FsPath)
+                && matches!(obs[0], Observable::FsAction)
+                && matches!(obs[1], Observable::FsPath)
             {
                 for arm in &block.arms {
                     let effect = match arm.effect {
@@ -610,6 +632,9 @@ fn compile_match_to_sandbox(
             } else {
                 bail!("unsupported observable tuple: only [fs.action fs.path] is supported")
             }
+        }
+        Observable::Command | Observable::Tool => {
+            // Command/tool observables don't apply to sandbox rules (sandbox restricts fs/net only).
         }
     }
     Ok(())
@@ -852,6 +877,207 @@ fn compile_tool_to_compiled(m: &ToolMatcher) -> Result<CompiledTool> {
     Ok(CompiledTool { name })
 }
 
+/// Compile a when guard (Observable + ArmPattern) into a tree Predicate.
+fn compile_when_guard(
+    observable: &Observable,
+    pattern: &ArmPattern,
+    env: &dyn EnvResolver,
+) -> Result<Predicate> {
+    match observable {
+        Observable::Command => {
+            if let ArmPattern::Exec(m) = pattern {
+                Ok(Predicate::Command(compile_exec_to_compiled(m, env)?))
+            } else {
+                bail!("command observable requires an exec pattern")
+            }
+        }
+        Observable::Tool => {
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("tool observable requires a single pattern"),
+            };
+            Ok(Predicate::Tool(compile_tool_to_compiled(&ToolMatcher {
+                name: pat.clone(),
+            })?))
+        }
+        Observable::ProxyDomain => {
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("proxy.domain observable requires a single pattern"),
+            };
+            let domain = compile_pattern(pat)?;
+            Ok(Predicate::Net(CompiledNet { domain, path: None }))
+        }
+        Observable::ProxyMethod => {
+            // Deferred — always true for now
+            Ok(Predicate::True)
+        }
+        Observable::FsAction => {
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("fs.action observable requires a single pattern"),
+            };
+            let op = pattern_to_op_pattern(pat)?;
+            Ok(Predicate::Fs(CompiledFs { op, path: None }))
+        }
+        Observable::FsPath => {
+            let pf = match pattern {
+                ArmPattern::SinglePath(pf) => pf,
+                ArmPattern::Single(Pattern::Any) => {
+                    return Ok(Predicate::Fs(CompiledFs {
+                        op: OpPattern::Any,
+                        path: None,
+                    }));
+                }
+                _ => bail!("fs.path observable requires a path filter pattern"),
+            };
+            let compiled_pf = compile_path_filter(pf, env)?;
+            Ok(Predicate::Fs(CompiledFs {
+                op: OpPattern::Any,
+                path: Some(compiled_pf),
+            }))
+        }
+        Observable::Tuple(_) => {
+            bail!("tuple observables are not supported in when guards")
+        }
+    }
+}
+
+/// Convert a Pattern to an OpPattern (for fs.action when guards).
+fn pattern_to_op_pattern(pat: &Pattern) -> Result<OpPattern> {
+    match pat {
+        Pattern::Any => Ok(OpPattern::Any),
+        Pattern::Literal(s) => {
+            let op = match s.as_str() {
+                "read" => FsOp::Read,
+                "write" => FsOp::Write,
+                "create" => FsOp::Create,
+                "delete" => FsOp::Delete,
+                other => bail!("unknown fs action: {other}"),
+            };
+            Ok(OpPattern::Single(op))
+        }
+        Pattern::Or(pats) => {
+            let mut ops = Vec::new();
+            for p in pats {
+                if let Pattern::Literal(s) = p {
+                    let op = match s.as_str() {
+                        "read" => FsOp::Read,
+                        "write" => FsOp::Write,
+                        "create" => FsOp::Create,
+                        "delete" => FsOp::Delete,
+                        other => bail!("unknown fs action: {other}"),
+                    };
+                    ops.push(op);
+                } else {
+                    bail!("expected literal fs action in (or ...) pattern")
+                }
+            }
+            Ok(OpPattern::Or(ops))
+        }
+        _ => bail!("unsupported pattern type for fs.action"),
+    }
+}
+
+/// Compile a policy-level match block into a Node::Match.
+fn compile_policy_match_to_node(
+    block: &MatchBlock,
+    origin: &str,
+    env: &dyn EnvResolver,
+    ids: &mut IdAllocator,
+) -> Result<Option<Node>> {
+    let ir_observable = compile_observable_to_ir(&block.observable)?;
+
+    let mut ir_arms = Vec::new();
+    for arm in &block.arms {
+        let ir_pattern = compile_arm_pattern_to_ir(&arm.pattern, &block.observable, env)?;
+        let leaf_id = ids.alloc(NodeMeta {
+            description: format!("match arm: {} → {}", arm.pattern, arm.effect_keyword()),
+            origin_policy: Some(origin.to_string()),
+            ..Default::default()
+        });
+        let body = Node::Leaf {
+            id: leaf_id,
+            effect: arm.effect,
+        };
+        ir_arms.push(MatchArm {
+            pattern: ir_pattern,
+            body,
+        });
+    }
+
+    let match_id = ids.alloc(NodeMeta {
+        description: format!("(match {} ...)", block.observable),
+        origin_policy: Some(origin.to_string()),
+        ..Default::default()
+    });
+
+    Ok(Some(Node::Match {
+        id: match_id,
+        observable: ir_observable,
+        arms: ir_arms,
+    }))
+}
+
+/// Compile an AST Observable to an IR Observable.
+fn compile_observable_to_ir(
+    obs: &Observable,
+) -> Result<crate::policy::tree::Observable> {
+    use crate::policy::tree as ir;
+    match obs {
+        Observable::Command => Ok(ir::Observable::Command),
+        Observable::Tool => Ok(ir::Observable::Tool),
+        Observable::ProxyMethod => Ok(ir::Observable::ProxyMethod),
+        Observable::ProxyDomain => Ok(ir::Observable::ProxyDomain),
+        Observable::FsAction => Ok(ir::Observable::FsAction),
+        Observable::FsPath => Ok(ir::Observable::FsPath),
+        Observable::Tuple(obs) => {
+            let inner = obs
+                .iter()
+                .map(compile_observable_to_ir)
+                .collect::<Result<_>>()?;
+            Ok(ir::Observable::Tuple(inner))
+        }
+    }
+}
+
+/// Compile an AST ArmPattern to an IR MatchPattern.
+fn compile_arm_pattern_to_ir(
+    pattern: &ArmPattern,
+    _observable: &Observable,
+    env: &dyn EnvResolver,
+) -> Result<crate::policy::tree::MatchPattern> {
+    use crate::policy::tree as ir;
+    match pattern {
+        ArmPattern::Exec(m) => {
+            let compiled = compile_exec_to_compiled(m, env)?;
+            Ok(ir::MatchPattern::Exec(compiled))
+        }
+        ArmPattern::Single(p) => {
+            let compiled = compile_pattern(p)?;
+            Ok(ir::MatchPattern::Single(compiled))
+        }
+        ArmPattern::SinglePath(pf) => {
+            let compiled = compile_path_filter(pf, env)?;
+            Ok(ir::MatchPattern::PathFilter(compiled))
+        }
+        ArmPattern::Tuple(elems) => {
+            let compiled = elems
+                .iter()
+                .map(|e| match e {
+                    ArmPatternElement::Pat(p) => compile_pattern(p),
+                    ArmPatternElement::Path(_pf) => {
+                        // Path elements in tuple patterns: use Any pattern as placeholder.
+                        // Tuple path matching is handled at sandbox level, not tree eval.
+                        Ok(CompiledPattern::Any)
+                    }
+                })
+                .collect::<Result<_>>()?;
+            Ok(ir::MatchPattern::Tuple(compiled))
+        }
+    }
+}
+
 /// Compile policies from multiple levels and merge into a single decision tree.
 ///
 /// Each level is compiled independently (so conflict detection is per-level),
@@ -1052,12 +1278,18 @@ fn inject_internal_includes(ast: &mut Vec<TopLevel>, internals: &[(&str, &str)])
         })
         .collect();
 
-    // Find the active policy name.
+    // Find the active policy name: (use ...) takes priority over (default ...).
     let active_policy = ast
         .iter()
         .find_map(|tl| match tl {
-            TopLevel::Default { policy, .. } => Some(policy.clone()),
+            TopLevel::Use(name) => Some(name.clone()),
             _ => None,
+        })
+        .or_else(|| {
+            ast.iter().find_map(|tl| match tl {
+                TopLevel::Default { policy, .. } => Some(policy.clone()),
+                _ => None,
+            })
         })
         .unwrap_or_else(|| "main".to_string());
 
@@ -1177,16 +1409,21 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
     let version = super::version::extract_version(top_levels)?;
     super::version::validate_version(version)?;
 
-    // Find the default declaration.
-    let default_decl = top_levels
-        .iter()
-        .find_map(|tl| match tl {
-            TopLevel::Default { effect, policy } => Some((*effect, policy.as_str())),
-            _ => None,
-        })
-        .unwrap_or((Effect::Deny, "main"));
-
-    let (default_effect, active_policy) = default_decl;
+    // Find the active policy: (use ...) takes priority over (default ...).
+    let use_policy = top_levels.iter().find_map(|tl| match tl {
+        TopLevel::Use(name) => Some(name.as_str()),
+        _ => None,
+    });
+    let default_decl = top_levels.iter().find_map(|tl| match tl {
+        TopLevel::Default { effect, policy } => Some((*effect, policy.as_str())),
+        _ => None,
+    });
+    let active_policy = use_policy
+        .or(default_decl.map(|(_, p)| p))
+        .unwrap_or("main");
+    let default_effect = default_decl
+        .map(|(e, _)| e)
+        .unwrap_or(Effect::Deny);
 
     // Build a map of policy name → body.
     let mut policies: HashMap<&str, &[PolicyItem]> = HashMap::new();
@@ -1352,7 +1589,10 @@ fn flatten_policy(
             }
             // v2 items are handled by compile_tree_ast, not flat compilation.
             // For v1 flatten, skip them (they won't appear in v1 policies).
-            PolicyItem::When { .. } | PolicyItem::Sandbox { .. } | PolicyItem::Effect(_) => {}
+            PolicyItem::When { .. }
+            | PolicyItem::Match(_)
+            | PolicyItem::Sandbox { .. }
+            | PolicyItem::Effect(_) => {}
         }
     }
 

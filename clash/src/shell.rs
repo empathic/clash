@@ -454,6 +454,17 @@ impl ShellSession {
                             .push_str(&format!("  Default: {} (policy: \"{}\")\n", effect, policy));
                     }
                 }
+                TopLevel::Use(name) => {
+                    if self.interactive {
+                        output.push_str(&format!(
+                            "  {}: {}\n",
+                            style::bold("Use"),
+                            style::cyan(&format!("\"{name}\""))
+                        ));
+                    } else {
+                        output.push_str(&format!("  Use: \"{name}\"\n"));
+                    }
+                }
                 TopLevel::Policy { name, body } => {
                     if self.interactive {
                         let marker = if *name == self.current_policy {
@@ -512,6 +523,7 @@ impl ShellSession {
                             }
                             // v2 items display via their Display impl
                             item @ (PolicyItem::When { .. }
+                            | PolicyItem::Match(_)
                             | PolicyItem::Sandbox { .. }
                             | PolicyItem::Effect(_)) => {
                                 output.push_str(&format!("    {item}\n"));

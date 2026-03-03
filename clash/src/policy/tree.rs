@@ -11,8 +11,8 @@ use tracing::{debug, trace};
 use crate::policy::Effect;
 use crate::policy::ast::FsOp;
 use crate::policy::decision_tree::{
-    CompiledExec, CompiledFs, CompiledMatcher, CompiledNet, CompiledPattern, CompiledRule,
-    CompiledTool, DecisionTree,
+    CompiledExec, CompiledFs, CompiledMatcher, CompiledNet, CompiledPathFilter, CompiledPattern,
+    CompiledRule, CompiledTool, DecisionTree,
 };
 use crate::policy::eval::{CapQuery, tool_to_queries};
 use crate::policy::ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
@@ -93,9 +93,13 @@ pub enum Predicate {
     True,
 }
 
-/// An observable value for `Match` dispatch. (Phase 2)
+/// An observable value for `Match` dispatch.
 #[derive(Debug, Clone)]
 pub enum Observable {
+    /// Matches command execution (binary + args).
+    Command,
+    /// Matches tool invocations by name.
+    Tool,
     ProxyMethod,
     ProxyDomain,
     FsAction,
@@ -110,10 +114,14 @@ pub struct MatchArm {
     pub body: Node,
 }
 
-/// Pattern in a `Match` arm. (Phase 2)
+/// Pattern in a `Match` arm.
 #[derive(Debug, Clone)]
 pub enum MatchPattern {
     Single(CompiledPattern),
+    /// Exec-style pattern for `command` observable.
+    Exec(CompiledExec),
+    /// Path filter for `fs.path` observable.
+    PathFilter(CompiledPathFilter),
     Tuple(Vec<CompiledPattern>),
 }
 
@@ -761,14 +769,13 @@ impl PolicyTree {
                 observable,
                 arms,
             } => {
-                let values = resolve_observable(observable, ctx);
-                let values = match values {
-                    Some(v) => v,
-                    None => return None, // observable not available (e.g. ProxyMethod deferred)
-                };
+                // Skip silently if observable is irrelevant to the query.
+                if !observable_is_relevant(observable, ctx) {
+                    return None;
+                }
 
                 for arm in arms {
-                    if match_pattern(&arm.pattern, &values) {
+                    if match_arm_against_ctx(observable, &arm.pattern, ctx) {
                         trace!(node_id = id, "match arm matched");
                         return self.eval_node(&arm.body, ctx, matched, skipped, sandbox_out);
                     }
@@ -796,12 +803,66 @@ impl PolicyTree {
 // Match node helpers
 // ---------------------------------------------------------------------------
 
+/// Whether a match observable is relevant to the current query context.
+///
+/// Irrelevant observables are silently skipped, matching `Predicate::is_relevant`.
+fn observable_is_relevant(observable: &Observable, ctx: &QueryContext) -> bool {
+    match observable {
+        Observable::Command => ctx.bin.is_some(),
+        Observable::Tool => {
+            ctx.bin.is_none() && ctx.fs_op.is_none() && ctx.net_domain.is_none()
+        }
+        Observable::ProxyMethod => false, // deferred
+        Observable::ProxyDomain => ctx.net_domain.is_some(),
+        Observable::FsAction | Observable::FsPath => ctx.fs_op.is_some(),
+        Observable::Tuple(obs) => obs.iter().all(|o| observable_is_relevant(o, ctx)),
+    }
+}
+
+/// Test whether a match arm matches the query context, dispatching by observable type.
+fn match_arm_against_ctx(
+    observable: &Observable,
+    pattern: &MatchPattern,
+    ctx: &QueryContext,
+) -> bool {
+    match observable {
+        Observable::Command => match pattern {
+            MatchPattern::Exec(exec) => {
+                if let Some(ref bin) = ctx.bin {
+                    let arg_refs: Vec<&str> = ctx.args.iter().map(|s| s.as_str()).collect();
+                    exec.matches(bin, &arg_refs)
+                } else {
+                    false
+                }
+            }
+            // Bare wildcard Single(Any) also matches everything for command
+            MatchPattern::Single(cp) => {
+                ctx.bin.as_ref().is_some_and(|bin| cp.matches(bin))
+            }
+            _ => false,
+        },
+        Observable::Tool => match pattern {
+            MatchPattern::Single(cp) => cp.matches(&ctx.tool_name),
+            _ => false,
+        },
+        // For sandbox-style observables, use the string-resolve path.
+        _ => {
+            let values = resolve_observable(observable, ctx);
+            match values {
+                Some(v) => match_pattern_strings(pattern, &v),
+                None => false,
+            }
+        }
+    }
+}
+
 /// Resolve an observable to a list of concrete string values from the query context.
 ///
 /// Returns `None` if the observable cannot be resolved (e.g. `ProxyMethod` is deferred).
 fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec<String>> {
     match observable {
-        Observable::ProxyMethod => None, // deferred for MVP
+        Observable::Command | Observable::Tool => None, // handled by match_arm_against_ctx
+        Observable::ProxyMethod => None,                // deferred
         Observable::ProxyDomain => ctx.net_domain.as_ref().map(|d| vec![d.clone()]),
         Observable::FsAction => ctx.fs_op.map(|op| {
             vec![match op {
@@ -816,7 +877,6 @@ fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec
             let mut values = Vec::with_capacity(obs.len());
             for o in obs {
                 let resolved = resolve_observable(o, ctx)?;
-                // Each scalar observable should produce exactly one value.
                 values.push(resolved.into_iter().next()?);
             }
             Some(values)
@@ -824,12 +884,14 @@ fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec
     }
 }
 
-/// Test whether a match pattern matches a list of resolved values.
-fn match_pattern(pattern: &MatchPattern, values: &[String]) -> bool {
+/// Test whether a match pattern matches a list of resolved string values.
+fn match_pattern_strings(pattern: &MatchPattern, values: &[String]) -> bool {
     match pattern {
         MatchPattern::Single(cp) => {
-            // Single pattern matches the first (and only) value.
             values.first().is_some_and(|v| cp.matches(v))
+        }
+        MatchPattern::PathFilter(pf) => {
+            values.first().is_some_and(|v| pf.matches(v))
         }
         MatchPattern::Tuple(pats) => {
             if pats.len() != values.len() {
@@ -839,6 +901,7 @@ fn match_pattern(pattern: &MatchPattern, values: &[String]) -> bool {
                 .zip(values.iter())
                 .all(|(pat, val)| pat.matches(val))
         }
+        MatchPattern::Exec(_) => false, // exec patterns don't match string values
     }
 }
 
