@@ -3,7 +3,7 @@
 //! Consumes the generic `SExpr` tree from `sexpr.rs` and produces typed
 //! `TopLevel` nodes. Errors are reported with source spans.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, bail, ensure};
 
@@ -36,15 +36,17 @@ fn try_as_string_list(sexpr: &SExpr) -> Option<Vec<String>> {
 
 /// Parse a policy source string into a list of top-level declarations.
 ///
-/// Two-pass approach:
-/// 1. Extract `(version N)` and `(def ...)` bindings.
-/// 2. Parse all forms with version + defs context.
+/// Pass 1: extract version and collect all `def`/`policy` names (for forward
+///         reference detection).
+/// Pass 2: parse forms sequentially, accumulating `def` bindings and declared
+///         policy names so that references are only valid after declaration.
 pub fn parse(source: &str) -> Result<Vec<TopLevel>> {
     let sexprs = sexpr::parse(source).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    // Pass 1: extract version and defs.
+    // Pass 1: extract version and collect all def/policy names.
     let mut version: u32 = 1;
-    let mut defs = Defs::new();
+    let mut all_def_names: HashSet<String> = HashSet::new();
+    let mut all_policy_names: HashSet<String> = HashSet::new();
     for expr in &sexprs {
         if let Some(list) = expr.as_list() {
             if !list.is_empty() {
@@ -58,23 +60,69 @@ pub fn parse(source: &str) -> Result<Vec<TopLevel>> {
                     }
                 }
                 if let Some("def") = list[0].as_str() {
-                    let tl = parse_def(list)?;
-                    if let TopLevel::Def { name, value } = &tl {
-                        defs.insert(name.clone(), value.clone());
+                    if list.len() >= 2 {
+                        if let Some(name) = list[1].as_str() {
+                            all_def_names.insert(name.to_string());
+                        }
+                    }
+                }
+                if let Some("policy") = list[0].as_str() {
+                    if list.len() >= 2 {
+                        if let SExpr::Str(name, _) = &list[1] {
+                            all_policy_names.insert(name.clone());
+                        }
                     }
                 }
             }
         }
     }
 
-    let ctx = ParseContext { version, defs };
-    sexprs.iter().map(|e| parse_top_level(e, &ctx)).collect()
+    // Pass 2: parse forms sequentially, building defs incrementally.
+    let mut ctx = ParseContext {
+        version,
+        defs: Defs::new(),
+        all_def_names,
+        declared_policies: HashSet::new(),
+        all_policy_names,
+    };
+
+    let mut result = Vec::new();
+    for expr in &sexprs {
+        // Pre-register policy name before parsing body so self-references
+        // are caught by circular-include detection, not forward-reference.
+        if let Some(list) = expr.as_list() {
+            if list.len() >= 2 {
+                if let Some("policy") = list[0].as_str() {
+                    if let SExpr::Str(name, _) = &list[1] {
+                        ctx.declared_policies.insert(name.clone());
+                    }
+                }
+            }
+        }
+
+        let tl = parse_top_level(expr, &ctx)?;
+
+        // Register def bindings after parsing so subsequent forms can use them.
+        if let TopLevel::Def { name, value } = &tl {
+            ctx.defs.insert(name.clone(), value.clone());
+        }
+
+        result.push(tl);
+    }
+
+    Ok(result)
 }
 
 /// Parsing context carried through the parse tree.
 struct ParseContext {
     version: u32,
     defs: Defs,
+    /// All def names in the file (for detecting forward references).
+    all_def_names: HashSet<String>,
+    /// Policy names declared before the current form.
+    declared_policies: HashSet<String>,
+    /// All policy names in the file (for detecting forward references).
+    all_policy_names: HashSet<String>,
 }
 
 fn parse_top_level(expr: &SExpr, ctx: &ParseContext) -> Result<TopLevel> {
@@ -179,6 +227,12 @@ fn parse_policy_item(expr: &SExpr, ctx: &ParseContext) -> Result<PolicyItem> {
         "include" => {
             ensure!(list.len() == 2, "(include) expects exactly 1 argument");
             let name = require_string(&list[1], "include target")?;
+            if ctx.version >= 2
+                && ctx.all_policy_names.contains(name)
+                && !ctx.declared_policies.contains(name)
+            {
+                bail!("name '{}' referenced before declaration", name);
+            }
             Ok(PolicyItem::Include(name.to_string()))
         }
         "when" => {
@@ -425,6 +479,8 @@ fn parse_pattern(expr: &SExpr, ctx: &ParseContext) -> Result<Pattern> {
                     // Arbitrary expression → parse as pattern
                     parse_pattern(def_value, ctx)
                 }
+            } else if ctx.version >= 2 && ctx.all_def_names.contains(s.as_str()) {
+                bail!("name '{}' referenced before declaration", s)
             } else {
                 Ok(Pattern::Literal(s.clone()))
             }
@@ -518,6 +574,8 @@ fn parse_path_expr(expr: &SExpr, ctx: &ParseContext) -> Result<PathExpr> {
                     // Compound expression → try to parse as path expr
                     parse_path_expr(def_value, ctx)
                 }
+            } else if ctx.version >= 2 && ctx.all_def_names.contains(s.as_str()) {
+                bail!("name '{}' referenced before declaration", s)
             } else {
                 Ok(PathExpr::Static(s.clone()))
             }
@@ -855,9 +913,18 @@ fn parse_tuple_arm_pattern(
     let mut elems = Vec::new();
     for (element, obs) in elements.iter().zip(obs_components.iter()) {
         if observable_is_path(obs) {
-            if let Ok(pf) = try_parse_arm_path_filter(element, ctx) {
-                elems.push(ArmPatternElement::Path(pf));
-                continue;
+            match try_parse_arm_path_filter(element, ctx) {
+                Ok(pf) => {
+                    elems.push(ArmPatternElement::Path(pf));
+                    continue;
+                }
+                Err(e) => {
+                    // Propagate validation errors; only swallow "not a path
+                    // filter" fallthrough so we can retry as a plain pattern.
+                    if !e.to_string().contains("not a path filter") {
+                        return Err(e);
+                    }
+                }
             }
         }
         let p = parse_pattern(element, ctx)?;
@@ -892,6 +959,9 @@ fn try_parse_arm_path_filter(expr: &SExpr, ctx: &ParseContext) -> Result<PathFil
                 }
                 // Arbitrary expression → try to parse as path filter
                 return try_parse_arm_path_filter(def_value, ctx);
+            }
+            if ctx.version >= 2 && ctx.all_def_names.contains(s.as_str()) {
+                bail!("name '{}' referenced before declaration", s);
             }
             bail!("not a path filter")
         }
@@ -2327,5 +2397,95 @@ mod tests {
             displayed,
             r#"(def my-net (match proxy.domain "github.com" :allow))"#
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Forward reference validation (validation rule 9)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_def_forward_reference_rejected() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (command builders *) :allow))
+            (def builders ["cargo" "rustc"])
+        "#;
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("name 'builders' referenced before declaration"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parse_def_forward_reference_in_path_filter_rejected() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (command "cargo")
+                (sandbox
+                  (match [fs.action fs.path]
+                    [* (subpath tmpdirs)] :allow))))
+            (def tmpdirs ["/tmp" "/var/folders"])
+        "#;
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("name 'tmpdirs' referenced before declaration"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parse_include_forward_reference_rejected() {
+        let source = r#"
+            (version 2)
+            (use "main")
+            (policy "main"
+              (include "helpers"))
+            (policy "helpers"
+              (when (command "git" *) :allow))
+        "#;
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("name 'helpers' referenced before declaration"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parse_valid_declaration_order_succeeds() {
+        let source = r#"
+            (version 2)
+            (use "main")
+            (def builders ["cargo" "rustc"])
+            (policy "helpers"
+              (when (command builders *) :allow))
+            (policy "main"
+              (include "helpers"))
+        "#;
+        let ast = parse(source).unwrap();
+        assert_eq!(ast.len(), 5);
+    }
+
+    #[test]
+    fn parse_v1_include_forward_reference_allowed() {
+        // v1 policies do not enforce forward reference prohibition.
+        let source = r#"
+            (default deny "main")
+            (policy "main"
+              (include "helpers")
+              (allow (exec "git" *)))
+            (policy "helpers"
+              (allow (fs read (subpath (env PWD)))))
+        "#;
+        let ast = parse(source).unwrap();
+        assert_eq!(ast.len(), 3);
     }
 }
