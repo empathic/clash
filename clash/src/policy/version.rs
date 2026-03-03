@@ -119,10 +119,11 @@ fn has_deprecated_observable(source: &str, name: &str) -> bool {
     let mut search_from = 0;
     while let Some(pos) = source[search_from..].find(name) {
         let abs_pos = search_from + pos;
-        let before_ok = abs_pos == 0 || source[..abs_pos]
-            .chars()
-            .next_back()
-            .is_some_and(|c| is_delim(c));
+        let before_ok = abs_pos == 0
+            || source[..abs_pos]
+                .chars()
+                .next_back()
+                .is_some_and(|c| is_delim(c));
         let after_pos = abs_pos + name.len();
         let after_ok = after_pos >= source.len()
             || source[after_pos..]
@@ -147,10 +148,11 @@ fn fix_observable_name(source: &str, old: &str, new: &str) -> String {
     let mut search_from = 0;
     while let Some(pos) = source[search_from..].find(old) {
         let abs_pos = search_from + pos;
-        let before_ok = abs_pos == 0 || source[..abs_pos]
-            .chars()
-            .next_back()
-            .is_some_and(|c| is_delim(c));
+        let before_ok = abs_pos == 0
+            || source[..abs_pos]
+                .chars()
+                .next_back()
+                .is_some_and(|c| is_delim(c));
         let after_pos = abs_pos + old.len();
         let after_ok = after_pos >= source.len()
             || source[after_pos..]

@@ -442,6 +442,9 @@ fn deny_hint(tool_name: &str, tool_input: &serde_json::Value, cwd: &str) -> Resu
         CapQuery::Tool { name } => {
             format!("(tool \"{}\")", name)
         }
+        CapQuery::Agent { name } => {
+            format!("(agent \"{}\")", name)
+        }
     };
 
     Ok(format!("clash allow '{}'", rule))
@@ -466,6 +469,7 @@ fn tool_input_summary(tool_name: &str, input: &serde_json::Value, cwd: &str) -> 
             None => domain.clone(),
         },
         Some(CapQuery::Tool { name }) => name.clone(),
+        Some(CapQuery::Agent { name }) => format!("agent:{name}"),
         None => String::new(),
     };
 

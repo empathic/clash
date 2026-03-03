@@ -184,6 +184,7 @@ impl ReplayResult {
                 None => format!("(net \"{}\")", domain),
             },
             Some(CapQuery::Tool { name }) => format!("(tool \"{}\")", name),
+            Some(CapQuery::Agent { name }) => format!("(agent \"{}\")", name),
             None => return format!("clash allow '{}'", self.tool_name.to_lowercase()),
         };
 

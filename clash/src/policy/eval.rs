@@ -29,6 +29,9 @@ pub enum CapQuery {
     Tool {
         name: String,
     },
+    Agent {
+        name: String,
+    },
 }
 
 /// Map a tool invocation to capability queries.
@@ -103,6 +106,19 @@ pub fn tool_to_queries(
             vec![CapQuery::Fs {
                 op: FsOp::Read,
                 path: resolve_path(path, cwd),
+            }]
+        }
+        "Agent" => {
+            let subagent_type = tool_input
+                .get("subagent_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            debug!(
+                tool_name,
+                subagent_type, "agent — using agent capability query"
+            );
+            vec![CapQuery::Agent {
+                name: subagent_type.to_string(),
             }]
         }
         _ => {
@@ -345,6 +361,7 @@ impl DecisionTree {
                 CapQuery::Fs { .. } => &self.fs_rules,
                 CapQuery::Net { .. } => &self.net_rules,
                 CapQuery::Tool { .. } => &self.tool_rules,
+                CapQuery::Agent { .. } => &self.tool_rules,
             };
 
             for (idx, rule) in rules.iter().enumerate() {
@@ -1751,5 +1768,19 @@ mod tests {
             "/home/user/project",
         );
         assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn agent_tool_produces_agent_query() {
+        let queries = super::tool_to_queries(
+            "Agent",
+            &json!({"subagent_type": "Explore", "prompt": "search code"}),
+            "/home/user",
+        );
+        assert_eq!(queries.len(), 1);
+        match &queries[0] {
+            super::CapQuery::Agent { name } => assert_eq!(name, "Explore"),
+            other => panic!("expected Agent query, got {other:?}"),
+        }
     }
 }
