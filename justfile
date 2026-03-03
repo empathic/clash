@@ -112,16 +112,15 @@ release version:
     cargo check --quiet 2>/dev/null
     echo "  updated Cargo.lock"
 
-    # Commit and tag
+    # Commit and push (tag is created automatically when PR merges to main)
     git add -A '*.toml' Cargo.lock
     git commit -m "chore: bump package versions to v$new"
-    git tag "v$new" -m "chore: bump package versions to v$new"
-    git push --follow-tags
+    git push -u origin "$tag"
     gh pr create -f
 
     echo ""
-    echo "Created commit and tag v$new."
-    echo "To trigger the release, merge the pr"
+    echo "Pushed branch $tag."
+    echo "Merge the PR to trigger auto-tagging and release."
 
 # Launch a Claude session for a GitHub issue in a new tmux window.
 # Usage: just work 123
