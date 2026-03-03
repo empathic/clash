@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "rust",
+  "include-component-in-tag": false,
+  "separate-pull-requests": false,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "bootstrap-sha": "4b7d769",
+  "packages": {
+    "clash": {},
+    "clash_notify": {},
+    "claude_settings": {},
+    "clester": {
+      "skip-github-release": true
+    }
+  },
+  "plugins": [
+    {
+      "type": "cargo-workspace",
+      "merge": false
+    },
+    {
+      "type": "linked-versions",
+      "groupName": "clash",
+      "components": ["clash", "clash_notify", "claude_settings", "clester"]
+    }
+  ]
+}
