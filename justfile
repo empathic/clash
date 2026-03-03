@@ -73,10 +73,9 @@ clash *ARGS:
 fix:
     cargo fix --allow-dirty
 
-# Release: merge the Release Please PR on GitHub.
-# Release Please auto-creates a PR with version bumps + changelog
-# from conventional commits. Merging it creates the tag and triggers
-# the release + publish workflows.
+# Run the site dev server
+site:
+    cd site && bun run dev
 
 # Launch a Claude session for a GitHub issue in a new tmux window.
 # Usage: just work 123

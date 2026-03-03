@@ -1,0 +1,123 @@
+---
+layout: base.njk
+title: Policy Grammar
+description: Formal EBNF grammar for the clash policy language.
+permalink: /policy/grammar/
+---
+
+<h1 class="page-title">Policy Grammar</h1>
+<p class="page-desc">Formal EBNF grammar for clash policy documents. For a practical guide, see <a href="/policy/">Policy Language</a>.</p>
+
+## Document structure
+
+```ebnf
+document        = top_level*
+top_level       = version_decl | default_decl | use_decl | policy_decl | def_decl
+
+version_decl    = "(" "version" INTEGER ")"
+default_decl    = "(" "default" effect QUOTED_STRING ")"
+use_decl        = "(" "use" QUOTED_STRING ")"
+policy_decl     = "(" "policy" QUOTED_STRING policy_item* ")"
+def_decl        = "(" "def" ATOM "[" QUOTED_STRING* "]" ")"
+```
+
+## Policy items
+
+```ebnf
+; v1
+policy_item     = include | rule
+rule            = "(" effect cap_matcher keyword_args* ")"
+
+; v2
+policy_item_v2  = include | when_block | match_block | sandbox_block | effect_kw
+
+include         = "(" "include" QUOTED_STRING ")"
+```
+
+## Capability matchers
+
+```ebnf
+cap_matcher     = exec_matcher | fs_matcher | net_matcher | tool_matcher
+
+exec_matcher    = "(" "exec" pattern? args_spec ")"
+args_spec       = pattern*                         ; positional
+                | ":has" pattern+                  ; orderless
+
+fs_matcher      = "(" "fs" op_pattern? path_filter? ")"
+net_matcher     = "(" "net" pattern? path_filter? ")"
+tool_matcher    = "(" "tool" pattern? ")"
+```
+
+## Effects
+
+```ebnf
+effect          = "allow" | "deny" | "ask"
+effect_kw       = ":allow" | ":deny" | ":ask"       ; v2 keyword form
+```
+
+## Patterns
+
+```ebnf
+pattern         = "*"                          ; wildcard
+                | QUOTED_STRING                ; exact match
+                | "/" REGEX "/"                ; regex
+                | "(" "or" pattern+ ")"        ; match any
+                | "(" "not" pattern ")"        ; negation
+
+op_pattern      = "*" | fs_op | "(" "or" fs_op+ ")"
+fs_op           = "read" | "write" | "create" | "delete"
+```
+
+## Path filters
+
+```ebnf
+path_filter     = "(" "subpath" ":worktree"? path_expr ")"
+                | QUOTED_STRING                ; exact path
+                | "/" REGEX "/"                ; regex on path
+                | "(" "or" path_filter+ ")"
+                | "(" "not" path_filter ")"
+
+path_expr       = QUOTED_STRING
+                | "(" "env" ENV_NAME ")"
+                | "(" "join" path_expr path_expr+ ")"
+```
+
+## Version 2 blocks
+
+```ebnf
+when_block      = "(" "when" when_guard when_body+ ")"
+when_guard      = "(" "command" pattern? args_spec ")"
+                | "(" "tool" pattern? ")"
+                | "(" observable pattern ")"
+                | "(" observable path_filter ")"
+when_body       = effect_kw | sandbox_block | when_block
+
+match_block     = "(" "match" observable match_arm+ ")"
+match_arm       = arm_pattern effect_kw
+
+sandbox_block   = "(" "sandbox" sandbox_item+ ")"
+sandbox_item    = rule | sandbox_match_block
+
+observable      = "command" | "tool"
+                | "proxy.method" | "proxy.domain"
+                | "fs.action" | "fs.path"
+                | "[" observable observable+ "]"
+```
+
+## Keyword arguments
+
+```ebnf
+keyword_args    = ":sandbox" ( QUOTED_STRING | rule+ )    ; v1 exec sandbox
+```
+
+## Lexical rules
+
+```ebnf
+QUOTED_STRING   = '"' (CHAR | ESCAPE)* '"'
+ESCAPE          = '\\' ('"' | '\\')
+REGEX           = '/' (CHAR_NO_SLASH)* '/'
+INTEGER         = [0-9]+
+ENV_NAME        = [A-Z_][A-Z0-9_]*
+KEYWORD         = ':' ATOM
+COMMENT         = ';' (any char)* NEWLINE
+```
