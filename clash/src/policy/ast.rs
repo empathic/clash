@@ -205,6 +205,8 @@ pub enum Observable {
     Tool,
     /// `agent` — invocation-type predicate matching subagent spawning by name.
     Agent,
+    /// `mcp` — invocation-type predicate matching MCP tool invocations by server name.
+    Mcp,
 
     // -- ctx.http namespace --------------------------------------------------
     /// `ctx.http.domain` — destination domain (formerly `proxy.domain`).
@@ -241,6 +243,12 @@ pub enum Observable {
     // -- ctx.agent namespace -------------------------------------------------
     /// `ctx.agent.name` — subagent name.
     AgentName,
+
+    // -- ctx.mcp namespace ---------------------------------------------------
+    /// `ctx.mcp.server` — MCP server name.
+    McpServer,
+    /// `ctx.mcp.tool` — MCP tool name.
+    McpTool,
 
     // -- ctx.state -----------------------------------------------------------
     /// `ctx.state` — agent state.
@@ -406,6 +414,15 @@ fn display_when_guard(
             }
             write!(f, ")")
         }
+        Observable::Mcp => {
+            write!(f, "(mcp")?;
+            if let ArmPattern::Single(pat) = pattern {
+                if *pat != Pattern::Any {
+                    write!(f, " {pat}")?;
+                }
+            }
+            write!(f, ")")
+        }
         _ => {
             // proxy.domain, fs.action, fs.path — render as (observable pattern)
             write!(f, "({observable}")?;
@@ -425,6 +442,7 @@ impl fmt::Display for Observable {
             Observable::Command => write!(f, "command"),
             Observable::Tool => write!(f, "tool"),
             Observable::Agent => write!(f, "agent"),
+            Observable::Mcp => write!(f, "mcp"),
             Observable::HttpDomain => write!(f, "ctx.http.domain"),
             Observable::HttpMethod => write!(f, "ctx.http.method"),
             Observable::HttpPort => write!(f, "ctx.http.port"),
@@ -437,6 +455,8 @@ impl fmt::Display for Observable {
             Observable::ToolName => write!(f, "ctx.tool.name"),
             Observable::ToolArgs => write!(f, "ctx.tool.args"),
             Observable::AgentName => write!(f, "ctx.agent.name"),
+            Observable::McpServer => write!(f, "ctx.mcp.server"),
+            Observable::McpTool => write!(f, "ctx.mcp.tool"),
             Observable::ToolArgField(field) => write!(f, "ctx.tool.args.{field}?"),
             Observable::State => write!(f, "ctx.state"),
             Observable::Tuple(obs) => {

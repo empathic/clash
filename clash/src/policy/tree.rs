@@ -105,8 +105,21 @@ pub enum Predicate {
     Tool(CompiledTool),
     /// Matches agent queries (subagent name).
     Agent(CompiledTool),
+    /// Matches MCP tool invocations (server name).
+    Mcp(CompiledTool),
     /// Always matches.
     True,
+}
+
+impl Predicate {
+    /// Whether this predicate represents an invocation type that allows `:ask`.
+    ///
+    /// Only `tool`, `mcp`, and `agent` invocation types permit `:ask` effects.
+    /// `command` does not — you cannot prompt a human about what a subprocess
+    /// is doing in real time.
+    pub fn allows_ask(&self) -> bool {
+        matches!(self, Predicate::Tool(_) | Predicate::Mcp(_) | Predicate::Agent(_))
+    }
 }
 
 /// An observable value for `Match` dispatch.
@@ -144,6 +157,10 @@ pub enum Observable {
     ToolArgs,
     /// `ctx.agent.name`
     AgentName,
+    /// `ctx.mcp.server`
+    McpServer,
+    /// `ctx.mcp.tool`
+    McpTool,
     /// `ctx.tool.args.<field>?` — nullable tool argument field.
     ToolArgField(String),
     /// `ctx.state`
@@ -221,6 +238,8 @@ pub struct QueryContext {
     pub net_domain: Option<String>,
     pub net_path: Option<String>,
     pub agent_name: Option<String>,
+    pub mcp_server: Option<String>,
+    pub mcp_tool: Option<String>,
     pub cwd: String,
     /// Raw tool input JSON — used for nullable `ctx.tool.args.<field>?` accessors.
     pub tool_input: serde_json::Value,
@@ -275,6 +294,7 @@ impl Predicate {
                     && ctx.agent_name.is_none()
             }
             Predicate::Agent(_) => ctx.agent_name.is_some(),
+            Predicate::Mcp(_) => ctx.mcp_server.is_some(),
             Predicate::True => true,
         }
     }
@@ -309,6 +329,10 @@ impl Predicate {
                 .agent_name
                 .as_ref()
                 .is_some_and(|name| agent.matches(name)),
+            Predicate::Mcp(mcp) => ctx
+                .mcp_server
+                .as_ref()
+                .is_some_and(|server| mcp.matches(server)),
             Predicate::True => true,
         }
     }
@@ -331,6 +355,8 @@ impl QueryContext {
             net_domain: None,
             net_path: None,
             agent_name: None,
+            mcp_server: None,
+            mcp_tool: None,
             cwd: cwd.to_string(),
             tool_input: tool_input.clone(),
         };
@@ -354,6 +380,10 @@ impl QueryContext {
                 }
                 CapQuery::Agent { name } => {
                     ctx.agent_name = Some(name.clone());
+                }
+                CapQuery::Mcp { server, tool } => {
+                    ctx.mcp_server = Some(server.clone());
+                    ctx.mcp_tool = Some(tool.clone());
                 }
             }
         }
@@ -893,6 +923,7 @@ fn observable_is_relevant(observable: &Observable, ctx: &QueryContext) -> bool {
                 && ctx.agent_name.is_none()
         }
         Observable::Agent | Observable::AgentName => ctx.agent_name.is_some(),
+        Observable::McpServer | Observable::McpTool => ctx.mcp_server.is_some(),
         Observable::HttpMethod | Observable::HttpPort => false, // deferred
         Observable::HttpDomain | Observable::HttpPath => ctx.net_domain.is_some(),
         Observable::FsAction | Observable::FsPath | Observable::FsExists => ctx.fs_op.is_some(),
@@ -978,6 +1009,8 @@ fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec
         }
         Observable::ToolArgs => None, // deferred — requires tool argument access
         Observable::AgentName => ctx.agent_name.as_ref().map(|n| vec![n.clone()]),
+        Observable::McpServer => ctx.mcp_server.as_ref().map(|s| vec![s.clone()]),
+        Observable::McpTool => ctx.mcp_tool.as_ref().map(|t| vec![t.clone()]),
         Observable::ToolArgField(field) => {
             // Look up the field in tool_input. Absent or null → None (short-circuit).
             match ctx.tool_input.get(field.as_str()) {
@@ -1610,11 +1643,11 @@ mod tests {
   (when (tool "Skill")
     (match ctx.tool.args.name?
       * :allow))
-  :ask)
+  :deny)
 "#;
         let tree = compile_v2_tree(source);
-        // null value → treated as absent → short-circuit → default :ask
+        // null value → treated as absent → short-circuit → default :deny
         let decision = tree.evaluate("Skill", &json!({"name": null}), "/home/user/project");
-        assert_eq!(decision.effect, Effect::Ask);
+        assert_eq!(decision.effect, Effect::Deny);
     }
 }

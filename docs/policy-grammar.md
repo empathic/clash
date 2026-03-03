@@ -414,20 +414,24 @@ policy_item_v3  = include | when_block | match_block | effect_kw
 when_block      = "(" "when" when_guard when_body+ ")"
 when_guard      = "(" "command" pattern? args_spec ")"
                 | "(" "tool" pattern? ")"
+                | "(" "agent" pattern? ")"
+                | "(" "mcp" pattern? ")"
                 | "(" observable pattern ")"
                 | "(" observable path_filter ")"        ; for ctx.fs.path
 when_body       = effect_kw                             ; inline effect
                 | match_block                           ; nested match (constraint source)
                 | when_block                            ; nested when
 
-effect_kw       = ":allow" | ":deny" | ":ask"
+effect_kw       = ":allow" | ":deny" | ":ask"      ; :ask requires tool/mcp/agent guard
 
 match_block     = "(" "match" observable match_arm+ ")"
-observable      = "command" | "tool"
+observable      = "command" | "tool" | "agent" | "mcp"
                 | "ctx.http.domain" | "ctx.http.method" | "ctx.http.port" | "ctx.http.path"
                 | "ctx.fs.action" | "ctx.fs.path" | "ctx.fs.exists"
                 | "ctx.process.command" | "ctx.process.args"
                 | "ctx.tool.name" | "ctx.tool.args" | ctx_tool_arg_field
+                | "ctx.agent.name"
+                | "ctx.mcp.server" | "ctx.mcp.tool"
                 | "ctx.state"
                 | "[" observable observable+ "]"         ; tuple
 ctx_tool_arg_field = "ctx.tool.args." FIELD_NAME "?"  ; nullable dynamic field accessor
@@ -468,6 +472,12 @@ The body contains one or more items: an effect keyword (`:allow`, `:deny`, `:ask
 ; Allow multiple tools
 (when (tool (or "Read" "Glob" "Grep")) :allow)
 
+; Allow a specific subagent
+(when (agent "Explore") :allow)
+
+; Allow an MCP server
+(when (mcp "puppeteer") :ask)
+
 ; Guard on HTTP domain
 (when (ctx.http.domain "github.com") :allow)
 
@@ -487,6 +497,8 @@ The body contains one or more items: an effect keyword (`:allow`, `:deny`, `:ask
 ```
 
 When the body is a single effect keyword, it renders on one line: `(when (command "git" *) :allow)`. Multi-item bodies are indented.
+
+> **`:ask` restriction:** The `:ask` effect may only appear inside a `(when (tool ...) ...)`, `(when (mcp ...) ...)`, or `(when (agent ...) ...)` guard. It is not valid under `(when (command ...) ...)` or with no invocation guard, because you cannot prompt a human about what a subprocess is doing in real time. This is enforced at compile time (validation rule 6).
 
 ### Constraint Derivation
 
@@ -519,6 +531,8 @@ At **policy level**, match arms may use `:allow`, `:deny`, or `:ask` effects. In
 |-----------|------|-------------|
 | `command` | exec | Command execution (binary + args) |
 | `tool` | string | Agent tool name |
+| `agent` | string | Subagent name |
+| `mcp` | string | MCP server name |
 | `ctx.http.domain` | string | Domain of an HTTP request |
 | `ctx.http.method` | string | HTTP method (GET, POST, etc.) |
 | `ctx.http.port` | int | Destination port |
@@ -531,6 +545,9 @@ At **policy level**, match arms may use `:allow`, `:deny`, or `:ask` effects. In
 | `ctx.tool.name` | string | Tool name |
 | `ctx.tool.args` | {string?} | Tool arguments (dynamic, nullable) |
 | `ctx.tool.args.<field>?` | string? | Nullable accessor for a specific tool argument field; absent field short-circuits the enclosing `match` |
+| `ctx.agent.name` | string | Subagent name |
+| `ctx.mcp.server` | string | MCP server name |
+| `ctx.mcp.tool` | string | MCP tool name |
 | `ctx.state` | string | Agent state |
 
 #### Scalar match

@@ -445,6 +445,9 @@ fn deny_hint(tool_name: &str, tool_input: &serde_json::Value, cwd: &str) -> Resu
         CapQuery::Agent { name } => {
             format!("(agent \"{}\")", name)
         }
+        CapQuery::Mcp { server, .. } => {
+            format!("(mcp \"{}\")", server)
+        }
     };
 
     Ok(format!("clash allow '{}'", rule))
@@ -470,6 +473,13 @@ fn tool_input_summary(tool_name: &str, input: &serde_json::Value, cwd: &str) -> 
         },
         Some(CapQuery::Tool { name }) => name.clone(),
         Some(CapQuery::Agent { name }) => format!("agent:{name}"),
+        Some(CapQuery::Mcp { server, tool }) => {
+            if tool.is_empty() {
+                format!("mcp:{server}")
+            } else {
+                format!("mcp:{server}/{tool}")
+            }
+        }
         None => String::new(),
     };
 

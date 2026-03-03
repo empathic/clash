@@ -32,6 +32,10 @@ pub enum CapQuery {
     Agent {
         name: String,
     },
+    Mcp {
+        server: String,
+        tool: String,
+    },
 }
 
 /// Map a tool invocation to capability queries.
@@ -120,6 +124,16 @@ pub fn tool_to_queries(
             vec![CapQuery::Agent {
                 name: subagent_type.to_string(),
             }]
+        }
+        _ if tool_name.starts_with("mcp__") => {
+            // MCP tools follow the pattern: mcp__<server>__<tool>
+            let rest = &tool_name["mcp__".len()..];
+            let (server, tool) = match rest.find("__") {
+                Some(pos) => (rest[..pos].to_string(), rest[pos + 2..].to_string()),
+                None => (rest.to_string(), String::new()),
+            };
+            debug!(tool_name, server = %server, tool = %tool, "mcp — using mcp capability query");
+            vec![CapQuery::Mcp { server, tool }]
         }
         _ => {
             debug!(tool_name, "tool — using tool capability query");
@@ -362,6 +376,7 @@ impl DecisionTree {
                 CapQuery::Net { .. } => &self.net_rules,
                 CapQuery::Tool { .. } => &self.tool_rules,
                 CapQuery::Agent { .. } => &self.tool_rules,
+                CapQuery::Mcp { .. } => &self.tool_rules,
             };
 
             for (idx, rule) in rules.iter().enumerate() {

@@ -178,7 +178,7 @@ fn compile_tree_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Po
         children: tree_children,
     };
 
-    Ok(PolicyTree {
+    let tree = PolicyTree {
         version,
         default: default_effect,
         policy_name: active_policy.to_string(),
@@ -189,7 +189,59 @@ fn compile_tree_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Po
         net_rules,
         tool_rules,
         sandbox_policies: sandbox_policies_map,
-    })
+    };
+
+    validate_ask_contexts(&tree.root, false, &tree.node_meta)?;
+
+    Ok(tree)
+}
+
+/// Validate that `:ask` effects only appear inside `tool`, `mcp`, or `agent` guards.
+///
+/// This implements validation rule 6 from the spec: `:ask` may only appear in
+/// contexts reachable from `tool`, `mcp`, or `agent` invocation types — not from
+/// `command` or with no invocation guard at all.
+///
+/// Internal policies (`__internal_*`) are exempt because they may legitimately
+/// use `:ask` under `command` guards (e.g. the internal clash policy).
+fn validate_ask_contexts(
+    node: &Node,
+    has_valid_invocation: bool,
+    meta: &[NodeMeta],
+) -> Result<()> {
+    match node {
+        Node::Sequence { children, .. } | Node::DenyOverrides { children, .. } => {
+            for child in children {
+                validate_ask_contexts(child, has_valid_invocation, meta)?;
+            }
+        }
+        Node::When { predicate, body, .. } => {
+            let valid = has_valid_invocation || predicate.allows_ask();
+            validate_ask_contexts(body, valid, meta)?;
+        }
+        Node::Match { arms, .. } => {
+            for arm in arms {
+                validate_ask_contexts(&arm.body, has_valid_invocation, meta)?;
+            }
+        }
+        Node::Leaf {
+            id,
+            effect: Effect::Ask,
+        } => {
+            let is_internal = meta
+                .get(*id as usize)
+                .and_then(|m| m.origin_policy.as_deref())
+                .is_some_and(|p| p.starts_with("__internal_"));
+            if !has_valid_invocation && !is_internal {
+                bail!(
+                    ":ask may only appear inside a (when (tool ...) ...), \
+                     (when (mcp ...) ...), or (when (agent ...) ...) guard"
+                );
+            }
+        }
+        Node::Leaf { .. } => {}
+    }
+    Ok(())
 }
 
 /// Flatten a v2 policy, resolving includes while preserving When/Sandbox items.
@@ -655,10 +707,13 @@ fn compile_match_to_sandbox(
         Observable::AgentName => {
             // Agent context observables don't apply to sandbox rules.
         }
+        Observable::McpServer | Observable::McpTool => {
+            // MCP context observables don't apply to sandbox rules.
+        }
         Observable::State => {
             // State observable doesn't apply to sandbox rules.
         }
-        Observable::Command | Observable::Tool | Observable::Agent => {
+        Observable::Command | Observable::Tool | Observable::Agent | Observable::Mcp => {
             // Command/tool/agent observables don't apply to sandbox rules (sandbox restricts fs/net only).
         }
     }
@@ -1015,6 +1070,28 @@ fn compile_when_guard(
                 name: pat.clone(),
             })?))
         }
+        Observable::Mcp => {
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("mcp observable requires a single pattern"),
+            };
+            Ok(Predicate::Mcp(compile_tool_to_compiled(&ToolMatcher {
+                name: pat.clone(),
+            })?))
+        }
+        Observable::McpServer => {
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("ctx.mcp.server observable requires a single pattern"),
+            };
+            Ok(Predicate::Mcp(compile_tool_to_compiled(&ToolMatcher {
+                name: pat.clone(),
+            })?))
+        }
+        Observable::McpTool => {
+            // ctx.mcp.tool as a when guard — deferred, always true for now
+            Ok(Predicate::True)
+        }
         Observable::Tuple(_) => {
             bail!("tuple observables are not supported in when guards")
         }
@@ -1160,6 +1237,9 @@ fn compile_observable_to_ir(obs: &Observable) -> Result<crate::policy::tree::Obs
         Observable::ToolArgs => Ok(ir::Observable::ToolArgs),
         Observable::Agent => Ok(ir::Observable::Agent),
         Observable::AgentName => Ok(ir::Observable::AgentName),
+        Observable::Mcp => bail!("mcp invocation type cannot be used as a match observable; use ctx.mcp.server or ctx.mcp.tool"),
+        Observable::McpServer => Ok(ir::Observable::McpServer),
+        Observable::McpTool => Ok(ir::Observable::McpTool),
         Observable::ToolArgField(field) => Ok(ir::Observable::ToolArgField(field.clone())),
         Observable::State => Ok(ir::Observable::State),
         Observable::Tuple(obs) => {
@@ -1994,6 +2074,7 @@ fn observable_domain(obs: &Observable) -> &'static str {
         | Observable::ToolArgs
         | Observable::ToolArgField(_) => "tool",
         Observable::Agent | Observable::AgentName => "agent",
+        Observable::Mcp | Observable::McpServer | Observable::McpTool => "mcp",
         Observable::HttpDomain
         | Observable::HttpMethod
         | Observable::HttpPort
@@ -3628,5 +3709,135 @@ mod tests {
             err.to_string().contains("sibling when blocks"),
             "expected nested overlap error, got: {err}",
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // :ask context validation tests (validation rule 6)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ask_under_tool_is_valid() {
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (tool "Skill") :ask))
+"#;
+        assert!(compile_to_tree(source, &env).is_ok());
+    }
+
+    #[test]
+    fn ask_under_mcp_is_valid() {
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (mcp "puppeteer") :ask))
+"#;
+        assert!(compile_to_tree(source, &env).is_ok());
+    }
+
+    #[test]
+    fn ask_under_agent_is_valid() {
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (agent "Explore") :ask))
+"#;
+        assert!(compile_to_tree(source, &env).is_ok());
+    }
+
+    #[test]
+    fn ask_under_command_is_invalid() {
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "git" *) :ask))
+"#;
+        let err = compile_to_tree(source, &env).unwrap_err();
+        assert!(
+            err.to_string().contains(":ask may only appear inside"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn ask_with_no_invocation_guard_is_invalid() {
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  :ask)
+"#;
+        let err = compile_to_tree(source, &env).unwrap_err();
+        assert!(
+            err.to_string().contains(":ask may only appear inside"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn ask_nested_command_then_tool_is_valid() {
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (tool "Skill")
+    (when (command "git" *) :ask)))
+"#;
+        // The outer (when (tool ...)) makes the inner :ask valid.
+        assert!(compile_to_tree(source, &env).is_ok());
+    }
+
+    #[test]
+    fn ask_in_match_arm_under_mcp_is_valid() {
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (mcp "puppeteer")
+    (match ctx.mcp.tool
+      "navigate" :allow
+      * :ask)))
+"#;
+        assert!(compile_to_tree(source, &env).is_ok());
+    }
+
+    #[test]
+    fn ask_in_when_without_invocation_guard_is_invalid() {
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (ctx.http.domain "github.com") :ask))
+"#;
+        let err = compile_to_tree(source, &env).unwrap_err();
+        assert!(
+            err.to_string().contains(":ask may only appear inside"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn allow_and_deny_under_command_are_valid() {
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "git" *) :allow)
+  (when (command "rm" *) :deny))
+"#;
+        assert!(compile_to_tree(source, &env).is_ok());
     }
 }
