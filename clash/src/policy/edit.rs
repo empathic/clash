@@ -82,43 +82,89 @@ pub fn ensure_policy_block(source: &str, name: &str, body_source: &str) -> Resul
 
 /// Update the default declaration's effect and/or policy name. Returns modified source.
 ///
-/// If no `(default ...)` exists, prepends one.
+/// For v2 policies: sets `(use "name")` and appends/updates a bare effect in the
+/// entry policy body. For v1: uses `(default effect "name")`.
 pub fn set_default(source: &str, effect: Effect, policy: &str) -> Result<String> {
     let mut top_levels = parse::parse(source)?;
-    let mut found = false;
-    for tl in &mut top_levels {
-        if let TopLevel::Default {
-            effect: e,
-            policy: p,
-        } = tl
-        {
-            *e = effect;
-            *p = policy.to_string();
-            found = true;
-            break;
+    let version = super::version::extract_version(&top_levels)?;
+
+    if version >= 2 {
+        // Update or insert (use "name").
+        let mut found_use = false;
+        for tl in &mut top_levels {
+            if let TopLevel::Use(name) = tl {
+                *name = policy.to_string();
+                found_use = true;
+                break;
+            }
         }
-    }
-    if !found {
-        top_levels.insert(
-            0,
-            TopLevel::Default {
-                effect,
-                policy: policy.to_string(),
-            },
-        );
+        if !found_use {
+            let pos = top_levels
+                .iter()
+                .position(|tl| !matches!(tl, TopLevel::Version(_)))
+                .unwrap_or(0);
+            top_levels.insert(pos, TopLevel::Use(policy.to_string()));
+        }
+
+        // Remove any lingering (default ...) — it's deprecated in v2.
+        top_levels.retain(|tl| !matches!(tl, TopLevel::Default { .. }));
+
+        // Update or append bare effect in the entry policy body.
+        for tl in &mut top_levels {
+            if let TopLevel::Policy { name, body } = tl {
+                if *name == policy {
+                    // Remove existing bare effects, then append new one.
+                    body.retain(|item| !matches!(item, PolicyItem::Effect(_)));
+                    body.push(PolicyItem::Effect(effect));
+                    break;
+                }
+            }
+        }
+    } else {
+        let mut found = false;
+        for tl in &mut top_levels {
+            if let TopLevel::Default {
+                effect: e,
+                policy: p,
+            } = tl
+            {
+                *e = effect;
+                *p = policy.to_string();
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            top_levels.insert(
+                0,
+                TopLevel::Default {
+                    effect,
+                    policy: policy.to_string(),
+                },
+            );
+        }
     }
     Ok(serialize_top_levels(&top_levels))
 }
 
-/// Return the active policy name from the `(default ...)` declaration.
+/// Return the active policy name from `(use ...)` or `(default ...)`.
+///
+/// `(use ...)` takes priority over `(default ...)`.
 pub fn active_policy(source: &str) -> Result<String> {
     let top_levels = parse::parse(source)?;
+    // (use "name") takes priority.
+    for tl in &top_levels {
+        if let TopLevel::Use(name) = tl {
+            return Ok(name.clone());
+        }
+    }
+    // Fall back to (default _ "name").
     for tl in &top_levels {
         if let TopLevel::Default { policy, .. } = tl {
             return Ok(policy.clone());
         }
     }
-    bail!("no (default ...) declaration found in policy")
+    bail!("no (use ...) or (default ...) declaration found in policy")
 }
 
 /// Find a rule in the named policy that has the same capability matcher

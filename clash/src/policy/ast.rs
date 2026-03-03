@@ -14,8 +14,12 @@ pub enum TopLevel {
     Version(u32),
     /// `(default deny "main")` — sets the default effect and active policy name.
     Default { effect: Effect, policy: String },
+    /// `(use "name")` — v2 directive selecting the entry policy to evaluate.
+    Use(String),
     /// `(policy name ...)` — a named policy containing rules and includes.
     Policy { name: String, body: Vec<PolicyItem> },
+    /// `(def name [val1 val2 ...])` — v2 macro definition for pattern expansion.
+    Def { name: String, values: Vec<String> },
 }
 
 /// An item inside a `(policy ...)` block.
@@ -25,6 +29,18 @@ pub enum PolicyItem {
     Include(String),
     /// A rule: `(effect (capability ...))`.
     Rule(Rule),
+    /// `(when (observable pattern) body...)` — v2 conditional block.
+    When {
+        observable: Observable,
+        pattern: ArmPattern,
+        body: Vec<PolicyItem>,
+    },
+    /// `(match observable arms...)` — v2 dispatch block at policy level.
+    Match(MatchBlock),
+    /// `(sandbox items...)` — v2 sandbox block (only inside `when`).
+    Sandbox { body: Vec<SandboxItem> },
+    /// `:allow`, `:deny`, `:ask` — v2 inline effect (only inside `when`).
+    Effect(Effect),
 }
 
 /// How a sandbox is specified on an exec rule.
@@ -171,6 +187,77 @@ pub enum PathExpr {
 }
 
 // ---------------------------------------------------------------------------
+// v2 types: when / sandbox / match
+// ---------------------------------------------------------------------------
+
+/// Unified observable reference for `when` guards and `match` dispatch.
+///
+/// Replaces the former `WhenPredicate` (command/tool only) and `ObservableRef`
+/// (proxy/fs only) with a single enum covering all observable domains.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Observable {
+    /// `command` — matches exec queries (binary + args).
+    Command,
+    /// `tool` — matches tool queries by name.
+    Tool,
+    /// `proxy.method`
+    ProxyMethod,
+    /// `proxy.domain`
+    ProxyDomain,
+    /// `fs.action`
+    FsAction,
+    /// `fs.path`
+    FsPath,
+    /// `[fs.action fs.path]` — tuple of observables.
+    Tuple(Vec<Observable>),
+}
+
+/// An item inside a `(sandbox ...)` block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SandboxItem {
+    /// A flat rule: `(allow (fs read ...))`.
+    Rule(Rule),
+    /// `(match observable arms...)`.
+    Match(MatchBlock),
+}
+
+/// A `(match observable arms...)` block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchBlock {
+    pub observable: Observable,
+    pub arms: Vec<MatchArmAst>,
+}
+
+/// One arm of a `match` block: pattern → effect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchArmAst {
+    pub pattern: ArmPattern,
+    pub effect: Effect,
+}
+
+/// Pattern in a match arm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArmPattern {
+    /// A single pattern: `"github.com"`, `*`, `(or ...)`, `(not ...)`.
+    Single(Pattern),
+    /// A single path pattern: `(subpath $PWD)`.
+    SinglePath(PathFilter),
+    /// An exec-style pattern for `command` observable: `("git" *)`.
+    Exec(ExecMatcher),
+    /// A tuple pattern: `["read" (subpath $PWD)]`.
+    Tuple(Vec<ArmPatternElement>),
+}
+
+/// An element in a tuple match arm pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArmPatternElement {
+    /// A general pattern.
+    Pat(Pattern),
+    /// A path filter (for fs.path observables).
+    Path(PathFilter),
+}
+
+// ---------------------------------------------------------------------------
 // Display implementations for round-trip printing
 // ---------------------------------------------------------------------------
 
@@ -181,6 +268,7 @@ impl fmt::Display for TopLevel {
             TopLevel::Default { effect, policy } => {
                 write!(f, "(default {effect} \"{policy}\")")
             }
+            TopLevel::Use(name) => write!(f, "(use \"{name}\")"),
             TopLevel::Policy { name, body } => {
                 write!(f, "(policy \"{name}\"")?;
                 for item in body {
@@ -192,6 +280,16 @@ impl fmt::Display for TopLevel {
                     write!(f, "\n)")
                 }
             }
+            TopLevel::Def { name, values } => {
+                write!(f, "(def {name} [")?;
+                for (i, v) in values.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))?;
+                }
+                write!(f, "])")
+            }
         }
     }
 }
@@ -201,6 +299,179 @@ impl fmt::Display for PolicyItem {
         match self {
             PolicyItem::Include(name) => write!(f, "(include \"{name}\")"),
             PolicyItem::Rule(rule) => write!(f, "{rule}"),
+            PolicyItem::When {
+                observable,
+                pattern,
+                body,
+            } => {
+                write!(f, "(when ")?;
+                display_when_guard(f, observable, pattern)?;
+                // Single inline effect: render on one line
+                if body.len() == 1 && matches!(&body[0], PolicyItem::Effect(_)) {
+                    write!(f, " {}", body[0])?;
+                } else {
+                    for item in body {
+                        write!(f, "\n    {item}")?;
+                    }
+                }
+                write!(f, ")")
+            }
+            PolicyItem::Match(block) => write!(f, "{block}"),
+            PolicyItem::Sandbox { body } => {
+                write!(f, "(sandbox")?;
+                for item in body {
+                    write!(f, "\n      {item}")?;
+                }
+                write!(f, ")")
+            }
+            PolicyItem::Effect(effect) => write!(f, ":{effect}"),
+        }
+    }
+}
+
+/// Write the when guard `(observable pattern)` combined form.
+fn display_when_guard(
+    f: &mut fmt::Formatter<'_>,
+    observable: &Observable,
+    pattern: &ArmPattern,
+) -> fmt::Result {
+    match observable {
+        Observable::Command => {
+            write!(f, "(command")?;
+            if let ArmPattern::Exec(m) = pattern {
+                let has_content = !m.args.is_empty() || !m.has_args.is_empty();
+                if m.bin != Pattern::Any || has_content {
+                    write!(f, " {}", m.bin)?;
+                }
+                for arg in &m.args {
+                    write!(f, " {arg}")?;
+                }
+                if !m.has_args.is_empty() {
+                    write!(f, " :has")?;
+                    for arg in &m.has_args {
+                        write!(f, " {arg}")?;
+                    }
+                }
+            }
+            write!(f, ")")
+        }
+        Observable::Tool => {
+            write!(f, "(tool")?;
+            if let ArmPattern::Single(pat) = pattern {
+                if *pat != Pattern::Any {
+                    write!(f, " {pat}")?;
+                }
+            }
+            write!(f, ")")
+        }
+        _ => {
+            // proxy.domain, fs.action, fs.path — render as (observable pattern)
+            write!(f, "({observable}")?;
+            match pattern {
+                ArmPattern::Single(pat) => write!(f, " {pat}")?,
+                ArmPattern::SinglePath(pf) => write!(f, " {pf}")?,
+                _ => {}
+            }
+            write!(f, ")")
+        }
+    }
+}
+
+impl fmt::Display for Observable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Observable::Command => write!(f, "command"),
+            Observable::Tool => write!(f, "tool"),
+            Observable::ProxyMethod => write!(f, "proxy.method"),
+            Observable::ProxyDomain => write!(f, "proxy.domain"),
+            Observable::FsAction => write!(f, "fs.action"),
+            Observable::FsPath => write!(f, "fs.path"),
+            Observable::Tuple(obs) => {
+                write!(f, "[")?;
+                for (i, o) in obs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "{o}")?;
+                }
+                write!(f, "]")
+            }
+        }
+    }
+}
+
+impl fmt::Display for SandboxItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SandboxItem::Rule(rule) => write!(f, "{rule}"),
+            SandboxItem::Match(block) => write!(f, "{block}"),
+        }
+    }
+}
+
+impl fmt::Display for MatchBlock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(match {}", self.observable)?;
+        for arm in &self.arms {
+            write!(f, "\n        {} {}", arm.pattern, arm.effect_keyword())?;
+        }
+        write!(f, ")")
+    }
+}
+
+impl MatchArmAst {
+    /// Display the effect as a keyword (`:allow`, `:deny`).
+    pub fn effect_keyword(&self) -> &'static str {
+        match self.effect {
+            Effect::Allow => ":allow",
+            Effect::Deny => ":deny",
+            Effect::Ask => ":ask",
+        }
+    }
+}
+
+impl fmt::Display for ArmPattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ArmPattern::Single(p) => write!(f, "{p}"),
+            ArmPattern::SinglePath(pf) => write!(f, "{pf}"),
+            ArmPattern::Exec(m) => {
+                // Bare wildcard: just `*`
+                if m.bin == Pattern::Any && m.args.is_empty() && m.has_args.is_empty() {
+                    return write!(f, "*");
+                }
+                // Otherwise: ("git" "push" *) or ("git" :has "--force")
+                write!(f, "({}", m.bin)?;
+                for arg in &m.args {
+                    write!(f, " {arg}")?;
+                }
+                if !m.has_args.is_empty() {
+                    write!(f, " :has")?;
+                    for arg in &m.has_args {
+                        write!(f, " {arg}")?;
+                    }
+                }
+                write!(f, ")")
+            }
+            ArmPattern::Tuple(elems) => {
+                write!(f, "[")?;
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "{e}")?;
+                }
+                write!(f, "]")
+            }
+        }
+    }
+}
+
+impl fmt::Display for ArmPatternElement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ArmPatternElement::Pat(p) => write!(f, "{p}"),
+            ArmPatternElement::Path(pf) => write!(f, "{pf}"),
         }
     }
 }

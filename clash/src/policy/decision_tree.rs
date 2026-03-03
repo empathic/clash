@@ -105,6 +105,8 @@ pub enum CompiledPattern {
     Regex(Arc<Regex>),
     Or(Vec<CompiledPattern>),
     Not(Box<CompiledPattern>),
+    /// Path-aware subpath matching for `match` arms (v2).
+    Subpath(String),
 }
 
 /// A pre-compiled path filter.
@@ -141,7 +143,7 @@ impl DecisionTree {
 
     /// Shared implementation: convert a set of compiled rules into a
     /// `SandboxPolicy` by extracting fs and net constraints.
-    fn sandbox_from_rules<'a>(
+    pub(crate) fn sandbox_from_rules<'a>(
         rules: impl Iterator<Item = &'a CompiledRule>,
     ) -> Option<SandboxPolicy> {
         let mut sandbox_rules: Vec<SandboxRule> = Vec::new();
@@ -278,7 +280,10 @@ impl DecisionTree {
     /// Recursively walks `Literal`, `Or`, and `Regex` variants. `Any` and `Not`
     /// are skipped (handled at a higher level). Regex patterns are included
     /// as-is — the proxy will attempt to match them.
-    fn extract_domains_from_pattern(pattern: &CompiledPattern, domains: &mut Vec<String>) {
+    pub(crate) fn extract_domains_from_pattern(
+        pattern: &CompiledPattern,
+        domains: &mut Vec<String>,
+    ) {
         match pattern {
             CompiledPattern::Literal(s) => {
                 if !domains.contains(s) {
@@ -297,9 +302,9 @@ impl DecisionTree {
                     domains.push(src);
                 }
             }
-            CompiledPattern::Any | CompiledPattern::Not(_) => {
+            CompiledPattern::Any | CompiledPattern::Not(_) | CompiledPattern::Subpath(_) => {
                 // Any is handled upstream (→ NetworkPolicy::Allow).
-                // Not is too complex for domain extraction — skip.
+                // Not/Subpath are too complex for domain extraction — skip.
             }
         }
     }
@@ -397,6 +402,9 @@ impl CompiledPattern {
             CompiledPattern::Regex(r) => r.is_match(value),
             CompiledPattern::Or(ps) => ps.iter().any(|p| p.matches(value)),
             CompiledPattern::Not(p) => !p.matches(value),
+            CompiledPattern::Subpath(base) => {
+                value == base || value.starts_with(&format!("{base}/"))
+            }
         }
     }
 }

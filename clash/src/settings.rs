@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::policy::DecisionTree;
+use crate::policy::tree::PolicyTree;
 use anyhow::{Context, Result};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
@@ -154,8 +154,8 @@ pub struct LoadedPolicy {
 
 #[derive(Debug, Default)]
 pub struct ClashSettings {
-    /// Pre-compiled decision tree for fast evaluation.
-    compiled: Option<DecisionTree>,
+    /// Pre-compiled policy tree for fast evaluation.
+    compiled: Option<PolicyTree>,
 
     /// Policy sources loaded from each level (ordered by precedence, highest first).
     loaded_policies: Vec<LoadedPolicy>,
@@ -352,7 +352,7 @@ impl ClashSettings {
 
     /// Set the policy source directly (compile from s-expression text).
     pub fn set_policy_source(&mut self, source: &str) {
-        match crate::policy::compile_policy(source) {
+        match crate::policy::compile_to_tree(source, &crate::policy::compile::StdEnvResolver) {
             Ok(tree) => {
                 self.compiled = Some(tree);
                 self.policy_error = None;
@@ -369,8 +369,14 @@ impl ClashSettings {
     /// Maximum policy file size (1 MiB).
     const MAX_POLICY_SIZE: u64 = 1024 * 1024;
 
-    /// Return the pre-compiled decision tree, if one was successfully compiled.
-    pub fn decision_tree(&self) -> Option<&DecisionTree> {
+    /// Return the pre-compiled policy tree, if one was successfully compiled.
+    pub fn policy_tree(&self) -> Option<&PolicyTree> {
+        self.compiled.as_ref()
+    }
+
+    /// Backward-compat alias for `policy_tree()`.
+    #[doc(hidden)]
+    pub fn decision_tree(&self) -> Option<&PolicyTree> {
         self.compiled.as_ref()
     }
 
@@ -457,7 +463,10 @@ impl ClashSettings {
                 // policy.yaml for notification/audit config.
                 self.load_notification_audit_config();
 
-                match crate::policy::compile_policy(&contents) {
+                match crate::policy::compile_to_tree(
+                    &contents,
+                    &crate::policy::compile::StdEnvResolver,
+                ) {
                     Ok(tree) => {
                         info!(path = %path.display(), "Loaded policy");
                         self.compiled = Some(tree);
@@ -569,20 +578,16 @@ impl ClashSettings {
         // Use a session-aware resolver that provides TRANSCRIPT_DIR etc.
         let resolver = SessionEnvResolver { hook_ctx };
 
-        // Compile (single-level or multi-level).
+        // Compile (single-level or multi-level) directly to PolicyTree.
         let result = if level_sources.len() == 1 {
             let (_, source) = &level_sources[0];
-            crate::policy::compile_policy_with_internals(source, &resolver, INTERNAL_POLICIES)
+            crate::policy::compile_to_tree_with_internals(source, &resolver, INTERNAL_POLICIES)
         } else {
             let level_refs: Vec<(PolicyLevel, &str)> = level_sources
                 .iter()
                 .map(|(l, s)| (*l, s.as_str()))
                 .collect();
-            crate::policy::compile_multi_level_with_internals(
-                &level_refs,
-                &resolver,
-                INTERNAL_POLICIES,
-            )
+            crate::policy::compile_multi_level_to_tree(&level_refs, &resolver, INTERNAL_POLICIES)
         };
 
         match result {

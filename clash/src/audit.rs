@@ -546,6 +546,7 @@ mod tests {
                     description: format!("rule {}", i),
                     effect: Effect::Allow,
                     has_active_constraints: false,
+                    node_id: None,
                 })
                 .collect(),
             skipped_rules: vec![],

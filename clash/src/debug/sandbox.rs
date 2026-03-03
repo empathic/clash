@@ -153,7 +153,7 @@ pub fn inspect(tool: &str, input: Option<&str>) -> Result<SandboxReport> {
 
     let settings = ClashSettings::load_or_create()?;
     let tree = settings
-        .decision_tree()
+        .policy_tree()
         .ok_or_else(|| anyhow::anyhow!("no compiled policy available — run `clash init`"))?;
 
     let decision = tree.evaluate(&tool_name, &tool_input, &cwd);

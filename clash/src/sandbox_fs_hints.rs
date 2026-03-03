@@ -154,7 +154,7 @@ fn resolve_sandbox_policy(
     settings: &ClashSettings,
 ) -> Option<SandboxPolicy> {
     // Path 1: re-evaluate against the decision tree.
-    if let Some(tree) = settings.decision_tree() {
+    if let Some(tree) = settings.policy_tree() {
         let decision = tree.evaluate(&input.tool_name, &input.tool_input, &input.cwd);
         if let Some(sandbox) = decision.sandbox {
             info!("resolve_sandbox_policy: found sandbox via decision tree re-evaluation");

@@ -1,0 +1,19 @@
+(version 2)
+
+(default (policy "main") (decision :deny))
+(def working-dir (or (subpath $PWD) (subpath (worktree $PWD))))
+
+(policy "main"
+  (when (command *)
+    (when (fs.path working-dir))
+      (sandbox
+        (match http.domain * :allow)
+        (match fs.action (or "read" "write" "create" "delete") :allow)
+    )
+  )
+  (when (tool (or "Read" "Glob" "Grep"))
+    (match fs.path
+      working-dir :allow
+    )
+  )
+)

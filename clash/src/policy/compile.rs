@@ -9,6 +9,11 @@ use anyhow::{Result, bail};
 use regex::Regex;
 
 use crate::policy::Effect;
+use crate::policy::ast::FsOp;
+use crate::policy::sandbox_types::{
+    Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy, SandboxRule,
+};
+use crate::policy::tree::{IdAllocator, MatchArm, Node, NodeMeta, PolicyTree, Predicate};
 
 use super::ast::*;
 use super::decision_tree::*;
@@ -60,6 +65,1017 @@ pub fn compile_policy(source: &str) -> Result<DecisionTree> {
 pub fn compile_policy_with_env(source: &str, env: &dyn EnvResolver) -> Result<DecisionTree> {
     let ast = super::parse::parse(source)?;
     compile_ast(&ast, env)
+}
+
+/// Compile a policy source string directly to a `PolicyTree`.
+///
+/// - v1 policies: parse → DecisionTree → `from_decision_tree()`
+/// - v2 policies: parse → `compile_tree_ast()` (builds PolicyTree directly)
+pub fn compile_to_tree(source: &str, env: &dyn EnvResolver) -> Result<PolicyTree> {
+    let ast = super::parse::parse(source)?;
+    let version = super::version::extract_version(&ast)?;
+    super::version::validate_version(version)?;
+
+    if version >= 2 {
+        compile_tree_ast(&ast, env)
+    } else {
+        let dt = compile_ast(&ast, env)?;
+        Ok(PolicyTree::from_decision_tree(dt))
+    }
+}
+
+/// Compile a v2 AST directly into a PolicyTree.
+fn compile_tree_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<PolicyTree> {
+    let version = super::version::extract_version(top_levels)?;
+
+    // Resolve active policy: (use "name") takes priority, then (default _ "name"), then "main".
+    let use_policy = top_levels.iter().find_map(|tl| match tl {
+        TopLevel::Use(name) => Some(name.as_str()),
+        _ => None,
+    });
+    let default_decl = top_levels.iter().find_map(|tl| match tl {
+        TopLevel::Default { effect, policy } => Some((*effect, policy.as_str())),
+        _ => None,
+    });
+    let active_policy = use_policy
+        .or(default_decl.map(|(_, p)| p))
+        .unwrap_or("main");
+
+    // Build policy name → body map.
+    let mut policies: HashMap<&str, &[PolicyItem]> = HashMap::new();
+    for tl in top_levels {
+        if let TopLevel::Policy { name, body } = tl {
+            policies.insert(name.as_str(), body);
+        }
+    }
+
+    // Flatten the active policy, resolving includes, keeping v2 items.
+    let mut items: Vec<(PolicyItem, String)> = Vec::new();
+    let mut visited = Vec::new();
+    flatten_policy_v2(active_policy, &policies, &mut items, &mut visited)?;
+
+    // Resolve default effect: last bare PolicyItem::Effect in the flattened body
+    // takes priority, then (default effect _), then Deny.
+    let body_effect = items
+        .iter()
+        .rev()
+        .find_map(|(item, _)| match item {
+            PolicyItem::Effect(e) => Some(*e),
+            _ => None,
+        });
+    let default_effect = body_effect
+        .or(default_decl.map(|(e, _)| e))
+        .unwrap_or(Effect::Deny);
+
+    // Build the tree.
+    let mut ids = IdAllocator::new();
+
+    // Compile flat rules for backward-compat display (only top-level Rule items).
+    let mut exec_rules = Vec::new();
+    let mut fs_rules = Vec::new();
+    let mut net_rules = Vec::new();
+    let mut tool_rules = Vec::new();
+    let mut sandbox_policies_map = HashMap::new();
+
+    // Build tree children from items.
+    let mut tree_children = Vec::new();
+    for (item, origin) in &items {
+        let node = compile_policy_item_to_node(
+            item,
+            origin,
+            env,
+            &mut ids,
+            &mut exec_rules,
+            &mut fs_rules,
+            &mut net_rules,
+            &mut tool_rules,
+            &mut sandbox_policies_map,
+            &policies,
+        )?;
+        if let Some(n) = node {
+            tree_children.push(n);
+        }
+    }
+
+    // Sort flat rules by specificity.
+    let sort_fn = |a: &CompiledRule, b: &CompiledRule| {
+        b.specificity
+            .partial_cmp(&a.specificity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    };
+    exec_rules.sort_by(sort_fn);
+    fs_rules.sort_by(sort_fn);
+    net_rules.sort_by(sort_fn);
+    tool_rules.sort_by(sort_fn);
+
+    let root_id = ids.alloc(NodeMeta {
+        description: "root sequence".into(),
+        ..Default::default()
+    });
+    let root = Node::Sequence {
+        id: root_id,
+        children: tree_children,
+    };
+
+    Ok(PolicyTree {
+        version,
+        default: default_effect,
+        policy_name: active_policy.to_string(),
+        root,
+        node_meta: ids.node_meta,
+        exec_rules,
+        fs_rules,
+        net_rules,
+        tool_rules,
+        sandbox_policies: sandbox_policies_map,
+    })
+}
+
+/// Flatten a v2 policy, resolving includes while preserving When/Sandbox items.
+fn flatten_policy_v2(
+    name: &str,
+    policies: &HashMap<&str, &[PolicyItem]>,
+    items: &mut Vec<(PolicyItem, String)>,
+    visited: &mut Vec<String>,
+) -> Result<()> {
+    if visited.contains(&name.to_string()) {
+        bail!("circular include detected: {name}");
+    }
+    visited.push(name.to_string());
+
+    let body = policies
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("policy not found: {name}"))?;
+
+    for item in *body {
+        match item {
+            PolicyItem::Include(target) => {
+                flatten_policy_v2(target, policies, items, visited)?;
+            }
+            _ => {
+                items.push((item.clone(), name.to_string()));
+            }
+        }
+    }
+
+    visited.pop();
+    Ok(())
+}
+
+/// Compile a single PolicyItem into a tree Node.
+///
+/// For flat rules, also adds to the flat rule lists for backward-compat display.
+#[allow(clippy::too_many_arguments)]
+fn compile_policy_item_to_node(
+    item: &PolicyItem,
+    origin: &str,
+    env: &dyn EnvResolver,
+    ids: &mut IdAllocator,
+    exec_rules: &mut Vec<CompiledRule>,
+    fs_rules: &mut Vec<CompiledRule>,
+    net_rules: &mut Vec<CompiledRule>,
+    tool_rules: &mut Vec<CompiledRule>,
+    sandbox_policies: &mut HashMap<String, Vec<CompiledRule>>,
+    policies: &HashMap<&str, &[PolicyItem]>,
+) -> Result<Option<Node>> {
+    match item {
+        PolicyItem::Include(_) => Ok(None), // already flattened
+        PolicyItem::Rule(rule) => {
+            // Compile to both flat rule list (display) and tree node.
+            let specificity = Specificity::from_matcher(&rule.matcher);
+            let compiled_matcher = compile_matcher(&rule.matcher, env)?;
+
+            // Handle sandbox references for flat rules.
+            let sandbox_key = resolve_sandbox_ref(&rule.sandbox, env, sandbox_policies, policies)?;
+
+            let compiled = CompiledRule {
+                effect: rule.effect,
+                matcher: compiled_matcher,
+                source: rule.clone(),
+                specificity,
+                sandbox: sandbox_key.clone(),
+                origin_policy: Some(origin.to_string()),
+                origin_level: None,
+            };
+            match &rule.matcher {
+                CapMatcher::Exec(_) => exec_rules.push(compiled),
+                CapMatcher::Fs(_) => fs_rules.push(compiled),
+                CapMatcher::Net(_) => net_rules.push(compiled),
+                CapMatcher::Tool(_) => tool_rules.push(compiled),
+            }
+
+            // Build tree node: When { predicate, Leaf }
+            let predicate = match &rule.matcher {
+                CapMatcher::Exec(m) => Predicate::Command(compile_exec_to_compiled(m, env)?),
+                CapMatcher::Fs(m) => Predicate::Fs(compile_fs_to_compiled(m, env)?),
+                CapMatcher::Net(m) => Predicate::Net(compile_net_to_compiled(m, env)?),
+                CapMatcher::Tool(m) => Predicate::Tool(compile_tool_to_compiled(m)?),
+            };
+
+            let leaf_id = ids.alloc(NodeMeta {
+                description: rule.to_string(),
+                origin_policy: Some(origin.to_string()),
+                ..Default::default()
+            });
+            let leaf = Node::Leaf {
+                id: leaf_id,
+                effect: rule.effect,
+            };
+
+            let when_id = ids.alloc(NodeMeta {
+                description: rule.to_string(),
+                origin_policy: Some(origin.to_string()),
+                sandbox_name: sandbox_key,
+                ..Default::default()
+            });
+            Ok(Some(Node::When {
+                id: when_id,
+                predicate,
+                body: Box::new(leaf),
+            }))
+        }
+        PolicyItem::When {
+            observable,
+            pattern,
+            body,
+        } => {
+            // Compile the when guard (observable + pattern) into a Predicate.
+            let compiled_pred = compile_when_guard(observable, pattern, env)?;
+
+            // Compile body items recursively.
+            let mut child_nodes = Vec::new();
+            for child_item in body {
+                let node = compile_policy_item_to_node(
+                    child_item,
+                    origin,
+                    env,
+                    ids,
+                    exec_rules,
+                    fs_rules,
+                    net_rules,
+                    tool_rules,
+                    sandbox_policies,
+                    policies,
+                )?;
+                if let Some(n) = node {
+                    child_nodes.push(n);
+                }
+            }
+
+            let body_node = if child_nodes.len() == 1 {
+                child_nodes.pop().unwrap()
+            } else {
+                let seq_id = ids.alloc(NodeMeta {
+                    description: format!("when body ({} items)", child_nodes.len()),
+                    origin_policy: Some(origin.to_string()),
+                    ..Default::default()
+                });
+                Node::Sequence {
+                    id: seq_id,
+                    children: child_nodes,
+                }
+            };
+
+            let when_id = ids.alloc(NodeMeta {
+                description: format!("(when ({observable} ...) ...)"),
+                origin_policy: Some(origin.to_string()),
+                ..Default::default()
+            });
+            Ok(Some(Node::When {
+                id: when_id,
+                predicate: compiled_pred,
+                body: Box::new(body_node),
+            }))
+        }
+        PolicyItem::Match(block) => {
+            // Compile a policy-level match block into a Node::Match.
+            compile_policy_match_to_node(block, origin, env, ids)
+        }
+        PolicyItem::Sandbox { body } => {
+            // Compile sandbox items into a SandboxPolicy.
+            let policy = compile_sandbox_items(body, env)?;
+
+            let sandbox_id = ids.alloc(NodeMeta {
+                description: "(sandbox ...)".to_string(),
+                origin_policy: Some(origin.to_string()),
+                ..Default::default()
+            });
+            Ok(Some(Node::Sandbox {
+                id: sandbox_id,
+                policy,
+            }))
+        }
+        PolicyItem::Effect(effect) => {
+            let leaf_id = ids.alloc(NodeMeta {
+                description: format!(":{effect}"),
+                origin_policy: Some(origin.to_string()),
+                ..Default::default()
+            });
+            Ok(Some(Node::Leaf {
+                id: leaf_id,
+                effect: *effect,
+            }))
+        }
+    }
+}
+
+/// Compile sandbox items (flat rules + match blocks) into a SandboxPolicy.
+fn compile_sandbox_items(items: &[SandboxItem], env: &dyn EnvResolver) -> Result<SandboxPolicy> {
+    let mut sandbox_rules: Vec<SandboxRule> = Vec::new();
+    let mut network = NetworkPolicy::Deny;
+
+    for item in items {
+        match item {
+            SandboxItem::Rule(rule) => {
+                // Same as v1 sandbox_from_rules logic.
+                let effect = match rule.effect {
+                    Effect::Allow => RuleEffect::Allow,
+                    Effect::Deny => RuleEffect::Deny,
+                    Effect::Ask => {
+                        bail!(":ask is not allowed in sandbox rules")
+                    }
+                };
+                compile_sandbox_rule_to_policy(
+                    &rule.matcher,
+                    effect,
+                    env,
+                    &mut sandbox_rules,
+                    &mut network,
+                )?;
+            }
+            SandboxItem::Match(block) => {
+                compile_match_to_sandbox(block, env, &mut sandbox_rules, &mut network)?;
+            }
+        }
+    }
+
+    // Add temp directory rules (reuse common logic).
+    for path in DecisionTree::temp_directory_paths() {
+        sandbox_rules.push(SandboxRule {
+            effect: RuleEffect::Allow,
+            caps: Cap::all(),
+            path,
+            path_match: PathMatch::Subpath,
+        });
+    }
+
+    Ok(SandboxPolicy {
+        default: Cap::READ | Cap::EXECUTE,
+        rules: sandbox_rules,
+        network,
+    })
+}
+
+/// Compile a capability matcher into sandbox rules/network policy.
+fn compile_sandbox_rule_to_policy(
+    matcher: &CapMatcher,
+    effect: RuleEffect,
+    env: &dyn EnvResolver,
+    sandbox_rules: &mut Vec<SandboxRule>,
+    network: &mut NetworkPolicy,
+) -> Result<()> {
+    match matcher {
+        CapMatcher::Fs(m) => {
+            let caps = op_pattern_to_sandbox_caps(&m.op);
+            match &m.path {
+                Some(pf) => {
+                    let compiled_pf = compile_path_filter(pf, env)?;
+                    path_filter_to_sandbox_rules_compiled(
+                        &compiled_pf,
+                        effect,
+                        caps,
+                        sandbox_rules,
+                    );
+                }
+                None => {
+                    sandbox_rules.push(SandboxRule {
+                        effect,
+                        caps,
+                        path: "/".to_string(),
+                        path_match: PathMatch::Subpath,
+                    });
+                }
+            }
+        }
+        CapMatcher::Net(m) => {
+            if effect == RuleEffect::Allow {
+                let compiled_domain = compile_pattern(&m.domain)?;
+                match &compiled_domain {
+                    CompiledPattern::Any => {
+                        *network = NetworkPolicy::Allow;
+                    }
+                    _ => {
+                        if *network != NetworkPolicy::Allow {
+                            let mut domains = match network {
+                                NetworkPolicy::AllowDomains(d) => d.clone(),
+                                _ => Vec::new(),
+                            };
+                            DecisionTree::extract_domains_from_pattern(
+                                &compiled_domain,
+                                &mut domains,
+                            );
+                            if !domains.is_empty() {
+                                *network = NetworkPolicy::AllowDomains(domains);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        CapMatcher::Exec(_) | CapMatcher::Tool(_) => {
+            // Sandbox restricts fs/net only.
+        }
+    }
+    Ok(())
+}
+
+/// Compile a match block inside a sandbox into SandboxPolicy components.
+fn compile_match_to_sandbox(
+    block: &MatchBlock,
+    env: &dyn EnvResolver,
+    sandbox_rules: &mut Vec<SandboxRule>,
+    network: &mut NetworkPolicy,
+) -> Result<()> {
+    match &block.observable {
+        Observable::ProxyDomain => {
+            // Each arm adds to NetworkPolicy.
+            for arm in &block.arms {
+                let effect = match arm.effect {
+                    Effect::Allow => RuleEffect::Allow,
+                    Effect::Deny => RuleEffect::Deny,
+                    Effect::Ask => bail!(":ask not allowed in sandbox"),
+                };
+                if effect == RuleEffect::Allow {
+                    match &arm.pattern {
+                        ArmPattern::Single(Pattern::Any) => {
+                            *network = NetworkPolicy::Allow;
+                        }
+                        ArmPattern::Single(pat) => {
+                            if *network != NetworkPolicy::Allow {
+                                let mut domains = match network {
+                                    NetworkPolicy::AllowDomains(d) => d.clone(),
+                                    _ => Vec::new(),
+                                };
+                                let compiled = compile_pattern(pat)?;
+                                DecisionTree::extract_domains_from_pattern(&compiled, &mut domains);
+                                if !domains.is_empty() {
+                                    *network = NetworkPolicy::AllowDomains(domains);
+                                }
+                            }
+                        }
+                        _ => bail!("proxy.domain match arm must be a single pattern"),
+                    }
+                }
+                // :deny arms for proxy.domain are implicitly handled by deny-default.
+            }
+        }
+        Observable::ProxyMethod => {
+            // Deferred for MVP — skip.
+        }
+        Observable::FsPath => {
+            // Each arm → SandboxRule with all caps.
+            for arm in &block.arms {
+                let effect = match arm.effect {
+                    Effect::Allow => RuleEffect::Allow,
+                    Effect::Deny => RuleEffect::Deny,
+                    Effect::Ask => bail!(":ask not allowed in sandbox"),
+                };
+                compile_arm_path_to_sandbox(&arm.pattern, effect, Cap::all(), env, sandbox_rules)?;
+            }
+        }
+        Observable::FsAction => {
+            // Each arm → SandboxRule for that op on all paths.
+            for arm in &block.arms {
+                let effect = match arm.effect {
+                    Effect::Allow => RuleEffect::Allow,
+                    Effect::Deny => RuleEffect::Deny,
+                    Effect::Ask => bail!(":ask not allowed in sandbox"),
+                };
+                let caps = action_pattern_to_caps(&arm.pattern)?;
+                sandbox_rules.push(SandboxRule {
+                    effect,
+                    caps,
+                    path: "/".to_string(),
+                    path_match: PathMatch::Subpath,
+                });
+            }
+        }
+        Observable::Tuple(obs) => {
+            // Handle [fs.action fs.path] tuple.
+            if obs.len() == 2
+                && matches!(obs[0], Observable::FsAction)
+                && matches!(obs[1], Observable::FsPath)
+            {
+                for arm in &block.arms {
+                    let effect = match arm.effect {
+                        Effect::Allow => RuleEffect::Allow,
+                        Effect::Deny => RuleEffect::Deny,
+                        Effect::Ask => bail!(":ask not allowed in sandbox"),
+                    };
+                    match &arm.pattern {
+                        ArmPattern::Tuple(elems) if elems.len() == 2 => {
+                            // First element: fs.action → caps.
+                            let caps = match &elems[0] {
+                                ArmPatternElement::Pat(pat) => {
+                                    action_pattern_to_caps_from_pat(pat)?
+                                }
+                                _ => Cap::all(),
+                            };
+                            // Second element: fs.path → sandbox rules.
+                            match &elems[1] {
+                                ArmPatternElement::Path(pf) => {
+                                    let compiled_pf = compile_path_filter(pf, env)?;
+                                    path_filter_to_sandbox_rules_compiled(
+                                        &compiled_pf,
+                                        effect,
+                                        caps,
+                                        sandbox_rules,
+                                    );
+                                }
+                                ArmPatternElement::Pat(Pattern::Any) => {
+                                    sandbox_rules.push(SandboxRule {
+                                        effect,
+                                        caps,
+                                        path: "/".to_string(),
+                                        path_match: PathMatch::Subpath,
+                                    });
+                                }
+                                ArmPatternElement::Pat(Pattern::Literal(s)) => {
+                                    sandbox_rules.push(SandboxRule {
+                                        effect,
+                                        caps,
+                                        path: s.clone(),
+                                        path_match: PathMatch::Subpath,
+                                    });
+                                }
+                                other => {
+                                    bail!(
+                                        "unsupported path pattern in [fs.action fs.path] arm: {other:?}"
+                                    )
+                                }
+                            }
+                        }
+                        ArmPattern::Single(Pattern::Any) => {
+                            // Wildcard arm: all caps, all paths.
+                            sandbox_rules.push(SandboxRule {
+                                effect,
+                                caps: Cap::all(),
+                                path: "/".to_string(),
+                                path_match: PathMatch::Subpath,
+                            });
+                        }
+                        other => {
+                            bail!("expected tuple pattern for [fs.action fs.path], got: {other:?}")
+                        }
+                    }
+                }
+            } else {
+                bail!("unsupported observable tuple: only [fs.action fs.path] is supported")
+            }
+        }
+        Observable::Command | Observable::Tool => {
+            // Command/tool observables don't apply to sandbox rules (sandbox restricts fs/net only).
+        }
+    }
+    Ok(())
+}
+
+/// Convert an arm path pattern into sandbox rules.
+fn compile_arm_path_to_sandbox(
+    pattern: &ArmPattern,
+    effect: RuleEffect,
+    caps: Cap,
+    env: &dyn EnvResolver,
+    sandbox_rules: &mut Vec<SandboxRule>,
+) -> Result<()> {
+    match pattern {
+        ArmPattern::SinglePath(pf) => {
+            let compiled_pf = compile_path_filter(pf, env)?;
+            path_filter_to_sandbox_rules_compiled(&compiled_pf, effect, caps, sandbox_rules);
+        }
+        ArmPattern::Single(Pattern::Any) => {
+            sandbox_rules.push(SandboxRule {
+                effect,
+                caps,
+                path: "/".to_string(),
+                path_match: PathMatch::Subpath,
+            });
+        }
+        ArmPattern::Single(Pattern::Literal(s)) => {
+            sandbox_rules.push(SandboxRule {
+                effect,
+                caps,
+                path: s.clone(),
+                path_match: PathMatch::Subpath,
+            });
+        }
+        other => bail!("unsupported path arm pattern: {other:?}"),
+    }
+    Ok(())
+}
+
+/// Convert an action pattern to Cap flags.
+fn action_pattern_to_caps(pattern: &ArmPattern) -> Result<Cap> {
+    match pattern {
+        ArmPattern::Single(pat) => action_pattern_to_caps_from_pat(pat),
+        _ => bail!("expected single pattern for fs.action arm"),
+    }
+}
+
+/// Convert a Pattern (from fs.action position) to Cap flags.
+fn action_pattern_to_caps_from_pat(pat: &Pattern) -> Result<Cap> {
+    match pat {
+        Pattern::Any => Ok(Cap::all()),
+        Pattern::Literal(s) => match s.as_str() {
+            "read" => Ok(Cap::READ),
+            "write" => Ok(Cap::WRITE | Cap::CREATE),
+            "create" => Ok(Cap::CREATE),
+            "delete" => Ok(Cap::DELETE),
+            other => bail!("unknown fs action: {other}"),
+        },
+        Pattern::Or(pats) => {
+            let mut caps = Cap::empty();
+            for p in pats {
+                caps |= action_pattern_to_caps_from_pat(p)?;
+            }
+            Ok(caps)
+        }
+        _ => Ok(Cap::all()), // conservative fallback
+    }
+}
+
+/// Convert an OpPattern to sandbox Cap.
+fn op_pattern_to_sandbox_caps(op: &OpPattern) -> Cap {
+    match op {
+        OpPattern::Any => Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE,
+        OpPattern::Single(FsOp::Read) => Cap::READ,
+        OpPattern::Single(FsOp::Write) => Cap::WRITE | Cap::CREATE,
+        OpPattern::Single(FsOp::Create) => Cap::CREATE,
+        OpPattern::Single(FsOp::Delete) => Cap::DELETE,
+        OpPattern::Or(ops) => {
+            let mut caps = Cap::empty();
+            for op in ops {
+                caps |= match op {
+                    FsOp::Read => Cap::READ,
+                    FsOp::Write => Cap::WRITE | Cap::CREATE,
+                    FsOp::Create => Cap::CREATE,
+                    FsOp::Delete => Cap::DELETE,
+                };
+            }
+            caps
+        }
+    }
+}
+
+/// Convert a CompiledPathFilter into SandboxRules.
+fn path_filter_to_sandbox_rules_compiled(
+    pf: &CompiledPathFilter,
+    effect: RuleEffect,
+    caps: Cap,
+    sandbox_rules: &mut Vec<SandboxRule>,
+) {
+    match pf {
+        CompiledPathFilter::Subpath(path) => {
+            sandbox_rules.push(SandboxRule {
+                effect,
+                caps,
+                path: path.clone(),
+                path_match: PathMatch::Subpath,
+            });
+        }
+        CompiledPathFilter::Literal(path) => {
+            sandbox_rules.push(SandboxRule {
+                effect,
+                caps,
+                path: path.clone(),
+                path_match: PathMatch::Literal,
+            });
+        }
+        CompiledPathFilter::Regex(re) => {
+            sandbox_rules.push(SandboxRule {
+                effect,
+                caps,
+                path: re.as_str().to_string(),
+                path_match: PathMatch::Regex,
+            });
+        }
+        CompiledPathFilter::Or(filters) => {
+            for f in filters {
+                path_filter_to_sandbox_rules_compiled(f, effect, caps, sandbox_rules);
+            }
+        }
+        CompiledPathFilter::Not(_) => {
+            // Can't easily represent negation in sandbox rules — skip.
+        }
+    }
+}
+
+/// Resolve a sandbox reference to a key name (reused from v1 logic).
+fn resolve_sandbox_ref(
+    sandbox: &Option<SandboxRef>,
+    env: &dyn EnvResolver,
+    sandbox_policies: &mut HashMap<String, Vec<CompiledRule>>,
+    policies: &HashMap<&str, &[PolicyItem]>,
+) -> Result<Option<String>> {
+    match sandbox {
+        Some(SandboxRef::Named(name)) => {
+            if !policies.contains_key(name.as_str()) {
+                bail!(
+                    "sandbox reference \"{}\" not found: no (policy \"{}\") defined",
+                    name,
+                    name
+                );
+            }
+            // Compile the named sandbox policy if not already done.
+            if !sandbox_policies.contains_key(name) {
+                if let Some(body) = policies.get(name.as_str()) {
+                    let mut rules = Vec::new();
+                    for item in *body {
+                        if let PolicyItem::Rule(rule) = item {
+                            let sp = Specificity::from_matcher(&rule.matcher);
+                            let cm = compile_matcher(&rule.matcher, env)?;
+                            rules.push(CompiledRule {
+                                effect: rule.effect,
+                                matcher: cm,
+                                source: rule.clone(),
+                                specificity: sp,
+                                sandbox: None,
+                                origin_policy: None,
+                                origin_level: None,
+                            });
+                        }
+                    }
+                    sandbox_policies.insert(name.clone(), rules);
+                }
+            }
+            Ok(Some(name.clone()))
+        }
+        Some(SandboxRef::Inline(inline_rules)) => {
+            let key = format!("__v2_inline_sandbox_{}__", sandbox_policies.len());
+            let mut compiled_rules = Vec::new();
+            for r in inline_rules {
+                let sp = Specificity::from_matcher(&r.matcher);
+                let cm = compile_matcher(&r.matcher, env)?;
+                compiled_rules.push(CompiledRule {
+                    effect: r.effect,
+                    matcher: cm,
+                    source: r.clone(),
+                    specificity: sp,
+                    sandbox: None,
+                    origin_policy: None,
+                    origin_level: None,
+                });
+            }
+            sandbox_policies.insert(key.clone(), compiled_rules);
+            Ok(Some(key))
+        }
+        None => Ok(None),
+    }
+}
+
+// Helper: compile ExecMatcher → CompiledExec
+fn compile_exec_to_compiled(m: &ExecMatcher, _env: &dyn EnvResolver) -> Result<CompiledExec> {
+    let bin = compile_pattern(&m.bin)?;
+    let args = m.args.iter().map(compile_pattern).collect::<Result<_>>()?;
+    let has_args = m
+        .has_args
+        .iter()
+        .map(compile_pattern)
+        .collect::<Result<_>>()?;
+    Ok(CompiledExec {
+        bin,
+        args,
+        has_args,
+    })
+}
+
+// Helper: compile FsMatcher → CompiledFs
+fn compile_fs_to_compiled(m: &FsMatcher, env: &dyn EnvResolver) -> Result<CompiledFs> {
+    let path = match &m.path {
+        Some(pf) => Some(compile_path_filter(pf, env)?),
+        None => None,
+    };
+    Ok(CompiledFs {
+        op: m.op.clone(),
+        path,
+    })
+}
+
+// Helper: compile NetMatcher → CompiledNet
+fn compile_net_to_compiled(m: &NetMatcher, env: &dyn EnvResolver) -> Result<CompiledNet> {
+    let domain = compile_pattern(&m.domain)?;
+    let path = match &m.path {
+        Some(pf) => Some(compile_path_filter(pf, env)?),
+        None => None,
+    };
+    Ok(CompiledNet { domain, path })
+}
+
+// Helper: compile ToolMatcher → CompiledTool
+fn compile_tool_to_compiled(m: &ToolMatcher) -> Result<CompiledTool> {
+    let name = compile_pattern(&m.name)?;
+    Ok(CompiledTool { name })
+}
+
+/// Compile a when guard (Observable + ArmPattern) into a tree Predicate.
+fn compile_when_guard(
+    observable: &Observable,
+    pattern: &ArmPattern,
+    env: &dyn EnvResolver,
+) -> Result<Predicate> {
+    match observable {
+        Observable::Command => {
+            if let ArmPattern::Exec(m) = pattern {
+                Ok(Predicate::Command(compile_exec_to_compiled(m, env)?))
+            } else {
+                bail!("command observable requires an exec pattern")
+            }
+        }
+        Observable::Tool => {
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("tool observable requires a single pattern"),
+            };
+            Ok(Predicate::Tool(compile_tool_to_compiled(&ToolMatcher {
+                name: pat.clone(),
+            })?))
+        }
+        Observable::ProxyDomain => {
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("proxy.domain observable requires a single pattern"),
+            };
+            let domain = compile_pattern(pat)?;
+            Ok(Predicate::Net(CompiledNet { domain, path: None }))
+        }
+        Observable::ProxyMethod => {
+            // Deferred — always true for now
+            Ok(Predicate::True)
+        }
+        Observable::FsAction => {
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("fs.action observable requires a single pattern"),
+            };
+            let op = pattern_to_op_pattern(pat)?;
+            Ok(Predicate::Fs(CompiledFs { op, path: None }))
+        }
+        Observable::FsPath => {
+            let pf = match pattern {
+                ArmPattern::SinglePath(pf) => pf,
+                ArmPattern::Single(Pattern::Any) => {
+                    return Ok(Predicate::Fs(CompiledFs {
+                        op: OpPattern::Any,
+                        path: None,
+                    }));
+                }
+                _ => bail!("fs.path observable requires a path filter pattern"),
+            };
+            let compiled_pf = compile_path_filter(pf, env)?;
+            Ok(Predicate::Fs(CompiledFs {
+                op: OpPattern::Any,
+                path: Some(compiled_pf),
+            }))
+        }
+        Observable::Tuple(_) => {
+            bail!("tuple observables are not supported in when guards")
+        }
+    }
+}
+
+/// Convert a Pattern to an OpPattern (for fs.action when guards).
+fn pattern_to_op_pattern(pat: &Pattern) -> Result<OpPattern> {
+    match pat {
+        Pattern::Any => Ok(OpPattern::Any),
+        Pattern::Literal(s) => {
+            let op = match s.as_str() {
+                "read" => FsOp::Read,
+                "write" => FsOp::Write,
+                "create" => FsOp::Create,
+                "delete" => FsOp::Delete,
+                other => bail!("unknown fs action: {other}"),
+            };
+            Ok(OpPattern::Single(op))
+        }
+        Pattern::Or(pats) => {
+            let mut ops = Vec::new();
+            for p in pats {
+                if let Pattern::Literal(s) = p {
+                    let op = match s.as_str() {
+                        "read" => FsOp::Read,
+                        "write" => FsOp::Write,
+                        "create" => FsOp::Create,
+                        "delete" => FsOp::Delete,
+                        other => bail!("unknown fs action: {other}"),
+                    };
+                    ops.push(op);
+                } else {
+                    bail!("expected literal fs action in (or ...) pattern")
+                }
+            }
+            Ok(OpPattern::Or(ops))
+        }
+        _ => bail!("unsupported pattern type for fs.action"),
+    }
+}
+
+/// Compile a policy-level match block into a Node::Match.
+fn compile_policy_match_to_node(
+    block: &MatchBlock,
+    origin: &str,
+    env: &dyn EnvResolver,
+    ids: &mut IdAllocator,
+) -> Result<Option<Node>> {
+    let ir_observable = compile_observable_to_ir(&block.observable)?;
+
+    let mut ir_arms = Vec::new();
+    for arm in &block.arms {
+        let ir_pattern = compile_arm_pattern_to_ir(&arm.pattern, &block.observable, env)?;
+        let leaf_id = ids.alloc(NodeMeta {
+            description: format!("match arm: {} → {}", arm.pattern, arm.effect_keyword()),
+            origin_policy: Some(origin.to_string()),
+            ..Default::default()
+        });
+        let body = Node::Leaf {
+            id: leaf_id,
+            effect: arm.effect,
+        };
+        ir_arms.push(MatchArm {
+            pattern: ir_pattern,
+            body,
+        });
+    }
+
+    let match_id = ids.alloc(NodeMeta {
+        description: format!("(match {} ...)", block.observable),
+        origin_policy: Some(origin.to_string()),
+        ..Default::default()
+    });
+
+    Ok(Some(Node::Match {
+        id: match_id,
+        observable: ir_observable,
+        arms: ir_arms,
+    }))
+}
+
+/// Compile an AST Observable to an IR Observable.
+fn compile_observable_to_ir(
+    obs: &Observable,
+) -> Result<crate::policy::tree::Observable> {
+    use crate::policy::tree as ir;
+    match obs {
+        Observable::Command => Ok(ir::Observable::Command),
+        Observable::Tool => Ok(ir::Observable::Tool),
+        Observable::ProxyMethod => Ok(ir::Observable::ProxyMethod),
+        Observable::ProxyDomain => Ok(ir::Observable::ProxyDomain),
+        Observable::FsAction => Ok(ir::Observable::FsAction),
+        Observable::FsPath => Ok(ir::Observable::FsPath),
+        Observable::Tuple(obs) => {
+            let inner = obs
+                .iter()
+                .map(compile_observable_to_ir)
+                .collect::<Result<_>>()?;
+            Ok(ir::Observable::Tuple(inner))
+        }
+    }
+}
+
+/// Compile an AST ArmPattern to an IR MatchPattern.
+fn compile_arm_pattern_to_ir(
+    pattern: &ArmPattern,
+    _observable: &Observable,
+    env: &dyn EnvResolver,
+) -> Result<crate::policy::tree::MatchPattern> {
+    use crate::policy::tree as ir;
+    match pattern {
+        ArmPattern::Exec(m) => {
+            let compiled = compile_exec_to_compiled(m, env)?;
+            Ok(ir::MatchPattern::Exec(compiled))
+        }
+        ArmPattern::Single(p) => {
+            let compiled = compile_pattern(p)?;
+            Ok(ir::MatchPattern::Single(compiled))
+        }
+        ArmPattern::SinglePath(pf) => {
+            let compiled = compile_path_filter(pf, env)?;
+            Ok(ir::MatchPattern::PathFilter(compiled))
+        }
+        ArmPattern::Tuple(elems) => {
+            let compiled = elems
+                .iter()
+                .map(|e| match e {
+                    ArmPatternElement::Pat(p) => compile_pattern(p),
+                    ArmPatternElement::Path(_pf) => {
+                        // Path elements in tuple patterns: use Any pattern as placeholder.
+                        // Tuple path matching is handled at sandbox level, not tree eval.
+                        Ok(CompiledPattern::Any)
+                    }
+                })
+                .collect::<Result<_>>()?;
+            Ok(ir::MatchPattern::Tuple(compiled))
+        }
+    }
 }
 
 /// Compile policies from multiple levels and merge into a single decision tree.
@@ -247,20 +1263,12 @@ fn inject_internals(
     Ok(())
 }
 
-/// Compile with internal policies injected.
+/// Inject internal policy definitions and includes into a parsed AST.
 ///
-/// 1. Parses user source
-/// 2. Checks which internal policy names the user already defined (override)
-/// 3. For non-overridden ones, parses embedded source, appends TopLevel::Policy items
-/// 4. Prepends `(include "__internal_X__")` to the active policy body
-/// 5. Calls existing compile_ast
-pub fn compile_policy_with_internals(
-    source: &str,
-    env: &dyn EnvResolver,
-    internals: &[(&str, &str)],
-) -> Result<DecisionTree> {
-    let mut ast = super::parse::parse(source)?;
-
+/// 1. Checks which internal policy names the user already defined (override)
+/// 2. For non-overridden ones, parses embedded source, appends `TopLevel::Policy` items
+/// 3. Prepends `(include "__internal_X__")` to the active policy body
+fn inject_internal_includes(ast: &mut Vec<TopLevel>, internals: &[(&str, &str)]) -> Result<()> {
     // Collect user-defined policy names.
     let user_policies: std::collections::HashSet<String> = ast
         .iter()
@@ -270,12 +1278,18 @@ pub fn compile_policy_with_internals(
         })
         .collect();
 
-    // Find the active policy name.
+    // Find the active policy name: (use ...) takes priority over (default ...).
     let active_policy = ast
         .iter()
         .find_map(|tl| match tl {
-            TopLevel::Default { policy, .. } => Some(policy.clone()),
+            TopLevel::Use(name) => Some(name.clone()),
             _ => None,
+        })
+        .or_else(|| {
+            ast.iter().find_map(|tl| match tl {
+                TopLevel::Default { policy, .. } => Some(policy.clone()),
+                _ => None,
+            })
         })
         .unwrap_or_else(|| "main".to_string());
 
@@ -296,7 +1310,7 @@ pub fn compile_policy_with_internals(
 
     // Prepend include directives for internal policies to the active policy.
     if !internal_includes.is_empty() {
-        for tl in &mut ast {
+        for tl in ast.iter_mut() {
             if let TopLevel::Policy { name, body } = tl
                 && *name == active_policy
             {
@@ -311,8 +1325,82 @@ pub fn compile_policy_with_internals(
         }
     }
 
-    let tree = compile_ast(&ast, env)?;
-    Ok(tree)
+    Ok(())
+}
+
+/// Compile with internal policies injected (returns flat `DecisionTree`).
+pub fn compile_policy_with_internals(
+    source: &str,
+    env: &dyn EnvResolver,
+    internals: &[(&str, &str)],
+) -> Result<DecisionTree> {
+    let mut ast = super::parse::parse(source)?;
+    inject_internal_includes(&mut ast, internals)?;
+    compile_ast(&ast, env)
+}
+
+/// Compile a policy source with internal policies, returning a `PolicyTree`.
+///
+/// Dispatches v1 → `DecisionTree` → `from_decision_tree()`, v2 → `compile_tree_ast()`.
+pub fn compile_to_tree_with_internals(
+    source: &str,
+    env: &dyn EnvResolver,
+    internals: &[(&str, &str)],
+) -> Result<PolicyTree> {
+    let mut ast = super::parse::parse(source)?;
+    inject_internal_includes(&mut ast, internals)?;
+
+    let version = super::version::extract_version(&ast)?;
+    super::version::validate_version(version)?;
+
+    if version >= 2 {
+        compile_tree_ast(&ast, env)
+    } else {
+        let dt = compile_ast(&ast, env)?;
+        Ok(PolicyTree::from_decision_tree(dt))
+    }
+}
+
+/// Compile multiple policy levels with internals, returning a merged `PolicyTree`.
+///
+/// Injects internal policies into the lowest-precedence level, compiles each
+/// level to a `PolicyTree`, then merges with `DenyOverrides` semantics.
+pub fn compile_multi_level_to_tree(
+    levels: &[(crate::settings::PolicyLevel, &str)],
+    env: &dyn EnvResolver,
+    internals: &[(&str, &str)],
+) -> Result<PolicyTree> {
+    use crate::settings::PolicyLevel;
+
+    if levels.is_empty() {
+        bail!("no policy levels to compile");
+    }
+
+    if levels.len() == 1 {
+        return compile_to_tree_with_internals(levels[0].1, env, internals);
+    }
+
+    // Sort by precedence (lowest first) so index 0 gets internals.
+    let mut sorted: Vec<(PolicyLevel, &str)> = levels.to_vec();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Compile each level; inject internals into lowest-precedence.
+    let mut level_trees = Vec::new();
+    for (i, (level, source)) in sorted.iter().enumerate() {
+        let tree = if i == 0 {
+            compile_to_tree_with_internals(source, env, internals)
+                .map_err(|e| anyhow::anyhow!("{} policy: {}", level.name(), e))?
+        } else {
+            compile_to_tree(source, env)
+                .map_err(|e| anyhow::anyhow!("{} policy: {}", level.name(), e))?
+        };
+        level_trees.push(tree);
+    }
+
+    // Reverse for highest-precedence-first order.
+    level_trees.reverse();
+
+    Ok(PolicyTree::merge_levels(level_trees))
 }
 
 /// Compile a parsed AST into a decision tree.
@@ -321,16 +1409,21 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
     let version = super::version::extract_version(top_levels)?;
     super::version::validate_version(version)?;
 
-    // Find the default declaration.
-    let default_decl = top_levels
-        .iter()
-        .find_map(|tl| match tl {
-            TopLevel::Default { effect, policy } => Some((*effect, policy.as_str())),
-            _ => None,
-        })
-        .unwrap_or((Effect::Deny, "main"));
-
-    let (default_effect, active_policy) = default_decl;
+    // Find the active policy: (use ...) takes priority over (default ...).
+    let use_policy = top_levels.iter().find_map(|tl| match tl {
+        TopLevel::Use(name) => Some(name.as_str()),
+        _ => None,
+    });
+    let default_decl = top_levels.iter().find_map(|tl| match tl {
+        TopLevel::Default { effect, policy } => Some((*effect, policy.as_str())),
+        _ => None,
+    });
+    let active_policy = use_policy
+        .or(default_decl.map(|(_, p)| p))
+        .unwrap_or("main");
+    let default_effect = default_decl
+        .map(|(e, _)| e)
+        .unwrap_or(Effect::Deny);
 
     // Build a map of policy name → body.
     let mut policies: HashMap<&str, &[PolicyItem]> = HashMap::new();
@@ -494,6 +1587,12 @@ fn flatten_policy(
             PolicyItem::Rule(rule) => {
                 rules.push((rule.clone(), name.to_string()));
             }
+            // v2 items are handled by compile_tree_ast, not flat compilation.
+            // For v1 flatten, skip them (they won't appear in v1 policies).
+            PolicyItem::When { .. }
+            | PolicyItem::Match(_)
+            | PolicyItem::Sandbox { .. }
+            | PolicyItem::Effect(_) => {}
         }
     }
 
@@ -794,11 +1893,26 @@ pub fn detect_shadows(rules: &[CompiledRule]) -> HashMap<usize, ShadowInfo> {
 
 /// Detect all shadows across all rule categories in a decision tree.
 pub fn detect_all_shadows(tree: &DecisionTree) -> AllShadows {
+    detect_all_shadows_from_rules(
+        &tree.exec_rules,
+        &tree.fs_rules,
+        &tree.net_rules,
+        &tree.tool_rules,
+    )
+}
+
+/// Detect shadows from flat rule slices (used by both DecisionTree and PolicyTree).
+pub fn detect_all_shadows_from_rules(
+    exec_rules: &[CompiledRule],
+    fs_rules: &[CompiledRule],
+    net_rules: &[CompiledRule],
+    tool_rules: &[CompiledRule],
+) -> AllShadows {
     AllShadows {
-        exec: detect_shadows(&tree.exec_rules),
-        fs: detect_shadows(&tree.fs_rules),
-        net: detect_shadows(&tree.net_rules),
-        tool: detect_shadows(&tree.tool_rules),
+        exec: detect_shadows(exec_rules),
+        fs: detect_shadows(fs_rules),
+        net: detect_shadows(net_rules),
+        tool: detect_shadows(tool_rules),
     }
 }
 
@@ -1703,6 +2817,201 @@ mod tests {
         assert!(
             shadows.is_empty(),
             "non-overlapping matchers should not shadow"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // v2 compile_to_tree tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compile_to_tree_v1_policy() {
+        let source = r#"
+(version 1)
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *))
+  (allow (fs read (subpath "/home/user"))))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+        assert_eq!(tree.version, 1);
+        assert_eq!(tree.default, Effect::Deny);
+        assert_eq!(tree.policy_name, "main");
+        // v1 policies should still populate flat rule lists.
+        assert_eq!(tree.exec_rules.len(), 1);
+        assert_eq!(tree.fs_rules.len(), 1);
+    }
+
+    #[test]
+    fn compile_to_tree_v2_basic() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "git" *) :allow)
+  (when (command "cargo")
+    (sandbox
+      (match proxy.domain
+        "crates.io" :allow
+        * :deny))))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+        assert_eq!(tree.version, 2);
+        assert_eq!(tree.default, Effect::Deny);
+        // v2 when blocks don't populate flat rule lists.
+        assert_eq!(tree.exec_rules.len(), 0);
+    }
+
+    #[test]
+    fn compile_to_tree_v2_example_policy() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(def tmpdirs ["/tmp" "/var/folders"])
+(policy "rust"
+  (when (command (or "cargo" "rustc"))
+    (sandbox
+      (match proxy.domain
+        (or "github.com" "crates.io") :allow)
+      (match [fs.action fs.path]
+        ["read" (subpath "/home/user/project")] :allow
+        [* (subpath "/tmp")] :allow))))
+(policy "web"
+  (when (tool (or "WebSearch" "WebFetch"))
+    (sandbox
+      (match proxy.domain
+        "github.com" :allow
+        * :deny))))
+(policy "main"
+  (include "rust")
+  (include "web"))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+        assert_eq!(tree.version, 2);
+        assert_eq!(tree.default, Effect::Deny);
+        assert_eq!(tree.policy_name, "main");
+    }
+
+    #[test]
+    fn compile_to_tree_v2_evaluate_when_match() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "cargo")
+    (sandbox
+      (match proxy.domain
+        "crates.io" :allow
+        * :deny)
+      (match [fs.action fs.path]
+        ["read" (subpath "/home/user")] :allow
+        [* (subpath "/tmp")] :allow))))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+
+        // cargo command should match the when predicate → Allow (via sandbox).
+        let input = serde_json::json!({
+            "command": "cargo build"
+        });
+        let decision = tree.evaluate("Bash", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "cargo should be allowed via sandbox"
+        );
+        assert!(decision.sandbox.is_some(), "should have sandbox policy");
+    }
+
+    #[test]
+    fn compile_to_tree_v2_no_match_uses_default() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "cargo")
+    (sandbox
+      (match proxy.domain
+        "crates.io" :allow))))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+
+        // "git" doesn't match the when predicate → default deny.
+        let input = serde_json::json!({
+            "command": "git status"
+        });
+        let decision = tree.evaluate("Bash", &input, "/home/user");
+        assert_eq!(decision.effect, Effect::Deny, "git should hit default deny");
+    }
+
+    #[test]
+    fn compile_to_tree_with_internals_v2() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "cargo")
+    (sandbox
+      (match proxy.domain
+        "crates.io" :allow))))
+"#;
+        let internals: &[(&str, &str)] = &[(
+            "__test_internal__",
+            r#"(policy "__test_internal__" (allow (exec "git" *)))"#,
+        )];
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree_with_internals(source, &env, internals).unwrap();
+
+        // git should be allowed via the injected internal policy.
+        let input = serde_json::json!({ "command": "git status" });
+        let decision = tree.evaluate("Bash", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "git should be allowed via internal policy"
+        );
+    }
+
+    #[test]
+    fn compile_multi_level_to_tree_basic() {
+        let user_source = r#"
+(default deny "main")
+(policy "main"
+  (allow (exec "git" *))
+  (allow (fs read (subpath "/home/user"))))
+"#;
+        let project_source = r#"
+(default deny "main")
+(policy "main"
+  (deny (exec "git" "push" *)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_multi_level_to_tree(
+            &[
+                (PolicyLevel::User, user_source),
+                (PolicyLevel::Project, project_source),
+            ],
+            &env,
+            &[],
+        )
+        .unwrap();
+
+        // "git push" should be denied (project deny overrides user allow).
+        let input = serde_json::json!({ "command": "git push origin main" });
+        let decision = tree.evaluate("Bash", &input, "/home/user");
+        assert_eq!(decision.effect, Effect::Deny, "git push should be denied");
+
+        // "git status" should be allowed (user allows, project has no match).
+        let input = serde_json::json!({ "command": "git status" });
+        let decision = tree.evaluate("Bash", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "git status should be allowed"
         );
     }
 }

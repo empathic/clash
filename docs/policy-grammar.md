@@ -23,17 +23,24 @@ Policy files use the `.policy` extension and contain s-expressions. Comments sta
 
 ```ebnf
 document        = top_level*
-top_level       = version_decl | default_decl | policy_decl
+top_level       = version_decl | default_decl | use_decl | policy_decl | def_decl
 
 version_decl    = "(" "version" INTEGER ")"
-default_decl    = "(" "default" effect QUOTED_STRING ")"
+default_decl    = "(" "default" effect QUOTED_STRING ")"          ; deprecated in v2
+use_decl        = "(" "use" QUOTED_STRING ")"                     ; v2 only
 policy_decl     = "(" "policy" QUOTED_STRING policy_item* ")"
+def_decl        = "(" "def" ATOM "[" QUOTED_STRING* "]" ")"      ; v2 only
 
-policy_item     = include | rule
+; v1 policy items
+policy_item     = include | rule                                  ; v1
+                | include | when_block | sandbox_block | effect_kw ; v2
+
 include         = "(" "include" QUOTED_STRING ")"
-rule            = "(" effect cap_matcher keyword_args* ")"
+rule            = "(" effect cap_matcher keyword_args* ")"        ; v1 only
 keyword_args    = ":sandbox" ( QUOTED_STRING | rule+ )
 ```
+
+> **Version 2 restriction:** Flat rules (`(allow ...)`, `(deny ...)`, `(ask ...)`) are not valid as policy items in version 2. Use `(when ...)` blocks instead. See [Version 2 Syntax](#version-2-syntax) below.
 
 Policy names, include targets, and keyword argument values must be quoted strings. Bare atoms are reserved for language keywords.
 
@@ -390,9 +397,28 @@ Include is resolved at compile time by inlining the referenced policy's rules. C
 
 ---
 
-## Default Declaration
+## Use Declaration (v2)
 
-Every policy file should have a `(default effect "name")` form that specifies:
+The `(use "name")` form selects the entry policy to evaluate. It replaces the policy-naming role of `(default ...)` in v2.
+
+```
+(version 2)
+(use "main")
+
+(policy "main"
+  (when (command "git" *) :allow)
+  :deny)
+```
+
+The fallback effect is expressed as a bare effect keyword (`:deny`, `:allow`, `:ask`) at the end of the policy body. Because policy bodies use first-match semantics, a trailing `:deny` fires only when nothing above it matched.
+
+If no `(use ...)` is present, the compiler falls back to `(default ...)`, then to `"main"`.
+
+## Default Declaration (deprecated in v2)
+
+> **Deprecated in v2:** Use `(use "name")` to select the entry policy and a bare effect in the policy body for the fallback. Run `clash policy upgrade` to auto-migrate.
+
+The `(default effect "name")` form specifies:
 - The default effect when no rule matches a request
 - The name of the active policy to evaluate
 
@@ -402,6 +428,263 @@ Every policy file should have a `(default effect "name")` form that specifies:
 ```
 
 If no default declaration is present, the compiler uses `deny` with the policy named `main`.
+
+---
+
+## Version 2 Syntax
+
+Version 2 (`(version 2)`) replaces flat rules with structured blocks. Flat rules (`(allow ...)`, `(deny ...)`, `(ask ...)`) are **not valid** as policy items in version 2 — use `(when ...)` blocks instead.
+
+Use `clash policy upgrade` to automatically transform a v1 policy to v2 syntax.
+
+### Grammar
+
+```ebnf
+; v2 policy items (inside a policy body)
+policy_item_v2  = include | when_block | match_block | sandbox_block | effect_kw
+
+when_block      = "(" "when" when_guard when_body+ ")"
+when_guard      = "(" "command" pattern? args_spec ")"
+                | "(" "tool" pattern? ")"
+                | "(" observable pattern ")"
+                | "(" observable path_filter ")"        ; for fs.path
+when_body       = effect_kw                             ; inline effect
+                | sandbox_block                         ; nested sandbox
+                | when_block                            ; nested when
+
+effect_kw       = ":allow" | ":deny" | ":ask"
+
+sandbox_block   = "(" "sandbox" sandbox_item+ ")"
+sandbox_item    = rule                                  ; flat capability rule
+                | sandbox_match_block                   ; observable dispatch
+
+match_block     = "(" "match" observable match_arm+ ")"     ; policy level (allows :ask)
+sandbox_match_block = "(" "match" observable sandbox_match_arm+ ")"  ; sandbox level (no :ask)
+observable      = "command" | "tool"
+                | "proxy.method" | "proxy.domain"
+                | "fs.action" | "fs.path"
+                | "[" observable observable+ "]"         ; tuple
+match_arm       = arm_pattern effect_kw
+sandbox_match_arm = arm_pattern sandbox_effect_kw
+sandbox_effect_kw = ":allow" | ":deny"
+arm_pattern     = pattern | path_filter                 ; scalar observable
+                | exec_arm_pattern                      ; command observable
+                | "[" arm_element+ "]"                  ; tuple observable
+exec_arm_pattern = "(" pattern? args_spec ")"           ; like exec_matcher sans "exec"
+
+def_decl        = "(" "def" ATOM "[" QUOTED_STRING* "]" ")"
+```
+
+### `when` blocks
+
+A `when` block gates its body on an observable guard. The guard tests a single observable value against a pattern. All observables are supported as guards.
+
+The body contains one or more items: an effect keyword (`:allow`, `:deny`, `:ask`), a `(sandbox ...)` block, or a nested `(when ...)` block.
+
+```
+; Allow all git commands
+(when (command "git" *) :allow)
+
+; Deny git push with --force
+(when (command "git" "push" :has "--force") :deny)
+
+; Allow the Read tool
+(when (tool "Read") :allow)
+
+; Allow multiple tools
+(when (tool (or "Read" "Glob" "Grep")) :allow)
+
+; Guard on proxy domain
+(when (proxy.domain "github.com") :allow)
+
+; Guard on filesystem action
+(when (fs.action "read") :allow)
+
+; Guard on filesystem path
+(when (fs.path (subpath (env PWD))) :allow)
+
+; Allow with a sandbox
+(when (command "cargo" *)
+  :allow
+  (sandbox
+    (allow (fs read (subpath (env PWD))))
+    (allow (net))))
+```
+
+When the body is a single effect keyword, it renders on one line: `(when (command "git" *) :allow)`. Multi-item bodies are indented.
+
+### `sandbox` blocks
+
+A `sandbox` block defines kernel-level restrictions for commands matched by a parent `(when (command ...) ...)` block. Sandbox items are capability grants — they use the same `(allow (fs ...))` / `(allow (net ...))` syntax as v1 flat rules.
+
+Sandbox blocks can also contain `(match ...)` blocks for observable-based dispatch.
+
+```
+(when (command *)
+  :allow
+  (sandbox
+    (allow (fs (or read write) (subpath (env PWD))))
+    (allow (net "github.com"))
+    (match proxy.domain
+      "crates.io" :allow
+      "github.com" :allow
+      *           :deny)))
+```
+
+### `match` blocks
+
+A `match` block dispatches on a runtime observable value. It contains alternating pattern/effect pairs. Match blocks can appear both at policy level and inside sandbox blocks.
+
+At **policy level**, match arms may use `:allow`, `:deny`, or `:ask` effects. Inside **sandbox blocks**, only `:allow` and `:deny` are valid (`:ask` is rejected).
+
+#### Observables
+
+| Observable | Type | Description |
+|-----------|------|-------------|
+| `command` | exec | Command execution (binary + args) |
+| `tool` | string | Agent tool name |
+| `proxy.domain` | string | Domain of an HTTP request (sandbox proxy) |
+| `proxy.method` | string | HTTP method (GET, POST, etc.) |
+| `fs.action` | string | Filesystem operation: `"read"`, `"write"`, `"create"`, `"delete"` |
+| `fs.path` | path | Filesystem path being accessed |
+
+#### Scalar match
+
+Match a single observable against patterns:
+
+```
+(match proxy.domain
+  "github.com" :allow
+  "crates.io"  :allow
+  *            :deny)
+
+(match fs.action
+  "read"  :allow
+  "write" :deny)
+
+(match fs.path
+  (subpath (env PWD)) :allow
+  *                   :deny)
+```
+
+#### Command match
+
+Match command execution with exec-style arm patterns:
+
+```
+(match command
+  ("git" "push" :has "--force") :deny
+  ("git" *)                    :allow
+  ("cargo" *)                  :allow
+  *                            :ask)
+```
+
+Each arm pattern uses the same syntax as exec matchers (binary + positional args or `:has`).
+
+#### Tool match
+
+Match agent tools by name:
+
+```
+(match tool
+  (or "Read" "Glob" "Grep") :allow
+  "WebFetch"                 :ask
+  *                          :deny)
+```
+
+#### Tuple match
+
+Match multiple observables simultaneously using bracket syntax:
+
+```
+(match [fs.action fs.path]
+  ["read"  (subpath (env PWD))]   :allow
+  ["write" (subpath (env PWD))]   :allow
+  ["read"  *]                     :deny
+  [*       *]                     :deny)
+```
+
+Tuple patterns use `[...]` brackets and must have one element per observable in the tuple.
+
+#### Pattern types in match arms
+
+- String literals: `"github.com"`, `"read"`
+- Wildcards: `*`
+- Combinators: `(or "read" "write")`, `(not "delete")`
+- Path filters (for `fs.path`): `(subpath (env PWD))`, `(subpath "/tmp")`
+- Regex: `/.*\.example\.com/`
+- Exec patterns (for `command`): `("git" "push" *)`, `("cargo" :has "--release")`
+
+### `def` declarations
+
+A `def` declaration creates a named pattern macro that can be referenced elsewhere in the policy. Definitions are top-level forms.
+
+```
+(def builders ["cargo" "make" "cmake" "ninja"])
+
+(policy "main"
+  (when (command builders *) :allow))
+```
+
+The name is a bare atom. The value is a bracket-delimited list of quoted strings, which expands to an `(or ...)` pattern at parse time.
+
+### Effect keywords
+
+In v2 contexts (when bodies, match arms), effects use keyword syntax:
+
+| Keyword | Effect |
+|---------|--------|
+| `:allow` | Permit the action |
+| `:deny` | Block the action |
+| `:ask` | Prompt the user |
+
+### Complete v2 example
+
+```
+(version 2)
+(use "main")
+(def builders ["cargo" "make" "cmake"])
+
+(policy "main"
+  ; Allow git, deny force-push
+  (when (command "git" "push" :has "--force") :deny)
+  (when (command "git" *) :allow)
+
+  ; Allow build tools with filesystem + network sandbox
+  (when (command builders *)
+    :allow
+    (sandbox
+      (allow (fs (or read write) (subpath (env PWD))))
+      (match proxy.domain
+        "crates.io"  :allow
+        "github.com" :allow
+        *            :deny)))
+
+  ; Dispatch on tool name at policy level
+  (match tool
+    (or "Read" "Glob" "Grep")      :allow
+    (or "WebFetch" "WebSearch")    :allow
+    *                              :deny)
+
+  ; Guard on proxy domain
+  (when (proxy.domain "github.com") :allow)
+
+  :deny)                             ; fallback for unmatched requests
+```
+
+### Upgrading from v1 to v2
+
+Run `clash policy upgrade` to automatically transform v1 flat rules to v2 structured syntax. The transformation:
+
+| v1 flat rule | v2 equivalent |
+|-------------|--------------|
+| `(allow (exec "git" *))` | `(when (command "git" *) :allow)` |
+| `(deny (exec "git" "push" *))` | `(when (command "git" "push" *) :deny)` |
+| `(allow (tool "Agent"))` | `(when (tool "Agent") :allow)` |
+| `(allow (fs read (subpath X)))` | `(when (tool (or "Read" "Glob" "Grep")) :allow)` + sandbox |
+| `(allow (net "github.com"))` | `(when (tool (or "WebFetch" "WebSearch")) :allow)` + sandbox |
+
+Filesystem and network allow rules also generate sandbox entries inside a `(when (command *) (sandbox ...))` block, so that sandboxed commands inherit the appropriate kernel-level capabilities.
 
 ---
 
