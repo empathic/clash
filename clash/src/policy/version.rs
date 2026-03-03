@@ -284,11 +284,13 @@ fn lift_sandbox_items(items: &[PolicyItem]) -> Vec<PolicyItem> {
                 observable,
                 pattern,
                 body,
+                ..
             } => {
                 result.push(PolicyItem::When {
                     observable: observable.clone(),
                     pattern: pattern.clone(),
                     body: lift_sandbox_items(body),
+                    is_eq: false,
                 });
             }
             other => result.push(other.clone()),
@@ -450,6 +452,7 @@ fn transform_policy_body(body: &[PolicyItem]) -> Vec<PolicyItem> {
                 has_args: vec![],
             }),
             body: vec![PolicyItem::Sandbox { body: sandbox_body }],
+            is_eq: false,
         });
     }
 
@@ -486,6 +489,7 @@ fn transform_rule(
                 observable: Observable::Command,
                 pattern: ArmPattern::Exec(exec_matcher.clone()),
                 body: when_body,
+                is_eq: false,
             });
         }
         CapMatcher::Tool(tool_matcher) => {
@@ -493,6 +497,7 @@ fn transform_rule(
                 observable: Observable::Tool,
                 pattern: ArmPattern::Single(tool_matcher.name.clone()),
                 body: vec![PolicyItem::Effect(rule.effect)],
+                is_eq: false,
             });
         }
         CapMatcher::Fs(fs_matcher) => {
@@ -502,6 +507,7 @@ fn transform_rule(
                 observable: Observable::Tool,
                 pattern: ArmPattern::Single(tool_pattern),
                 body: vec![PolicyItem::Effect(rule.effect)],
+                is_eq: false,
             });
 
             // For allow effects, also collect the fs rule as a sandbox item
@@ -520,6 +526,7 @@ fn transform_rule(
                 observable: Observable::Tool,
                 pattern: ArmPattern::Single(tool_pattern),
                 body: vec![PolicyItem::Effect(rule.effect)],
+                is_eq: false,
             });
 
             // For allow effects, also collect the net rule as a sandbox item.

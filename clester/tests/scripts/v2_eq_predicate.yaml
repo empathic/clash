@@ -1,0 +1,48 @@
+meta:
+  name: v2 eq predicate — equality test in when guards
+  description: >
+    Test that the (eq ctx.field value) predicate form works in when guards,
+    matching tool invocations by ctx field equality.
+
+clash:
+  policy_sexpr: |
+    (version 2)
+    (default deny "main")
+    (policy "main"
+      (when (eq ctx.process.command "cargo") :allow)
+      (when (eq ctx.http.domain "github.com") :allow))
+
+steps:
+  - name: cargo allowed by eq ctx.process.command
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: cargo build
+    expect:
+      decision: allow
+
+  - name: git denied — does not match eq predicate
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: deny
+
+  - name: github.com allowed by eq ctx.http.domain
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://github.com/empathic/clash"
+      prompt: read the readme
+    expect:
+      decision: allow
+
+  - name: evil.com denied — does not match eq predicate
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://evil.com/exploit"
+      prompt: bad
+    expect:
+      decision: deny

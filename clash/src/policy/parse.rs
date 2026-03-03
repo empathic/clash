@@ -624,7 +624,7 @@ fn parse_when_block(list: &[SExpr], ctx: &ParseContext) -> Result<PolicyItem> {
         list.len() >= 3,
         "(when) expects a guard and at least one body item"
     );
-    let (observable, pattern) = parse_when_guard(&list[1], ctx)?;
+    let (observable, pattern, is_eq) = parse_when_guard(&list[1], ctx)?;
     let body = list[2..]
         .iter()
         .map(|e| parse_when_body_item(e, ctx))
@@ -633,6 +633,7 @@ fn parse_when_block(list: &[SExpr], ctx: &ParseContext) -> Result<PolicyItem> {
         observable,
         pattern,
         body,
+        is_eq,
     })
 }
 
@@ -657,20 +658,40 @@ fn parse_when_body_item(expr: &SExpr, ctx: &ParseContext) -> Result<PolicyItem> 
     parse_policy_item(expr, ctx)
 }
 
-/// Parse a when guard `(observable pattern)` → `(Observable, ArmPattern)`.
+/// Parse a when guard `(observable pattern)` → `(Observable, ArmPattern, is_eq)`.
 ///
-/// Handles invocation-type guards and ctx.* observable guards:
+/// Handles invocation-type guards, ctx.* observable guards, and `eq` predicates:
 /// - `(command ...)` → Observable::Command + ArmPattern::Exec
 /// - `(tool ...)` → Observable::Tool + ArmPattern::Single
 /// - `(ctx.http.domain ...)` → Observable::HttpDomain + ArmPattern::Single
 /// - `(ctx.fs.action ...)` → Observable::FsAction + ArmPattern::Single
 /// - `(ctx.fs.path ...)` → Observable::FsPath + ArmPattern::SinglePath
+/// - `(eq <ctx-ref> <expr>)` → resolved observable + ArmPattern::Single
 ///
 /// Deprecated flat names (`proxy.domain`, `fs.action`, etc.) are accepted with warnings.
-fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, ArmPattern)> {
+fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, ArmPattern, bool)> {
     let list = require_list(expr, "when guard")?;
     ensure!(!list.is_empty(), "empty when guard");
     let head = require_atom(&list[0], "guard keyword")?;
+
+    // Handle `(eq <ctx-ref> <expr>)` predicate form.
+    if head == "eq" {
+        ensure!(
+            list.len() == 3,
+            "(eq) expects exactly 2 arguments: (eq <ctx-ref> <expr>)"
+        );
+        let observable = parse_observable(&list[1])?;
+        ensure!(
+            !matches!(
+                observable,
+                Observable::Command | Observable::Tool | Observable::Agent
+            ),
+            "(eq) operates on ctx fields, not invocation types; \
+             use (command ...), (tool ...), or (agent ...) directly"
+        );
+        let pat = parse_pattern(&list[2], ctx)?;
+        return Ok((observable, ArmPattern::Single(pat), true));
+    }
 
     // Map deprecated names to their canonical ctx.* equivalents.
     let (canonical, deprecated) = match head {
@@ -698,19 +719,19 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
         // Invocation-type guards
         "command" => {
             let m = parse_exec_matcher(&list[1..], ctx)?;
-            Ok((Observable::Command, ArmPattern::Exec(m)))
+            Ok((Observable::Command, ArmPattern::Exec(m), false))
         }
         "tool" => {
             let m = parse_tool_matcher(&list[1..], ctx)?;
-            Ok((Observable::Tool, ArmPattern::Single(m.name)))
+            Ok((Observable::Tool, ArmPattern::Single(m.name), false))
         }
         "agent" => {
             let m = parse_tool_matcher(&list[1..], ctx)?;
-            Ok((Observable::Agent, ArmPattern::Single(m.name)))
+            Ok((Observable::Agent, ArmPattern::Single(m.name), false))
         }
         "mcp" => {
             let m = parse_tool_matcher(&list[1..], ctx)?;
-            Ok((Observable::Mcp, ArmPattern::Single(m.name)))
+            Ok((Observable::Mcp, ArmPattern::Single(m.name), false))
         }
 
         // ctx.http guards
@@ -720,7 +741,7 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
                 "(ctx.http.domain) guard expects exactly 1 pattern"
             );
             let pat = parse_pattern(&list[1], ctx)?;
-            Ok((Observable::HttpDomain, ArmPattern::Single(pat)))
+            Ok((Observable::HttpDomain, ArmPattern::Single(pat), false))
         }
         "ctx.http.method" => {
             ensure!(
@@ -728,7 +749,7 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
                 "(ctx.http.method) guard expects exactly 1 pattern"
             );
             let pat = parse_pattern(&list[1], ctx)?;
-            Ok((Observable::HttpMethod, ArmPattern::Single(pat)))
+            Ok((Observable::HttpMethod, ArmPattern::Single(pat), false))
         }
 
         // ctx.fs guards
@@ -738,7 +759,7 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
                 "(ctx.fs.action) guard expects exactly 1 pattern"
             );
             let pat = parse_pattern(&list[1], ctx)?;
-            Ok((Observable::FsAction, ArmPattern::Single(pat)))
+            Ok((Observable::FsAction, ArmPattern::Single(pat), false))
         }
         "ctx.fs.path" => {
             ensure!(
@@ -746,7 +767,7 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
                 "(ctx.fs.path) guard expects exactly 1 path filter"
             );
             let pf = parse_path_filter(&list[1], ctx)?;
-            Ok((Observable::FsPath, ArmPattern::SinglePath(pf)))
+            Ok((Observable::FsPath, ArmPattern::SinglePath(pf), false))
         }
 
         // ctx.tool.args.<field>? — nullable dynamic field when guard
@@ -755,15 +776,15 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
             ensure!(list.len() == 2, "({other}) guard expects exactly 1 pattern");
             // Try path filter first, fall back to general pattern
             if let Ok(pf) = try_parse_arm_path_filter(&list[1], ctx) {
-                Ok((observable, ArmPattern::SinglePath(pf)))
+                Ok((observable, ArmPattern::SinglePath(pf), false))
             } else {
                 let pat = parse_pattern(&list[1], ctx)?;
-                Ok((observable, ArmPattern::Single(pat)))
+                Ok((observable, ArmPattern::Single(pat), false))
             }
         }
 
         other => bail!(
-            "unknown when guard: {other} (expected 'command', 'tool', 'agent', 'mcp', \
+            "unknown when guard: {other} (expected 'eq', 'command', 'tool', 'agent', 'mcp', \
              'ctx.http.domain', 'ctx.http.method', 'ctx.fs.action', or 'ctx.fs.path')"
         ),
     }
@@ -1955,6 +1976,7 @@ mod tests {
                 observable,
                 pattern,
                 body,
+                ..
             } => {
                 assert!(matches!(observable, Observable::Command));
                 match pattern {
@@ -2035,6 +2057,7 @@ mod tests {
                 observable,
                 pattern,
                 body,
+                ..
             } => {
                 assert!(matches!(observable, Observable::Tool));
                 match pattern {
@@ -2067,11 +2090,46 @@ mod tests {
                 observable,
                 pattern,
                 body,
+                ..
             } => {
                 assert!(matches!(observable, Observable::Agent));
                 match pattern {
                     ArmPattern::Single(Pattern::Literal(s)) => assert_eq!(s, "Explore"),
                     _ => panic!("expected Single(Literal) pattern"),
+                }
+                assert_eq!(body.len(), 1);
+                assert!(matches!(&body[0], PolicyItem::Effect(Effect::Allow)));
+            }
+            other => panic!("expected When, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_when_eq_process_command() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (eq ctx.process.command "cargo") :allow))
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[1] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        match &body[0] {
+            PolicyItem::When {
+                observable,
+                pattern,
+                body,
+                is_eq,
+            } => {
+                assert!(matches!(observable, Observable::ProcessCommand));
+                assert!(*is_eq, "expected is_eq = true");
+                match pattern {
+                    ArmPattern::Single(pat) => {
+                        assert_eq!(*pat, Pattern::Literal("cargo".into()));
+                    }
+                    _ => panic!("expected Single pattern, got {pattern:?}"),
                 }
                 assert_eq!(body.len(), 1);
                 assert!(matches!(&body[0], PolicyItem::Effect(Effect::Allow)));
@@ -2097,6 +2155,7 @@ mod tests {
                 observable,
                 pattern,
                 body,
+                ..
             } => {
                 assert!(matches!(observable, Observable::Agent));
                 match pattern {
@@ -2107,6 +2166,35 @@ mod tests {
                 }
                 assert_eq!(body.len(), 1);
                 assert!(matches!(&body[0], PolicyItem::Effect(Effect::Ask)));
+            }
+            other => panic!("expected When, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_when_eq_http_domain() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (eq ctx.http.domain "github.com") :deny))
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[1] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        match &body[0] {
+            PolicyItem::When {
+                observable,
+                pattern,
+                is_eq,
+                ..
+            } => {
+                assert!(matches!(observable, Observable::HttpDomain));
+                assert!(*is_eq);
+                assert!(
+                    matches!(pattern, ArmPattern::Single(Pattern::Literal(s)) if s == "github.com")
+                );
             }
             other => panic!("expected When, got {other:?}"),
         }
@@ -2142,6 +2230,73 @@ mod tests {
             }
             other => panic!("expected Match, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_when_eq_with_or_pattern() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (eq ctx.tool.name (or "Read" "Write")) :allow))
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[1] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        match &body[0] {
+            PolicyItem::When {
+                observable,
+                pattern,
+                is_eq,
+                ..
+            } => {
+                assert!(matches!(observable, Observable::ToolName));
+                assert!(*is_eq);
+                assert!(matches!(pattern, ArmPattern::Single(Pattern::Or(ps)) if ps.len() == 2));
+            }
+            other => panic!("expected When, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_when_eq_rejects_invocation_types() {
+        let source = r#"(version 2)(policy "p" (when (eq command "cargo") :allow))"#;
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.to_string().contains("invocation types"),
+            "expected invocation type error, got: {err}"
+        );
+
+        let source = r#"(version 2)(policy "p" (when (eq tool "Read") :allow))"#;
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.to_string().contains("invocation types"),
+            "expected invocation type error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_when_eq_wrong_arity() {
+        let source = r#"(version 2)(policy "p" (when (eq ctx.process.command) :allow))"#;
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.to_string().contains("exactly 2 arguments"),
+            "expected arity error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn round_trip_when_eq() {
+        let source = r#"(version 2)(policy "p" (when (eq ctx.process.command "cargo") :allow))"#;
+        let ast1 = parse(source).unwrap();
+        let printed: String = ast1
+            .iter()
+            .map(|tl| tl.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let ast2 = parse(&printed).unwrap();
+        assert_eq!(ast1, ast2, "round-trip failed:\n{printed}");
     }
 
     #[test]
@@ -2313,6 +2468,7 @@ mod tests {
                 observable,
                 pattern,
                 body,
+                ..
             } => {
                 assert!(matches!(observable, Observable::Command));
                 match pattern {
@@ -2563,6 +2719,7 @@ mod tests {
                 observable,
                 pattern,
                 body,
+                ..
             } => {
                 assert!(matches!(observable, Observable::Command));
                 match pattern {
