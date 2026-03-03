@@ -229,12 +229,7 @@ fn compile_policy_item_to_node(
             let compiled_matcher = compile_matcher(&rule.matcher, env)?;
 
             // Handle sandbox references for flat rules.
-            let sandbox_key = resolve_sandbox_ref(
-                &rule.sandbox,
-                env,
-                sandbox_policies,
-                policies,
-            )?;
+            let sandbox_key = resolve_sandbox_ref(&rule.sandbox, env, sandbox_policies, policies)?;
 
             let compiled = CompiledRule {
                 effect: rule.effect,
@@ -254,9 +249,7 @@ fn compile_policy_item_to_node(
 
             // Build tree node: When { predicate, Leaf }
             let predicate = match &rule.matcher {
-                CapMatcher::Exec(m) => {
-                    Predicate::Command(compile_exec_to_compiled(m, env)?)
-                }
+                CapMatcher::Exec(m) => Predicate::Command(compile_exec_to_compiled(m, env)?),
                 CapMatcher::Fs(m) => Predicate::Fs(compile_fs_to_compiled(m, env)?),
                 CapMatcher::Net(m) => Predicate::Net(compile_net_to_compiled(m, env)?),
                 CapMatcher::Tool(m) => Predicate::Tool(compile_tool_to_compiled(m)?),
@@ -287,9 +280,7 @@ fn compile_policy_item_to_node(
         PolicyItem::When { predicate, body } => {
             // Compile the when predicate.
             let compiled_pred = match predicate {
-                WhenPredicate::Command(m) => {
-                    Predicate::Command(compile_exec_to_compiled(m, env)?)
-                }
+                WhenPredicate::Command(m) => Predicate::Command(compile_exec_to_compiled(m, env)?),
                 WhenPredicate::Tool(m) => Predicate::Tool(compile_tool_to_compiled(m)?),
             };
 
@@ -352,6 +343,17 @@ fn compile_policy_item_to_node(
                 policy,
             }))
         }
+        PolicyItem::Effect(effect) => {
+            let leaf_id = ids.alloc(NodeMeta {
+                description: format!(":{effect}"),
+                origin_policy: Some(origin.to_string()),
+                ..Default::default()
+            });
+            Ok(Some(Node::Leaf {
+                id: leaf_id,
+                effect: *effect,
+            }))
+        }
     }
 }
 
@@ -380,12 +382,7 @@ fn compile_sandbox_items(items: &[SandboxItem], env: &dyn EnvResolver) -> Result
                 )?;
             }
             SandboxItem::Match(block) => {
-                compile_match_to_sandbox(
-                    block,
-                    env,
-                    &mut sandbox_rules,
-                    &mut network,
-                )?;
+                compile_match_to_sandbox(block, env, &mut sandbox_rules, &mut network)?;
             }
         }
     }
@@ -498,9 +495,7 @@ fn compile_match_to_sandbox(
                                     _ => Vec::new(),
                                 };
                                 let compiled = compile_pattern(pat)?;
-                                DecisionTree::extract_domains_from_pattern(
-                                    &compiled, &mut domains,
-                                );
+                                DecisionTree::extract_domains_from_pattern(&compiled, &mut domains);
                                 if !domains.is_empty() {
                                     *network = NetworkPolicy::AllowDomains(domains);
                                 }
@@ -523,13 +518,7 @@ fn compile_match_to_sandbox(
                     Effect::Deny => RuleEffect::Deny,
                     Effect::Ask => bail!(":ask not allowed in sandbox"),
                 };
-                compile_arm_path_to_sandbox(
-                    &arm.pattern,
-                    effect,
-                    Cap::all(),
-                    env,
-                    sandbox_rules,
-                )?;
+                compile_arm_path_to_sandbox(&arm.pattern, effect, Cap::all(), env, sandbox_rules)?;
             }
         }
         ObservableRef::FsAction => {
@@ -565,7 +554,9 @@ fn compile_match_to_sandbox(
                         ArmPattern::Tuple(elems) if elems.len() == 2 => {
                             // First element: fs.action → caps.
                             let caps = match &elems[0] {
-                                ArmPatternElement::Pat(pat) => action_pattern_to_caps_from_pat(pat)?,
+                                ArmPatternElement::Pat(pat) => {
+                                    action_pattern_to_caps_from_pat(pat)?
+                                }
                                 _ => Cap::all(),
                             };
                             // Second element: fs.path → sandbox rules.
@@ -596,7 +587,9 @@ fn compile_match_to_sandbox(
                                     });
                                 }
                                 other => {
-                                    bail!("unsupported path pattern in [fs.action fs.path] arm: {other:?}")
+                                    bail!(
+                                        "unsupported path pattern in [fs.action fs.path] arm: {other:?}"
+                                    )
                                 }
                             }
                         }
@@ -819,7 +812,11 @@ fn resolve_sandbox_ref(
 fn compile_exec_to_compiled(m: &ExecMatcher, _env: &dyn EnvResolver) -> Result<CompiledExec> {
     let bin = compile_pattern(&m.bin)?;
     let args = m.args.iter().map(compile_pattern).collect::<Result<_>>()?;
-    let has_args = m.has_args.iter().map(compile_pattern).collect::<Result<_>>()?;
+    let has_args = m
+        .has_args
+        .iter()
+        .map(compile_pattern)
+        .collect::<Result<_>>()?;
     Ok(CompiledExec {
         bin,
         args,
@@ -1045,10 +1042,7 @@ fn inject_internals(
 /// 1. Checks which internal policy names the user already defined (override)
 /// 2. For non-overridden ones, parses embedded source, appends `TopLevel::Policy` items
 /// 3. Prepends `(include "__internal_X__")` to the active policy body
-fn inject_internal_includes(
-    ast: &mut Vec<TopLevel>,
-    internals: &[(&str, &str)],
-) -> Result<()> {
+fn inject_internal_includes(ast: &mut Vec<TopLevel>, internals: &[(&str, &str)]) -> Result<()> {
     // Collect user-defined policy names.
     let user_policies: std::collections::HashSet<String> = ast
         .iter()
@@ -1356,9 +1350,9 @@ fn flatten_policy(
             PolicyItem::Rule(rule) => {
                 rules.push((rule.clone(), name.to_string()));
             }
-            // v2 items (when/sandbox) are handled by compile_tree_ast, not flat compilation.
+            // v2 items are handled by compile_tree_ast, not flat compilation.
             // For v1 flatten, skip them (they won't appear in v1 policies).
-            PolicyItem::When { .. } | PolicyItem::Sandbox { .. } => {}
+            PolicyItem::When { .. } | PolicyItem::Sandbox { .. } | PolicyItem::Effect(_) => {}
         }
     }
 
@@ -2615,7 +2609,7 @@ mod tests {
 (version 2)
 (default deny "main")
 (policy "main"
-  (allow (exec "git" *))
+  (when (command "git" *) :allow)
   (when (command "cargo")
     (sandbox
       (match proxy.domain
@@ -2626,8 +2620,8 @@ mod tests {
         let tree = compile_to_tree(source, &env).unwrap();
         assert_eq!(tree.version, 2);
         assert_eq!(tree.default, Effect::Deny);
-        // Flat exec rule for the top-level (allow (exec "git" *)).
-        assert_eq!(tree.exec_rules.len(), 1);
+        // v2 when blocks don't populate flat rule lists.
+        assert_eq!(tree.exec_rules.len(), 0);
     }
 
     #[test]
@@ -2684,7 +2678,11 @@ mod tests {
             "command": "cargo build"
         });
         let decision = tree.evaluate("Bash", &input, "/home/user");
-        assert_eq!(decision.effect, Effect::Allow, "cargo should be allowed via sandbox");
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "cargo should be allowed via sandbox"
+        );
         assert!(decision.sandbox.is_some(), "should have sandbox policy");
     }
 
@@ -2770,6 +2768,10 @@ mod tests {
         // "git status" should be allowed (user allows, project has no match).
         let input = serde_json::json!({ "command": "git status" });
         let decision = tree.evaluate("Bash", &input, "/home/user");
-        assert_eq!(decision.effect, Effect::Allow, "git status should be allowed");
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "git status should be allowed"
+        );
     }
 }

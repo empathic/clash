@@ -511,7 +511,9 @@ impl ShellSession {
                                 }
                             }
                             // v2 items display via their Display impl
-                            item @ (PolicyItem::When { .. } | PolicyItem::Sandbox { .. }) => {
+                            item @ (PolicyItem::When { .. }
+                            | PolicyItem::Sandbox { .. }
+                            | PolicyItem::Effect(_)) => {
                                 output.push_str(&format!("    {item}\n"));
                             }
                         }

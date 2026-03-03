@@ -192,6 +192,13 @@ impl ReplayResult {
 
     /// Look up the origin PolicyLevel for a matched rule.
     fn find_origin_level(&self, m: &crate::policy::ir::RuleMatch) -> Option<&PolicyLevel> {
+        // v2 tree-native: direct lookup via node_id
+        if let Some(nid) = m.node_id {
+            if let Some(meta) = self.tree.node_meta.get(nid as usize) {
+                return meta.origin_level.as_ref();
+            }
+        }
+        // v1 fallback: search flat rule lists by index + description
         use crate::policy::decision_tree::CompiledRule;
         let rule_lists: &[&[CompiledRule]] = &[
             &self.tree.exec_rules,
@@ -380,5 +387,119 @@ mod tests {
     fn test_build_tool_input_read() {
         let input = build_tool_input("Read", "/tmp/file");
         assert_eq!(input["file_path"], "/tmp/file");
+    }
+
+    #[test]
+    fn test_find_origin_level_v2_node_id() {
+        use crate::policy::Effect;
+        use crate::policy::ir::{DecisionTrace, RuleMatch};
+        use crate::policy::tree::{Node, NodeMeta, PolicyTree};
+
+        // Build a minimal PolicyTree with one node_meta entry that has origin_level.
+        let tree = PolicyTree {
+            version: 2,
+            default: Effect::Deny,
+            policy_name: "main".into(),
+            root: Node::Leaf {
+                id: 0,
+                effect: Effect::Allow,
+            },
+            node_meta: vec![NodeMeta {
+                id: 0,
+                description: "(allow (exec \"cargo\" *))".into(),
+                origin_level: Some(PolicyLevel::User),
+                ..Default::default()
+            }],
+            exec_rules: vec![],
+            fs_rules: vec![],
+            net_rules: vec![],
+            tool_rules: vec![],
+            sandbox_policies: Default::default(),
+        };
+
+        let result = ReplayResult {
+            tool_name: "Bash".into(),
+            noun: "cargo build".into(),
+            decision: PolicyDecision {
+                effect: Effect::Allow,
+                reason: None,
+                trace: DecisionTrace {
+                    matched_rules: vec![RuleMatch {
+                        rule_index: 0,
+                        description: "(allow (exec \"cargo\" *))".into(),
+                        effect: Effect::Allow,
+                        has_active_constraints: false,
+                        node_id: Some(0),
+                    }],
+                    skipped_rules: vec![],
+                    final_resolution: "allow".into(),
+                },
+                sandbox: None,
+            },
+            multi_level: true,
+            tree,
+        };
+
+        // v2 path: find_origin_level should resolve via node_id -> node_meta.
+        let matched = &result.decision.trace.matched_rules[0];
+        let level = result.find_origin_level(matched);
+        assert_eq!(level, Some(&PolicyLevel::User));
+    }
+
+    #[test]
+    fn test_find_origin_level_v2_node_id_no_level() {
+        use crate::policy::Effect;
+        use crate::policy::ir::{DecisionTrace, RuleMatch};
+        use crate::policy::tree::{Node, NodeMeta, PolicyTree};
+
+        // Node meta exists but origin_level is None (single-level v2 compile).
+        let tree = PolicyTree {
+            version: 2,
+            default: Effect::Deny,
+            policy_name: "main".into(),
+            root: Node::Leaf {
+                id: 0,
+                effect: Effect::Allow,
+            },
+            node_meta: vec![NodeMeta {
+                id: 0,
+                description: "(allow (exec \"cargo\" *))".into(),
+                origin_level: None,
+                ..Default::default()
+            }],
+            exec_rules: vec![],
+            fs_rules: vec![],
+            net_rules: vec![],
+            tool_rules: vec![],
+            sandbox_policies: Default::default(),
+        };
+
+        let result = ReplayResult {
+            tool_name: "Bash".into(),
+            noun: "cargo build".into(),
+            decision: PolicyDecision {
+                effect: Effect::Allow,
+                reason: None,
+                trace: DecisionTrace {
+                    matched_rules: vec![RuleMatch {
+                        rule_index: 0,
+                        description: "(allow (exec \"cargo\" *))".into(),
+                        effect: Effect::Allow,
+                        has_active_constraints: false,
+                        node_id: Some(0),
+                    }],
+                    skipped_rules: vec![],
+                    final_resolution: "allow".into(),
+                },
+                sandbox: None,
+            },
+            multi_level: false,
+            tree,
+        };
+
+        // node_meta exists but origin_level is None → returns None.
+        let matched = &result.decision.trace.matched_rules[0];
+        let level = result.find_origin_level(matched);
+        assert_eq!(level, None);
     }
 }

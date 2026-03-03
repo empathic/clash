@@ -783,10 +783,12 @@ fn handle_upgrade(dry_run: bool, scope: Option<&str>) -> Result<()> {
     let (upgraded, changes) = crate::policy::version::upgrade_policy(&source)?;
 
     if changes.is_empty() {
+        let ast = crate::policy::parse::parse(&source)?;
+        let ver = crate::policy::version::extract_version(&ast)?;
         println!(
             "{} Policy is already at version {} (no changes needed).",
             style::green_bold("✓"),
-            crate::policy::version::CURRENT_VERSION
+            ver
         );
         return Ok(());
     }

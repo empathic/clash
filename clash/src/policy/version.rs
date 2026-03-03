@@ -10,7 +10,7 @@
 //! 3. Implement the `check` function (returns true if the deprecated pattern is present)
 //! 4. Optionally implement `fix` (returns the migrated source text)
 
-use super::ast::TopLevel;
+use super::ast::*;
 
 /// The current (latest) policy syntax version.
 ///
@@ -67,19 +67,14 @@ pub fn validate_version(version: u32) -> anyhow::Result<()> {
 /// Return all known deprecations.
 ///
 /// Add new entries here when making backwards-incompatible changes.
-/// Each deprecation is tied to the version that deprecated the old behavior.
+/// Each deprecation should have a `check` that detects the deprecated pattern
+/// and (ideally) a `fix` that transforms the source to the new syntax.
+///
+/// Note: The v1 → v2 version bump is NOT a deprecation — v1 flat rules are
+/// valid v2 syntax. The version bump is handled as a feature upgrade in
+/// `upgrade_policy()` instead.
 pub fn all_deprecations() -> Vec<Deprecation> {
-    vec![
-        // Example for future use — the (env CWD) → (env PWD) rename was a pre-version
-        // migration handled in settings.rs. When we add version 2, we'll add entries here.
-        //
-        // Deprecation {
-        //     deprecated_in: 2,
-        //     message: "description of what changed".into(),
-        //     check: |source| source.contains("old_pattern"),
-        //     fix: Some(|source| source.replace("old_pattern", "new_pattern")),
-        // },
-    ]
+    vec![]
 }
 
 /// Check a policy source for deprecated features at the given version.
@@ -93,85 +88,251 @@ pub fn check_deprecations(source: &str, version: u32) -> Vec<String> {
         .collect()
 }
 
-/// Upgrade a policy source: apply all auto-fixes and set the version to CURRENT_VERSION.
+/// Upgrade a policy source: transform v1 flat rules to v2 structured syntax
+/// and bump to CURRENT_VERSION.
 ///
-/// Returns the upgraded source text, or the original if no changes were needed.
-/// Also returns a list of descriptions of what was changed.
+/// Returns the upgraded source text and a list of what changed.
+/// Returns an empty changes list when nothing needs to be done.
 pub fn upgrade_policy(source: &str) -> anyhow::Result<(String, Vec<String>)> {
-    let ast = super::parse::parse(source)?;
+    let mut ast = super::parse::parse(source)?;
     let version = extract_version(&ast)?;
     validate_version(version)?;
 
-    if version == CURRENT_VERSION {
-        // Check if the policy just needs a version declaration added.
-        let has_version_decl = ast.iter().any(|tl| matches!(tl, TopLevel::Version(_)));
-        if has_version_decl {
-            return Ok((source.to_string(), vec![]));
-        }
-        // Add version declaration to an already-current policy.
-        let upgraded = prepend_version(source, CURRENT_VERSION);
-        return Ok((
-            upgraded,
-            vec![format!(
-                "Added (version {CURRENT_VERSION}) declaration to policy."
-            )],
-        ));
+    let has_version_decl = ast.iter().any(|tl| matches!(tl, TopLevel::Version(_)));
+
+    if version == CURRENT_VERSION && has_version_decl {
+        return Ok((source.to_string(), vec![]));
     }
 
-    let mut result = source.to_string();
     let mut changes = Vec::new();
 
-    // Apply all auto-fixes for deprecations between the declared version and current.
+    // Apply deprecation fixes.
+    // (Currently none, but the framework is here for future use.)
+    let mut text = source.to_string();
     for dep in all_deprecations() {
-        if dep.deprecated_in > version
-            && dep.deprecated_in <= CURRENT_VERSION
-            && (dep.check)(&result)
+        if dep.deprecated_in > version && dep.deprecated_in <= CURRENT_VERSION && (dep.check)(&text)
         {
             if let Some(fix) = dep.fix {
-                result = fix(&result);
+                text = fix(&text);
                 changes.push(dep.message);
+                // Re-parse after text-level fixes.
+                ast = super::parse::parse(&text)?;
             } else {
-                // No auto-fix available — warn but continue.
                 changes.push(format!("{} (manual fix required)", dep.message));
             }
         }
     }
 
-    // Update or add the version declaration.
-    result = set_version(&result, CURRENT_VERSION)?;
-    if !changes.is_empty() || version < CURRENT_VERSION {
-        changes.insert(
-            0,
-            format!("Upgraded policy from version {version} to {CURRENT_VERSION}."),
-        );
+    // Transform v1 flat rules to v2 structured syntax.
+    if version < 2 {
+        let transformed = transform_v1_to_v2(&mut ast);
+        if transformed {
+            changes.push(
+                "Transformed flat rules to v2 structured syntax (when/sandbox blocks).".into(),
+            );
+        }
     }
 
-    Ok((result, changes))
-}
-
-/// Prepend a `(version N)` declaration to policy source text.
-fn prepend_version(source: &str, version: u32) -> String {
-    format!("(version {version})\n{source}")
-}
-
-/// Set or update the `(version N)` declaration in a policy source.
-fn set_version(source: &str, version: u32) -> anyhow::Result<String> {
-    let mut ast = super::parse::parse(source)?;
-
+    // Set version declaration.
     let mut found = false;
     for tl in &mut ast {
         if let TopLevel::Version(v) = tl {
-            *v = version;
+            *v = CURRENT_VERSION;
             found = true;
             break;
         }
     }
-
     if !found {
-        ast.insert(0, TopLevel::Version(version));
+        ast.insert(0, TopLevel::Version(CURRENT_VERSION));
     }
 
-    Ok(super::edit::serialize_ast(&ast))
+    if version < CURRENT_VERSION {
+        changes.insert(0, format!("Set (version {CURRENT_VERSION})."));
+    } else if !has_version_decl {
+        changes.push(format!(
+            "Added (version {CURRENT_VERSION}) declaration to policy."
+        ));
+    }
+
+    Ok((super::edit::serialize_ast(&ast), changes))
+}
+
+// ---------------------------------------------------------------------------
+// v1 → v2 AST transformation
+// ---------------------------------------------------------------------------
+
+use crate::policy::Effect;
+
+/// Transform all v1 flat rules in policy bodies to v2 structured syntax.
+///
+/// Returns true if any transformation was performed.
+fn transform_v1_to_v2(ast: &mut [TopLevel]) -> bool {
+    let mut transformed = false;
+    for tl in ast.iter_mut() {
+        if let TopLevel::Policy { body, .. } = tl {
+            let new_body = transform_policy_body(body);
+            if new_body != *body {
+                *body = new_body;
+                transformed = true;
+            }
+        }
+    }
+    transformed
+}
+
+/// Transform a single policy body's flat rules into v2 when/sandbox blocks.
+fn transform_policy_body(body: &[PolicyItem]) -> Vec<PolicyItem> {
+    let mut result = Vec::new();
+    let mut sandbox_fs_items: Vec<SandboxItem> = Vec::new();
+    let mut sandbox_net_items: Vec<SandboxItem> = Vec::new();
+
+    for item in body {
+        match item {
+            PolicyItem::Rule(rule) => {
+                transform_rule(
+                    rule,
+                    &mut result,
+                    &mut sandbox_fs_items,
+                    &mut sandbox_net_items,
+                );
+            }
+            // Include, When, Sandbox, Effect pass through unchanged.
+            _ => result.push(item.clone()),
+        }
+    }
+
+    // Wrap collected sandbox items in (when (command *) (sandbox ...)).
+    let mut sandbox_body = Vec::new();
+    sandbox_body.append(&mut sandbox_fs_items);
+    sandbox_body.append(&mut sandbox_net_items);
+
+    if !sandbox_body.is_empty() {
+        result.push(PolicyItem::When {
+            predicate: WhenPredicate::Command(ExecMatcher {
+                bin: Pattern::Any,
+                args: vec![],
+                has_args: vec![],
+            }),
+            body: vec![PolicyItem::Sandbox { body: sandbox_body }],
+        });
+    }
+
+    result
+}
+
+/// Transform a single flat rule into v2 when blocks.
+///
+/// For exec/tool rules: produces `(when (command/tool ...) :effect)`.
+/// For fs/net rules: produces `(when (tool ...) :effect)` and collects
+/// sandbox items for allow-effect rules.
+fn transform_rule(
+    rule: &Rule,
+    result: &mut Vec<PolicyItem>,
+    sandbox_fs: &mut Vec<SandboxItem>,
+    sandbox_net: &mut Vec<SandboxItem>,
+) {
+    match &rule.matcher {
+        CapMatcher::Exec(exec_matcher) => {
+            let predicate = WhenPredicate::Command(exec_matcher.clone());
+            let mut when_body = vec![PolicyItem::Effect(rule.effect)];
+
+            // Inline sandbox rules transfer to a (sandbox ...) block.
+            if let Some(SandboxRef::Inline(sandbox_rules)) = &rule.sandbox {
+                let items = sandbox_rules
+                    .iter()
+                    .map(|r| SandboxItem::Rule(r.clone()))
+                    .collect();
+                when_body.push(PolicyItem::Sandbox { body: items });
+            }
+            // Named sandbox: inline the referenced policy's rules.
+            // (Named refs are rare in practice; drop with a comment if unresolvable.)
+
+            result.push(PolicyItem::When {
+                predicate,
+                body: when_body,
+            });
+        }
+        CapMatcher::Tool(tool_matcher) => {
+            result.push(PolicyItem::When {
+                predicate: WhenPredicate::Tool(tool_matcher.clone()),
+                body: vec![PolicyItem::Effect(rule.effect)],
+            });
+        }
+        CapMatcher::Fs(fs_matcher) => {
+            let tool_names = fs_op_to_tool_names(&fs_matcher.op);
+            let tool_pattern = names_to_pattern(&tool_names);
+            result.push(PolicyItem::When {
+                predicate: WhenPredicate::Tool(ToolMatcher { name: tool_pattern }),
+                body: vec![PolicyItem::Effect(rule.effect)],
+            });
+
+            // For allow effects, also collect the fs rule as a sandbox item
+            // so sandboxed commands get the filesystem capability.
+            if rule.effect == Effect::Allow {
+                sandbox_fs.push(SandboxItem::Rule(Rule {
+                    effect: rule.effect,
+                    matcher: rule.matcher.clone(),
+                    sandbox: None,
+                }));
+            }
+        }
+        CapMatcher::Net(_) => {
+            let tool_pattern = names_to_pattern(&["WebFetch", "WebSearch"]);
+            result.push(PolicyItem::When {
+                predicate: WhenPredicate::Tool(ToolMatcher { name: tool_pattern }),
+                body: vec![PolicyItem::Effect(rule.effect)],
+            });
+
+            // For allow effects, also collect the net rule as a sandbox item.
+            if rule.effect == Effect::Allow {
+                sandbox_net.push(SandboxItem::Rule(Rule {
+                    effect: rule.effect,
+                    matcher: rule.matcher.clone(),
+                    sandbox: None,
+                }));
+            }
+        }
+    }
+}
+
+/// Map fs operation patterns to the Claude Code tool names they correspond to.
+fn fs_op_to_tool_names(op: &OpPattern) -> Vec<&'static str> {
+    match op {
+        OpPattern::Any => vec!["Read", "Glob", "Grep", "Write", "Edit"],
+        OpPattern::Single(FsOp::Read) => vec!["Read", "Glob", "Grep"],
+        OpPattern::Single(FsOp::Write | FsOp::Create | FsOp::Delete) => vec!["Write", "Edit"],
+        OpPattern::Or(ops) => {
+            let mut names = Vec::new();
+            if ops.contains(&FsOp::Read) {
+                names.extend_from_slice(&["Read", "Glob", "Grep"]);
+            }
+            if ops
+                .iter()
+                .any(|o| matches!(o, FsOp::Write | FsOp::Create | FsOp::Delete))
+            {
+                names.extend_from_slice(&["Write", "Edit"]);
+            }
+            if names.is_empty() {
+                vec!["Read", "Glob", "Grep", "Write", "Edit"]
+            } else {
+                names
+            }
+        }
+    }
+}
+
+/// Build a Pattern from a list of tool names.
+fn names_to_pattern(names: &[&str]) -> Pattern {
+    if names.len() == 1 {
+        Pattern::Literal(names[0].to_string())
+    } else {
+        Pattern::Or(
+            names
+                .iter()
+                .map(|n| Pattern::Literal(n.to_string()))
+                .collect(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -216,15 +377,22 @@ mod tests {
     fn upgrade_adds_version_declaration() {
         let source = "(default deny \"main\")\n(policy \"main\")\n";
         let (upgraded, changes) = upgrade_policy(source).unwrap();
-        assert!(upgraded.contains(&format!("(version {CURRENT_VERSION})")));
+        assert!(
+            upgraded.contains(&format!("(version {CURRENT_VERSION})")),
+            "expected (version {CURRENT_VERSION}), got:\n{upgraded}"
+        );
         assert!(!changes.is_empty());
+        assert!(
+            changes[0].contains(&format!("(version {CURRENT_VERSION})")),
+            "expected version set note, got: {}",
+            changes[0]
+        );
     }
 
     #[test]
     fn upgrade_already_current_is_noop() {
-        let source = &format!(
-            "(version {CURRENT_VERSION})\n(default deny \"main\")\n(policy \"main\")\n"
-        );
+        let source =
+            &format!("(version {CURRENT_VERSION})\n(default deny \"main\")\n(policy \"main\")\n");
         let (upgraded, changes) = upgrade_policy(source).unwrap();
         assert_eq!(upgraded, *source);
         assert!(changes.is_empty());

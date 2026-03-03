@@ -587,11 +587,7 @@ impl ClashSettings {
                 .iter()
                 .map(|(l, s)| (*l, s.as_str()))
                 .collect();
-            crate::policy::compile_multi_level_to_tree(
-                &level_refs,
-                &resolver,
-                INTERNAL_POLICIES,
-            )
+            crate::policy::compile_multi_level_to_tree(&level_refs, &resolver, INTERNAL_POLICIES)
         };
 
         match result {

@@ -1097,11 +1097,19 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
     ];
 
     let scroll = Cell::new(0);
-    render_scrollable_overlay(f, area, " Keyboard Shortcuts ", tui_style::DOMAIN, 50, lines, OverlayScroll {
-        cell: &scroll,
-        show_indicators: false,
-        max_scroll_out: None,
-    });
+    render_scrollable_overlay(
+        f,
+        area,
+        " Keyboard Shortcuts ",
+        tui_style::DOMAIN,
+        50,
+        lines,
+        OverlayScroll {
+            cell: &scroll,
+            show_indicators: false,
+            max_scroll_out: None,
+        },
+    );
 }
 
 fn help_line<'a>(key_style: Style, key: &'a str, desc: &'a str) -> Line<'a> {
@@ -1187,7 +1195,12 @@ fn render_save_diff_overlay(f: &mut Frame, diff: &SaveDiff, area: Rect) {
 
     // Reserve bottom row for the fixed hint line.
     let hint_row = Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
-    let content_area = Rect::new(inner.x, inner.y, inner.width, inner.height.saturating_sub(1));
+    let content_area = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(1),
+    );
 
     let total = lines.len();
     let visible = content_area.height as usize;
@@ -1238,10 +1251,7 @@ pub(crate) fn build_save_diff_lines(hunks: &[DiffHunk]) -> Vec<Line<'static>> {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                hunk.path.display().to_string(),
-                tui_style::DIM,
-            ),
+            Span::styled(hunk.path.display().to_string(), tui_style::DIM),
         ]));
         for dl in &hunk.lines {
             let (prefix, text, style) = match dl {
@@ -2160,10 +2170,7 @@ mod tests {
             "should have file path: {text}"
         );
         assert!(text.contains("git"), "should contain added line: {text}");
-        assert!(
-            text.contains("rm"),
-            "should contain removed line: {text}"
-        );
+        assert!(text.contains("rm"), "should contain removed line: {text}");
     }
 
     // -----------------------------------------------------------------------
@@ -2546,10 +2553,6 @@ mod tests {
         } else {
             panic!("expected ConfirmSave");
         };
-        assert_eq!(
-            after_k,
-            max_scroll - 1,
-            "k should scroll up from max"
-        );
+        assert_eq!(after_k, max_scroll - 1, "k should scroll up from max");
     }
 }

@@ -73,10 +73,7 @@ pub enum Node {
         arms: Vec<MatchArm>,
     },
     /// Return Allow + attached pre-compiled sandbox policy.
-    Sandbox {
-        id: NodeId,
-        policy: SandboxPolicy,
-    },
+    Sandbox { id: NodeId, policy: SandboxPolicy },
     /// Return the effect unconditionally.
     Leaf { id: NodeId, effect: Effect },
 }
@@ -137,6 +134,20 @@ pub struct NodeMeta {
     pub rule_index: Option<usize>,
     /// Sandbox policy name referenced by this node's rule.
     pub sandbox_name: Option<String>,
+}
+
+impl Node {
+    /// Return the node's stable identifier.
+    pub fn id(&self) -> NodeId {
+        match self {
+            Node::Sequence { id, .. }
+            | Node::DenyOverrides { id, .. }
+            | Node::When { id, .. }
+            | Node::Match { id, .. }
+            | Node::Sandbox { id, .. }
+            | Node::Leaf { id, .. } => *id,
+        }
+    }
 }
 
 /// How a sandbox was resolved during evaluation.
@@ -627,9 +638,7 @@ impl PolicyTree {
             Node::DenyOverrides { children, .. } => {
                 let mut effects = Vec::new();
                 for child in children {
-                    if let Some(eff) =
-                        self.eval_node(child, ctx, matched, skipped, sandbox_out)
-                    {
+                    if let Some(eff) = self.eval_node(child, ctx, matched, skipped, sandbox_out) {
                         effects.push(eff);
                     }
                 }
@@ -651,9 +660,7 @@ impl PolicyTree {
 
             Node::Sequence { children, .. } => {
                 for child in children {
-                    if let Some(eff) =
-                        self.eval_node(child, ctx, matched, skipped, sandbox_out)
-                    {
+                    if let Some(eff) = self.eval_node(child, ctx, matched, skipped, sandbox_out) {
                         return Some(eff);
                     }
                 }
@@ -713,8 +720,7 @@ impl PolicyTree {
                         // if the body didn't already record one (e.g. Leaf nodes
                         // don't record matches, but Sandbox nodes do).
                         let pre_len = matched.len();
-                        let result =
-                            self.eval_node(body, ctx, matched, skipped, sandbox_out);
+                        let result = self.eval_node(body, ctx, matched, skipped, sandbox_out);
                         if let Some(effect) = result {
                             if matched.len() == pre_len {
                                 matched.push(RuleMatch {
@@ -763,10 +769,7 @@ impl PolicyTree {
 
                 for arm in arms {
                     if match_pattern(&arm.pattern, &values) {
-                        trace!(
-                            node_id = id,
-                            "match arm matched"
-                        );
+                        trace!(node_id = id, "match arm matched");
                         return self.eval_node(&arm.body, ctx, matched, skipped, sandbox_out);
                     }
                 }
@@ -930,7 +933,6 @@ impl PolicyTree {
 
         out
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -1185,7 +1187,12 @@ mod tests {
   (deny  (net /.*\.evil\.com/)))
 "#;
         let cwd = "/home/user/project";
-        assert_same_decision(source, "Bash", json!({"command": "git push origin main"}), cwd);
+        assert_same_decision(
+            source,
+            "Bash",
+            json!({"command": "git push origin main"}),
+            cwd,
+        );
         assert_same_decision(source, "Bash", json!({"command": "git status"}), cwd);
         assert_same_decision(source, "Bash", json!({"command": "git commit -m fix"}), cwd);
         assert_same_decision(
@@ -1255,8 +1262,11 @@ mod tests {
 "#;
         // "deny git status" is more specific -> sorted first -> deny wins
         let tree = compile_tree(source);
-        let decision =
-            tree.evaluate("Bash", &json!({"command": "git status"}), "/home/user/project");
+        let decision = tree.evaluate(
+            "Bash",
+            &json!({"command": "git status"}),
+            "/home/user/project",
+        );
         assert_eq!(decision.effect, Effect::Deny);
     }
 

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use anyhow::{Result, bail, ensure};
 
 use crate::policy::Effect;
-use crate::policy::sexpr::{self, SExpr, BRACKET_MARKER};
+use crate::policy::sexpr::{self, BRACKET_MARKER, SExpr};
 
 use super::ast::*;
 
@@ -74,10 +74,7 @@ fn parse_top_level(expr: &SExpr, ctx: &ParseContext) -> Result<TopLevel> {
 }
 
 fn require_v2(ctx: &ParseContext, form: &str) -> Result<()> {
-    ensure!(
-        ctx.version >= 2,
-        "({form}) requires (version 2) or higher"
-    );
+    ensure!(ctx.version >= 2, "({form}) requires (version 2) or higher");
     Ok(())
 }
 
@@ -108,7 +105,10 @@ fn parse_default(list: &[SExpr]) -> Result<TopLevel> {
 }
 
 fn parse_def(list: &[SExpr]) -> Result<TopLevel> {
-    ensure!(list.len() == 3, "(def) expects exactly 2 arguments: name and [values...]");
+    ensure!(
+        list.len() == 3,
+        "(def) expects exactly 2 arguments: name and [values...]"
+    );
     let name = require_atom(&list[1], "def name")?.to_string();
     // Values must be in a bracket list: [val1 val2 ...]
     let values_list = require_bracket_list(&list[2], "def values")?;
@@ -158,6 +158,12 @@ fn parse_policy_item(expr: &SExpr, ctx: &ParseContext) -> Result<PolicyItem> {
             parse_sandbox_block(list, ctx)
         }
         "allow" | "deny" | "ask" => {
+            if ctx.version >= 2 {
+                bail!(
+                    "({head} ...) flat rules are not supported in version 2. \
+                     Use (when ...) blocks instead."
+                );
+            }
             let effect = parse_effect_str(head)?;
             ensure!(
                 list.len() >= 2,
@@ -479,10 +485,7 @@ fn parse_path_expr(expr: &SExpr, ctx: &ParseContext) -> Result<PathExpr> {
                     Ok(PathExpr::Env(name.to_string()))
                 }
                 "join" | "joinpath" => {
-                    ensure!(
-                        children.len() >= 3,
-                        "({head}) expects at least 2 arguments"
-                    );
+                    ensure!(children.len() >= 3, "({head}) expects at least 2 arguments");
                     let parts = children[1..]
                         .iter()
                         .map(|e| parse_path_expr(e, ctx))
@@ -496,12 +499,13 @@ fn parse_path_expr(expr: &SExpr, ctx: &ParseContext) -> Result<PathExpr> {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // v2 parse functions: when / sandbox / match
 // ---------------------------------------------------------------------------
 
 /// Parse `(when (predicate) body...)` → `PolicyItem::When`.
+///
+/// Body items can be regular policy items or effect keywords (`:allow`/`:deny`/`:ask`).
 fn parse_when_block(list: &[SExpr], ctx: &ParseContext) -> Result<PolicyItem> {
     ensure!(
         list.len() >= 3,
@@ -510,9 +514,25 @@ fn parse_when_block(list: &[SExpr], ctx: &ParseContext) -> Result<PolicyItem> {
     let predicate = parse_when_predicate(&list[1], ctx)?;
     let body = list[2..]
         .iter()
-        .map(|e| parse_policy_item(e, ctx))
+        .map(|e| parse_when_body_item(e, ctx))
         .collect::<Result<_>>()?;
     Ok(PolicyItem::When { predicate, body })
+}
+
+/// Parse a single body item inside a `(when ...)` block.
+///
+/// Accepts `:allow`/`:deny`/`:ask` atoms as inline effects, or delegates to
+/// `parse_policy_item` for structured items like `(sandbox ...)`.
+fn parse_when_body_item(expr: &SExpr, ctx: &ParseContext) -> Result<PolicyItem> {
+    if let SExpr::Atom(s, _) = expr {
+        match s.as_str() {
+            ":allow" => return Ok(PolicyItem::Effect(Effect::Allow)),
+            ":deny" => return Ok(PolicyItem::Effect(Effect::Deny)),
+            ":ask" => return Ok(PolicyItem::Effect(Effect::Ask)),
+            _ => {}
+        }
+    }
+    parse_policy_item(expr, ctx)
 }
 
 /// Parse `(command ...)` or `(tool ...)` → `WhenPredicate`.
@@ -737,7 +757,9 @@ fn parse_effect_keyword(expr: &SExpr) -> Result<Effect> {
     match s {
         ":allow" => Ok(Effect::Allow),
         ":deny" => Ok(Effect::Deny),
-        ":ask" => bail!(":ask is not allowed in sandbox match arms (sandbox can only :allow or :deny)"),
+        ":ask" => {
+            bail!(":ask is not allowed in sandbox match arms (sandbox can only :allow or :deny)")
+        }
         other => bail!("expected :allow or :deny, got: {other}"),
     }
 }
@@ -1520,8 +1542,7 @@ mod tests {
         let source = r#"
             (version 2)
             (policy "p"
-              (when (command "cargo" *)
-                (allow (fs read (subpath (env PWD))))))
+              (when (command "cargo" *) :allow))
         "#;
         let ast = parse(source).unwrap();
         let body = match &ast[1] {
@@ -1538,10 +1559,47 @@ mod tests {
                     _ => panic!("expected Command predicate"),
                 }
                 assert_eq!(body.len(), 1);
-                assert!(matches!(&body[0], PolicyItem::Rule(_)));
+                assert!(matches!(&body[0], PolicyItem::Effect(Effect::Allow)));
             }
             other => panic!("expected When, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_when_effect_shorthand_all_effects() {
+        for (kw, effect) in [
+            (":allow", Effect::Allow),
+            (":deny", Effect::Deny),
+            (":ask", Effect::Ask),
+        ] {
+            let source = format!(r#"(version 2)(policy "p" (when (command "git" *) {kw}))"#);
+            let ast = parse(&source).unwrap();
+            let body = match &ast[1] {
+                TopLevel::Policy { body, .. } => body,
+                _ => panic!(),
+            };
+            match &body[0] {
+                PolicyItem::When { body, .. } => {
+                    assert_eq!(body.len(), 1);
+                    assert!(
+                        matches!(&body[0], PolicyItem::Effect(e) if *e == effect),
+                        "expected Effect({effect:?}) for {kw}"
+                    );
+                }
+                other => panic!("expected When, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_v2_rejects_flat_rules() {
+        let source = r#"(version 2)(policy "p" (allow (exec "git" *)))"#;
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("flat rules are not supported in version 2"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1559,8 +1617,7 @@ mod tests {
         let source = r#"
             (version 2)
             (policy "p"
-              (when (tool (or "WebSearch" "WebFetch"))
-                (allow (net "github.com"))))
+              (when (tool (or "WebSearch" "WebFetch")) :allow))
         "#;
         let ast = parse(source).unwrap();
         let body = match &ast[1] {
@@ -1568,13 +1625,15 @@ mod tests {
             _ => panic!(),
         };
         match &body[0] {
-            PolicyItem::When { predicate, .. } => {
+            PolicyItem::When { predicate, body } => {
                 match predicate {
                     WhenPredicate::Tool(m) => {
                         assert!(matches!(&m.name, Pattern::Or(ps) if ps.len() == 2));
                     }
                     _ => panic!("expected Tool predicate"),
                 }
+                assert_eq!(body.len(), 1);
+                assert!(matches!(&body[0], PolicyItem::Effect(Effect::Allow)));
             }
             other => panic!("expected When, got {other:?}"),
         }
@@ -1610,7 +1669,9 @@ mod tests {
                 assert_eq!(block.observable, ObservableRef::ProxyDomain);
                 assert_eq!(block.arms.len(), 2);
                 assert_eq!(block.arms[0].effect, Effect::Allow);
-                assert!(matches!(&block.arms[0].pattern, ArmPattern::Single(Pattern::Literal(s)) if s == "github.com"));
+                assert!(
+                    matches!(&block.arms[0].pattern, ArmPattern::Single(Pattern::Literal(s)) if s == "github.com")
+                );
             }
             other => panic!("expected Match, got {other:?}"),
         }
@@ -1648,8 +1709,12 @@ mod tests {
                 match &block.arms[0].pattern {
                     ArmPattern::Tuple(elems) => {
                         assert_eq!(elems.len(), 2);
-                        assert!(matches!(&elems[0], ArmPatternElement::Pat(Pattern::Literal(s)) if s == "read"));
-                        assert!(matches!(&elems[1], ArmPatternElement::Path(PathFilter::Subpath(PathExpr::Env(name), false)) if name == "PWD"));
+                        assert!(
+                            matches!(&elems[0], ArmPatternElement::Pat(Pattern::Literal(s)) if s == "read")
+                        );
+                        assert!(
+                            matches!(&elems[1], ArmPatternElement::Path(PathFilter::Subpath(PathExpr::Env(name), false)) if name == "PWD")
+                        );
                     }
                     other => panic!("expected Tuple, got {other:?}"),
                 }
@@ -1686,7 +1751,9 @@ mod tests {
                 match &block.arms[0].pattern {
                     ArmPattern::Tuple(elems) => {
                         // $PWD should parse as PathExpr::Env("PWD")
-                        assert!(matches!(&elems[1], ArmPatternElement::Path(PathFilter::Subpath(PathExpr::Env(name), false)) if name == "PWD"));
+                        assert!(
+                            matches!(&elems[1], ArmPatternElement::Path(PathFilter::Subpath(PathExpr::Env(name), false)) if name == "PWD")
+                        );
                     }
                     other => panic!("expected Tuple, got {other:?}"),
                 }
@@ -1698,12 +1765,11 @@ mod tests {
     #[test]
     fn parse_joinpath_alias() {
         let source = r#"
-            (version 2)
             (policy "p"
               (allow (fs read (subpath (joinpath (env PWD) "targets")))))
         "#;
         let ast = parse(source).unwrap();
-        let body = match &ast[1] {
+        let body = match &ast[0] {
             TopLevel::Policy { body, .. } => body,
             _ => panic!(),
         };
@@ -1730,30 +1796,33 @@ mod tests {
             (version 2)
             (def builders ["cargo" "rustc"])
             (policy "p"
-              (allow (exec builders *)))
+              (when (command builders *) :allow))
         "#;
         let ast = parse(source).unwrap();
         let body = match &ast[2] {
             TopLevel::Policy { body, .. } => body,
             _ => panic!(),
         };
-        let rule = match &body[0] {
-            PolicyItem::Rule(r) => r,
-            _ => panic!(),
-        };
-        match &rule.matcher {
-            CapMatcher::Exec(m) => {
-                // def "builders" should expand to Or(["cargo", "rustc"])
-                match &m.bin {
-                    Pattern::Or(ps) => {
-                        assert_eq!(ps.len(), 2);
-                        assert_eq!(ps[0], Pattern::Literal("cargo".into()));
-                        assert_eq!(ps[1], Pattern::Literal("rustc".into()));
+        match &body[0] {
+            PolicyItem::When { predicate, body } => {
+                match predicate {
+                    WhenPredicate::Command(m) => {
+                        // def "builders" should expand to Or(["cargo", "rustc"])
+                        match &m.bin {
+                            Pattern::Or(ps) => {
+                                assert_eq!(ps.len(), 2);
+                                assert_eq!(ps[0], Pattern::Literal("cargo".into()));
+                                assert_eq!(ps[1], Pattern::Literal("rustc".into()));
+                            }
+                            other => panic!("expected Or pattern from def, got {other:?}"),
+                        }
                     }
-                    other => panic!("expected Or pattern from def, got {other:?}"),
+                    _ => panic!("expected Command predicate"),
                 }
+                assert_eq!(body.len(), 1);
+                assert!(matches!(&body[0], PolicyItem::Effect(Effect::Allow)));
             }
-            _ => panic!("expected Exec"),
+            other => panic!("expected When, got {other:?}"),
         }
     }
 
@@ -1787,7 +1856,10 @@ mod tests {
                     ArmPattern::Tuple(elems) => {
                         // tmpdirs in subpath position should expand
                         match &elems[1] {
-                            ArmPatternElement::Path(PathFilter::Subpath(PathExpr::Static(s), false)) => {
+                            ArmPatternElement::Path(PathFilter::Subpath(
+                                PathExpr::Static(s),
+                                false,
+                            )) => {
                                 // The def name is passed through as static since
                                 // expansion happens at try_parse_arm_path_filter level
                                 // Actually, `(subpath tmpdirs)` parses the inner as
@@ -1851,7 +1923,10 @@ mod tests {
         match &sandbox_body[0] {
             SandboxItem::Match(block) => {
                 assert_eq!(block.arms.len(), 2);
-                assert!(matches!(&block.arms[1].pattern, ArmPattern::Single(Pattern::Any)));
+                assert!(matches!(
+                    &block.arms[1].pattern,
+                    ArmPattern::Single(Pattern::Any)
+                ));
                 assert_eq!(block.arms[1].effect, Effect::Deny);
             }
             _ => panic!(),

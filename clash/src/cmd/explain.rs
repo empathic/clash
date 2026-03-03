@@ -96,6 +96,13 @@ pub fn run(json_output: bool, tool: Option<String>, input_arg: Option<String>) -
     // rule lists. The rule_index is relative to its domain list, so we check
     // each list at that index for a matching description.
     let find_origin_level = |m: &crate::policy::ir::RuleMatch| -> Option<&PolicyLevel> {
+        // v2 tree-native: direct lookup via node_id
+        if let Some(nid) = m.node_id {
+            if let Some(meta) = tree.node_meta.get(nid as usize) {
+                return meta.origin_level.as_ref();
+            }
+        }
+        // v1 fallback: search flat rule lists by index + description
         let rule_lists: &[&[crate::policy::decision_tree::CompiledRule]] = &[
             &tree.exec_rules,
             &tree.fs_rules,
@@ -237,4 +244,79 @@ pub fn run(json_output: bool, tool: Option<String>, input_arg: Option<String>) -
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify that v2 tree-native evaluation produces RuleMatch entries with
+    /// node_id set, and that looking up origin_level via node_meta works.
+    #[test]
+    fn test_find_origin_level_v2_tree_native() {
+        use crate::policy::compile::{EnvResolver, compile_to_tree};
+        use std::collections::HashMap;
+
+        struct TestEnv(HashMap<String, String>);
+        impl EnvResolver for TestEnv {
+            fn resolve(&self, name: &str) -> anyhow::Result<String> {
+                self.0
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("not set: {name}"))
+            }
+        }
+
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "cargo" *) :allow))
+"#;
+        let env = TestEnv(
+            [("PWD".to_string(), "/home/user".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let tree = compile_to_tree(source, &env).unwrap();
+
+        // Evaluate: "cargo build" should match the when+allow rule.
+        let input = serde_json::json!({ "command": "cargo build" });
+        let decision = tree.evaluate("Bash", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            crate::policy::Effect::Allow,
+            "cargo build should be allowed"
+        );
+
+        // The matched rule should have node_id set (v2 tree-native).
+        let matched = &decision.trace.matched_rules;
+        assert!(!matched.is_empty(), "should have at least one matched rule");
+        let first = &matched[0];
+        assert!(
+            first.node_id.is_some(),
+            "v2 tree-native match should have node_id set"
+        );
+
+        // Verify that the node_meta at that node_id is accessible.
+        let nid = first.node_id.unwrap();
+        let meta = tree.node_meta.get(nid as usize);
+        assert!(meta.is_some(), "node_meta should exist for node_id");
+
+        // Replicate the find_origin_level closure logic: for single-level
+        // compile origin_level is None, but the lookup path itself works.
+        let find_origin_level = |m: &crate::policy::ir::RuleMatch| -> Option<&PolicyLevel> {
+            if let Some(nid) = m.node_id {
+                if let Some(meta) = tree.node_meta.get(nid as usize) {
+                    return meta.origin_level.as_ref();
+                }
+            }
+            None
+        };
+
+        // Single-level compile → origin_level is None, but the path executes
+        // without error (no silent failure as with the old flat-list approach).
+        let level = find_origin_level(first);
+        assert_eq!(level, None, "single-level v2 has no origin_level");
+    }
 }

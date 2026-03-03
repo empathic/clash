@@ -34,6 +34,8 @@ pub enum PolicyItem {
     },
     /// `(sandbox items...)` — v2 sandbox block (only inside `when`).
     Sandbox { body: Vec<SandboxItem> },
+    /// `:allow`, `:deny`, `:ask` — v2 inline effect (only inside `when`).
+    Effect(Effect),
 }
 
 /// How a sandbox is specified on an exec rule.
@@ -293,8 +295,13 @@ impl fmt::Display for PolicyItem {
             PolicyItem::Rule(rule) => write!(f, "{rule}"),
             PolicyItem::When { predicate, body } => {
                 write!(f, "(when {predicate}")?;
-                for item in body {
-                    write!(f, "\n    {item}")?;
+                // Single inline effect: render on one line
+                if body.len() == 1 && matches!(&body[0], PolicyItem::Effect(_)) {
+                    write!(f, " {}", body[0])?;
+                } else {
+                    for item in body {
+                        write!(f, "\n    {item}")?;
+                    }
                 }
                 write!(f, ")")
             }
@@ -305,6 +312,7 @@ impl fmt::Display for PolicyItem {
                 }
                 write!(f, ")")
             }
+            PolicyItem::Effect(effect) => write!(f, ":{effect}"),
         }
     }
 }

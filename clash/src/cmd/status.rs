@@ -51,10 +51,13 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     );
     if tree.version < crate::policy::version::CURRENT_VERSION {
         println!(
-            "  {} Policy uses version {}, latest is {}. Run {} to upgrade.",
+            "  {} Policy uses version {}. Version {} is available with when/match/sandbox/def support.",
             style::yellow_bold("!"),
             tree.version,
             crate::policy::version::CURRENT_VERSION,
+        );
+        println!(
+            "  Run {} to upgrade (your existing rules are fully compatible).",
             style::bold("clash policy upgrade")
         );
     }
@@ -108,6 +111,7 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     );
     println!("{}", style::dim("─────────────────────────────────"));
 
+    // Shadow detection runs unconditionally (cheap on empty flat lists for v2)
     let shadows = crate::policy::detect_all_shadows_from_rules(
         &tree.exec_rules,
         &tree.fs_rules,
@@ -115,95 +119,101 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
         &tree.tool_rules,
     );
 
-    let print_rules =
-        |label: &str,
-         rules: &[CompiledRule],
-         shadow_map: &std::collections::HashMap<usize, crate::policy::ShadowInfo>| {
-            if rules.is_empty() {
-                return;
-            }
-
-            // Count builtin vs non-builtin rules
-            let builtin_count = rules
-                .iter()
-                .filter(|r| {
-                    r.origin_policy
-                        .as_ref()
-                        .is_some_and(|p| p.starts_with("__internal_"))
-                })
-                .count();
-            let non_builtin_count = rules.len() - builtin_count;
-
-            // When not verbose and there are only builtin rules, show just the summary
-            if !verbose && non_builtin_count == 0 && builtin_count > 0 {
-                println!("  {}:", style::bold(label));
-                println!(
-                    "    {}",
-                    style::dim(&format!(
-                        "{} builtin rules (clash status --verbose to show)",
-                        builtin_count
-                    ))
-                );
-                return;
-            }
-
-            println!("  {}:", style::bold(label));
-
-            // When not verbose, show builtin summary first, then non-builtin rules
-            if !verbose && builtin_count > 0 {
-                println!(
-                    "    {}",
-                    style::dim(&format!(
-                        "{} builtin rules (clash status --verbose to show)",
-                        builtin_count
-                    ))
-                );
-            }
-
-            for (i, rule) in rules.iter().enumerate() {
-                let builtin = rule
-                    .origin_policy
-                    .as_ref()
-                    .is_some_and(|p| p.starts_with("__internal_"));
-
-                // Skip builtin rules in non-verbose mode
-                if !verbose && builtin {
-                    continue;
+    if tree.version >= 2 {
+        // v2: show tree structure (shadow detection deferred for tree-native rules)
+        println!("{}", crate::policy::print::print_tree_structure(tree));
+    } else {
+        // v1: flat rule display with shadow annotations
+        let print_rules =
+            |label: &str,
+             rules: &[CompiledRule],
+             shadow_map: &std::collections::HashMap<usize, crate::policy::ShadowInfo>| {
+                if rules.is_empty() {
+                    return;
                 }
 
-                // Source tag: [builtin], [user], [project], [session]
-                let tag = if builtin {
-                    style::dim("[builtin]")
-                } else if let Some(ref level) = rule.origin_level {
-                    style::cyan(&format!("[{}]", level))
-                } else {
-                    String::new()
-                };
+                // Count builtin vs non-builtin rules
+                let builtin_count = rules
+                    .iter()
+                    .filter(|r| {
+                        r.origin_policy
+                            .as_ref()
+                            .is_some_and(|p| p.starts_with("__internal_"))
+                    })
+                    .count();
+                let non_builtin_count = rules.len() - builtin_count;
 
-                // Shadow indicator
-                let shadow_note = if let Some(info) = shadow_map.get(&i) {
-                    style::yellow(&format!("  <- shadowed by {}", info.shadowed_by_level))
-                } else {
-                    String::new()
-                };
+                // When not verbose and there are only builtin rules, show just the summary
+                if !verbose && non_builtin_count == 0 && builtin_count > 0 {
+                    println!("  {}:", style::bold(label));
+                    println!(
+                        "    {}",
+                        style::dim(&format!(
+                            "{} builtin rules (clash status --verbose to show)",
+                            builtin_count
+                        ))
+                    );
+                    return;
+                }
 
-                let effect_str = style::effect(&format!("{:<5}", rule.effect));
+                println!("  {}:", style::bold(label));
 
-                println!(
-                    "    [{}] {:<45} {}{}",
-                    effect_str, rule.source.matcher, tag, shadow_note,
-                );
-            }
-        };
+                // When not verbose, show builtin summary first, then non-builtin rules
+                if !verbose && builtin_count > 0 {
+                    println!(
+                        "    {}",
+                        style::dim(&format!(
+                            "{} builtin rules (clash status --verbose to show)",
+                            builtin_count
+                        ))
+                    );
+                }
 
-    print_rules("Exec", &tree.exec_rules, &shadows.exec);
-    print_rules("Filesystem", &tree.fs_rules, &shadows.fs);
-    print_rules("Network", &tree.net_rules, &shadows.net);
-    print_rules("Tool", &tree.tool_rules, &shadows.tool);
+                for (i, rule) in rules.iter().enumerate() {
+                    let builtin = rule
+                        .origin_policy
+                        .as_ref()
+                        .is_some_and(|p| p.starts_with("__internal_"));
+
+                    // Skip builtin rules in non-verbose mode
+                    if !verbose && builtin {
+                        continue;
+                    }
+
+                    // Source tag: [builtin], [user], [project], [session]
+                    let tag = if builtin {
+                        style::dim("[builtin]")
+                    } else if let Some(ref level) = rule.origin_level {
+                        style::cyan(&format!("[{}]", level))
+                    } else {
+                        String::new()
+                    };
+
+                    // Shadow indicator
+                    let shadow_note = if let Some(info) = shadow_map.get(&i) {
+                        style::yellow(&format!("  <- shadowed by {}", info.shadowed_by_level))
+                    } else {
+                        String::new()
+                    };
+
+                    let effect_str = style::effect(&format!("{:<5}", rule.effect));
+
+                    println!(
+                        "    [{}] {:<45} {}{}",
+                        effect_str, rule.source.matcher, tag, shadow_note,
+                    );
+                }
+            };
+
+        print_rules("Exec", &tree.exec_rules, &shadows.exec);
+        print_rules("Filesystem", &tree.fs_rules, &shadows.fs);
+        print_rules("Network", &tree.net_rules, &shadows.net);
+        print_rules("Tool", &tree.tool_rules, &shadows.tool);
+    }
 
     let total =
         tree.exec_rules.len() + tree.fs_rules.len() + tree.net_rules.len() + tree.tool_rules.len();
-    if total == 0 {
+    if total == 0 && tree.version < 2 {
         println!(
             "  {}",
             style::dim(&format!(
@@ -290,14 +300,16 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
         issues.push("Default is allow with no deny rules: everything is permitted.".to_string());
     }
 
-    // Check for shadowed rules
-    let shadow_count =
-        shadows.exec.len() + shadows.fs.len() + shadows.net.len() + shadows.tool.len();
-    if shadow_count > 0 {
-        issues.push(format!(
-            "{} rule(s) shadowed by higher-precedence layers (marked with <- above).",
-            shadow_count
-        ));
+    // Shadow check only for v1 (shadow detection wasn't meaningful for v2)
+    if tree.version < 2 {
+        let shadow_count =
+            shadows.exec.len() + shadows.fs.len() + shadows.net.len() + shadows.tool.len();
+        if shadow_count > 0 {
+            issues.push(format!(
+                "{} rule(s) shadowed by higher-precedence layers (marked with <- above).",
+                shadow_count
+            ));
+        }
     }
 
     if issues.is_empty() {

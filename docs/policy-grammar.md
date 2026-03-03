@@ -23,17 +23,23 @@ Policy files use the `.policy` extension and contain s-expressions. Comments sta
 
 ```ebnf
 document        = top_level*
-top_level       = version_decl | default_decl | policy_decl
+top_level       = version_decl | default_decl | policy_decl | def_decl
 
 version_decl    = "(" "version" INTEGER ")"
 default_decl    = "(" "default" effect QUOTED_STRING ")"
 policy_decl     = "(" "policy" QUOTED_STRING policy_item* ")"
+def_decl        = "(" "def" ATOM "[" QUOTED_STRING* "]" ")"      ; v2 only
 
-policy_item     = include | rule
+; v1 policy items
+policy_item     = include | rule                                  ; v1
+                | include | when_block | sandbox_block            ; v2
+
 include         = "(" "include" QUOTED_STRING ")"
-rule            = "(" effect cap_matcher keyword_args* ")"
+rule            = "(" effect cap_matcher keyword_args* ")"        ; v1 only
 keyword_args    = ":sandbox" ( QUOTED_STRING | rule+ )
 ```
+
+> **Version 2 restriction:** Flat rules (`(allow ...)`, `(deny ...)`, `(ask ...)`) are not valid as policy items in version 2. Use `(when ...)` blocks instead. See [Version 2 Syntax](#version-2-syntax) below.
 
 Policy names, include targets, and keyword argument values must be quoted strings. Bare atoms are reserved for language keywords.
 
@@ -402,6 +408,211 @@ Every policy file should have a `(default effect "name")` form that specifies:
 ```
 
 If no default declaration is present, the compiler uses `deny` with the policy named `main`.
+
+---
+
+## Version 2 Syntax
+
+Version 2 (`(version 2)`) replaces flat rules with structured blocks. Flat rules (`(allow ...)`, `(deny ...)`, `(ask ...)`) are **not valid** as policy items in version 2 — use `(when ...)` blocks instead.
+
+Use `clash policy upgrade` to automatically transform a v1 policy to v2 syntax.
+
+### Grammar
+
+```ebnf
+; v2 policy items (inside a policy body)
+policy_item_v2  = include | when_block | sandbox_block
+
+when_block      = "(" "when" when_pred when_body+ ")"
+when_pred       = "(" "command" pattern? args_spec ")"
+                | "(" "tool" pattern? ")"
+when_body       = effect_kw                             ; inline effect
+                | sandbox_block                         ; nested sandbox
+                | when_block                            ; nested when (future)
+
+effect_kw       = ":allow" | ":deny" | ":ask"
+
+sandbox_block   = "(" "sandbox" sandbox_item+ ")"
+sandbox_item    = rule                                  ; flat capability rule
+                | match_block                           ; observable dispatch
+
+match_block     = "(" "match" observable match_arm+ ")"
+observable      = "proxy.method" | "proxy.domain"
+                | "fs.action" | "fs.path"
+                | "[" observable observable+ "]"         ; tuple
+match_arm       = arm_pattern effect_kw
+arm_pattern     = pattern | path_filter                 ; scalar observable
+                | "[" arm_element+ "]"                  ; tuple observable
+
+def_decl        = "(" "def" ATOM "[" QUOTED_STRING* "]" ")"
+```
+
+### `when` blocks
+
+A `when` block gates its body on a predicate. The predicate is either `(command ...)` (matches exec/Bash tool calls) or `(tool ...)` (matches agent tool calls by name).
+
+The body contains one or more items: an effect keyword (`:allow`, `:deny`, `:ask`), a `(sandbox ...)` block, or a nested `(when ...)` block.
+
+```
+; Allow all git commands
+(when (command "git" *) :allow)
+
+; Deny git push with --force
+(when (command "git" "push" :has "--force") :deny)
+
+; Allow the Read tool
+(when (tool "Read") :allow)
+
+; Allow multiple tools
+(when (tool (or "Read" "Glob" "Grep")) :allow)
+
+; Allow with a sandbox
+(when (command "cargo" *)
+  :allow
+  (sandbox
+    (allow (fs read (subpath (env PWD))))
+    (allow (net))))
+```
+
+When the body is a single effect keyword, it renders on one line: `(when (command "git" *) :allow)`. Multi-item bodies are indented.
+
+### `sandbox` blocks
+
+A `sandbox` block defines kernel-level restrictions for commands matched by a parent `(when (command ...) ...)` block. Sandbox items are capability grants — they use the same `(allow (fs ...))` / `(allow (net ...))` syntax as v1 flat rules.
+
+Sandbox blocks can also contain `(match ...)` blocks for observable-based dispatch.
+
+```
+(when (command *)
+  :allow
+  (sandbox
+    (allow (fs (or read write) (subpath (env PWD))))
+    (allow (net "github.com"))
+    (match proxy.domain
+      "crates.io" :allow
+      "github.com" :allow
+      *           :deny)))
+```
+
+### `match` blocks
+
+A `match` block dispatches on a runtime observable value. It contains alternating pattern/effect pairs.
+
+#### Observables
+
+| Observable | Type | Description |
+|-----------|------|-------------|
+| `proxy.domain` | string | Domain of an HTTP request (sandbox proxy) |
+| `proxy.method` | string | HTTP method (GET, POST, etc.) |
+| `fs.action` | string | Filesystem operation: `"read"`, `"write"`, `"create"`, `"delete"` |
+| `fs.path` | path | Filesystem path being accessed |
+
+#### Scalar match
+
+Match a single observable against patterns:
+
+```
+(match proxy.domain
+  "github.com" :allow
+  "crates.io"  :allow
+  *            :deny)
+
+(match fs.action
+  "read"  :allow
+  "write" :deny)
+
+(match fs.path
+  (subpath (env PWD)) :allow
+  *                   :deny)
+```
+
+#### Tuple match
+
+Match multiple observables simultaneously using bracket syntax:
+
+```
+(match [fs.action fs.path]
+  ["read"  (subpath (env PWD))]   :allow
+  ["write" (subpath (env PWD))]   :allow
+  ["read"  *]                     :deny
+  [*       *]                     :deny)
+```
+
+Tuple patterns use `[...]` brackets and must have one element per observable in the tuple.
+
+#### Pattern types in match arms
+
+- String literals: `"github.com"`, `"read"`
+- Wildcards: `*`
+- Combinators: `(or "read" "write")`, `(not "delete")`
+- Path filters (for `fs.path`): `(subpath (env PWD))`, `(subpath "/tmp")`
+- Regex: `/.*\.example\.com/`
+
+### `def` declarations
+
+A `def` declaration creates a named pattern macro that can be referenced elsewhere in the policy. Definitions are top-level forms.
+
+```
+(def builders ["cargo" "make" "cmake" "ninja"])
+
+(policy "main"
+  (when (command builders *) :allow))
+```
+
+The name is a bare atom. The value is a bracket-delimited list of quoted strings, which expands to an `(or ...)` pattern at parse time.
+
+### Effect keywords
+
+In v2 contexts (when bodies, match arms), effects use keyword syntax:
+
+| Keyword | Effect |
+|---------|--------|
+| `:allow` | Permit the action |
+| `:deny` | Block the action |
+| `:ask` | Prompt the user |
+
+### Complete v2 example
+
+```
+(version 2)
+(default deny "main")
+(def builders ["cargo" "make" "cmake"])
+
+(policy "main"
+  ; Allow git, deny force-push
+  (when (command "git" "push" :has "--force") :deny)
+  (when (command "git" *) :allow)
+
+  ; Allow build tools with filesystem + network sandbox
+  (when (command builders *)
+    :allow
+    (sandbox
+      (allow (fs (or read write) (subpath (env PWD))))
+      (match proxy.domain
+        "crates.io"  :allow
+        "github.com" :allow
+        *            :deny)))
+
+  ; Allow read tools
+  (when (tool (or "Read" "Glob" "Grep")) :allow)
+
+  ; Allow web tools
+  (when (tool (or "WebFetch" "WebSearch")) :allow))
+```
+
+### Upgrading from v1 to v2
+
+Run `clash policy upgrade` to automatically transform v1 flat rules to v2 structured syntax. The transformation:
+
+| v1 flat rule | v2 equivalent |
+|-------------|--------------|
+| `(allow (exec "git" *))` | `(when (command "git" *) :allow)` |
+| `(deny (exec "git" "push" *))` | `(when (command "git" "push" *) :deny)` |
+| `(allow (tool "Agent"))` | `(when (tool "Agent") :allow)` |
+| `(allow (fs read (subpath X)))` | `(when (tool (or "Read" "Glob" "Grep")) :allow)` + sandbox |
+| `(allow (net "github.com"))` | `(when (tool (or "WebFetch" "WebSearch")) :allow)` + sandbox |
+
+Filesystem and network allow rules also generate sandbox entries inside a `(when (command *) (sandbox ...))` block, so that sandboxed commands inherit the appropriate kernel-level capabilities.
 
 ---
 

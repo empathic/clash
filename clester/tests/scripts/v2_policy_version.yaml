@@ -34,7 +34,7 @@ steps:
     command: policy upgrade --dry-run
     expect:
       exit_code: 0
-      stdout_contains: "(version 1)"
+      stdout_contains: "(version 2)"
 
   # Policy still works after upgrade (rules unchanged)
   - name: actually upgrade the policy

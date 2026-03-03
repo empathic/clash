@@ -871,7 +871,11 @@ impl App {
             Mode::Normal | Mode::Search => self.tree.move_cursor_down(),
             Mode::AddRule(_) if can_advance => self.advance_add_rule(),
             Mode::ConfirmSave(diff) => {
-                let new = diff.scroll.get().saturating_add(1).min(diff.max_scroll.get());
+                let new = diff
+                    .scroll
+                    .get()
+                    .saturating_add(1)
+                    .min(diff.max_scroll.get());
                 diff.scroll.set(new);
             }
             _ => {}
@@ -3290,7 +3294,11 @@ mod tests {
             KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
         );
         if let Mode::ConfirmSave(diff) = &app.mode {
-            assert_eq!(diff.scroll.get(), initial_scroll + 1, "j should scroll down");
+            assert_eq!(
+                diff.scroll.get(),
+                initial_scroll + 1,
+                "j should scroll down"
+            );
         }
 
         // Scroll up

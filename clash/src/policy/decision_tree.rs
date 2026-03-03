@@ -280,7 +280,10 @@ impl DecisionTree {
     /// Recursively walks `Literal`, `Or`, and `Regex` variants. `Any` and `Not`
     /// are skipped (handled at a higher level). Regex patterns are included
     /// as-is — the proxy will attempt to match them.
-    pub(crate) fn extract_domains_from_pattern(pattern: &CompiledPattern, domains: &mut Vec<String>) {
+    pub(crate) fn extract_domains_from_pattern(
+        pattern: &CompiledPattern,
+        domains: &mut Vec<String>,
+    ) {
         match pattern {
             CompiledPattern::Literal(s) => {
                 if !domains.contains(s) {
