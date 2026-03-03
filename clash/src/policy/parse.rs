@@ -593,17 +593,43 @@ fn parse_when_body_item(expr: &SExpr, ctx: &ParseContext) -> Result<PolicyItem> 
 
 /// Parse a when guard `(observable pattern)` → `(Observable, ArmPattern)`.
 ///
-/// Handles all observable types:
+/// Handles invocation-type guards and ctx.* observable guards:
 /// - `(command ...)` → Observable::Command + ArmPattern::Exec
 /// - `(tool ...)` → Observable::Tool + ArmPattern::Single
-/// - `(proxy.domain ...)` → Observable::ProxyDomain + ArmPattern::Single
-/// - `(fs.action ...)` → Observable::FsAction + ArmPattern::Single
-/// - `(fs.path ...)` → Observable::FsPath + ArmPattern::SinglePath
+/// - `(ctx.http.domain ...)` → Observable::HttpDomain + ArmPattern::Single
+/// - `(ctx.fs.action ...)` → Observable::FsAction + ArmPattern::Single
+/// - `(ctx.fs.path ...)` → Observable::FsPath + ArmPattern::SinglePath
+///
+/// Deprecated flat names (`proxy.domain`, `fs.action`, etc.) are accepted with warnings.
 fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, ArmPattern)> {
     let list = require_list(expr, "when guard")?;
     ensure!(!list.is_empty(), "empty when guard");
     let head = require_atom(&list[0], "guard keyword")?;
-    match head {
+
+    // Map deprecated names to their canonical ctx.* equivalents.
+    let (canonical, deprecated) = match head {
+        "proxy.domain" => {
+            tracing::warn!("deprecated when guard `proxy.domain`: use `ctx.http.domain`");
+            ("ctx.http.domain", true)
+        }
+        "proxy.method" => {
+            tracing::warn!("deprecated when guard `proxy.method`: use `ctx.http.method`");
+            ("ctx.http.method", true)
+        }
+        "fs.action" => {
+            tracing::warn!("deprecated when guard `fs.action`: use `ctx.fs.action`");
+            ("ctx.fs.action", true)
+        }
+        "fs.path" => {
+            tracing::warn!("deprecated when guard `fs.path`: use `ctx.fs.path`");
+            ("ctx.fs.path", true)
+        }
+        other => (other, false),
+    };
+    let _ = deprecated; // suppress unused warning
+
+    match canonical {
+        // Invocation-type guards
         "command" => {
             let m = parse_exec_matcher(&list[1..], ctx)?;
             Ok((Observable::Command, ArmPattern::Exec(m)))
@@ -612,41 +638,46 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
             let m = parse_tool_matcher(&list[1..], ctx)?;
             Ok((Observable::Tool, ArmPattern::Single(m.name)))
         }
-        "proxy.domain" => {
+
+        // ctx.http guards
+        "ctx.http.domain" => {
             ensure!(
                 list.len() == 2,
-                "(proxy.domain) guard expects exactly 1 pattern"
+                "(ctx.http.domain) guard expects exactly 1 pattern"
             );
             let pat = parse_pattern(&list[1], ctx)?;
-            Ok((Observable::ProxyDomain, ArmPattern::Single(pat)))
+            Ok((Observable::HttpDomain, ArmPattern::Single(pat)))
         }
-        "proxy.method" => {
+        "ctx.http.method" => {
             ensure!(
                 list.len() == 2,
-                "(proxy.method) guard expects exactly 1 pattern"
+                "(ctx.http.method) guard expects exactly 1 pattern"
             );
             let pat = parse_pattern(&list[1], ctx)?;
-            Ok((Observable::ProxyMethod, ArmPattern::Single(pat)))
+            Ok((Observable::HttpMethod, ArmPattern::Single(pat)))
         }
-        "fs.action" => {
+
+        // ctx.fs guards
+        "ctx.fs.action" => {
             ensure!(
                 list.len() == 2,
-                "(fs.action) guard expects exactly 1 pattern"
+                "(ctx.fs.action) guard expects exactly 1 pattern"
             );
             let pat = parse_pattern(&list[1], ctx)?;
             Ok((Observable::FsAction, ArmPattern::Single(pat)))
         }
-        "fs.path" => {
+        "ctx.fs.path" => {
             ensure!(
                 list.len() == 2,
-                "(fs.path) guard expects exactly 1 path filter"
+                "(ctx.fs.path) guard expects exactly 1 path filter"
             );
             let pf = parse_path_filter(&list[1], ctx)?;
             Ok((Observable::FsPath, ArmPattern::SinglePath(pf)))
         }
+
         other => bail!(
             "unknown when guard: {other} (expected 'command', 'tool', \
-             'proxy.domain', 'proxy.method', 'fs.action', or 'fs.path')"
+             'ctx.http.domain', 'ctx.http.method', 'ctx.fs.action', or 'ctx.fs.path')"
         ),
     }
 }
@@ -715,17 +746,55 @@ fn parse_sandbox_match_block(list: &[SExpr], ctx: &ParseContext) -> Result<Match
     parse_match_block_inner(list, ctx, true)
 }
 
-/// Parse an observable reference: `command`, `tool`, `proxy.method`, `proxy.domain`,
-/// `fs.action`, `fs.path`, or `[fs.action fs.path]` (bracket tuple).
+/// Parse an observable reference: `command`, `tool`, or any `ctx.*` observable,
+/// plus deprecated flat names (`proxy.domain`, `fs.action`, etc.).
 fn parse_observable(expr: &SExpr) -> Result<Observable> {
     match expr {
         SExpr::Atom(s, _) => match s.as_str() {
+            // Invocation-type observables (unchanged)
             "command" => Ok(Observable::Command),
             "tool" => Ok(Observable::Tool),
-            "proxy.method" => Ok(Observable::ProxyMethod),
-            "proxy.domain" => Ok(Observable::ProxyDomain),
-            "fs.action" => Ok(Observable::FsAction),
-            "fs.path" => Ok(Observable::FsPath),
+
+            // ctx.http namespace
+            "ctx.http.domain" => Ok(Observable::HttpDomain),
+            "ctx.http.method" => Ok(Observable::HttpMethod),
+            "ctx.http.port" => Ok(Observable::HttpPort),
+            "ctx.http.path" => Ok(Observable::HttpPath),
+
+            // ctx.fs namespace
+            "ctx.fs.action" => Ok(Observable::FsAction),
+            "ctx.fs.path" => Ok(Observable::FsPath),
+            "ctx.fs.exists" => Ok(Observable::FsExists),
+
+            // ctx.process namespace
+            "ctx.process.command" => Ok(Observable::ProcessCommand),
+            "ctx.process.args" => Ok(Observable::ProcessArgs),
+
+            // ctx.tool namespace
+            "ctx.tool.name" => Ok(Observable::ToolName),
+            "ctx.tool.args" => Ok(Observable::ToolArgs),
+
+            // ctx.state
+            "ctx.state" => Ok(Observable::State),
+
+            // Deprecated flat names — accept with warning
+            "proxy.domain" => {
+                tracing::warn!("deprecated observable `proxy.domain`: use `ctx.http.domain`");
+                Ok(Observable::HttpDomain)
+            }
+            "proxy.method" => {
+                tracing::warn!("deprecated observable `proxy.method`: use `ctx.http.method`");
+                Ok(Observable::HttpMethod)
+            }
+            "fs.action" => {
+                tracing::warn!("deprecated observable `fs.action`: use `ctx.fs.action`");
+                Ok(Observable::FsAction)
+            }
+            "fs.path" => {
+                tracing::warn!("deprecated observable `fs.path`: use `ctx.fs.path`");
+                Ok(Observable::FsPath)
+            }
+
             other => bail!("unknown observable: {other}"),
         },
         SExpr::List(children, _) => {
@@ -806,7 +875,7 @@ fn parse_arm_pattern(
         }
     }
 
-    // Fall back to general pattern (tool, proxy.domain, fs.action, etc.)
+    // Fall back to general pattern (tool, ctx.http.domain, ctx.fs.action, etc.)
     let p = parse_pattern(expr, ctx)?;
     Ok(ArmPattern::Single(p))
 }
@@ -1818,7 +1887,7 @@ mod tests {
             (policy "p"
               (when (command "cargo")
                 (sandbox
-                  (match proxy.domain
+                  (match ctx.http.domain
                     "github.com" :allow
                     "crates.io" :allow))))
         "#;
@@ -1838,7 +1907,7 @@ mod tests {
         };
         match &sandbox_body[0] {
             SandboxItem::Match(block) => {
-                assert_eq!(block.observable, Observable::ProxyDomain);
+                assert_eq!(block.observable, Observable::HttpDomain);
                 assert_eq!(block.arms.len(), 2);
                 assert_eq!(block.arms[0].effect, Effect::Allow);
                 assert!(
@@ -2062,7 +2131,7 @@ mod tests {
             (policy "p"
               (when (command "cargo")
                 (sandbox
-                  (match proxy.domain
+                  (match ctx.http.domain
                     "github.com" :ask))))
         "#;
         let err = parse(source).unwrap_err();
@@ -2080,7 +2149,7 @@ mod tests {
             (policy "p"
               (when (command "cargo")
                 (sandbox
-                  (match proxy.domain
+                  (match ctx.http.domain
                     "github.com" :allow
                     * :deny))))
         "#;
@@ -2117,7 +2186,7 @@ mod tests {
             (policy "p"
               (when (command "cargo")
                 (sandbox
-                  (match proxy.method
+                  (match ctx.http.method
                     (not "GET") :deny))))
         "#;
         let ast = parse(source).unwrap();
@@ -2135,7 +2204,7 @@ mod tests {
         };
         match &sandbox_body[0] {
             SandboxItem::Match(block) => {
-                assert_eq!(block.observable, Observable::ProxyMethod);
+                assert_eq!(block.observable, Observable::HttpMethod);
                 assert!(matches!(&block.arms[0].pattern,
                     ArmPattern::Single(Pattern::Not(inner)) if matches!(&**inner, Pattern::Literal(s) if s == "GET")));
             }
@@ -2199,7 +2268,7 @@ mod tests {
         // The def reference should have been spliced as a Match block
         match &when_body[0] {
             PolicyItem::Match(block) => {
-                assert!(matches!(block.observable, Observable::ProxyDomain));
+                assert!(matches!(block.observable, Observable::HttpDomain));
                 assert_eq!(block.arms.len(), 1);
                 assert_eq!(
                     block.arms[0].pattern,

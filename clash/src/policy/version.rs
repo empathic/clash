@@ -74,12 +74,100 @@ pub fn validate_version(version: u32) -> anyhow::Result<()> {
 /// valid v2 syntax. The version bump is handled as a feature upgrade in
 /// `upgrade_policy()` instead.
 pub fn all_deprecations() -> Vec<Deprecation> {
-    vec![Deprecation {
-        deprecated_in: 2,
-        message: "`(default ...)` is deprecated in v2. Use `(use \"name\")` and a bare effect in the policy body.".into(),
-        check: |source| source.contains("(default "),
-        fix: Some(fix_default_to_use),
-    }]
+    vec![
+        Deprecation {
+            deprecated_in: 2,
+            message: "`(default ...)` is deprecated in v2. Use `(use \"name\")` and a bare effect in the policy body.".into(),
+            check: |source| source.contains("(default "),
+            fix: Some(fix_default_to_use),
+        },
+        Deprecation {
+            deprecated_in: 2,
+            message: "`proxy.domain` is deprecated. Use `ctx.http.domain`.".into(),
+            check: |source| has_deprecated_observable(source, "proxy.domain"),
+            fix: Some(|s| fix_observable_name(s, "proxy.domain", "ctx.http.domain")),
+        },
+        Deprecation {
+            deprecated_in: 2,
+            message: "`proxy.method` is deprecated. Use `ctx.http.method`.".into(),
+            check: |source| has_deprecated_observable(source, "proxy.method"),
+            fix: Some(|s| fix_observable_name(s, "proxy.method", "ctx.http.method")),
+        },
+        Deprecation {
+            deprecated_in: 2,
+            message: "`fs.action` is deprecated as an observable name. Use `ctx.fs.action`.".into(),
+            check: |source| has_deprecated_observable(source, "fs.action"),
+            fix: Some(|s| fix_observable_name(s, "fs.action", "ctx.fs.action")),
+        },
+        Deprecation {
+            deprecated_in: 2,
+            message: "`fs.path` is deprecated as an observable name. Use `ctx.fs.path`.".into(),
+            check: |source| has_deprecated_observable(source, "fs.path"),
+            fix: Some(|s| fix_observable_name(s, "fs.path", "ctx.fs.path")),
+        },
+    ]
+}
+
+/// Check whether a deprecated observable name appears as a bare atom in the source.
+///
+/// Looks for the name surrounded by s-expression delimiters (whitespace, parens, brackets)
+/// to avoid false positives inside string literals or unrelated identifiers.
+fn has_deprecated_observable(source: &str, name: &str) -> bool {
+    // Observable names appear as bare atoms, so they are delimited by
+    // whitespace, '(', ')', '[', ']', or start/end of string.
+    let is_delim = |c: char| c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']');
+    let mut search_from = 0;
+    while let Some(pos) = source[search_from..].find(name) {
+        let abs_pos = search_from + pos;
+        let before_ok = abs_pos == 0 || source[..abs_pos]
+            .chars()
+            .next_back()
+            .is_some_and(|c| is_delim(c));
+        let after_pos = abs_pos + name.len();
+        let after_ok = after_pos >= source.len()
+            || source[after_pos..]
+                .chars()
+                .next()
+                .is_some_and(|c| is_delim(c));
+        if before_ok && after_ok {
+            return true;
+        }
+        search_from = abs_pos + name.len();
+    }
+    false
+}
+
+/// Replace a deprecated observable name with its `ctx.*` equivalent throughout source text.
+///
+/// Only replaces bare atoms (delimited by s-expression boundaries), not occurrences
+/// inside string literals or other identifiers.
+fn fix_observable_name(source: &str, old: &str, new: &str) -> String {
+    let is_delim = |c: char| c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']');
+    let mut result = String::with_capacity(source.len());
+    let mut search_from = 0;
+    while let Some(pos) = source[search_from..].find(old) {
+        let abs_pos = search_from + pos;
+        let before_ok = abs_pos == 0 || source[..abs_pos]
+            .chars()
+            .next_back()
+            .is_some_and(|c| is_delim(c));
+        let after_pos = abs_pos + old.len();
+        let after_ok = after_pos >= source.len()
+            || source[after_pos..]
+                .chars()
+                .next()
+                .is_some_and(|c| is_delim(c));
+        if before_ok && after_ok {
+            result.push_str(&source[search_from..abs_pos]);
+            result.push_str(new);
+            search_from = after_pos;
+        } else {
+            result.push_str(&source[search_from..after_pos]);
+            search_from = after_pos;
+        }
+    }
+    result.push_str(&source[search_from..]);
+    result
 }
 
 /// Migrate `(default effect "name")` → `(use "name")` + bare effect in the entry policy body.

@@ -94,16 +94,38 @@ pub enum Predicate {
 }
 
 /// An observable value for `Match` dispatch.
+///
+/// Mirrors `ast::Observable` with the `ctx.*` namespace from the v2 spec.
 #[derive(Debug, Clone)]
 pub enum Observable {
     /// Matches command execution (binary + args).
     Command,
     /// Matches tool invocations by name.
     Tool,
-    ProxyMethod,
-    ProxyDomain,
+    /// `ctx.http.domain` (formerly `proxy.domain`).
+    HttpDomain,
+    /// `ctx.http.method` (formerly `proxy.method`).
+    HttpMethod,
+    /// `ctx.http.port`
+    HttpPort,
+    /// `ctx.http.path`
+    HttpPath,
+    /// `ctx.fs.action` (formerly `fs.action`).
     FsAction,
+    /// `ctx.fs.path` (formerly `fs.path`).
     FsPath,
+    /// `ctx.fs.exists`
+    FsExists,
+    /// `ctx.process.command`
+    ProcessCommand,
+    /// `ctx.process.args`
+    ProcessArgs,
+    /// `ctx.tool.name`
+    ToolName,
+    /// `ctx.tool.args`
+    ToolArgs,
+    /// `ctx.state`
+    State,
     Tuple(Vec<Observable>),
 }
 
@@ -808,11 +830,16 @@ impl PolicyTree {
 /// Irrelevant observables are silently skipped, matching `Predicate::is_relevant`.
 fn observable_is_relevant(observable: &Observable, ctx: &QueryContext) -> bool {
     match observable {
-        Observable::Command => ctx.bin.is_some(),
-        Observable::Tool => ctx.bin.is_none() && ctx.fs_op.is_none() && ctx.net_domain.is_none(),
-        Observable::ProxyMethod => false, // deferred
-        Observable::ProxyDomain => ctx.net_domain.is_some(),
-        Observable::FsAction | Observable::FsPath => ctx.fs_op.is_some(),
+        Observable::Command | Observable::ProcessCommand | Observable::ProcessArgs => {
+            ctx.bin.is_some()
+        }
+        Observable::Tool | Observable::ToolName | Observable::ToolArgs => {
+            ctx.bin.is_none() && ctx.fs_op.is_none() && ctx.net_domain.is_none()
+        }
+        Observable::HttpMethod | Observable::HttpPort => false, // deferred
+        Observable::HttpDomain | Observable::HttpPath => ctx.net_domain.is_some(),
+        Observable::FsAction | Observable::FsPath | Observable::FsExists => ctx.fs_op.is_some(),
+        Observable::State => false, // deferred
         Observable::Tuple(obs) => obs.iter().all(|o| observable_is_relevant(o, ctx)),
     }
 }
@@ -854,12 +881,13 @@ fn match_arm_against_ctx(
 
 /// Resolve an observable to a list of concrete string values from the query context.
 ///
-/// Returns `None` if the observable cannot be resolved (e.g. `ProxyMethod` is deferred).
+/// Returns `None` if the observable cannot be resolved (e.g. `HttpMethod` is deferred).
 fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec<String>> {
     match observable {
         Observable::Command | Observable::Tool => None, // handled by match_arm_against_ctx
-        Observable::ProxyMethod => None,                // deferred
-        Observable::ProxyDomain => ctx.net_domain.as_ref().map(|d| vec![d.clone()]),
+        Observable::HttpMethod | Observable::HttpPort => None, // deferred
+        Observable::HttpDomain => ctx.net_domain.as_ref().map(|d| vec![d.clone()]),
+        Observable::HttpPath => ctx.net_path.as_ref().map(|p| vec![p.clone()]),
         Observable::FsAction => ctx.fs_op.map(|op| {
             vec![match op {
                 FsOp::Read => "read".to_string(),
@@ -869,6 +897,24 @@ fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec
             }]
         }),
         Observable::FsPath => ctx.fs_path.as_ref().map(|p| vec![p.clone()]),
+        Observable::FsExists => None, // deferred — requires runtime stat check
+        Observable::ProcessCommand => ctx.bin.as_ref().map(|b| vec![b.clone()]),
+        Observable::ProcessArgs => {
+            if ctx.bin.is_some() {
+                Some(ctx.args.clone())
+            } else {
+                None
+            }
+        }
+        Observable::ToolName => {
+            if ctx.bin.is_none() && ctx.fs_op.is_none() && ctx.net_domain.is_none() {
+                Some(vec![ctx.tool_name.clone()])
+            } else {
+                None
+            }
+        }
+        Observable::ToolArgs => None, // deferred — requires tool argument access
+        Observable::State => None,    // deferred
         Observable::Tuple(obs) => {
             let mut values = Vec::with_capacity(obs.len());
             for o in obs {
