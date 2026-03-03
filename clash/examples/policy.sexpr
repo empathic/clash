@@ -8,7 +8,7 @@
 ; If no rule matches, the default effect is used.
 
 (version 2)
-(default deny "main")
+(use "main")
 
 (def tmpdirs ["/tmp" "/var/folders" "/var/private/folders"])
 
@@ -32,4 +32,5 @@
 
 (policy "main"
   (include "rust")
-  (include "web"))
+  (include "web")
+  :deny)
