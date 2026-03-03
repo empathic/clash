@@ -439,14 +439,17 @@ fn deny_hint(tool_name: &str, tool_input: &serde_json::Value, cwd: &str) -> Resu
             Some(p) => format!("(net \"{}\" (subpath \"{}\"))", domain, p),
             None => format!("(net \"{}\")", domain),
         },
+        CapQuery::Mcp { server, tool } => {
+            format!(
+                "(mcp \"{}\" \"{}\") ; server={}, tool={}",
+                server, tool, server, tool
+            )
+        }
         CapQuery::Tool { name } => {
             format!("(tool \"{}\")", name)
         }
         CapQuery::Agent { name } => {
             format!("(agent \"{}\")", name)
-        }
-        CapQuery::Mcp { server, .. } => {
-            format!("(mcp \"{}\")", server)
         }
     };
 
@@ -471,15 +474,9 @@ fn tool_input_summary(tool_name: &str, input: &serde_json::Value, cwd: &str) -> 
             Some(p) => format!("{domain}{p}"),
             None => domain.clone(),
         },
+        Some(CapQuery::Mcp { server, tool }) => format!("{server}/{tool}"),
         Some(CapQuery::Tool { name }) => name.clone(),
         Some(CapQuery::Agent { name }) => format!("agent:{name}"),
-        Some(CapQuery::Mcp { server, tool }) => {
-            if tool.is_empty() {
-                format!("mcp:{server}")
-            } else {
-                format!("mcp:{server}/{tool}")
-            }
-        }
         None => String::new(),
     };
 

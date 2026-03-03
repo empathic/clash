@@ -26,15 +26,15 @@ pub enum CapQuery {
         domain: String,
         path: Option<String>,
     },
+    Mcp {
+        server: String,
+        tool: String,
+    },
     Tool {
         name: String,
     },
     Agent {
         name: String,
-    },
-    Mcp {
-        server: String,
-        tool: String,
     },
 }
 
@@ -136,10 +136,19 @@ pub fn tool_to_queries(
             vec![CapQuery::Mcp { server, tool }]
         }
         _ => {
-            debug!(tool_name, "tool — using tool capability query");
-            vec![CapQuery::Tool {
-                name: tool_name.to_string(),
-            }]
+            // MCP tools use the naming convention mcp__<server>__<tool>.
+            if let Some(mcp) = parse_mcp_tool_name(tool_name) {
+                debug!(tool_name, server = %mcp.0, mcp_tool = %mcp.1, "MCP tool invocation");
+                vec![CapQuery::Mcp {
+                    server: mcp.0,
+                    tool: mcp.1,
+                }]
+            } else {
+                debug!(tool_name, "tool — using tool capability query");
+                vec![CapQuery::Tool {
+                    name: tool_name.to_string(),
+                }]
+            }
         }
     }
 }
@@ -192,6 +201,19 @@ pub(crate) fn extract_domain_and_path(url: &str) -> (String, Option<String>) {
             .to_string()
     });
     (domain, clean_path)
+}
+
+/// Parse an MCP tool name in the `mcp__<server>__<tool>` format.
+///
+/// Returns `Some((server, tool))` if the name matches the MCP convention,
+/// `None` otherwise.
+fn parse_mcp_tool_name(tool_name: &str) -> Option<(String, String)> {
+    let rest = tool_name.strip_prefix("mcp__")?;
+    let (server, tool) = rest.split_once("__")?;
+    if server.is_empty() || tool.is_empty() {
+        return None;
+    }
+    Some((server.to_string(), tool.to_string()))
 }
 
 /// Check whether a token looks like a shell environment variable assignment (`KEY=value`).
@@ -374,9 +396,9 @@ impl DecisionTree {
                 CapQuery::Exec { .. } => &self.exec_rules,
                 CapQuery::Fs { .. } => &self.fs_rules,
                 CapQuery::Net { .. } => &self.net_rules,
+                CapQuery::Mcp { .. } => &self.tool_rules,
                 CapQuery::Tool { .. } => &self.tool_rules,
                 CapQuery::Agent { .. } => &self.tool_rules,
-                CapQuery::Mcp { .. } => &self.tool_rules,
             };
 
             for (idx, rule) in rules.iter().enumerate() {
@@ -505,6 +527,8 @@ mod tests {
     use crate::policy::compile::{EnvResolver, compile_policy_with_env};
     use crate::policy::sandbox_types::NetworkPolicy;
 
+    use super::{CapQuery, tool_to_queries};
+
     /// Test env resolver with fixed values.
     struct TestEnv(HashMap<String, String>);
 
@@ -531,6 +555,11 @@ mod tests {
     fn compile(source: &str) -> crate::policy::decision_tree::DecisionTree {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         compile_policy_with_env(source, &env).unwrap()
+    }
+
+    fn compile_v2(source: &str) -> crate::policy::tree::PolicyTree {
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        crate::policy::compile::compile_to_tree(source, &env).unwrap()
     }
 
     #[test]
@@ -1797,5 +1826,179 @@ mod tests {
             super::CapQuery::Agent { name } => assert_eq!(name, "Explore"),
             other => panic!("expected Agent query, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // MCP tool name parsing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_mcp_tool_name_valid() {
+        let result = super::parse_mcp_tool_name("mcp__puppeteer__navigate");
+        assert_eq!(
+            result,
+            Some(("puppeteer".to_string(), "navigate".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_mcp_tool_name_with_underscores() {
+        let result = super::parse_mcp_tool_name("mcp__my_server__my_tool");
+        assert_eq!(
+            result,
+            Some(("my_server".to_string(), "my_tool".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_mcp_tool_name_not_mcp() {
+        assert_eq!(super::parse_mcp_tool_name("Read"), None);
+        assert_eq!(super::parse_mcp_tool_name("Bash"), None);
+        assert_eq!(super::parse_mcp_tool_name("WebFetch"), None);
+    }
+
+    #[test]
+    fn parse_mcp_tool_name_malformed() {
+        // Missing tool part
+        assert_eq!(super::parse_mcp_tool_name("mcp__puppeteer"), None);
+        // Empty server
+        assert_eq!(super::parse_mcp_tool_name("mcp____tool"), None);
+        // Empty tool
+        assert_eq!(super::parse_mcp_tool_name("mcp__server__"), None);
+    }
+
+    #[test]
+    fn mcp_tool_to_queries() {
+        let queries = tool_to_queries("mcp__puppeteer__navigate", &json!({}), "/tmp");
+        assert_eq!(queries.len(), 1);
+        match &queries[0] {
+            CapQuery::Mcp { server, tool } => {
+                assert_eq!(server, "puppeteer");
+                assert_eq!(tool, "navigate");
+            }
+            other => panic!("expected Mcp query, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_mcp_tool_to_queries() {
+        let queries = tool_to_queries("Skill", &json!({}), "/tmp");
+        assert_eq!(queries.len(), 1);
+        assert!(matches!(&queries[0], CapQuery::Tool { name } if name == "Skill"));
+    }
+
+    // -----------------------------------------------------------------------
+    // MCP tree evaluation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mcp_when_guard_matches_server() {
+        let tree = compile_v2(
+            r#"
+(version 2)
+(use "main")
+(policy "main"
+  (when (mcp "puppeteer") :allow)
+  :deny)
+"#,
+        );
+
+        let decision = tree.evaluate("mcp__puppeteer__navigate", &json!({}), "/tmp");
+        assert_eq!(decision.effect, Effect::Allow);
+
+        let decision = tree.evaluate("mcp__other_server__tool", &json!({}), "/tmp");
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn mcp_match_ctx_mcp_tool() {
+        let tree = compile_v2(
+            r#"
+(version 2)
+(use "main")
+(policy "main"
+  (when (mcp "puppeteer")
+    (match ctx.mcp.tool
+      "puppeteer_navigate"   :ask
+      "puppeteer_screenshot" :allow))
+  :deny)
+"#,
+        );
+
+        let decision = tree.evaluate("mcp__puppeteer__puppeteer_navigate", &json!({}), "/tmp");
+        assert_eq!(decision.effect, Effect::Ask);
+
+        let decision = tree.evaluate("mcp__puppeteer__puppeteer_screenshot", &json!({}), "/tmp");
+        assert_eq!(decision.effect, Effect::Allow);
+
+        // Unmatched MCP tool falls through
+        let decision = tree.evaluate("mcp__puppeteer__puppeteer_click", &json!({}), "/tmp");
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn mcp_regex_pattern() {
+        let tree = compile_v2(
+            r#"
+(version 2)
+(use "main")
+(policy "main"
+  (when (mcp /puppet.*/) :allow)
+  :deny)
+"#,
+        );
+
+        let decision = tree.evaluate("mcp__puppeteer__navigate", &json!({}), "/tmp");
+        assert_eq!(decision.effect, Effect::Allow);
+
+        let decision = tree.evaluate("mcp__github__issues", &json!({}), "/tmp");
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn mcp_does_not_match_regular_tools() {
+        let tree = compile_v2(
+            r#"
+(version 2)
+(use "main")
+(policy "main"
+  (when (mcp "puppeteer") :allow)
+  (when (tool "Skill") :allow)
+  :deny)
+"#,
+        );
+
+        // MCP tool matches mcp guard, not tool guard
+        let decision = tree.evaluate("mcp__puppeteer__navigate", &json!({}), "/tmp");
+        assert_eq!(decision.effect, Effect::Allow);
+
+        // Regular tool matches tool guard, not mcp guard
+        let decision = tree.evaluate("Skill", &json!({}), "/tmp");
+        assert_eq!(decision.effect, Effect::Allow);
+
+        // Regular tool without matching guard denied
+        let decision = tree.evaluate("Agent", &json!({}), "/tmp");
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn mcp_match_on_server_observable() {
+        let tree = compile_v2(
+            r#"
+(version 2)
+(use "main")
+(policy "main"
+  (match ctx.mcp.server
+    "puppeteer" :allow
+    * :deny)
+  :deny)
+"#,
+        );
+
+        let decision = tree.evaluate("mcp__puppeteer__navigate", &json!({}), "/tmp");
+        assert_eq!(decision.effect, Effect::Allow);
+
+        let decision = tree.evaluate("mcp__github__issues", &json!({}), "/tmp");
+        assert_eq!(decision.effect, Effect::Deny);
     }
 }

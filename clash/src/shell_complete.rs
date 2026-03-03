@@ -51,7 +51,7 @@ const DOMAINS: &[(&str, &str)] = &[
     ("exec", "Command execution"),
     ("fs", "Filesystem access"),
     ("net", "Network access"),
-    ("tool", "MCP tool use"),
+    ("tool", "Agent tool use"),
 ];
 
 const FS_OPS: &[(&str, &str)] = &[

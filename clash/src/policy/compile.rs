@@ -988,6 +988,15 @@ fn compile_when_guard(
                 name: pat.clone(),
             })?))
         }
+        Observable::Mcp => {
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("mcp observable requires a single pattern"),
+            };
+            Ok(Predicate::Mcp(compile_tool_to_compiled(&ToolMatcher {
+                name: pat.clone(),
+            })?))
+        }
         Observable::HttpDomain => {
             let pat = match pattern {
                 ArmPattern::Single(p) => p,
@@ -1073,15 +1082,6 @@ fn compile_when_guard(
                 _ => bail!("ctx.agent.name observable requires a single pattern"),
             };
             Ok(Predicate::Agent(compile_tool_to_compiled(&ToolMatcher {
-                name: pat.clone(),
-            })?))
-        }
-        Observable::Mcp => {
-            let pat = match pattern {
-                ArmPattern::Single(p) => p,
-                _ => bail!("mcp observable requires a single pattern"),
-            };
-            Ok(Predicate::Mcp(compile_tool_to_compiled(&ToolMatcher {
                 name: pat.clone(),
             })?))
         }
@@ -1230,6 +1230,7 @@ fn compile_observable_to_ir(obs: &Observable) -> Result<crate::policy::tree::Obs
     match obs {
         Observable::Command => Ok(ir::Observable::Command),
         Observable::Tool => Ok(ir::Observable::Tool),
+        Observable::Mcp => Ok(ir::Observable::Mcp),
         Observable::HttpDomain => Ok(ir::Observable::HttpDomain),
         Observable::HttpMethod => Ok(ir::Observable::HttpMethod),
         Observable::HttpPort => Ok(ir::Observable::HttpPort),

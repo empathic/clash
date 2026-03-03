@@ -601,6 +601,25 @@ Match agent tools by name:
   *                          :deny)
 ```
 
+#### MCP match
+
+Match MCP tool invocations by server or tool name:
+
+```
+; Guard on MCP server, dispatch on tool
+(when (mcp "puppeteer")
+  (match ctx.mcp.tool
+    "puppeteer_navigate"    :ask
+    "puppeteer_screenshot"  :allow))
+
+; Match on MCP server name
+(match mcp
+  "puppeteer" :ask
+  *           :deny)
+```
+
+MCP tool names follow the `mcp__<server>__<tool>` naming convention from Claude Code. The `mcp` invocation-type predicate matches on the server name; `ctx.mcp.server` and `ctx.mcp.tool` provide fine-grained dispatch.
+
 #### Tuple match
 
 Match multiple observables simultaneously using bracket syntax:

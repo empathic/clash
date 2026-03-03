@@ -2990,4 +2990,118 @@ mod tests {
         let obs = Observable::ToolArgField("file_path".into());
         assert_eq!(obs.to_string(), "ctx.tool.args.file_path?");
     }
+
+    // -----------------------------------------------------------------------
+    // MCP guard and observable tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_v2_when_mcp_guard() {
+        let source = r#"
+            (version 2)
+            (use "main")
+            (policy "main"
+              (when (mcp "puppeteer") :allow))
+        "#;
+        let ast = parse(source).unwrap();
+        let policy = ast.iter().find_map(|tl| match tl {
+            TopLevel::Policy { body, .. } => Some(body),
+            _ => None,
+        });
+        let body = policy.unwrap();
+        assert_eq!(body.len(), 1);
+        match &body[0] {
+            PolicyItem::When {
+                observable,
+                pattern,
+                ..
+            } => {
+                assert_eq!(*observable, Observable::Mcp);
+                assert!(
+                    matches!(pattern, ArmPattern::Single(Pattern::Literal(s)) if s == "puppeteer")
+                );
+            }
+            other => panic!("expected When, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_v2_match_ctx_mcp_tool() {
+        let source = r#"
+            (version 2)
+            (use "main")
+            (policy "main"
+              (match ctx.mcp.tool
+                "puppeteer_navigate" :allow
+                "puppeteer_screenshot" :ask))
+        "#;
+        let ast = parse(source).unwrap();
+        let policy = ast.iter().find_map(|tl| match tl {
+            TopLevel::Policy { body, .. } => Some(body),
+            _ => None,
+        });
+        let body = policy.unwrap();
+        assert_eq!(body.len(), 1);
+        match &body[0] {
+            PolicyItem::Match(block) => {
+                assert_eq!(block.observable, Observable::McpTool);
+                assert_eq!(block.arms.len(), 2);
+            }
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_v2_match_ctx_mcp_server() {
+        let source = r#"
+            (version 2)
+            (use "main")
+            (policy "main"
+              (match ctx.mcp.server
+                "puppeteer" :allow
+                * :deny))
+        "#;
+        let ast = parse(source).unwrap();
+        let policy = ast.iter().find_map(|tl| match tl {
+            TopLevel::Policy { body, .. } => Some(body),
+            _ => None,
+        });
+        let body = policy.unwrap();
+        match &body[0] {
+            PolicyItem::Match(block) => {
+                assert_eq!(block.observable, Observable::McpServer);
+                assert_eq!(block.arms.len(), 2);
+            }
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_v2_mcp_regex_pattern() {
+        let source = r#"
+            (version 2)
+            (use "main")
+            (policy "main"
+              (when (mcp /puppeteer.*/) :allow))
+        "#;
+        let ast = parse(source).unwrap();
+        let policy = ast.iter().find_map(|tl| match tl {
+            TopLevel::Policy { body, .. } => Some(body),
+            _ => None,
+        });
+        let body = policy.unwrap();
+        match &body[0] {
+            PolicyItem::When {
+                observable,
+                pattern,
+                ..
+            } => {
+                assert_eq!(*observable, Observable::Mcp);
+                assert!(
+                    matches!(pattern, ArmPattern::Single(Pattern::Regex(r)) if r == "puppeteer.*")
+                );
+            }
+            other => panic!("expected When, got {other:?}"),
+        }
+    }
 }
