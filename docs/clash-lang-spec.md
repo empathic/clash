@@ -415,7 +415,7 @@ If `ctx.process.command = "node"`, the `when` guard in step 3 fails. The body is
 
 ### Isolation
 
-Each policy's constraint set is **isolated**. There is no merging or inheritance of constraints between policies. Reuse is achieved through `def` bindings, not through sandbox composition. The validator enforces this by rejecting policies where sibling forms could produce overlapping decisions for the same input (see validation rule 10) — so constraint collection is enumeration, never merging.
+Each policy's constraint set is **isolated**. There is no merging or inheritance of constraints between policies. Reuse is achieved through `def` bindings, not through sandbox composition. The validator enforces this by rejecting policies where sibling forms could produce overlapping decisions for the same input (see validation rule 11) — so constraint collection is enumeration, never merging.
 
 ```scheme
 ;; Reuse through def — explicit, no merging ambiguity

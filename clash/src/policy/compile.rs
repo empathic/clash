@@ -114,6 +114,10 @@ fn compile_tree_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Po
     let mut visited = Vec::new();
     flatten_policy_v2(active_policy, &policies, &mut items, &mut visited)?;
 
+    // Rule 11: validate non-overlapping sibling dimensions.
+    let top_items: Vec<PolicyItem> = items.iter().map(|(item, _)| item.clone()).collect();
+    validate_sibling_dimensions(&top_items)?;
+
     // Resolve default effect: last bare PolicyItem::Effect in the flattened body
     // takes priority, then (default effect _), then Deny.
     let body_effect = items.iter().rev().find_map(|(item, _)| match item {
@@ -1701,22 +1705,7 @@ fn detect_conflicts(rules: &[CompiledRule], domain: &str) -> Result<()> {
 /// same position). Returns `true` (may overlap) when uncertain.
 fn matchers_may_overlap(a: &CapMatcher, b: &CapMatcher) -> bool {
     match (a, b) {
-        (CapMatcher::Exec(ea), CapMatcher::Exec(eb)) => {
-            if !patterns_may_overlap(&ea.bin, &eb.bin) {
-                return false;
-            }
-            // If either has :has patterns, be conservative (may overlap).
-            if !ea.has_args.is_empty() || !eb.has_args.is_empty() {
-                return true;
-            }
-            // Both purely positional: check args pairwise.
-            for (pa, pb) in ea.args.iter().zip(eb.args.iter()) {
-                if !patterns_may_overlap(pa, pb) {
-                    return false;
-                }
-            }
-            true
-        }
+        (CapMatcher::Exec(ea), CapMatcher::Exec(eb)) => exec_matchers_may_overlap(ea, eb),
         (CapMatcher::Fs(fa), CapMatcher::Fs(fb)) => {
             if !ops_may_overlap(&fa.op, &fb.op) {
                 return false;
@@ -1761,6 +1750,233 @@ fn ops_may_overlap(a: &OpPattern, b: &OpPattern) -> bool {
 fn path_filters_may_overlap(a: &PathFilter, b: &PathFilter) -> bool {
     match (a, b) {
         (PathFilter::Literal(la), PathFilter::Literal(lb)) => la == lb,
+        _ => true,
+    }
+}
+
+/// Check if two exec matchers may overlap.
+///
+/// Extracted from `matchers_may_overlap` for reuse in `arm_patterns_may_overlap`.
+fn exec_matchers_may_overlap(ea: &ExecMatcher, eb: &ExecMatcher) -> bool {
+    if !patterns_may_overlap(&ea.bin, &eb.bin) {
+        return false;
+    }
+    // If either has :has patterns, be conservative (may overlap).
+    if !ea.has_args.is_empty() || !eb.has_args.is_empty() {
+        return true;
+    }
+    // Both purely positional: check args pairwise.
+    for (pa, pb) in ea.args.iter().zip(eb.args.iter()) {
+        if !patterns_may_overlap(pa, pb) {
+            return false;
+        }
+    }
+    true
+}
+
+// ---------------------------------------------------------------------------
+// Rule 11: Non-overlapping sibling dimensions
+// ---------------------------------------------------------------------------
+
+/// Validate that sibling body forms within a policy or `when` block govern
+/// non-overlapping `ctx` dimensions (spec validation rule 11).
+///
+/// Two violations are detected:
+/// 1. Two sibling `match` blocks dispatch on the same subject.
+/// 2. Two sibling `when` guards with non-disjoint predicates contain forms
+///    that govern the same `ctx` dimension.
+fn validate_sibling_dimensions(items: &[PolicyItem]) -> Result<()> {
+    // ── Check 1: sibling match blocks on the same subject ──────────────
+    let match_blocks: Vec<&MatchBlock> = items
+        .iter()
+        .filter_map(|item| match item {
+            PolicyItem::Match(block) => Some(block),
+            _ => None,
+        })
+        .collect();
+
+    for i in 0..match_blocks.len() {
+        for j in (i + 1)..match_blocks.len() {
+            if let Some(shared) =
+                find_shared_observable(&match_blocks[i].observable, &match_blocks[j].observable)
+            {
+                bail!(
+                    "overlapping sibling match blocks both dispatch on {shared}: \
+                     (match {} ...) and (match {} ...)",
+                    match_blocks[i].observable,
+                    match_blocks[j].observable,
+                );
+            }
+        }
+    }
+
+    // ── Check 2: sibling when blocks with overlapping predicates ───────
+    let when_blocks: Vec<(&Observable, &ArmPattern, &[PolicyItem])> = items
+        .iter()
+        .filter_map(|item| match item {
+            PolicyItem::When {
+                observable,
+                pattern,
+                body,
+            } => Some((observable, pattern, body.as_slice())),
+            _ => None,
+        })
+        .collect();
+
+    for i in 0..when_blocks.len() {
+        for j in (i + 1)..when_blocks.len() {
+            let (obs_a, pat_a, body_a) = when_blocks[i];
+            let (obs_b, pat_b, body_b) = when_blocks[j];
+
+            if !when_predicates_may_overlap(obs_a, pat_a, obs_b, pat_b) {
+                continue;
+            }
+
+            let dims_a = governed_observables(body_a);
+            let dims_b = governed_observables(body_b);
+
+            for da in &dims_a {
+                for db in &dims_b {
+                    if let Some(shared) = find_shared_observable(da, db) {
+                        bail!(
+                            "sibling when blocks with overlapping guards \
+                             both govern {shared}: \
+                             (when ({obs_a} ...) ...) and (when ({obs_b} ...) ...) \
+                             can both produce decisions over the same dimension",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Recurse into when bodies ───────────────────────────────────────
+    for item in items {
+        if let PolicyItem::When { body, .. } = item {
+            validate_sibling_dimensions(body)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Collect all observables governed by a list of policy items.
+///
+/// Recursively collects subjects from `match` blocks and from `when` block
+/// bodies, expanding tuples into their leaf components.
+fn governed_observables(items: &[PolicyItem]) -> Vec<Observable> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            PolicyItem::Match(block) => {
+                collect_observable_leaves(&block.observable, &mut result);
+            }
+            PolicyItem::When { body, .. } => {
+                result.extend(governed_observables(body));
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+/// Expand an observable into its leaf components (flattens tuples).
+fn collect_observable_leaves(obs: &Observable, out: &mut Vec<Observable>) {
+    match obs {
+        Observable::Tuple(inner) => {
+            for o in inner {
+                collect_observable_leaves(o, out);
+            }
+        }
+        _ => out.push(obs.clone()),
+    }
+}
+
+/// If two observables share any dimension, return the name of the shared one.
+///
+/// Expands tuples and checks leaf-by-leaf.
+fn find_shared_observable(a: &Observable, b: &Observable) -> Option<String> {
+    let mut leaves_a = Vec::new();
+    let mut leaves_b = Vec::new();
+    collect_observable_leaves(a, &mut leaves_a);
+    collect_observable_leaves(b, &mut leaves_b);
+
+    for la in &leaves_a {
+        for lb in &leaves_b {
+            if la == lb {
+                return Some(format!("{la}"));
+            }
+        }
+    }
+    None
+}
+
+/// Check if two `when` predicates may overlap (could both fire for the same input).
+///
+/// Returns false only when the predicates are provably disjoint:
+/// - Different predicate domains (exec vs net vs fs vs tool)
+/// - Same observable with provably disjoint patterns
+fn when_predicates_may_overlap(
+    obs_a: &Observable,
+    pat_a: &ArmPattern,
+    obs_b: &Observable,
+    pat_b: &ArmPattern,
+) -> bool {
+    if observable_domain(obs_a) != observable_domain(obs_b) {
+        return false;
+    }
+    if obs_a == obs_b {
+        return arm_patterns_may_overlap(pat_a, pat_b);
+    }
+    // Same domain, different observable → conservatively assume overlap.
+    true
+}
+
+/// Classify an observable into its input domain for disjointness analysis.
+///
+/// Observables from different domains can never fire for the same input.
+fn observable_domain(obs: &Observable) -> &'static str {
+    match obs {
+        Observable::Command | Observable::ProcessCommand | Observable::ProcessArgs => "exec",
+        Observable::Tool
+        | Observable::ToolName
+        | Observable::ToolArgs
+        | Observable::ToolArgField(_) => "tool",
+        Observable::Agent | Observable::AgentName => "agent",
+        Observable::HttpDomain
+        | Observable::HttpMethod
+        | Observable::HttpPort
+        | Observable::HttpPath => "http",
+        Observable::FsAction | Observable::FsPath | Observable::FsExists => "fs",
+        Observable::State => "state",
+        Observable::Tuple(inner) => inner.first().map(observable_domain).unwrap_or("unknown"),
+    }
+}
+
+/// Check if two arm patterns may overlap (could match the same value).
+///
+/// Conservative: returns true (may overlap) when uncertain.
+fn arm_patterns_may_overlap(a: &ArmPattern, b: &ArmPattern) -> bool {
+    match (a, b) {
+        (ArmPattern::Single(pa), ArmPattern::Single(pb)) => patterns_may_overlap(pa, pb),
+        (ArmPattern::SinglePath(pa), ArmPattern::SinglePath(pb)) => {
+            path_filters_may_overlap(pa, pb)
+        }
+        (ArmPattern::Exec(ea), ArmPattern::Exec(eb)) => exec_matchers_may_overlap(ea, eb),
+        (ArmPattern::Tuple(ta), ArmPattern::Tuple(tb)) => {
+            if ta.len() != tb.len() {
+                return true;
+            }
+            ta.iter().zip(tb.iter()).all(|(ea, eb)| match (ea, eb) {
+                (ArmPatternElement::Pat(pa), ArmPatternElement::Pat(pb)) => {
+                    patterns_may_overlap(pa, pb)
+                }
+                (ArmPatternElement::Path(pa), ArmPatternElement::Path(pb)) => {
+                    path_filters_may_overlap(pa, pb)
+                }
+                _ => true,
+            })
+        }
         _ => true,
     }
 }
@@ -3188,5 +3404,178 @@ mod tests {
         let input = serde_json::json!({ "subagent_type": "Unknown" });
         let decision = tree.evaluate("Agent", &input, "/home/user");
         assert_eq!(decision.effect, Effect::Ask);
+    }
+
+    // ── Rule 11: sibling dimension overlap ─────────────────────────────
+
+    #[test]
+    fn overlapping_sibling_match_blocks_rejected() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "cargo")
+    (match ctx.http.domain
+      "crates.io" :allow)
+    (match ctx.http.domain
+      "github.com" :allow)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let err = compile_to_tree(source, &env).unwrap_err();
+        assert!(
+            err.to_string().contains("overlapping sibling match blocks"),
+            "expected overlap error, got: {err}",
+        );
+    }
+
+    #[test]
+    fn disjoint_sibling_match_blocks_accepted() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "cargo")
+    (match ctx.http.domain
+      "crates.io" :allow)
+    (match ctx.fs.path
+      (subpath "/home") :allow)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        compile_to_tree(source, &env).expect("disjoint match blocks should compile");
+    }
+
+    #[test]
+    fn overlapping_when_blocks_same_dimension_rejected() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "git" *)
+    (match ctx.http.domain
+      "github.com" :allow))
+  (when (command "git" *)
+    (match ctx.http.domain
+      "crates.io" :allow)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let err = compile_to_tree(source, &env).unwrap_err();
+        assert!(
+            err.to_string().contains("sibling when blocks"),
+            "expected when overlap error, got: {err}",
+        );
+    }
+
+    #[test]
+    fn disjoint_when_predicates_same_dimension_accepted() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "git" *)
+    (match ctx.http.domain
+      "github.com" :allow))
+  (when (command "cargo" *)
+    (match ctx.http.domain
+      "crates.io" :allow)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        compile_to_tree(source, &env).expect("disjoint predicates should compile");
+    }
+
+    #[test]
+    fn overlapping_when_blocks_different_dimensions_accepted() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "git" *)
+    (match ctx.http.domain
+      "github.com" :allow))
+  (when (command "git" *)
+    (match ctx.fs.path
+      (subpath "/home") :allow)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        compile_to_tree(source, &env).expect("different dimensions should compile");
+    }
+
+    #[test]
+    fn tuple_dimension_overlap_with_scalar_rejected() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "cargo")
+    (match [ctx.fs.action ctx.fs.path]
+      ["read" (subpath "/home")] :allow)
+    (match ctx.fs.action
+      "write" :deny)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let err = compile_to_tree(source, &env).unwrap_err();
+        assert!(
+            err.to_string().contains("overlapping sibling match blocks"),
+            "expected tuple overlap error, got: {err}",
+        );
+    }
+
+    #[test]
+    fn cross_domain_when_blocks_accepted() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "git" *)
+    (match ctx.http.domain
+      "github.com" :allow))
+  (when (ctx.http.domain "example.com")
+    (match ctx.http.path
+      "/api" :allow)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        compile_to_tree(source, &env).expect("cross-domain when blocks should compile");
+    }
+
+    #[test]
+    fn when_blocks_with_overlapping_exec_predicates_rejected() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "git" *)
+    (match ctx.http.domain
+      "github.com" :allow))
+  (when (command "git" "push")
+    (match ctx.http.domain
+      "example.com" :allow)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let err = compile_to_tree(source, &env).unwrap_err();
+        assert!(
+            err.to_string().contains("sibling when blocks"),
+            "expected overlap error with overlapping exec predicates, got: {err}",
+        );
+    }
+
+    #[test]
+    fn nested_when_overlap_rejected() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (command "git" *)
+    (when (ctx.http.domain "github.com")
+      (match ctx.http.path
+        "/api" :allow))
+    (when (ctx.http.domain "github.com")
+      (match ctx.http.path
+        "/web" :allow))))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let err = compile_to_tree(source, &env).unwrap_err();
+        assert!(
+            err.to_string().contains("sibling when blocks"),
+            "expected nested overlap error, got: {err}",
+        );
     }
 }
