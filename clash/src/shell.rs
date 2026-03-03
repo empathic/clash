@@ -531,16 +531,16 @@ impl ShellSession {
                         }
                     }
                 }
-                TopLevel::Def { name, values } => {
+                TopLevel::Def { name, value } => {
                     if self.interactive {
                         output.push_str(&format!(
-                            "  {} {} = [{}]\n",
+                            "  {} {} = {}\n",
                             style::bold("Def"),
                             style::cyan(name),
-                            values.join(", ")
+                            value
                         ));
                     } else {
-                        output.push_str(&format!("  Def {name} = [{}]\n", values.join(", ")));
+                        output.push_str(&format!("  Def {name} = {value}\n"));
                     }
                 }
             }

@@ -56,6 +56,42 @@ impl SExpr {
     }
 }
 
+impl fmt::Display for SExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SExpr::Atom(s, _) => write!(f, "{s}"),
+            SExpr::Str(s, _) => {
+                write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+            }
+            SExpr::Regex(r, _) => write!(f, "/{r}/"),
+            SExpr::List(children, _) => {
+                // Bracket list: (__CLASH_BRACKET__ ...) → [...]
+                if !children.is_empty()
+                    && matches!(&children[0], SExpr::Atom(s, _) if s == BRACKET_MARKER)
+                {
+                    write!(f, "[")?;
+                    for (i, child) in children[1..].iter().enumerate() {
+                        if i > 0 {
+                            write!(f, " ")?;
+                        }
+                        write!(f, "{child}")?;
+                    }
+                    write!(f, "]")
+                } else {
+                    write!(f, "(")?;
+                    for (i, child) in children.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, " ")?;
+                        }
+                        write!(f, "{child}")?;
+                    }
+                    write!(f, ")")
+                }
+            }
+        }
+    }
+}
+
 /// A parse error with position information.
 #[derive(Debug, Clone)]
 pub struct ParseError {

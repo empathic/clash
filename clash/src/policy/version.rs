@@ -125,7 +125,9 @@ fn fix_default_to_use(source: &str) -> String {
     for tl in &mut ast {
         if let TopLevel::Policy { name, body } = tl {
             if *name == entry_name {
-                let has_body_effect = body.iter().any(|item| matches!(item, PolicyItem::Effect(_)));
+                let has_body_effect = body
+                    .iter()
+                    .any(|item| matches!(item, PolicyItem::Effect(_)));
                 if !has_body_effect {
                     body.push(PolicyItem::Effect(effect));
                 }

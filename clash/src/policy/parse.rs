@@ -12,8 +12,27 @@ use crate::policy::sexpr::{self, BRACKET_MARKER, SExpr};
 
 use super::ast::*;
 
-/// Def-macro bindings: name → list of literal values.
-type Defs = HashMap<String, Vec<String>>;
+/// Def-macro bindings: name → raw s-expression value.
+type Defs = HashMap<String, SExpr>;
+
+/// If the SExpr is a bracket list of strings/atoms, return the string values.
+/// This preserves backwards compatibility with `(def name ["a" "b" ...])`.
+fn try_as_string_list(sexpr: &SExpr) -> Option<Vec<String>> {
+    if let SExpr::List(children, _) = sexpr {
+        if !children.is_empty() && matches!(&children[0], SExpr::Atom(s, _) if s == BRACKET_MARKER)
+        {
+            let mut values = Vec::new();
+            for child in &children[1..] {
+                match child {
+                    SExpr::Str(s, _) | SExpr::Atom(s, _) => values.push(s.clone()),
+                    _ => return None,
+                }
+            }
+            return Some(values);
+        }
+    }
+    None
+}
 
 /// Parse a policy source string into a list of top-level declarations.
 ///
@@ -40,8 +59,8 @@ pub fn parse(source: &str) -> Result<Vec<TopLevel>> {
                 }
                 if let Some("def") = list[0].as_str() {
                     let tl = parse_def(list)?;
-                    if let TopLevel::Def { name, values } = &tl {
-                        defs.insert(name.clone(), values.clone());
+                    if let TopLevel::Def { name, value } = &tl {
+                        defs.insert(name.clone(), value.clone());
                     }
                 }
             }
@@ -120,27 +139,11 @@ fn parse_use(list: &[SExpr]) -> Result<TopLevel> {
 fn parse_def(list: &[SExpr]) -> Result<TopLevel> {
     ensure!(
         list.len() == 3,
-        "(def) expects exactly 2 arguments: name and [values...]"
+        "(def) expects exactly 2 arguments: name and value"
     );
     let name = require_atom(&list[1], "def name")?.to_string();
-    // Values must be in a bracket list: [val1 val2 ...]
-    let values_list = require_bracket_list(&list[2], "def values")?;
-    let mut values = Vec::new();
-    for v in values_list {
-        let s = require_string_or_atom(v, "def value")?;
-        values.push(s.to_string());
-    }
-    Ok(TopLevel::Def { name, values })
-}
-
-/// Require a bracket list `[...]` (our `(__CLASH_BRACKET__ ...)` encoding).
-fn require_bracket_list<'a>(expr: &'a SExpr, context: &str) -> Result<&'a [SExpr]> {
-    let list = require_list(expr, context)?;
-    ensure!(
-        !list.is_empty() && matches!(&list[0], SExpr::Atom(s, _) if s == BRACKET_MARKER),
-        "expected [...] bracket list for {context}"
-    );
-    Ok(&list[1..])
+    let value = list[2].clone();
+    Ok(TopLevel::Def { name, value })
 }
 
 fn parse_policy(list: &[SExpr], ctx: &ParseContext) -> Result<TopLevel> {
@@ -161,7 +164,12 @@ fn parse_policy_item(expr: &SExpr, ctx: &ParseContext) -> Result<PolicyItem> {
                 ":allow" => return Ok(PolicyItem::Effect(Effect::Allow)),
                 ":deny" => return Ok(PolicyItem::Effect(Effect::Deny)),
                 ":ask" => return Ok(PolicyItem::Effect(Effect::Ask)),
-                _ => {}
+                _ => {
+                    // Def expansion: bare atom matching a def name → splice expression
+                    if let Some(def_value) = ctx.defs.get(s.as_str()) {
+                        return parse_policy_item(def_value, ctx);
+                    }
+                }
             }
         }
     }
@@ -406,11 +414,17 @@ fn parse_pattern(expr: &SExpr, ctx: &ParseContext) -> Result<Pattern> {
     match expr {
         SExpr::Atom(s, _) if s == "*" => Ok(Pattern::Any),
         SExpr::Atom(s, _) => {
-            // Def expansion: bare atom matching a def name → Or(literals)
-            if let Some(values) = ctx.defs.get(s.as_str()) {
-                Ok(Pattern::Or(
-                    values.iter().map(|v| Pattern::Literal(v.clone())).collect(),
-                ))
+            // Def expansion: bare atom matching a def name
+            if let Some(def_value) = ctx.defs.get(s.as_str()) {
+                if let Some(values) = try_as_string_list(def_value) {
+                    // Bracket list → Or(literals) (backwards compat)
+                    Ok(Pattern::Or(
+                        values.iter().map(|v| Pattern::Literal(v.clone())).collect(),
+                    ))
+                } else {
+                    // Arbitrary expression → parse as pattern
+                    parse_pattern(def_value, ctx)
+                }
             } else {
                 Ok(Pattern::Literal(s.clone()))
             }
@@ -496,10 +510,14 @@ fn parse_path_expr(expr: &SExpr, ctx: &ParseContext) -> Result<PathExpr> {
             // $VAR shorthand: $PWD → (env PWD)
             if let Some(var_name) = s.strip_prefix('$') {
                 Ok(PathExpr::Env(var_name.to_string()))
-            } else if ctx.defs.contains_key(s.as_str()) {
-                // Def names in path expr position expand to Or path filter
-                // at the path_filter level, not here. Just treat as static.
-                Ok(PathExpr::Static(s.clone()))
+            } else if let Some(def_value) = ctx.defs.get(s.as_str()) {
+                if try_as_string_list(def_value).is_some() {
+                    // Bracket list defs expand at the path_filter level, not here.
+                    Ok(PathExpr::Static(s.clone()))
+                } else {
+                    // Compound expression → try to parse as path expr
+                    parse_path_expr(def_value, ctx)
+                }
             } else {
                 Ok(PathExpr::Static(s.clone()))
             }
@@ -562,7 +580,12 @@ fn parse_when_body_item(expr: &SExpr, ctx: &ParseContext) -> Result<PolicyItem> 
             ":allow" => return Ok(PolicyItem::Effect(Effect::Allow)),
             ":deny" => return Ok(PolicyItem::Effect(Effect::Deny)),
             ":ask" => return Ok(PolicyItem::Effect(Effect::Ask)),
-            _ => {}
+            _ => {
+                // Def expansion: bare atom matching a def name → splice expression
+                if let Some(def_value) = ctx.defs.get(s.as_str()) {
+                    return parse_when_body_item(def_value, ctx);
+                }
+            }
         }
     }
     parse_policy_item(expr, ctx)
@@ -590,22 +613,34 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
             Ok((Observable::Tool, ArmPattern::Single(m.name)))
         }
         "proxy.domain" => {
-            ensure!(list.len() == 2, "(proxy.domain) guard expects exactly 1 pattern");
+            ensure!(
+                list.len() == 2,
+                "(proxy.domain) guard expects exactly 1 pattern"
+            );
             let pat = parse_pattern(&list[1], ctx)?;
             Ok((Observable::ProxyDomain, ArmPattern::Single(pat)))
         }
         "proxy.method" => {
-            ensure!(list.len() == 2, "(proxy.method) guard expects exactly 1 pattern");
+            ensure!(
+                list.len() == 2,
+                "(proxy.method) guard expects exactly 1 pattern"
+            );
             let pat = parse_pattern(&list[1], ctx)?;
             Ok((Observable::ProxyMethod, ArmPattern::Single(pat)))
         }
         "fs.action" => {
-            ensure!(list.len() == 2, "(fs.action) guard expects exactly 1 pattern");
+            ensure!(
+                list.len() == 2,
+                "(fs.action) guard expects exactly 1 pattern"
+            );
             let pat = parse_pattern(&list[1], ctx)?;
             Ok((Observable::FsAction, ArmPattern::Single(pat)))
         }
         "fs.path" => {
-            ensure!(list.len() == 2, "(fs.path) guard expects exactly 1 path filter");
+            ensure!(
+                list.len() == 2,
+                "(fs.path) guard expects exactly 1 path filter"
+            );
             let pf = parse_path_filter(&list[1], ctx)?;
             Ok((Observable::FsPath, ArmPattern::SinglePath(pf)))
         }
@@ -844,14 +879,19 @@ fn try_parse_arm_path_filter(expr: &SExpr, ctx: &ParseContext) -> Result<PathFil
             bail!("not a path filter")
         }
         SExpr::Atom(s, _) => {
-            // Def expansion: bare atom that is a def name → Or(Subpath(Static(v)))
-            if let Some(values) = ctx.defs.get(s.as_str()) {
-                return Ok(PathFilter::Or(
-                    values
-                        .iter()
-                        .map(|v| PathFilter::Subpath(PathExpr::Static(v.clone()), false))
-                        .collect(),
-                ));
+            // Def expansion: bare atom that is a def name
+            if let Some(def_value) = ctx.defs.get(s.as_str()) {
+                if let Some(values) = try_as_string_list(def_value) {
+                    // Bracket list → Or(Subpath(Static(v))) (backwards compat)
+                    return Ok(PathFilter::Or(
+                        values
+                            .iter()
+                            .map(|v| PathFilter::Subpath(PathExpr::Static(v.clone()), false))
+                            .collect(),
+                    ));
+                }
+                // Arbitrary expression → try to parse as path filter
+                return try_parse_arm_path_filter(def_value, ctx);
             }
             bail!("not a path filter")
         }
@@ -874,7 +914,9 @@ fn parse_match_effect_keyword(expr: &SExpr, in_sandbox: bool) -> Result<Effect> 
         ":deny" => Ok(Effect::Deny),
         ":ask" => {
             if in_sandbox {
-                bail!(":ask is not allowed in sandbox match arms (sandbox can only :allow or :deny)")
+                bail!(
+                    ":ask is not allowed in sandbox match arms (sandbox can only :allow or :deny)"
+                )
             }
             Ok(Effect::Ask)
         }
@@ -1637,9 +1679,11 @@ mod tests {
         let ast = parse(r#"(version 2)(def tmpdirs ["/tmp" "/var/folders"])"#).unwrap();
         assert_eq!(ast.len(), 2);
         match &ast[1] {
-            TopLevel::Def { name, values } => {
+            TopLevel::Def { name, value } => {
                 assert_eq!(name, "tmpdirs");
-                assert_eq!(values, &["/tmp", "/var/folders"]);
+                // Value is stored as raw SExpr bracket list
+                let values = try_as_string_list(value).expect("expected bracket list");
+                assert_eq!(values, vec!["/tmp", "/var/folders"]);
             }
             other => panic!("expected Def, got {other:?}"),
         }
@@ -2106,6 +2150,182 @@ mod tests {
             err.to_string().contains("requires (version 2)"),
             "got: {}",
             err
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // def with arbitrary expressions (gh-220)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_def_with_match_block() {
+        let source = r#"
+            (version 2)
+            (def github-net
+              (match proxy.domain
+                "github.com" :allow))
+        "#;
+        let ast = parse(source).unwrap();
+        match &ast[1] {
+            TopLevel::Def { name, value } => {
+                assert_eq!(name, "github-net");
+                // Value should be a raw SExpr list (match ...)
+                assert!(value.as_list().is_some(), "expected list, got {value:?}");
+            }
+            other => panic!("expected Def, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_def_compound_spliced_in_when_body() {
+        let source = r#"
+            (version 2)
+            (def github-net
+              (match proxy.domain
+                "github.com" :allow))
+            (policy "p"
+              (when (command "cargo" *)
+                github-net))
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[2] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let when_body = match &body[0] {
+            PolicyItem::When { body, .. } => body,
+            _ => panic!(),
+        };
+        // The def reference should have been spliced as a Match block
+        match &when_body[0] {
+            PolicyItem::Match(block) => {
+                assert!(matches!(block.observable, Observable::ProxyDomain));
+                assert_eq!(block.arms.len(), 1);
+                assert_eq!(
+                    block.arms[0].pattern,
+                    ArmPattern::Single(Pattern::Literal("github.com".into()))
+                );
+                assert_eq!(block.arms[0].effect, Effect::Allow);
+            }
+            other => panic!("expected Match from def splice, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_def_compound_spliced_in_policy_body() {
+        let source = r#"
+            (version 2)
+            (def my-when
+              (when (command "git" *) :allow))
+            (policy "p"
+              my-when)
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[2] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        match &body[0] {
+            PolicyItem::When {
+                observable,
+                pattern,
+                body,
+            } => {
+                assert!(matches!(observable, Observable::Command));
+                match pattern {
+                    ArmPattern::Exec(m) => {
+                        assert_eq!(m.bin, Pattern::Literal("git".into()));
+                    }
+                    _ => panic!("expected Exec pattern"),
+                }
+                assert_eq!(body.len(), 1);
+                assert!(matches!(&body[0], PolicyItem::Effect(Effect::Allow)));
+            }
+            other => panic!("expected When from def splice, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_def_or_pattern_spliced() {
+        let source = r#"
+            (version 2)
+            (def github-domains (or "github.com" "api.github.com"))
+            (policy "p"
+              (when (command "curl" *)
+                (match proxy.domain
+                  github-domains :allow)))
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[2] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let when_body = match &body[0] {
+            PolicyItem::When { body, .. } => body,
+            _ => panic!(),
+        };
+        match &when_body[0] {
+            PolicyItem::Match(block) => {
+                // The (or ...) pattern from def should be spliced as Pattern::Or
+                match &block.arms[0].pattern {
+                    ArmPattern::Single(Pattern::Or(ps)) => {
+                        assert_eq!(ps.len(), 2);
+                        assert_eq!(ps[0], Pattern::Literal("github.com".into()));
+                        assert_eq!(ps[1], Pattern::Literal("api.github.com".into()));
+                    }
+                    other => panic!("expected Or pattern, got {other:?}"),
+                }
+            }
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_def_bracket_list_backwards_compat() {
+        // Existing bracket list syntax must continue to work identically
+        let source = r#"
+            (version 2)
+            (def builders ["cargo" "rustc"])
+            (policy "p"
+              (when (command builders *) :allow))
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[2] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        match &body[0] {
+            PolicyItem::When { pattern, .. } => match pattern {
+                ArmPattern::Exec(m) => match &m.bin {
+                    Pattern::Or(ps) => {
+                        assert_eq!(ps.len(), 2);
+                        assert_eq!(ps[0], Pattern::Literal("cargo".into()));
+                        assert_eq!(ps[1], Pattern::Literal("rustc".into()));
+                    }
+                    other => panic!("expected Or pattern, got {other:?}"),
+                },
+                _ => panic!("expected Exec pattern"),
+            },
+            other => panic!("expected When, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_def_display_roundtrip_bracket_list() {
+        let source = r#"(version 2)(def tmpdirs ["/tmp" "/var/folders"])"#;
+        let ast = parse(source).unwrap();
+        let displayed = ast[1].to_string();
+        assert_eq!(displayed, r#"(def tmpdirs ["/tmp" "/var/folders"])"#);
+    }
+
+    #[test]
+    fn parse_def_display_roundtrip_compound() {
+        let source = r#"(version 2)(def my-net (match proxy.domain "github.com" :allow))"#;
+        let ast = parse(source).unwrap();
+        let displayed = ast[1].to_string();
+        assert_eq!(
+            displayed,
+            r#"(def my-net (match proxy.domain "github.com" :allow))"#
         );
     }
 }
