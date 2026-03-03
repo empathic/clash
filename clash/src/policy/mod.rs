@@ -16,6 +16,7 @@ pub mod ir;
 pub mod parse;
 pub mod print;
 pub mod sandbox_types;
+pub mod schema;
 pub mod sexpr;
 pub mod specificity;
 pub mod tree;

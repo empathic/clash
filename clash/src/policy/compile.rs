@@ -1243,13 +1243,10 @@ fn compile_observable_to_ir(obs: &Observable) -> Result<crate::policy::tree::Obs
         Observable::ToolName => Ok(ir::Observable::ToolName),
         Observable::ToolArgs => Ok(ir::Observable::ToolArgs),
         Observable::Agent => Ok(ir::Observable::Agent),
-        Observable::AgentName => Ok(ir::Observable::AgentName),
-        Observable::Mcp => bail!(
-            "mcp invocation type cannot be used as a match observable; use ctx.mcp.server or ctx.mcp.tool"
-        ),
+        Observable::ToolArgField(field) => Ok(ir::Observable::ToolArgField(field.clone())),
         Observable::McpServer => Ok(ir::Observable::McpServer),
         Observable::McpTool => Ok(ir::Observable::McpTool),
-        Observable::ToolArgField(field) => Ok(ir::Observable::ToolArgField(field.clone())),
+        Observable::AgentName => Ok(ir::Observable::AgentName),
         Observable::State => Ok(ir::Observable::State),
         Observable::Tuple(obs) => {
             let inner = obs

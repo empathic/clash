@@ -158,16 +158,16 @@ pub enum Observable {
     ToolName,
     /// `ctx.tool.args`
     ToolArgs,
-    /// `ctx.agent.name`
-    AgentName,
+    /// `ctx.tool.args.<field>?` — nullable tool argument field.
+    ToolArgField(String),
     /// `ctx.mcp.server`
     McpServer,
     /// `ctx.mcp.tool`
     McpTool,
-    /// `ctx.tool.args.<field>?` — nullable tool argument field.
-    ToolArgField(String),
     /// `mcp` — invocation-type predicate matching MCP tools by server name.
     Mcp,
+    /// `ctx.agent.name`
+    AgentName,
     /// `ctx.state`
     State,
     Tuple(Vec<Observable>),

@@ -431,8 +431,8 @@ observable      = "command" | "tool" | "agent" | "mcp"
                 | "ctx.fs.action" | "ctx.fs.path" | "ctx.fs.exists"
                 | "ctx.process.command" | "ctx.process.args"
                 | "ctx.tool.name" | "ctx.tool.args" | ctx_tool_arg_field
-                | "ctx.agent.name"
                 | "ctx.mcp.server" | "ctx.mcp.tool"
+                | "ctx.agent.name"
                 | "ctx.state"
                 | "[" observable observable+ "]"         ; tuple
 ctx_tool_arg_field = "ctx.tool.args." FIELD_NAME "?"  ; nullable dynamic field accessor
@@ -552,9 +552,9 @@ At **policy level**, match arms may use `:allow`, `:deny`, or `:ask` effects. In
 | `ctx.tool.name` | string | Tool name |
 | `ctx.tool.args` | {string?} | Tool arguments (dynamic, nullable) |
 | `ctx.tool.args.<field>?` | string? | Nullable accessor for a specific tool argument field; absent field short-circuits the enclosing `match` |
-| `ctx.agent.name` | string | Subagent name |
 | `ctx.mcp.server` | string | MCP server name |
 | `ctx.mcp.tool` | string | MCP tool name |
+| `ctx.agent.name` | string | Subagent name |
 | `ctx.state` | string | Agent state |
 
 #### Scalar match
