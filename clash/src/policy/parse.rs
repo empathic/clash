@@ -660,13 +660,9 @@ fn parse_when_body_item(expr: &SExpr, ctx: &ParseContext) -> Result<PolicyItem> 
 
 /// Parse a when guard `(observable pattern)` → `(Observable, ArmPattern, is_eq)`.
 ///
-/// Handles invocation-type guards, ctx.* observable guards, and `eq` predicates:
-/// - `(command ...)` → Observable::Command + ArmPattern::Exec
-/// - `(tool ...)` → Observable::Tool + ArmPattern::Single
-/// - `(ctx.http.domain ...)` → Observable::HttpDomain + ArmPattern::Single
-/// - `(ctx.fs.action ...)` → Observable::FsAction + ArmPattern::Single
-/// - `(ctx.fs.path ...)` → Observable::FsPath + ArmPattern::SinglePath
-/// - `(eq <ctx-ref> <expr>)` → resolved observable + ArmPattern::Single
+/// Handles invocation-type guards, ctx.* observable guards, and `eq` predicates.
+/// For ctx paths, validates against the versioned schema and dispatches to the
+/// appropriate pattern parser based on the field kind (scalar vs path).
 ///
 /// Deprecated flat names (`proxy.domain`, `fs.action`, etc.) are accepted with warnings.
 fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, ArmPattern, bool)> {
@@ -680,7 +676,7 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
             list.len() == 3,
             "(eq) expects exactly 2 arguments: (eq <ctx-ref> <expr>)"
         );
-        let observable = parse_observable(&list[1])?;
+        let observable = parse_observable(&list[1], ctx.version)?;
         ensure!(
             !matches!(
                 observable,
@@ -694,26 +690,25 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
     }
 
     // Map deprecated names to their canonical ctx.* equivalents.
-    let (canonical, deprecated) = match head {
+    let canonical = match head {
         "proxy.domain" => {
             tracing::warn!("deprecated when guard `proxy.domain`: use `ctx.http.domain`");
-            ("ctx.http.domain", true)
+            "ctx.http.domain"
         }
         "proxy.method" => {
             tracing::warn!("deprecated when guard `proxy.method`: use `ctx.http.method`");
-            ("ctx.http.method", true)
+            "ctx.http.method"
         }
         "fs.action" => {
             tracing::warn!("deprecated when guard `fs.action`: use `ctx.fs.action`");
-            ("ctx.fs.action", true)
+            "ctx.fs.action"
         }
         "fs.path" => {
             tracing::warn!("deprecated when guard `fs.path`: use `ctx.fs.path`");
-            ("ctx.fs.path", true)
+            "ctx.fs.path"
         }
-        other => (other, false),
+        other => other,
     };
-    let _ = deprecated; // suppress unused warning
 
     match canonical {
         // Invocation-type guards
@@ -734,59 +729,49 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
             Ok((Observable::Mcp, ArmPattern::Single(m.name), false))
         }
 
-        // ctx.http guards
-        "ctx.http.domain" => {
-            ensure!(
-                list.len() == 2,
-                "(ctx.http.domain) guard expects exactly 1 pattern"
-            );
-            let pat = parse_pattern(&list[1], ctx)?;
-            Ok((Observable::HttpDomain, ArmPattern::Single(pat), false))
-        }
-        "ctx.http.method" => {
-            ensure!(
-                list.len() == 2,
-                "(ctx.http.method) guard expects exactly 1 pattern"
-            );
-            let pat = parse_pattern(&list[1], ctx)?;
-            Ok((Observable::HttpMethod, ArmPattern::Single(pat), false))
-        }
+        // ctx.* guards — schema-driven validation and dispatch
+        s if s.starts_with("ctx.") => {
+            use super::schema::{CtxFieldKind, ctx_schema};
 
-        // ctx.fs guards
-        "ctx.fs.action" => {
-            ensure!(
-                list.len() == 2,
-                "(ctx.fs.action) guard expects exactly 1 pattern"
-            );
-            let pat = parse_pattern(&list[1], ctx)?;
-            Ok((Observable::FsAction, ArmPattern::Single(pat), false))
-        }
-        "ctx.fs.path" => {
-            ensure!(
-                list.len() == 2,
-                "(ctx.fs.path) guard expects exactly 1 path filter"
-            );
-            let pf = parse_path_filter(&list[1], ctx)?;
-            Ok((Observable::FsPath, ArmPattern::SinglePath(pf), false))
-        }
+            let schema = ctx_schema(ctx.version);
+            let entry = schema.iter().find(|e| e.path == s);
 
-        // ctx.tool.args.<field>? — nullable dynamic field when guard
-        other if other.starts_with("ctx.tool.args.") => {
-            let observable = parse_tool_arg_field(other)?;
-            ensure!(list.len() == 2, "({other}) guard expects exactly 1 pattern");
-            // Try path filter first, fall back to general pattern
-            if let Ok(pf) = try_parse_arm_path_filter(&list[1], ctx) {
-                Ok((observable, ArmPattern::SinglePath(pf), false))
-            } else {
-                let pat = parse_pattern(&list[1], ctx)?;
-                Ok((observable, ArmPattern::Single(pat), false))
+            let Some(field) = entry else {
+                // ctx.tool.args.<field>? — nullable dynamic field accessor.
+                if s.starts_with("ctx.tool.args.") {
+                    let observable = parse_tool_arg_field(s)?;
+                    ensure!(list.len() == 2, "({s}) guard expects exactly 1 pattern");
+                    if let Ok(pf) = try_parse_arm_path_filter(&list[1], ctx) {
+                        return Ok((observable, ArmPattern::SinglePath(pf), false));
+                    }
+                    let pat = parse_pattern(&list[1], ctx)?;
+                    return Ok((observable, ArmPattern::Single(pat), false));
+                }
+                // Not found — delegate to resolve_ctx_observable for helpful error.
+                return super::schema::resolve_ctx_observable(s, ctx.version)
+                    .map(|obs| (obs, ArmPattern::Single(Pattern::Any), false));
+            };
+
+            ensure!(list.len() == 2, "({s}) guard expects exactly 1 pattern");
+
+            match field.kind {
+                CtxFieldKind::Path => {
+                    let pf = parse_path_filter(&list[1], ctx)?;
+                    Ok((field.observable.clone(), ArmPattern::SinglePath(pf), false))
+                }
+                CtxFieldKind::Scalar | CtxFieldKind::Dynamic => {
+                    let pat = parse_pattern(&list[1], ctx)?;
+                    Ok((field.observable.clone(), ArmPattern::Single(pat), false))
+                }
             }
         }
 
-        other => bail!(
-            "unknown when guard: {other} (expected 'eq', 'command', 'tool', 'agent', 'mcp', \
-             'ctx.http.domain', 'ctx.http.method', 'ctx.fs.action', or 'ctx.fs.path')"
-        ),
+        other => {
+            bail!(
+                "unknown when guard: `{other}` (expected `command`, `tool`, `agent`, `mcp`, \
+                 or a `ctx.*` observable)"
+            )
+        }
     }
 }
 
@@ -839,7 +824,7 @@ fn parse_match_block_inner(
         list.len() >= 4,
         "(match) expects an observable and at least one pattern/effect pair"
     );
-    let observable = parse_observable(&list[1])?;
+    let observable = parse_observable(&list[1], ctx.version)?;
     let (default, arms) = parse_match_arms(&list[2..], &observable, ctx, in_sandbox)?;
     Ok(MatchBlock {
         observable,
@@ -860,67 +845,53 @@ fn parse_sandbox_match_block(list: &[SExpr], ctx: &ParseContext) -> Result<Match
 
 /// Parse an observable reference: `command`, `tool`, or any `ctx.*` observable,
 /// plus deprecated flat names (`proxy.domain`, `fs.action`, etc.).
-fn parse_observable(expr: &SExpr) -> Result<Observable> {
+///
+/// For `ctx.*` paths, validates against the versioned schema and produces
+/// helpful error messages with did-you-mean suggestions for typos.
+fn parse_observable(expr: &SExpr, version: u32) -> Result<Observable> {
     match expr {
-        SExpr::Atom(s, _) => match s.as_str() {
-            // Invocation-type observables (unchanged)
-            "command" => Ok(Observable::Command),
-            "tool" => Ok(Observable::Tool),
-            "agent" => Ok(Observable::Agent),
-            "mcp" => Ok(Observable::Mcp),
-
-            // ctx.http namespace
-            "ctx.http.domain" => Ok(Observable::HttpDomain),
-            "ctx.http.method" => Ok(Observable::HttpMethod),
-            "ctx.http.port" => Ok(Observable::HttpPort),
-            "ctx.http.path" => Ok(Observable::HttpPath),
-
-            // ctx.fs namespace
-            "ctx.fs.action" => Ok(Observable::FsAction),
-            "ctx.fs.path" => Ok(Observable::FsPath),
-            "ctx.fs.exists" => Ok(Observable::FsExists),
-
-            // ctx.process namespace
-            "ctx.process.command" => Ok(Observable::ProcessCommand),
-            "ctx.process.args" => Ok(Observable::ProcessArgs),
-
-            // ctx.tool namespace
-            "ctx.tool.name" => Ok(Observable::ToolName),
-            "ctx.tool.args" => Ok(Observable::ToolArgs),
-
-            // ctx.agent namespace
-            "ctx.agent.name" => Ok(Observable::AgentName),
-
-            // ctx.mcp namespace
-            "ctx.mcp.server" => Ok(Observable::McpServer),
-            "ctx.mcp.tool" => Ok(Observable::McpTool),
-
-            // ctx.state
-            "ctx.state" => Ok(Observable::State),
-
-            // ctx.tool.args.<field>? — nullable dynamic field accessor
-            other if other.starts_with("ctx.tool.args.") => parse_tool_arg_field(other),
-
-            // Deprecated flat names — accept with warning
-            "proxy.domain" => {
-                tracing::warn!("deprecated observable `proxy.domain`: use `ctx.http.domain`");
-                Ok(Observable::HttpDomain)
-            }
-            "proxy.method" => {
-                tracing::warn!("deprecated observable `proxy.method`: use `ctx.http.method`");
-                Ok(Observable::HttpMethod)
-            }
-            "fs.action" => {
-                tracing::warn!("deprecated observable `fs.action`: use `ctx.fs.action`");
-                Ok(Observable::FsAction)
-            }
-            "fs.path" => {
-                tracing::warn!("deprecated observable `fs.path`: use `ctx.fs.path`");
-                Ok(Observable::FsPath)
+        SExpr::Atom(s, _) => {
+            // Invocation-type observables (not part of ctx namespace).
+            match s.as_str() {
+                "command" => return Ok(Observable::Command),
+                "tool" => return Ok(Observable::Tool),
+                "agent" => return Ok(Observable::Agent),
+                "mcp" => return Ok(Observable::Mcp),
+                _ => {}
             }
 
-            other => bail!("unknown observable: {other}"),
-        },
+            // Deprecated flat names — accept with warning.
+            match s.as_str() {
+                "proxy.domain" => {
+                    tracing::warn!("deprecated observable `proxy.domain`: use `ctx.http.domain`");
+                    return Ok(Observable::HttpDomain);
+                }
+                "proxy.method" => {
+                    tracing::warn!("deprecated observable `proxy.method`: use `ctx.http.method`");
+                    return Ok(Observable::HttpMethod);
+                }
+                "fs.action" => {
+                    tracing::warn!("deprecated observable `fs.action`: use `ctx.fs.action`");
+                    return Ok(Observable::FsAction);
+                }
+                "fs.path" => {
+                    tracing::warn!("deprecated observable `fs.path`: use `ctx.fs.path`");
+                    return Ok(Observable::FsPath);
+                }
+                _ => {}
+            }
+
+            // ctx.* paths — validate against versioned schema.
+            // ctx.tool.args.<field>? is handled by parse_tool_arg_field (nullable accessor).
+            if s.starts_with("ctx.") {
+                if s.starts_with("ctx.tool.args.") {
+                    return parse_tool_arg_field(s);
+                }
+                return super::schema::resolve_ctx_observable(s, version);
+            }
+
+            bail!("unknown observable: {s}")
+        }
         SExpr::List(children, _) => {
             // Bracket list: [fs.action fs.path] → Tuple
             ensure!(
@@ -934,7 +905,7 @@ fn parse_observable(expr: &SExpr) -> Result<Observable> {
             );
             let obs = children[1..]
                 .iter()
-                .map(parse_observable)
+                .map(|e| parse_observable(e, version))
                 .collect::<Result<_>>()?;
             Ok(Observable::Tuple(obs))
         }
@@ -3017,6 +2988,160 @@ mod tests {
                 ..
             } => {
                 assert_eq!(*observable, Observable::Mcp);
+                assert!(
+                    matches!(pattern, ArmPattern::Single(Pattern::Literal(s)) if s == "puppeteer")
+                );
+            }
+            other => panic!("expected When, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // ctx schema validation (gh-223)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_ctx_typo_suggests_closest() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (command "cargo" *)
+                (match ctx.htttp.domain
+                  "crates.io" :allow)))
+        "#;
+        let err = parse(source).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Did you mean `ctx.http.domain`?"),
+            "expected did-you-mean suggestion, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_ctx_unknown_namespace_in_match() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (command "cargo" *)
+                (match ctx.foo.bar
+                  "x" :allow)))
+        "#;
+        let err = parse(source).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("is not a valid observable in version 2"),
+            "expected schema error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_ctx_typo_in_when_guard() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (ctx.htttp.domain "github.com") :allow))
+        "#;
+        let err = parse(source).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Did you mean `ctx.http.domain`?"),
+            "expected did-you-mean suggestion, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_ctx_static_subpath_rejected() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (command "cargo" *)
+                (match ctx.http.domain.something
+                  "x" :allow)))
+        "#;
+        let err = parse(source).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("leaf field"),
+            "expected leaf field error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_ctx_dynamic_subpath_with_nullable_accepted() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (command "cargo" *)
+                (match ctx.tool.args.file_path?
+                  "src/main.rs" :allow)))
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[1] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let when_body = match &body[0] {
+            PolicyItem::When { body, .. } => body,
+            _ => panic!(),
+        };
+        match &when_body[0] {
+            PolicyItem::Match(block) => {
+                // Nullable accessor resolves to ToolArgField.
+                assert_eq!(
+                    block.observable,
+                    Observable::ToolArgField("file_path".into())
+                );
+            }
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_ctx_valid_paths_still_work() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (command "cargo" *)
+                (match ctx.http.domain
+                  "github.com" :allow)
+                (match ctx.fs.path
+                  (subpath (env PWD)) :allow)
+                (match ctx.mcp.server
+                  "puppeteer" :allow)
+                (match ctx.agent.name
+                  "Explore" :allow)))
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[1] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let when_body = match &body[0] {
+            PolicyItem::When { body, .. } => body,
+            _ => panic!(),
+        };
+        assert_eq!(when_body.len(), 4);
+    }
+
+    #[test]
+    fn parse_ctx_when_guard_schema_driven() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (ctx.mcp.server "puppeteer") :allow))
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[1] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        match &body[0] {
+            PolicyItem::When {
+                observable,
+                pattern,
+                ..
+            } => {
+                assert_eq!(*observable, Observable::McpServer);
                 assert!(
                     matches!(pattern, ArmPattern::Single(Pattern::Literal(s)) if s == "puppeteer")
                 );

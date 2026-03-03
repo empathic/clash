@@ -469,10 +469,10 @@ impl fmt::Display for Observable {
             Observable::ProcessArgs => write!(f, "ctx.process.args"),
             Observable::ToolName => write!(f, "ctx.tool.name"),
             Observable::ToolArgs => write!(f, "ctx.tool.args"),
-            Observable::AgentName => write!(f, "ctx.agent.name"),
+            Observable::ToolArgField(field) => write!(f, "ctx.tool.args.{field}?"),
             Observable::McpServer => write!(f, "ctx.mcp.server"),
             Observable::McpTool => write!(f, "ctx.mcp.tool"),
-            Observable::ToolArgField(field) => write!(f, "ctx.tool.args.{field}?"),
+            Observable::AgentName => write!(f, "ctx.agent.name"),
             Observable::State => write!(f, "ctx.state"),
             Observable::Tuple(obs) => {
                 write!(f, "[")?;
