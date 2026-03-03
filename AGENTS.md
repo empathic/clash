@@ -56,6 +56,13 @@
 * Auto-fix functions SHOULD be provided when possible so `clash policy upgrade` can migrate users automatically
 * The `(version N)` declaration in policy files allows clash to detect outdated syntax and guide users to upgrade
 
+## Site
+
+* The `site/` directory is an Eleventy 3.0.0 static site
+* Use **bun** (not npm/node) for all site tooling: `bun install`, `bun run build`, `bun run dev`
+* Build output goes to `site/_site`
+* Preview deploys to Cloudflare Pages (`clash-site` project) on PRs touching `site/**`
+
 ## Layout
 
 - *clash* Clash binary + library
