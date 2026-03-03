@@ -130,6 +130,8 @@ pub enum Observable {
     ToolArgs,
     /// `ctx.agent.name`
     AgentName,
+    /// `ctx.tool.args.<field>?` — nullable tool argument field.
+    ToolArgField(String),
     /// `ctx.state`
     State,
     Tuple(Vec<Observable>),
@@ -207,6 +209,8 @@ pub struct QueryContext {
     pub net_path: Option<String>,
     pub agent_name: Option<String>,
     pub cwd: String,
+    /// Raw tool input JSON — used for nullable `ctx.tool.args.<field>?` accessors.
+    pub tool_input: serde_json::Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +303,12 @@ impl Predicate {
 
 impl QueryContext {
     /// Build a `QueryContext` from capability queries produced by `tool_to_queries`.
-    fn from_queries(tool_name: &str, queries: &[CapQuery], cwd: &str) -> Self {
+    fn from_queries(
+        tool_name: &str,
+        queries: &[CapQuery],
+        cwd: &str,
+        tool_input: &serde_json::Value,
+    ) -> Self {
         let mut ctx = Self {
             tool_name: tool_name.to_string(),
             bin: None,
@@ -310,6 +319,7 @@ impl QueryContext {
             net_path: None,
             agent_name: None,
             cwd: cwd.to_string(),
+            tool_input: tool_input.clone(),
         };
 
         for query in queries {
@@ -593,7 +603,7 @@ impl PolicyTree {
             };
         }
 
-        let ctx = QueryContext::from_queries(tool_name, &queries, cwd);
+        let ctx = QueryContext::from_queries(tool_name, &queries, cwd, tool_input);
         let mut matched_rules = Vec::new();
         let mut skipped_rules = Vec::new();
         let mut sandbox_out: Option<SandboxOut> = None;
@@ -852,7 +862,10 @@ fn observable_is_relevant(observable: &Observable, ctx: &QueryContext) -> bool {
         Observable::Command | Observable::ProcessCommand | Observable::ProcessArgs => {
             ctx.bin.is_some()
         }
-        Observable::Tool | Observable::ToolName | Observable::ToolArgs => {
+        Observable::Tool
+        | Observable::ToolName
+        | Observable::ToolArgs
+        | Observable::ToolArgField(_) => {
             ctx.bin.is_none()
                 && ctx.fs_op.is_none()
                 && ctx.net_domain.is_none()
@@ -944,6 +957,16 @@ fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec
         }
         Observable::ToolArgs => None, // deferred — requires tool argument access
         Observable::AgentName => ctx.agent_name.as_ref().map(|n| vec![n.clone()]),
+        Observable::ToolArgField(field) => {
+            // Look up the field in tool_input. Absent or null → None (short-circuit).
+            match ctx.tool_input.get(field.as_str()) {
+                Some(serde_json::Value::String(s)) => Some(vec![s.clone()]),
+                Some(serde_json::Value::Number(n)) => Some(vec![n.to_string()]),
+                Some(serde_json::Value::Bool(b)) => Some(vec![b.to_string()]),
+                Some(serde_json::Value::Null) | None => None,
+                Some(other) => Some(vec![other.to_string()]),
+            }
+        }
         Observable::State => None, // deferred
         Observable::Tuple(obs) => {
             let mut values = Vec::with_capacity(obs.len());
@@ -1456,5 +1479,89 @@ mod tests {
             .build_implicit_sandbox()
             .expect("should have implicit sandbox");
         assert_eq!(sandbox.network, NetworkPolicy::Allow);
+    }
+
+    // -----------------------------------------------------------------------
+    // Nullable accessor eval tests (ctx.tool.args.<field>?)
+    // -----------------------------------------------------------------------
+
+    fn compile_v2_tree(source: &str) -> PolicyTree {
+        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
+        crate::policy::compile::compile_to_tree(source, &env).unwrap()
+    }
+
+    #[test]
+    fn nullable_accessor_present_field_matches() {
+        // Use "Skill" — a tool that doesn't map to fs/net/exec capabilities,
+        // so tool-level observables (ctx.tool.args.*) are relevant.
+        let source = r#"
+(version 2)
+(use "main")
+(policy "main"
+  (when (tool "Skill")
+    (match ctx.tool.args.name?
+      "deploy" :allow
+      * :deny))
+  :deny)
+"#;
+        let tree = compile_v2_tree(source);
+        let decision = tree.evaluate("Skill", &json!({"name": "deploy"}), "/home/user/project");
+        assert_eq!(decision.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn nullable_accessor_present_field_no_match_falls_to_wildcard() {
+        let source = r#"
+(version 2)
+(use "main")
+(policy "main"
+  (when (tool "Skill")
+    (match ctx.tool.args.name?
+      "deploy" :allow
+      * :deny))
+  :deny)
+"#;
+        let tree = compile_v2_tree(source);
+        let decision = tree.evaluate("Skill", &json!({"name": "rollback"}), "/home/user/project");
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn nullable_accessor_absent_field_short_circuits_to_default() {
+        let source = r#"
+(version 2)
+(use "main")
+(policy "main"
+  (when (tool "Skill")
+    (match ctx.tool.args.name?
+      "deploy" :allow
+      * :allow))
+  :deny)
+"#;
+        let tree = compile_v2_tree(source);
+        // tool_input has no "name" field → match short-circuits → default :deny
+        let decision = tree.evaluate(
+            "Skill",
+            &json!({"other_field": "value"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn nullable_accessor_null_field_treated_as_absent() {
+        let source = r#"
+(version 2)
+(use "main")
+(policy "main"
+  (when (tool "Skill")
+    (match ctx.tool.args.name?
+      * :allow))
+  :ask)
+"#;
+        let tree = compile_v2_tree(source);
+        // null value → treated as absent → short-circuit → default :ask
+        let decision = tree.evaluate("Skill", &json!({"name": null}), "/home/user/project");
+        assert_eq!(decision.effect, Effect::Ask);
     }
 }

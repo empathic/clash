@@ -464,9 +464,10 @@ observable      = "command" | "tool"
                 | "ctx.http.domain" | "ctx.http.method" | "ctx.http.port" | "ctx.http.path"
                 | "ctx.fs.action" | "ctx.fs.path" | "ctx.fs.exists"
                 | "ctx.process.command" | "ctx.process.args"
-                | "ctx.tool.name" | "ctx.tool.args"
+                | "ctx.tool.name" | "ctx.tool.args" | ctx_tool_arg_field
                 | "ctx.state"
                 | "[" observable observable+ "]"         ; tuple
+ctx_tool_arg_field = "ctx.tool.args." FIELD_NAME "?"  ; nullable dynamic field accessor
 match_arm       = arm_pattern effect_kw
 sandbox_match_arm = arm_pattern sandbox_effect_kw
 sandbox_effect_kw = ":allow" | ":deny"
@@ -563,6 +564,7 @@ At **policy level**, match arms may use `:allow`, `:deny`, or `:ask` effects. In
 | `ctx.process.args` | [string] | Argument list |
 | `ctx.tool.name` | string | Tool name |
 | `ctx.tool.args` | {string?} | Tool arguments (dynamic, nullable) |
+| `ctx.tool.args.<field>?` | string? | Nullable accessor for a specific tool argument field; absent field short-circuits the enclosing `match` |
 | `ctx.state` | string | Agent state |
 
 #### Scalar match

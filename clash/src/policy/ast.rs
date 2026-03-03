@@ -235,6 +235,8 @@ pub enum Observable {
     ToolName,
     /// `ctx.tool.args` — tool arguments (dynamic, nullable accessors).
     ToolArgs,
+    /// `ctx.tool.args.<field>?` — nullable accessor for a specific tool argument field.
+    ToolArgField(String),
 
     // -- ctx.agent namespace -------------------------------------------------
     /// `ctx.agent.name` — subagent name.
@@ -433,6 +435,7 @@ impl fmt::Display for Observable {
             Observable::ToolName => write!(f, "ctx.tool.name"),
             Observable::ToolArgs => write!(f, "ctx.tool.args"),
             Observable::AgentName => write!(f, "ctx.agent.name"),
+            Observable::ToolArgField(field) => write!(f, "ctx.tool.args.{field}?"),
             Observable::State => write!(f, "ctx.state"),
             Observable::Tuple(obs) => {
                 write!(f, "[")?;

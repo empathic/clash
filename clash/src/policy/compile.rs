@@ -638,7 +638,7 @@ fn compile_match_to_sandbox(
         Observable::ProcessCommand | Observable::ProcessArgs => {
             // Process observables don't apply to sandbox rules.
         }
-        Observable::ToolName | Observable::ToolArgs => {
+        Observable::ToolName | Observable::ToolArgs | Observable::ToolArgField(_) => {
             // Tool context observables don't apply to sandbox rules.
         }
         Observable::AgentName => {
@@ -981,6 +981,11 @@ fn compile_when_guard(
             // Deferred — always true for now
             Ok(Predicate::True)
         }
+        Observable::ToolArgField(_) => {
+            // Nullable field accessor in when guard: always true (field presence
+            // is checked at match-dispatch time, not guard time).
+            Ok(Predicate::True)
+        }
         Observable::ToolName => {
             let pat = match pattern {
                 ArmPattern::Single(p) => p,
@@ -1100,6 +1105,7 @@ fn compile_observable_to_ir(obs: &Observable) -> Result<crate::policy::tree::Obs
         Observable::ToolArgs => Ok(ir::Observable::ToolArgs),
         Observable::Agent => Ok(ir::Observable::Agent),
         Observable::AgentName => Ok(ir::Observable::AgentName),
+        Observable::ToolArgField(field) => Ok(ir::Observable::ToolArgField(field.clone())),
         Observable::State => Ok(ir::Observable::State),
         Observable::Tuple(obs) => {
             let inner = obs

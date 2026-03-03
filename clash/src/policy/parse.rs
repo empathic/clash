@@ -737,6 +737,19 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
             Ok((Observable::FsPath, ArmPattern::SinglePath(pf)))
         }
 
+        // ctx.tool.args.<field>? — nullable dynamic field when guard
+        other if other.starts_with("ctx.tool.args.") => {
+            let observable = parse_tool_arg_field(other)?;
+            ensure!(list.len() == 2, "({other}) guard expects exactly 1 pattern");
+            // Try path filter first, fall back to general pattern
+            if let Ok(pf) = try_parse_arm_path_filter(&list[1], ctx) {
+                Ok((observable, ArmPattern::SinglePath(pf)))
+            } else {
+                let pat = parse_pattern(&list[1], ctx)?;
+                Ok((observable, ArmPattern::Single(pat)))
+            }
+        }
+
         other => bail!(
             "unknown when guard: {other} (expected 'command', 'tool', 'agent', \
              'ctx.http.domain', 'ctx.http.method', 'ctx.fs.action', or 'ctx.fs.path')"
@@ -843,6 +856,9 @@ fn parse_observable(expr: &SExpr) -> Result<Observable> {
             // ctx.state
             "ctx.state" => Ok(Observable::State),
 
+            // ctx.tool.args.<field>? — nullable dynamic field accessor
+            other if other.starts_with("ctx.tool.args.") => parse_tool_arg_field(other),
+
             // Deprecated flat names — accept with warning
             "proxy.domain" => {
                 tracing::warn!("deprecated observable `proxy.domain`: use `ctx.http.domain`");
@@ -881,6 +897,33 @@ fn parse_observable(expr: &SExpr) -> Result<Observable> {
             Ok(Observable::Tuple(obs))
         }
         _ => bail!("expected observable reference"),
+    }
+}
+
+/// Parse a `ctx.tool.args.<field>?` nullable dynamic field accessor.
+///
+/// The `?` suffix is required for dynamic fields — bare `ctx.tool.args.<field>`
+/// is a validation error because the field may not exist for all tool invocations.
+fn parse_tool_arg_field(atom: &str) -> Result<Observable> {
+    let suffix = &atom["ctx.tool.args.".len()..];
+    if let Some(field) = suffix.strip_suffix('?') {
+        ensure!(
+            !field.is_empty(),
+            "ctx.tool.args.? requires a field name before the ? suffix"
+        );
+        ensure!(
+            field
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+            "invalid field name in ctx.tool.args.{field}? \
+             (must be alphanumeric, underscore, or hyphen)"
+        );
+        Ok(Observable::ToolArgField(field.to_string()))
+    } else {
+        bail!(
+            "dynamic field `{atom}` may not exist for all tools — \
+             add ? suffix: {atom}?"
+        )
     }
 }
 
@@ -1047,8 +1090,11 @@ fn try_parse_arm_path_filter(expr: &SExpr, ctx: &ParseContext) -> Result<PathFil
 }
 
 /// Check if an observable refers to a path value.
+///
+/// ToolArgField is included because tool arguments may contain file paths
+/// that users want to match with `(subpath ...)` patterns.
 fn observable_is_path(obs: &Observable) -> bool {
-    matches!(obs, Observable::FsPath)
+    matches!(obs, Observable::FsPath | Observable::ToolArgField(_))
 }
 
 /// Parse an effect keyword in match arm position: `:allow`, `:deny`, `:ask`.
@@ -2658,5 +2704,87 @@ mod tests {
         "#;
         let ast = parse(source).unwrap();
         assert_eq!(ast.len(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Nullable accessor tests (ctx.tool.args.<field>?)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_nullable_accessor_in_match() {
+        let source = r#"
+            (version 2)
+            (use "main")
+            (policy "main"
+              (match ctx.tool.args.file_path?
+                (subpath "/home") :allow
+                * :deny)
+              :deny)
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[2] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!("expected Policy"),
+        };
+        let block = match &body[0] {
+            PolicyItem::Match(b) => b,
+            other => panic!("expected Match, got {other:?}"),
+        };
+        assert_eq!(
+            block.observable,
+            Observable::ToolArgField("file_path".into())
+        );
+        assert_eq!(block.arms.len(), 2);
+    }
+
+    #[test]
+    fn parse_nullable_accessor_in_when_guard() {
+        let source = r#"
+            (version 2)
+            (use "main")
+            (policy "main"
+              (when (ctx.tool.args.file_path? (subpath "/home")) :allow)
+              :deny)
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[2] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!("expected Policy"),
+        };
+        match &body[0] {
+            PolicyItem::When {
+                observable,
+                pattern,
+                ..
+            } => {
+                assert_eq!(*observable, Observable::ToolArgField("file_path".into()));
+                assert!(matches!(pattern, ArmPattern::SinglePath(_)));
+            }
+            other => panic!("expected When, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_error_bare_dynamic_field_without_question_mark() {
+        let source = r#"
+            (version 2)
+            (use "main")
+            (policy "main"
+              (match ctx.tool.args.file_path
+                * :deny)
+              :deny)
+        "#;
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.to_string().contains("add ? suffix"),
+            "expected actionable error about ? suffix, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn parse_nullable_accessor_display_roundtrip() {
+        let obs = Observable::ToolArgField("file_path".into());
+        assert_eq!(obs.to_string(), "ctx.tool.args.file_path?");
     }
 }
