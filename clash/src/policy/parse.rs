@@ -708,6 +708,10 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
             let m = parse_tool_matcher(&list[1..], ctx)?;
             Ok((Observable::Agent, ArmPattern::Single(m.name)))
         }
+        "mcp" => {
+            let m = parse_tool_matcher(&list[1..], ctx)?;
+            Ok((Observable::Mcp, ArmPattern::Single(m.name)))
+        }
 
         // ctx.http guards
         "ctx.http.domain" => {
@@ -759,7 +763,7 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
         }
 
         other => bail!(
-            "unknown when guard: {other} (expected 'command', 'tool', 'agent', \
+            "unknown when guard: {other} (expected 'command', 'tool', 'agent', 'mcp', \
              'ctx.http.domain', 'ctx.http.method', 'ctx.fs.action', or 'ctx.fs.path')"
         ),
     }
@@ -842,6 +846,7 @@ fn parse_observable(expr: &SExpr) -> Result<Observable> {
             "command" => Ok(Observable::Command),
             "tool" => Ok(Observable::Tool),
             "agent" => Ok(Observable::Agent),
+            "mcp" => Ok(Observable::Mcp),
 
             // ctx.http namespace
             "ctx.http.domain" => Ok(Observable::HttpDomain),
@@ -864,6 +869,10 @@ fn parse_observable(expr: &SExpr) -> Result<Observable> {
 
             // ctx.agent namespace
             "ctx.agent.name" => Ok(Observable::AgentName),
+
+            // ctx.mcp namespace
+            "ctx.mcp.server" => Ok(Observable::McpServer),
+            "ctx.mcp.tool" => Ok(Observable::McpTool),
 
             // ctx.state
             "ctx.state" => Ok(Observable::State),

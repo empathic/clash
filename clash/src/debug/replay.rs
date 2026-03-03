@@ -185,6 +185,7 @@ impl ReplayResult {
             },
             Some(CapQuery::Tool { name }) => format!("(tool \"{}\")", name),
             Some(CapQuery::Agent { name }) => format!("(agent \"{}\")", name),
+            Some(CapQuery::Mcp { server, .. }) => format!("(mcp \"{}\")", server),
             None => return format!("clash allow '{}'", self.tool_name.to_lowercase()),
         };
 
