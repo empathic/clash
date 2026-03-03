@@ -166,6 +166,8 @@ pub enum Observable {
     McpTool,
     /// `ctx.tool.args.<field>?` — nullable tool argument field.
     ToolArgField(String),
+    /// `mcp` — invocation-type predicate matching MCP tools by server name.
+    Mcp,
     /// `ctx.state`
     State,
     Tuple(Vec<Observable>),
@@ -288,6 +290,7 @@ impl Predicate {
             Predicate::Command(_) => ctx.bin.is_some(),
             Predicate::Fs(_) => ctx.fs_op.is_some(),
             Predicate::Net(_) => ctx.net_domain.is_some(),
+            Predicate::Mcp(_) => ctx.mcp_server.is_some(),
             // Tool predicates are relevant only when no other domain matched,
             // matching the old `_ =>` fallthrough in tool_to_queries.
             Predicate::Tool(_) => {
@@ -295,9 +298,9 @@ impl Predicate {
                     && ctx.fs_op.is_none()
                     && ctx.net_domain.is_none()
                     && ctx.agent_name.is_none()
+                    && ctx.mcp_server.is_none()
             }
             Predicate::Agent(_) => ctx.agent_name.is_some(),
-            Predicate::Mcp(_) => ctx.mcp_server.is_some(),
             Predicate::True => true,
         }
     }
@@ -378,15 +381,15 @@ impl QueryContext {
                     ctx.net_domain = Some(domain.clone());
                     ctx.net_path = path.clone();
                 }
+                CapQuery::Mcp { server, tool } => {
+                    ctx.mcp_server = Some(server.clone());
+                    ctx.mcp_tool = Some(tool.clone());
+                }
                 CapQuery::Tool { .. } => {
                     // tool_name is already set from the parameter
                 }
                 CapQuery::Agent { name } => {
                     ctx.agent_name = Some(name.clone());
-                }
-                CapQuery::Mcp { server, tool } => {
-                    ctx.mcp_server = Some(server.clone());
-                    ctx.mcp_tool = Some(tool.clone());
                 }
             }
         }
@@ -869,10 +872,26 @@ impl PolicyTree {
             } => {
                 if observable_is_relevant(observable, ctx) {
                     // Observable is in query context → normal first-match evaluation.
+                    let meta = &self.node_meta[*id as usize];
                     for arm in arms {
                         if match_arm_against_ctx(observable, &arm.pattern, ctx) {
                             trace!(node_id = id, "match arm matched");
-                            return self.eval_node(&arm.body, ctx, matched, skipped, sandbox_out);
+                            let pre_len = matched.len();
+                            let result =
+                                self.eval_node(&arm.body, ctx, matched, skipped, sandbox_out);
+                            // Record a match if the body didn't already.
+                            if let Some(effect) = result {
+                                if matched.len() == pre_len {
+                                    matched.push(RuleMatch {
+                                        rule_index: 0,
+                                        description: meta.description.clone(),
+                                        effect,
+                                        has_active_constraints: sandbox_out.is_some(),
+                                        node_id: Some(*id),
+                                    });
+                                }
+                            }
+                            return result;
                         }
                     }
                     None
@@ -924,9 +943,10 @@ fn observable_is_relevant(observable: &Observable, ctx: &QueryContext) -> bool {
                 && ctx.fs_op.is_none()
                 && ctx.net_domain.is_none()
                 && ctx.agent_name.is_none()
+                && ctx.mcp_server.is_none()
         }
         Observable::Agent | Observable::AgentName => ctx.agent_name.is_some(),
-        Observable::McpServer | Observable::McpTool => ctx.mcp_server.is_some(),
+        Observable::Mcp | Observable::McpServer | Observable::McpTool => ctx.mcp_server.is_some(),
         Observable::HttpMethod | Observable::HttpPort => false, // deferred
         Observable::HttpDomain | Observable::HttpPath => ctx.net_domain.is_some(),
         Observable::FsAction | Observable::FsPath | Observable::FsExists => ctx.fs_op.is_some(),
@@ -965,6 +985,13 @@ fn match_arm_against_ctx(
             }
             _ => false,
         },
+        Observable::Mcp => match pattern {
+            MatchPattern::Single(cp) => ctx
+                .mcp_server
+                .as_ref()
+                .is_some_and(|server| cp.matches(server)),
+            _ => false,
+        },
         // For sandbox-style observables, use the string-resolve path.
         _ => {
             let values = resolve_observable(observable, ctx);
@@ -981,8 +1008,8 @@ fn match_arm_against_ctx(
 /// Returns `None` if the observable cannot be resolved (e.g. `HttpMethod` is deferred).
 fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec<String>> {
     match observable {
-        Observable::Command | Observable::Tool | Observable::Agent => None, // handled by match_arm_against_ctx
-        Observable::HttpMethod | Observable::HttpPort => None,              // deferred
+        Observable::Command | Observable::Tool | Observable::Agent | Observable::Mcp => None, // handled by match_arm_against_ctx
+        Observable::HttpMethod | Observable::HttpPort => None, // deferred
         Observable::HttpDomain => ctx.net_domain.as_ref().map(|d| vec![d.clone()]),
         Observable::HttpPath => ctx.net_path.as_ref().map(|p| vec![p.clone()]),
         Observable::FsAction => ctx.fs_op.map(|op| {
@@ -1004,7 +1031,11 @@ fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec
             }
         }
         Observable::ToolName => {
-            if ctx.bin.is_none() && ctx.fs_op.is_none() && ctx.net_domain.is_none() {
+            if ctx.bin.is_none()
+                && ctx.fs_op.is_none()
+                && ctx.net_domain.is_none()
+                && ctx.mcp_server.is_none()
+            {
                 Some(vec![ctx.tool_name.clone()])
             } else {
                 None

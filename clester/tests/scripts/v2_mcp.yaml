@@ -1,0 +1,90 @@
+meta:
+  name: v2 policy — MCP invocation type and ctx.mcp.* observables
+  description: >
+    Test the mcp invocation type predicate and ctx.mcp.server / ctx.mcp.tool
+    observables for matching MCP tool invocations.
+
+clash:
+  policy_sexpr: |
+    (version 2)
+    (use "main")
+
+    (policy "puppeteer"
+      (when (mcp "puppeteer")
+        (match ctx.mcp.tool
+          "puppeteer_navigate"    :ask
+          "puppeteer_screenshot"  :allow)))
+
+    (policy "github-mcp"
+      (when (mcp "github")
+        :allow))
+
+    (policy "main"
+      (include "puppeteer")
+      (include "github-mcp")
+      :deny)
+
+steps:
+  # MCP puppeteer: navigate → ask
+  - name: puppeteer navigate is ask
+    hook: pre-tool-use
+    tool_name: mcp__puppeteer__puppeteer_navigate
+    tool_input: {}
+    expect:
+      decision: ask
+
+  # MCP puppeteer: screenshot → allow
+  - name: puppeteer screenshot is allow
+    hook: pre-tool-use
+    tool_name: mcp__puppeteer__puppeteer_screenshot
+    tool_input: {}
+    expect:
+      decision: allow
+
+  # MCP puppeteer: unmatched tool → deny (falls through match, then default)
+  - name: puppeteer click is denied (unmatched tool)
+    hook: pre-tool-use
+    tool_name: mcp__puppeteer__puppeteer_click
+    tool_input: {}
+    expect:
+      decision: deny
+
+  # MCP github: all tools → allow
+  - name: github create_issue is allowed
+    hook: pre-tool-use
+    tool_name: mcp__github__create_issue
+    tool_input: {}
+    expect:
+      decision: allow
+
+  - name: github list_prs is allowed
+    hook: pre-tool-use
+    tool_name: mcp__github__list_prs
+    tool_input: {}
+    expect:
+      decision: allow
+
+  # Unknown MCP server → deny
+  - name: unknown MCP server is denied
+    hook: pre-tool-use
+    tool_name: mcp__unknown_server__some_tool
+    tool_input: {}
+    expect:
+      decision: deny
+
+  # Non-MCP tools unaffected — Skill is allowed by internal (allow (tool)) catch-all;
+  # this confirms MCP guards don't interfere with non-MCP tool evaluation.
+  - name: regular tool is still allowed (internal policy)
+    hook: pre-tool-use
+    tool_name: Skill
+    tool_input: {}
+    expect:
+      decision: allow
+
+  - name: bash is denied by default
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: echo hello
+    expect:
+      decision: deny
