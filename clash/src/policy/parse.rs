@@ -590,22 +590,34 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
             Ok((Observable::Tool, ArmPattern::Single(m.name)))
         }
         "proxy.domain" => {
-            ensure!(list.len() == 2, "(proxy.domain) guard expects exactly 1 pattern");
+            ensure!(
+                list.len() == 2,
+                "(proxy.domain) guard expects exactly 1 pattern"
+            );
             let pat = parse_pattern(&list[1], ctx)?;
             Ok((Observable::ProxyDomain, ArmPattern::Single(pat)))
         }
         "proxy.method" => {
-            ensure!(list.len() == 2, "(proxy.method) guard expects exactly 1 pattern");
+            ensure!(
+                list.len() == 2,
+                "(proxy.method) guard expects exactly 1 pattern"
+            );
             let pat = parse_pattern(&list[1], ctx)?;
             Ok((Observable::ProxyMethod, ArmPattern::Single(pat)))
         }
         "fs.action" => {
-            ensure!(list.len() == 2, "(fs.action) guard expects exactly 1 pattern");
+            ensure!(
+                list.len() == 2,
+                "(fs.action) guard expects exactly 1 pattern"
+            );
             let pat = parse_pattern(&list[1], ctx)?;
             Ok((Observable::FsAction, ArmPattern::Single(pat)))
         }
         "fs.path" => {
-            ensure!(list.len() == 2, "(fs.path) guard expects exactly 1 path filter");
+            ensure!(
+                list.len() == 2,
+                "(fs.path) guard expects exactly 1 path filter"
+            );
             let pf = parse_path_filter(&list[1], ctx)?;
             Ok((Observable::FsPath, ArmPattern::SinglePath(pf)))
         }
@@ -874,7 +886,9 @@ fn parse_match_effect_keyword(expr: &SExpr, in_sandbox: bool) -> Result<Effect> 
         ":deny" => Ok(Effect::Deny),
         ":ask" => {
             if in_sandbox {
-                bail!(":ask is not allowed in sandbox match arms (sandbox can only :allow or :deny)")
+                bail!(
+                    ":ask is not allowed in sandbox match arms (sandbox can only :allow or :deny)"
+                )
             }
             Ok(Effect::Ask)
         }

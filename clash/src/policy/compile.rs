@@ -116,13 +116,10 @@ fn compile_tree_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Po
 
     // Resolve default effect: last bare PolicyItem::Effect in the flattened body
     // takes priority, then (default effect _), then Deny.
-    let body_effect = items
-        .iter()
-        .rev()
-        .find_map(|(item, _)| match item {
-            PolicyItem::Effect(e) => Some(*e),
-            _ => None,
-        });
+    let body_effect = items.iter().rev().find_map(|(item, _)| match item {
+        PolicyItem::Effect(e) => Some(*e),
+        _ => None,
+    });
     let default_effect = body_effect
         .or(default_decl.map(|(e, _)| e))
         .unwrap_or(Effect::Deny);
@@ -1020,9 +1017,7 @@ fn compile_policy_match_to_node(
 }
 
 /// Compile an AST Observable to an IR Observable.
-fn compile_observable_to_ir(
-    obs: &Observable,
-) -> Result<crate::policy::tree::Observable> {
+fn compile_observable_to_ir(obs: &Observable) -> Result<crate::policy::tree::Observable> {
     use crate::policy::tree as ir;
     match obs {
         Observable::Command => Ok(ir::Observable::Command),
@@ -1421,9 +1416,7 @@ fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Decisio
     let active_policy = use_policy
         .or(default_decl.map(|(_, p)| p))
         .unwrap_or("main");
-    let default_effect = default_decl
-        .map(|(e, _)| e)
-        .unwrap_or(Effect::Deny);
+    let default_effect = default_decl.map(|(e, _)| e).unwrap_or(Effect::Deny);
 
     // Build a map of policy name → body.
     let mut policies: HashMap<&str, &[PolicyItem]> = HashMap::new();

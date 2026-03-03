@@ -809,9 +809,7 @@ impl PolicyTree {
 fn observable_is_relevant(observable: &Observable, ctx: &QueryContext) -> bool {
     match observable {
         Observable::Command => ctx.bin.is_some(),
-        Observable::Tool => {
-            ctx.bin.is_none() && ctx.fs_op.is_none() && ctx.net_domain.is_none()
-        }
+        Observable::Tool => ctx.bin.is_none() && ctx.fs_op.is_none() && ctx.net_domain.is_none(),
         Observable::ProxyMethod => false, // deferred
         Observable::ProxyDomain => ctx.net_domain.is_some(),
         Observable::FsAction | Observable::FsPath => ctx.fs_op.is_some(),
@@ -836,9 +834,7 @@ fn match_arm_against_ctx(
                 }
             }
             // Bare wildcard Single(Any) also matches everything for command
-            MatchPattern::Single(cp) => {
-                ctx.bin.as_ref().is_some_and(|bin| cp.matches(bin))
-            }
+            MatchPattern::Single(cp) => ctx.bin.as_ref().is_some_and(|bin| cp.matches(bin)),
             _ => false,
         },
         Observable::Tool => match pattern {
@@ -887,12 +883,8 @@ fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec
 /// Test whether a match pattern matches a list of resolved string values.
 fn match_pattern_strings(pattern: &MatchPattern, values: &[String]) -> bool {
     match pattern {
-        MatchPattern::Single(cp) => {
-            values.first().is_some_and(|v| cp.matches(v))
-        }
-        MatchPattern::PathFilter(pf) => {
-            values.first().is_some_and(|v| pf.matches(v))
-        }
+        MatchPattern::Single(cp) => values.first().is_some_and(|v| cp.matches(v)),
+        MatchPattern::PathFilter(pf) => values.first().is_some_and(|v| pf.matches(v)),
         MatchPattern::Tuple(pats) => {
             if pats.len() != values.len() {
                 return false;
