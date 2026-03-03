@@ -30,19 +30,52 @@ pub fn add_rule(source: &str, policy_name: &str, rule: &Rule) -> Result<String> 
     Ok(serialize_top_levels(&top_levels))
 }
 
-/// Remove a rule matching the given Display text. Returns modified source.
+/// Returns true if the string looks like a 7-char hex rule ID.
+pub fn looks_like_rule_id(s: &str) -> bool {
+    s.len() == 7 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Resolve a rule ID to its Display text. Returns `None` if not found.
+pub fn resolve_rule_id(source: &str, policy_name: &str, id: &str) -> Result<Option<String>> {
+    let top_levels = parse::parse(source)?;
+    for tl in &top_levels {
+        if let TopLevel::Policy { name, body } = tl
+            && name == policy_name
+        {
+            for item in body {
+                if let PolicyItem::Rule(r) = item
+                    && r.id() == id
+                {
+                    return Ok(Some(r.to_string()));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Remove a rule matching the given Display text or rule ID. Returns modified source.
 pub fn remove_rule(source: &str, policy_name: &str, rule_text: &str) -> Result<String> {
     let mut top_levels = parse::parse(source)?;
     let body = find_policy_mut(&mut top_levels, policy_name)?;
 
     let before = body.len();
-    body.retain(|item| match item {
-        PolicyItem::Rule(r) => r.to_string() != rule_text,
-        _ => true,
-    });
-
-    if body.len() == before {
-        bail!("rule not found: {}", rule_text);
+    if looks_like_rule_id(rule_text) {
+        body.retain(|item| match item {
+            PolicyItem::Rule(r) => r.id() != rule_text,
+            _ => true,
+        });
+        if body.len() == before {
+            bail!("no rule with ID: {}", rule_text);
+        }
+    } else {
+        body.retain(|item| match item {
+            PolicyItem::Rule(r) => r.to_string() != rule_text,
+            _ => true,
+        });
+        if body.len() == before {
+            bail!("rule not found: {}", rule_text);
+        }
     }
 
     Ok(serialize_top_levels(&top_levels))
@@ -342,5 +375,23 @@ mod tests {
         let rule = exec_any_rule(Effect::Allow);
         let err = add_rule(default_policy(), "nonexistent", &rule).unwrap_err();
         assert!(err.to_string().contains("policy not found"));
+    }
+
+    #[test]
+    fn remove_rule_by_id() {
+        let rule = git_push_deny();
+        let added = add_rule(default_policy(), "main", &rule).unwrap();
+        let id = rule.id();
+        let removed = remove_rule(&added, "main", &id).unwrap();
+        assert!(
+            !removed.contains("git"),
+            "rule should be removed by ID:\n{removed}"
+        );
+    }
+
+    #[test]
+    fn remove_rule_by_id_not_found() {
+        let err = remove_rule(default_policy(), "main", "deadbee").unwrap_err();
+        assert!(err.to_string().contains("no rule with ID"));
     }
 }

@@ -440,6 +440,14 @@ fn handle_remove(rule_str: &str, dry_run: bool, scope: Option<&str>) -> Result<(
 
     let (path, source) = load_policy_source(Some(level))?;
     let policy_name = crate::policy::edit::active_policy(&source)?;
+    // Resolve ID to rule text for the success message before removing.
+    let display_text = if crate::policy::edit::looks_like_rule_id(rule_str) {
+        crate::policy::edit::resolve_rule_id(&source, &policy_name, rule_str)?
+            .unwrap_or_else(|| rule_str.to_string())
+    } else {
+        rule_str.to_string()
+    };
+
     let modified = crate::policy::edit::remove_rule(&source, &policy_name, rule_str)?;
 
     if dry_run {
@@ -447,9 +455,10 @@ fn handle_remove(rule_str: &str, dry_run: bool, scope: Option<&str>) -> Result<(
     } else {
         write_policy(&path, &modified)?;
         println!(
-            "{} Removed rule from {} policy: {rule_str}",
+            "{} Removed rule from {} policy: {}",
             style::red_bold("✗"),
-            style::cyan(&level.to_string())
+            style::cyan(&level.to_string()),
+            display_text
         );
     }
     Ok(())
