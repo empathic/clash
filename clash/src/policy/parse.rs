@@ -696,6 +696,10 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
             let m = parse_tool_matcher(&list[1..], ctx)?;
             Ok((Observable::Tool, ArmPattern::Single(m.name)))
         }
+        "agent" => {
+            let m = parse_tool_matcher(&list[1..], ctx)?;
+            Ok((Observable::Agent, ArmPattern::Single(m.name)))
+        }
 
         // ctx.http guards
         "ctx.http.domain" => {
@@ -734,7 +738,7 @@ fn parse_when_guard(expr: &SExpr, ctx: &ParseContext) -> Result<(Observable, Arm
         }
 
         other => bail!(
-            "unknown when guard: {other} (expected 'command', 'tool', \
+            "unknown when guard: {other} (expected 'command', 'tool', 'agent', \
              'ctx.http.domain', 'ctx.http.method', 'ctx.fs.action', or 'ctx.fs.path')"
         ),
     }
@@ -812,6 +816,7 @@ fn parse_observable(expr: &SExpr) -> Result<Observable> {
             // Invocation-type observables (unchanged)
             "command" => Ok(Observable::Command),
             "tool" => Ok(Observable::Tool),
+            "agent" => Ok(Observable::Agent),
 
             // ctx.http namespace
             "ctx.http.domain" => Ok(Observable::HttpDomain),
@@ -831,6 +836,9 @@ fn parse_observable(expr: &SExpr) -> Result<Observable> {
             // ctx.tool namespace
             "ctx.tool.name" => Ok(Observable::ToolName),
             "ctx.tool.args" => Ok(Observable::ToolArgs),
+
+            // ctx.agent namespace
+            "ctx.agent.name" => Ok(Observable::AgentName),
 
             // ctx.state
             "ctx.state" => Ok(Observable::State),
@@ -1947,6 +1955,100 @@ mod tests {
                 assert!(matches!(&body[0], PolicyItem::Effect(Effect::Allow)));
             }
             other => panic!("expected When, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_when_agent_predicate() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (agent "Explore") :allow))
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[1] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        match &body[0] {
+            PolicyItem::When {
+                observable,
+                pattern,
+                body,
+            } => {
+                assert!(matches!(observable, Observable::Agent));
+                match pattern {
+                    ArmPattern::Single(Pattern::Literal(s)) => assert_eq!(s, "Explore"),
+                    _ => panic!("expected Single(Literal) pattern"),
+                }
+                assert_eq!(body.len(), 1);
+                assert!(matches!(&body[0], PolicyItem::Effect(Effect::Allow)));
+            }
+            other => panic!("expected When, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_when_agent_or_predicate() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (agent (or "Explore" "Verify")) :ask))
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[1] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        match &body[0] {
+            PolicyItem::When {
+                observable,
+                pattern,
+                body,
+            } => {
+                assert!(matches!(observable, Observable::Agent));
+                match pattern {
+                    ArmPattern::Single(pat) => {
+                        assert!(matches!(pat, Pattern::Or(ps) if ps.len() == 2));
+                    }
+                    _ => panic!("expected Single pattern"),
+                }
+                assert_eq!(body.len(), 1);
+                assert!(matches!(&body[0], PolicyItem::Effect(Effect::Ask)));
+            }
+            other => panic!("expected When, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_ctx_agent_name_observable() {
+        let source = r#"
+            (version 2)
+            (policy "p"
+              (when (agent *)
+                (match ctx.agent.name
+                  "Explore" :allow
+                  * :deny)))
+        "#;
+        let ast = parse(source).unwrap();
+        let body = match &ast[1] {
+            TopLevel::Policy { body, .. } => body,
+            _ => panic!(),
+        };
+        let when_body = match &body[0] {
+            PolicyItem::When { body, .. } => body,
+            other => panic!("expected When, got {other:?}"),
+        };
+        match &when_body[0] {
+            PolicyItem::Match(block) => {
+                assert_eq!(block.observable, Observable::AgentName);
+                assert_eq!(block.arms.len(), 2);
+                assert_eq!(block.arms[0].effect, Effect::Allow);
+                assert!(
+                    matches!(&block.arms[0].pattern, ArmPattern::Single(Pattern::Literal(s)) if s == "Explore")
+                );
+            }
+            other => panic!("expected Match, got {other:?}"),
         }
     }
 

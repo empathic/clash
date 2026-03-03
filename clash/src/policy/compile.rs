@@ -622,7 +622,9 @@ fn compile_match_to_sandbox(
                             });
                         }
                         other => {
-                            bail!("expected tuple pattern for [ctx.fs.action ctx.fs.path], got: {other:?}")
+                            bail!(
+                                "expected tuple pattern for [ctx.fs.action ctx.fs.path], got: {other:?}"
+                            )
                         }
                     }
                 }
@@ -639,11 +641,14 @@ fn compile_match_to_sandbox(
         Observable::ToolName | Observable::ToolArgs => {
             // Tool context observables don't apply to sandbox rules.
         }
+        Observable::AgentName => {
+            // Agent context observables don't apply to sandbox rules.
+        }
         Observable::State => {
             // State observable doesn't apply to sandbox rules.
         }
-        Observable::Command | Observable::Tool => {
-            // Command/tool observables don't apply to sandbox rules (sandbox restricts fs/net only).
+        Observable::Command | Observable::Tool | Observable::Agent => {
+            // Command/tool/agent observables don't apply to sandbox rules (sandbox restricts fs/net only).
         }
     }
     Ok(())
@@ -909,6 +914,15 @@ fn compile_when_guard(
                 name: pat.clone(),
             })?))
         }
+        Observable::Agent => {
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("agent observable requires a single pattern"),
+            };
+            Ok(Predicate::Agent(compile_tool_to_compiled(&ToolMatcher {
+                name: pat.clone(),
+            })?))
+        }
         Observable::HttpDomain => {
             let pat = match pattern {
                 ArmPattern::Single(p) => p,
@@ -973,6 +987,15 @@ fn compile_when_guard(
                 _ => bail!("ctx.tool.name observable requires a single pattern"),
             };
             Ok(Predicate::Tool(compile_tool_to_compiled(&ToolMatcher {
+                name: pat.clone(),
+            })?))
+        }
+        Observable::AgentName => {
+            let pat = match pattern {
+                ArmPattern::Single(p) => p,
+                _ => bail!("ctx.agent.name observable requires a single pattern"),
+            };
+            Ok(Predicate::Agent(compile_tool_to_compiled(&ToolMatcher {
                 name: pat.clone(),
             })?))
         }
@@ -1075,6 +1098,8 @@ fn compile_observable_to_ir(obs: &Observable) -> Result<crate::policy::tree::Obs
         Observable::ProcessArgs => Ok(ir::Observable::ProcessArgs),
         Observable::ToolName => Ok(ir::Observable::ToolName),
         Observable::ToolArgs => Ok(ir::Observable::ToolArgs),
+        Observable::Agent => Ok(ir::Observable::Agent),
+        Observable::AgentName => Ok(ir::Observable::AgentName),
         Observable::State => Ok(ir::Observable::State),
         Observable::Tuple(obs) => {
             let inner = obs
@@ -3056,5 +3081,106 @@ mod tests {
             Effect::Allow,
             "git status should be allowed"
         );
+    }
+
+    #[test]
+    fn compile_to_tree_v2_agent_when_allows() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (agent "Explore") :allow))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+
+        let input = serde_json::json!({ "subagent_type": "Explore" });
+        let decision = tree.evaluate("Agent", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "agent Explore should be allowed"
+        );
+    }
+
+    #[test]
+    fn compile_to_tree_v2_agent_when_denies_other() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (agent "Explore") :allow))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+
+        let input = serde_json::json!({ "subagent_type": "Plan" });
+        let decision = tree.evaluate("Agent", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Deny,
+            "agent Plan should hit default deny"
+        );
+    }
+
+    #[test]
+    fn compile_to_tree_v2_agent_or_pattern() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (agent (or "Explore" "Verify")) :ask))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+
+        let input = serde_json::json!({ "subagent_type": "Verify" });
+        let decision = tree.evaluate("Agent", &input, "/home/user");
+        assert_eq!(decision.effect, Effect::Ask, "agent Verify should be :ask");
+    }
+
+    #[test]
+    fn compile_to_tree_v2_agent_does_not_match_tool() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (agent "Explore") :allow))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+
+        // A normal tool (not Agent) should not match the agent predicate.
+        let input = serde_json::json!({});
+        let decision = tree.evaluate("WebFetch", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Deny,
+            "non-agent tool should not match agent predicate"
+        );
+    }
+
+    #[test]
+    fn compile_to_tree_v2_ctx_agent_name_match() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (agent *)
+    (match ctx.agent.name
+      "Explore" :allow
+      "Plan" :allow
+      * :ask)))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+
+        let input = serde_json::json!({ "subagent_type": "Explore" });
+        let decision = tree.evaluate("Agent", &input, "/home/user");
+        assert_eq!(decision.effect, Effect::Allow);
+
+        let input = serde_json::json!({ "subagent_type": "Unknown" });
+        let decision = tree.evaluate("Agent", &input, "/home/user");
+        assert_eq!(decision.effect, Effect::Ask);
     }
 }

@@ -89,6 +89,8 @@ pub enum Predicate {
     Net(CompiledNet),
     /// Matches tool queries (tool name).
     Tool(CompiledTool),
+    /// Matches agent queries (subagent name).
+    Agent(CompiledTool),
     /// Always matches.
     True,
 }
@@ -102,6 +104,8 @@ pub enum Observable {
     Command,
     /// Matches tool invocations by name.
     Tool,
+    /// Matches subagent spawning by name.
+    Agent,
     /// `ctx.http.domain` (formerly `proxy.domain`).
     HttpDomain,
     /// `ctx.http.method` (formerly `proxy.method`).
@@ -124,6 +128,8 @@ pub enum Observable {
     ToolName,
     /// `ctx.tool.args`
     ToolArgs,
+    /// `ctx.agent.name`
+    AgentName,
     /// `ctx.state`
     State,
     Tuple(Vec<Observable>),
@@ -199,6 +205,7 @@ pub struct QueryContext {
     pub fs_path: Option<String>,
     pub net_domain: Option<String>,
     pub net_path: Option<String>,
+    pub agent_name: Option<String>,
     pub cwd: String,
 }
 
@@ -245,8 +252,12 @@ impl Predicate {
             // Tool predicates are relevant only when no other domain matched,
             // matching the old `_ =>` fallthrough in tool_to_queries.
             Predicate::Tool(_) => {
-                ctx.bin.is_none() && ctx.fs_op.is_none() && ctx.net_domain.is_none()
+                ctx.bin.is_none()
+                    && ctx.fs_op.is_none()
+                    && ctx.net_domain.is_none()
+                    && ctx.agent_name.is_none()
             }
+            Predicate::Agent(_) => ctx.agent_name.is_some(),
             Predicate::True => true,
         }
     }
@@ -277,6 +288,10 @@ impl Predicate {
                 }
             }
             Predicate::Tool(tool) => tool.matches(&ctx.tool_name),
+            Predicate::Agent(agent) => ctx
+                .agent_name
+                .as_ref()
+                .is_some_and(|name| agent.matches(name)),
             Predicate::True => true,
         }
     }
@@ -293,6 +308,7 @@ impl QueryContext {
             fs_path: None,
             net_domain: None,
             net_path: None,
+            agent_name: None,
             cwd: cwd.to_string(),
         };
 
@@ -312,6 +328,9 @@ impl QueryContext {
                 }
                 CapQuery::Tool { .. } => {
                     // tool_name is already set from the parameter
+                }
+                CapQuery::Agent { name } => {
+                    ctx.agent_name = Some(name.clone());
                 }
             }
         }
@@ -834,8 +853,12 @@ fn observable_is_relevant(observable: &Observable, ctx: &QueryContext) -> bool {
             ctx.bin.is_some()
         }
         Observable::Tool | Observable::ToolName | Observable::ToolArgs => {
-            ctx.bin.is_none() && ctx.fs_op.is_none() && ctx.net_domain.is_none()
+            ctx.bin.is_none()
+                && ctx.fs_op.is_none()
+                && ctx.net_domain.is_none()
+                && ctx.agent_name.is_none()
         }
+        Observable::Agent | Observable::AgentName => ctx.agent_name.is_some(),
         Observable::HttpMethod | Observable::HttpPort => false, // deferred
         Observable::HttpDomain | Observable::HttpPath => ctx.net_domain.is_some(),
         Observable::FsAction | Observable::FsPath | Observable::FsExists => ctx.fs_op.is_some(),
@@ -868,6 +891,12 @@ fn match_arm_against_ctx(
             MatchPattern::Single(cp) => cp.matches(&ctx.tool_name),
             _ => false,
         },
+        Observable::Agent => match pattern {
+            MatchPattern::Single(cp) => {
+                ctx.agent_name.as_ref().is_some_and(|name| cp.matches(name))
+            }
+            _ => false,
+        },
         // For sandbox-style observables, use the string-resolve path.
         _ => {
             let values = resolve_observable(observable, ctx);
@@ -884,8 +913,8 @@ fn match_arm_against_ctx(
 /// Returns `None` if the observable cannot be resolved (e.g. `HttpMethod` is deferred).
 fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec<String>> {
     match observable {
-        Observable::Command | Observable::Tool => None, // handled by match_arm_against_ctx
-        Observable::HttpMethod | Observable::HttpPort => None, // deferred
+        Observable::Command | Observable::Tool | Observable::Agent => None, // handled by match_arm_against_ctx
+        Observable::HttpMethod | Observable::HttpPort => None,              // deferred
         Observable::HttpDomain => ctx.net_domain.as_ref().map(|d| vec![d.clone()]),
         Observable::HttpPath => ctx.net_path.as_ref().map(|p| vec![p.clone()]),
         Observable::FsAction => ctx.fs_op.map(|op| {
@@ -914,7 +943,8 @@ fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec
             }
         }
         Observable::ToolArgs => None, // deferred — requires tool argument access
-        Observable::State => None,    // deferred
+        Observable::AgentName => ctx.agent_name.as_ref().map(|n| vec![n.clone()]),
+        Observable::State => None, // deferred
         Observable::Tuple(obs) => {
             let mut values = Vec::with_capacity(obs.len());
             for o in obs {

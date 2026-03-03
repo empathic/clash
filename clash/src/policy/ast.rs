@@ -203,6 +203,8 @@ pub enum Observable {
     Command,
     /// `tool` — invocation-type predicate matching tool queries by name.
     Tool,
+    /// `agent` — invocation-type predicate matching subagent spawning by name.
+    Agent,
 
     // -- ctx.http namespace --------------------------------------------------
     /// `ctx.http.domain` — destination domain (formerly `proxy.domain`).
@@ -233,6 +235,10 @@ pub enum Observable {
     ToolName,
     /// `ctx.tool.args` — tool arguments (dynamic, nullable accessors).
     ToolArgs,
+
+    // -- ctx.agent namespace -------------------------------------------------
+    /// `ctx.agent.name` — subagent name.
+    AgentName,
 
     // -- ctx.state -----------------------------------------------------------
     /// `ctx.state` — agent state.
@@ -387,6 +393,15 @@ fn display_when_guard(
             }
             write!(f, ")")
         }
+        Observable::Agent => {
+            write!(f, "(agent")?;
+            if let ArmPattern::Single(pat) = pattern {
+                if *pat != Pattern::Any {
+                    write!(f, " {pat}")?;
+                }
+            }
+            write!(f, ")")
+        }
         _ => {
             // proxy.domain, fs.action, fs.path — render as (observable pattern)
             write!(f, "({observable}")?;
@@ -405,6 +420,7 @@ impl fmt::Display for Observable {
         match self {
             Observable::Command => write!(f, "command"),
             Observable::Tool => write!(f, "tool"),
+            Observable::Agent => write!(f, "agent"),
             Observable::HttpDomain => write!(f, "ctx.http.domain"),
             Observable::HttpMethod => write!(f, "ctx.http.method"),
             Observable::HttpPort => write!(f, "ctx.http.port"),
@@ -416,6 +432,7 @@ impl fmt::Display for Observable {
             Observable::ProcessArgs => write!(f, "ctx.process.args"),
             Observable::ToolName => write!(f, "ctx.tool.name"),
             Observable::ToolArgs => write!(f, "ctx.tool.args"),
+            Observable::AgentName => write!(f, "ctx.agent.name"),
             Observable::State => write!(f, "ctx.state"),
             Observable::Tuple(obs) => {
                 write!(f, "[")?;
