@@ -418,6 +418,7 @@ when_guard      = "(" "command" pattern? args_spec ")"
                 | "(" "mcp" pattern? ")"
                 | "(" observable pattern ")"
                 | "(" observable path_filter ")"        ; for ctx.fs.path
+                | "(" "eq" ctx_ref pattern ")"          ; equality predicate
 when_body       = effect_kw                             ; inline effect
                 | match_block                           ; nested match (constraint source)
                 | when_block                            ; nested when
@@ -486,6 +487,12 @@ The body contains one or more items: an effect keyword (`:allow`, `:deny`, `:ask
 
 ; Guard on filesystem path
 (when (ctx.fs.path (subpath (env PWD))) :allow)
+
+; Equality predicate on ctx field
+(when (eq ctx.process.command "cargo") :allow)
+
+; Equality predicate with or-pattern
+(when (eq ctx.http.domain (or "github.com" "crates.io")) :allow)
 
 ; Allow cargo with network constraints
 (when (command "cargo" *)

@@ -204,18 +204,16 @@ fn compile_tree_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Po
 ///
 /// Internal policies (`__internal_*`) are exempt because they may legitimately
 /// use `:ask` under `command` guards (e.g. the internal clash policy).
-fn validate_ask_contexts(
-    node: &Node,
-    has_valid_invocation: bool,
-    meta: &[NodeMeta],
-) -> Result<()> {
+fn validate_ask_contexts(node: &Node, has_valid_invocation: bool, meta: &[NodeMeta]) -> Result<()> {
     match node {
         Node::Sequence { children, .. } | Node::DenyOverrides { children, .. } => {
             for child in children {
                 validate_ask_contexts(child, has_valid_invocation, meta)?;
             }
         }
-        Node::When { predicate, body, .. } => {
+        Node::When {
+            predicate, body, ..
+        } => {
             let valid = has_valid_invocation || predicate.allows_ask();
             validate_ask_contexts(body, valid, meta)?;
         }
@@ -351,6 +349,7 @@ fn compile_policy_item_to_node(
             observable,
             pattern,
             body,
+            ..
         } => {
             // Compile the when guard (observable + pattern) into a Predicate.
             let compiled_pred = compile_when_guard(observable, pattern, env)?;
@@ -1010,21 +1009,28 @@ fn compile_when_guard(
             Ok(Predicate::Fs(CompiledFs { op, path: None }))
         }
         Observable::FsPath => {
-            let pf = match pattern {
-                ArmPattern::SinglePath(pf) => pf,
-                ArmPattern::Single(Pattern::Any) => {
-                    return Ok(Predicate::Fs(CompiledFs {
+            match pattern {
+                ArmPattern::SinglePath(pf) => {
+                    let compiled_pf = compile_path_filter(pf, env)?;
+                    Ok(Predicate::Fs(CompiledFs {
                         op: OpPattern::Any,
-                        path: None,
-                    }));
+                        path: Some(compiled_pf),
+                    }))
                 }
-                _ => bail!("ctx.fs.path observable requires a path filter pattern"),
-            };
-            let compiled_pf = compile_path_filter(pf, env)?;
-            Ok(Predicate::Fs(CompiledFs {
-                op: OpPattern::Any,
-                path: Some(compiled_pf),
-            }))
+                ArmPattern::Single(Pattern::Any) => Ok(Predicate::Fs(CompiledFs {
+                    op: OpPattern::Any,
+                    path: None,
+                })),
+                // (eq ctx.fs.path "...") — literal/pattern equality on path
+                ArmPattern::Single(pat) => {
+                    let compiled = compile_pattern(pat)?;
+                    Ok(Predicate::Fs(CompiledFs {
+                        op: OpPattern::Any,
+                        path: Some(compiled_pattern_to_path_filter(compiled)),
+                    }))
+                }
+                _ => bail!("ctx.fs.path observable requires a path filter or pattern"),
+            }
         }
         Observable::FsExists => {
             // Deferred — always true for now
@@ -1237,7 +1243,9 @@ fn compile_observable_to_ir(obs: &Observable) -> Result<crate::policy::tree::Obs
         Observable::ToolArgs => Ok(ir::Observable::ToolArgs),
         Observable::Agent => Ok(ir::Observable::Agent),
         Observable::AgentName => Ok(ir::Observable::AgentName),
-        Observable::Mcp => bail!("mcp invocation type cannot be used as a match observable; use ctx.mcp.server or ctx.mcp.tool"),
+        Observable::Mcp => bail!(
+            "mcp invocation type cannot be used as a match observable; use ctx.mcp.server or ctx.mcp.tool"
+        ),
         Observable::McpServer => Ok(ir::Observable::McpServer),
         Observable::McpTool => Ok(ir::Observable::McpTool),
         Observable::ToolArgField(field) => Ok(ir::Observable::ToolArgField(field.clone())),
@@ -1949,6 +1957,7 @@ fn validate_sibling_dimensions(items: &[PolicyItem]) -> Result<()> {
                 observable,
                 pattern,
                 body,
+                ..
             } => Some((observable, pattern, body.as_slice())),
             _ => None,
         })
@@ -2174,6 +2183,30 @@ fn compile_pattern(pattern: &Pattern) -> Result<CompiledPattern> {
             let inner = compile_pattern(p)?;
             Ok(CompiledPattern::Not(Box::new(inner)))
         }
+    }
+}
+
+/// Convert a `CompiledPattern` to a `CompiledPathFilter`.
+///
+/// Used by `(eq ctx.fs.path ...)` where the pattern is parsed as a general
+/// pattern rather than a path filter.
+fn compiled_pattern_to_path_filter(cp: CompiledPattern) -> CompiledPathFilter {
+    match cp {
+        CompiledPattern::Any => {
+            // Any path — unreachable in practice (handled earlier as path: None)
+            CompiledPathFilter::Or(vec![])
+        }
+        CompiledPattern::Literal(s) => CompiledPathFilter::Literal(s),
+        CompiledPattern::Regex(r) => CompiledPathFilter::Regex(r),
+        CompiledPattern::Or(ps) => CompiledPathFilter::Or(
+            ps.into_iter()
+                .map(compiled_pattern_to_path_filter)
+                .collect(),
+        ),
+        CompiledPattern::Not(p) => {
+            CompiledPathFilter::Not(Box::new(compiled_pattern_to_path_filter(*p)))
+        }
+        CompiledPattern::Subpath(s) => CompiledPathFilter::Subpath(s),
     }
 }
 
@@ -3839,5 +3872,129 @@ mod tests {
   (when (command "rm" *) :deny))
 "#;
         assert!(compile_to_tree(source, &env).is_ok());
+    }
+
+    // ── eq predicate ────────────────────────────────────────────────────
+
+    #[test]
+    fn compile_to_tree_v2_eq_process_command() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (eq ctx.process.command "cargo") :allow))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+
+        // "cargo build" should match the eq predicate → Allow.
+        let input = serde_json::json!({ "command": "cargo build" });
+        let decision = tree.evaluate("Bash", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "cargo should be allowed via eq predicate"
+        );
+
+        // "git status" should not match → default deny.
+        let input = serde_json::json!({ "command": "git status" });
+        let decision = tree.evaluate("Bash", &input, "/home/user");
+        assert_eq!(decision.effect, Effect::Deny, "git should hit default deny");
+    }
+
+    #[test]
+    fn compile_to_tree_v2_eq_http_domain() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (eq ctx.http.domain "github.com") :allow))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+
+        // WebFetch to github.com should match → Allow.
+        let input = serde_json::json!({ "url": "https://github.com/foo" });
+        let decision = tree.evaluate("WebFetch", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "github.com should be allowed via eq"
+        );
+
+        // WebFetch to evil.com should not match → default deny.
+        let input = serde_json::json!({ "url": "https://evil.com/foo" });
+        let decision = tree.evaluate("WebFetch", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Deny,
+            "evil.com should hit default deny"
+        );
+    }
+
+    #[test]
+    fn compile_to_tree_v2_eq_tool_name() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (eq ctx.tool.name "Skill") :allow))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+
+        // Skill tool (pure tool, no fs/exec/net query) should match → Allow.
+        let input = serde_json::json!({ "skill": "commit" });
+        let decision = tree.evaluate("Skill", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "Skill should be allowed via eq ctx.tool.name"
+        );
+
+        // Different pure tool should not match → default deny.
+        let input = serde_json::json!({});
+        let decision = tree.evaluate("AskUserQuestion", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Deny,
+            "AskUserQuestion should hit default deny"
+        );
+    }
+
+    #[test]
+    fn compile_to_tree_v2_eq_with_or_pattern() {
+        let source = r#"
+(version 2)
+(default deny "main")
+(policy "main"
+  (when (eq ctx.process.command (or "cargo" "rustc")) :allow))
+"#;
+        let env = TestEnv::new(&[("PWD", "/home/user")]);
+        let tree = compile_to_tree(source, &env).unwrap();
+
+        let input = serde_json::json!({ "command": "cargo build" });
+        let decision = tree.evaluate("Bash", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "cargo should match or-pattern"
+        );
+
+        let input = serde_json::json!({ "command": "rustc main.rs" });
+        let decision = tree.evaluate("Bash", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Allow,
+            "rustc should match or-pattern"
+        );
+
+        let input = serde_json::json!({ "command": "git status" });
+        let decision = tree.evaluate("Bash", &input, "/home/user");
+        assert_eq!(
+            decision.effect,
+            Effect::Deny,
+            "git should not match or-pattern"
+        );
     }
 }

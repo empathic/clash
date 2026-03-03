@@ -31,10 +31,12 @@ pub enum PolicyItem {
     /// A rule: `(effect (capability ...))`.
     Rule(Rule),
     /// `(when (observable pattern) body...)` — v2 conditional block.
+    /// When `is_eq` is true, the guard was written as `(eq observable pattern)`.
     When {
         observable: Observable,
         pattern: ArmPattern,
         body: Vec<PolicyItem>,
+        is_eq: bool,
     },
     /// `(match observable arms...)` — v2 dispatch block at policy level.
     Match(MatchBlock),
@@ -344,9 +346,10 @@ impl fmt::Display for PolicyItem {
                 observable,
                 pattern,
                 body,
+                is_eq,
             } => {
                 write!(f, "(when ")?;
-                display_when_guard(f, observable, pattern)?;
+                display_when_guard(f, observable, pattern, *is_eq)?;
                 // Single inline effect: render on one line
                 if body.len() == 1 && matches!(&body[0], PolicyItem::Effect(_)) {
                     write!(f, " {}", body[0])?;
@@ -371,11 +374,23 @@ impl fmt::Display for PolicyItem {
 }
 
 /// Write the when guard `(observable pattern)` combined form.
+///
+/// When `is_eq` is true, renders as `(eq observable pattern)` instead.
 fn display_when_guard(
     f: &mut fmt::Formatter<'_>,
     observable: &Observable,
     pattern: &ArmPattern,
+    is_eq: bool,
 ) -> fmt::Result {
+    if is_eq {
+        write!(f, "(eq {observable}")?;
+        match pattern {
+            ArmPattern::Single(pat) => write!(f, " {pat}")?,
+            ArmPattern::SinglePath(pf) => write!(f, " {pf}")?,
+            _ => {}
+        }
+        return write!(f, ")");
+    }
     match observable {
         Observable::Command => {
             write!(f, "(command")?;

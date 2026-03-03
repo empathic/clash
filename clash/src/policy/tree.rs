@@ -118,7 +118,10 @@ impl Predicate {
     /// `command` does not — you cannot prompt a human about what a subprocess
     /// is doing in real time.
     pub fn allows_ask(&self) -> bool {
-        matches!(self, Predicate::Tool(_) | Predicate::Mcp(_) | Predicate::Agent(_))
+        matches!(
+            self,
+            Predicate::Tool(_) | Predicate::Mcp(_) | Predicate::Agent(_)
+        )
     }
 }
 
