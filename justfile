@@ -39,7 +39,7 @@ uninstall:
     -rm ~/.cargo/bin/clash
 
 check:
-    cargo fmt
+    cargo fmt --check
     cargo test
     cargo clippy
 
