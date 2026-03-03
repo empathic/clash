@@ -246,6 +246,14 @@ fn parse_policy_item(expr: &SExpr, ctx: &ParseContext) -> Result<PolicyItem> {
         }
         "sandbox" => {
             require_v2(ctx, "sandbox")?;
+            if ctx.version >= 3 {
+                bail!(
+                    "(sandbox ...) is removed in version 3. \
+                     Use (match ctx.http.domain ...) and (match ctx.fs.path ...) instead; \
+                     constraints are derived automatically from the decision tree. \
+                     Run `clash policy upgrade` to migrate."
+                );
+            }
             parse_sandbox_block(list, ctx)
         }
         "allow" | "deny" | "ask" => {
@@ -807,8 +815,12 @@ fn parse_match_block_inner(
         "(match) expects an observable and at least one pattern/effect pair"
     );
     let observable = parse_observable(&list[1])?;
-    let arms = parse_match_arms(&list[2..], &observable, ctx, in_sandbox)?;
-    Ok(MatchBlock { observable, arms })
+    let (default, arms) = parse_match_arms(&list[2..], &observable, ctx, in_sandbox)?;
+    Ok(MatchBlock {
+        observable,
+        default,
+        arms,
+    })
 }
 
 /// Parse `(match ...)` at policy level (`:ask` allowed).
@@ -927,7 +939,7 @@ fn parse_tool_arg_field(atom: &str) -> Result<Observable> {
     }
 }
 
-/// Parse match arms: alternating pattern/effect pairs.
+/// Parse match arms: alternating pattern/effect pairs, with optional leading `(default :effect)`.
 ///
 /// Each arm is `pattern :effect` where pattern can be:
 /// - A simple pattern: `"github.com"`, `*`, `(or ...)`, `(not ...)`
@@ -935,24 +947,49 @@ fn parse_tool_arg_field(atom: &str) -> Result<Observable> {
 /// - An exec pattern (for command observable): `("git" *)`, `*`
 /// - A tuple pattern: `["read" (subpath $PWD)]`
 ///
+/// A leading `(default :effect)` form sets the fallthrough for unmatched arms.
 /// When `in_sandbox` is true, `:ask` is rejected in effect keywords.
 fn parse_match_arms(
     exprs: &[SExpr],
     observable: &Observable,
     ctx: &ParseContext,
     in_sandbox: bool,
-) -> Result<Vec<MatchArmAst>> {
+) -> Result<(Option<Effect>, Vec<MatchArmAst>)> {
+    // Check for leading (default :effect) form.
+    let (default, arm_exprs) = if let Some(first) = exprs.first() {
+        if let Some(list) = first.as_list() {
+            if !list.is_empty() {
+                if let Some("default") = list[0].as_str() {
+                    ensure!(
+                        list.len() == 2,
+                        "(default) inside match expects exactly 1 effect"
+                    );
+                    let effect = parse_match_effect_keyword(&list[1], in_sandbox)?;
+                    (Some(effect), &exprs[1..])
+                } else {
+                    (None, exprs)
+                }
+            } else {
+                (None, exprs)
+            }
+        } else {
+            (None, exprs)
+        }
+    } else {
+        (None, exprs)
+    };
+
     ensure!(
-        exprs.len() % 2 == 0,
+        arm_exprs.len() % 2 == 0,
         "match arms must be pattern/effect pairs (got odd number of elements)"
     );
     let mut arms = Vec::new();
-    for pair in exprs.chunks(2) {
+    for pair in arm_exprs.chunks(2) {
         let pattern = parse_arm_pattern(&pair[0], observable, ctx)?;
         let effect = parse_match_effect_keyword(&pair[1], in_sandbox)?;
         arms.push(MatchArmAst { pattern, effect });
     }
-    Ok(arms)
+    Ok((default, arms))
 }
 
 /// Parse a pattern in match-arm position, guided by the observable type.

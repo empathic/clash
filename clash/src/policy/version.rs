@@ -17,7 +17,7 @@ use super::ast::*;
 /// Bump this when making backwards-incompatible changes to the policy language.
 /// Every bump must be accompanied by deprecation entries that describe what changed
 /// and (ideally) an auto-fix function for `clash policy upgrade`.
-pub const CURRENT_VERSION: u32 = 2;
+pub const CURRENT_VERSION: u32 = 3;
 
 /// A deprecated feature in the policy language.
 pub struct Deprecation {
@@ -104,6 +104,14 @@ pub fn all_deprecations() -> Vec<Deprecation> {
             message: "`fs.path` is deprecated as an observable name. Use `ctx.fs.path`.".into(),
             check: |source| has_deprecated_observable(source, "fs.path"),
             fix: Some(|s| fix_observable_name(s, "fs.path", "ctx.fs.path")),
+        },
+        Deprecation {
+            deprecated_in: 3,
+            message: "`(sandbox ...)` is removed in v3. Constraints are now derived from match blocks in the decision tree. Run `clash policy upgrade` to migrate.".into(),
+            check: |source| source.contains("(sandbox"),
+            // Fix is handled at AST level in upgrade_policy (transform_v2_to_v3)
+            // because the v3 parser rejects (sandbox ...) so text-level re-parse fails.
+            fix: None,
         },
     ]
 }
@@ -229,6 +237,66 @@ fn fix_default_to_use(source: &str) -> String {
     super::edit::serialize_ast(&ast)
 }
 
+// ---------------------------------------------------------------------------
+// v2 → v3 AST transformation
+// ---------------------------------------------------------------------------
+
+/// Transform all `(sandbox ...)` blocks in policy bodies to inline match blocks.
+///
+/// Returns true if any transformation was performed.
+fn transform_v2_to_v3(ast: &mut [TopLevel]) -> bool {
+    let mut changed = false;
+    for tl in ast.iter_mut() {
+        if let TopLevel::Policy { body, .. } = tl {
+            let new_body = lift_sandbox_items(body);
+            if new_body != *body {
+                *body = new_body;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// Recursively lift sandbox items out of `(sandbox ...)` wrappers.
+///
+/// Each `SandboxItem::Match(block)` inside a sandbox becomes a `PolicyItem::Match(block)`.
+/// `SandboxItem::Rule(...)` entries (from v1 migration) are dropped since constraints
+/// are now derived from the decision tree in v3.
+fn lift_sandbox_items(items: &[PolicyItem]) -> Vec<PolicyItem> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            PolicyItem::Sandbox { body } => {
+                for si in body {
+                    match si {
+                        SandboxItem::Match(block) => {
+                            result.push(PolicyItem::Match(block.clone()));
+                        }
+                        SandboxItem::Rule(_) => {
+                            // v1 flat rules inside sandbox: drop them, constraints
+                            // are derived from the decision tree in v3.
+                        }
+                    }
+                }
+            }
+            PolicyItem::When {
+                observable,
+                pattern,
+                body,
+            } => {
+                result.push(PolicyItem::When {
+                    observable: observable.clone(),
+                    pattern: pattern.clone(),
+                    body: lift_sandbox_items(body),
+                });
+            }
+            other => result.push(other.clone()),
+        }
+    }
+    result
+}
+
 /// Check a policy source for deprecated features at the given version.
 ///
 /// Returns a list of warning messages for any deprecated patterns found.
@@ -291,9 +359,16 @@ pub fn upgrade_policy(source: &str) -> anyhow::Result<(String, Vec<String>)> {
     if version < 2 {
         let transformed = transform_v1_to_v2(&mut ast);
         if transformed {
-            changes.push(
-                "Transformed flat rules to v2 structured syntax (when/sandbox blocks).".into(),
-            );
+            changes
+                .push("Transformed flat rules to v2 structured syntax (when/match blocks).".into());
+        }
+    }
+
+    // Transform v2 sandbox blocks to inline match blocks (v3 removes sandbox).
+    if version < 3 {
+        let transformed = transform_v2_to_v3(&mut ast);
+        if transformed {
+            changes.push("Replaced (sandbox ...) blocks with inline (match ...) blocks.".into());
         }
     }
 

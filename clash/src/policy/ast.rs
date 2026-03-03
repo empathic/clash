@@ -263,6 +263,8 @@ pub enum SandboxItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchBlock {
     pub observable: Observable,
+    /// Optional default effect for unmatched arms: `(default :deny)`.
+    pub default: Option<Effect>,
     pub arms: Vec<MatchArmAst>,
 }
 
@@ -463,6 +465,9 @@ impl fmt::Display for SandboxItem {
 impl fmt::Display for MatchBlock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "(match {}", self.observable)?;
+        if let Some(effect) = &self.default {
+            write!(f, "\n        (default :{effect})")?;
+        }
         for arm in &self.arms {
             write!(f, "\n        {} {}", arm.pattern, arm.effect_keyword())?;
         }

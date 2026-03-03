@@ -58,21 +58,21 @@ fn print_node(out: &mut String, node: &Node, tree: &PolicyTree, indent: usize) {
             print_node(out, body, tree, indent + 2);
         }
         Node::Match {
-            observable, arms, ..
+            observable,
+            arms,
+            constraint_policy,
+            ..
         } => {
-            out.push_str(&format!("{pad}Match {observable:?}:\n"));
+            let constraint_tag = if constraint_policy.is_some() {
+                " [constraint]"
+            } else {
+                ""
+            };
+            out.push_str(&format!("{pad}Match {observable:?}{constraint_tag}:\n"));
             for arm in arms {
                 out.push_str(&format!("{pad}  {:?} =>\n", arm.pattern));
                 print_node(out, &arm.body, tree, indent + 4);
             }
-        }
-        Node::Sandbox { .. } => {
-            let desc = if meta.description.is_empty() {
-                "...".to_string()
-            } else {
-                meta.description.clone()
-            };
-            out.push_str(&format!("{pad}Sandbox [{desc}]\n"));
         }
         Node::Leaf { effect, .. } => {
             let builtin_tag = if meta

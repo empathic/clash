@@ -32,18 +32,21 @@ S-expression source text
 Vec<TopLevel> (AST)             ← parse.rs
     │
     ├── Version { number }
-    ├── Default { effect, policy }
-    └── Policy { name, body: [Rule | Include] }
+    ├── Use { policy_name }
+    └── Policy { name, body: [When | Match | Effect | Include] }
     │
     ▼
-DecisionTree (IR)               ← compile.rs
-    │
+PolicyTree (IR)                 ← compile.rs, tree.rs
+    │                             (v1 also compiles to flat DecisionTree)
     ├── default: Effect
     ├── policy_name: String
-    ├── exec_rules: Vec<CompiledRule>   (sorted by specificity)
-    ├── fs_rules: Vec<CompiledRule>     (sorted by specificity)
-    ├── net_rules: Vec<CompiledRule>    (sorted by specificity)
-    └── sandbox_policies: HashMap<String, Vec<CompiledRule>>
+    ├── root: Node               (tree-shaped decision structure)
+    │   ├── Sequence { children }
+    │   ├── DenyOverrides { children }
+    │   ├── When { predicate, body }
+    │   ├── Match { observable, arms, constraint_policy? }
+    │   └── Leaf { effect }
+    └── node_meta: Vec<NodeMeta>
 ```
 
 ### Compilation Steps
@@ -105,26 +108,21 @@ Conflicts are compile-time errors. This guarantees that specificity ordering is 
 
 ```
 evaluate(tool_name, tool_input, cwd):
-    1. Map tool invocation to capability queries
-       (e.g., Bash "git push" → Exec { bin: "git", args: ["push"] }, Bash "FOO=1 cargo build" → Exec { bin: "cargo", args: ["build"] })
+    1. Map tool invocation to EvalContext
+       (command, tool, http.domain, fs.action, fs.path, etc.)
 
-    2. For each query, select the rule list:
-       - Exec query → exec_rules
-       - Fs query → fs_rules
-       - Net query → net_rules
+    2. Walk the policy tree (root node):
+       - Sequence: evaluate children in order, return first match
+       - DenyOverrides: evaluate ALL children, deny > ask > allow
+       - When: test predicate against context, recurse into body if true
+       - Match: if observable is relevant, dispatch on arms (first-match);
+               if irrelevant and constraint_policy present,
+               merge constraints into SandboxOut, return implicit Allow
+       - Leaf: return effect
 
-    3. Walk the rule list (sorted most-specific-first):
-       - Test if the compiled matcher matches the query
-       - First match wins → record effect
-       - If the matching rule has :sandbox, note sandbox name in trace
-       - Non-matching rules are recorded as skipped
+    3. If tree walk produces no match → return default effect
 
-    4. If no queries produced matches → return default effect
-
-    5. If multiple domains matched (rare):
-       - deny > ask > allow (deny-overrides)
-
-    6. Build PolicyDecision with effect, reason, and trace
+    4. Build PolicyDecision with effect, sandbox_out, and trace
 ```
 
 > **Note:** This evaluation runs once per Claude Code tool call via the PreToolUse hook. It does not run for child processes spawned by allowed Bash commands. Child processes inherit kernel-level sandbox restrictions (fs/net) but are not checked against exec rules.
@@ -154,26 +152,31 @@ This enables the `clash explain` command and structured audit logging.
 
 ---
 
-## Sandbox Generation
+## Constraint Derivation (v3)
 
-When an exec allow rule matches with a `:sandbox` annotation, the sandbox rules define the filesystem and network permissions for the spawned process. Sandbox rules can be specified two ways:
+In v3, runtime constraints (filesystem and network sandbox policies) are derived from surviving `(match ...)` blocks in the decision tree, rather than from explicit `(sandbox ...)` annotations.
 
-- **Named**: `:sandbox "name"` references a `(policy "name" ...)` block whose rules are pre-compiled into `sandbox_policies`.
-- **Inline**: `:sandbox (allow (net *)) (allow (fs ...))` compiles the inline rules directly into `sandbox_policies` under a synthetic key.
+### How It Works
 
-Both forms produce the same compiled representation — downstream evaluation is identical.
+Match blocks on constraint-derivable observables (`ctx.http.domain`, `ctx.http.method`, `ctx.http.port`, `ctx.http.path`, `ctx.fs.action`, `ctx.fs.path`, `ctx.fs.exists`) are pre-compiled into a `SandboxPolicy` at compile time. The `constraint_policy` is attached to the `Node::Match` in the decision tree.
+
+At runtime, the decision tree is evaluated. When a match block's observable is **relevant** (e.g. the request involves HTTP), it dispatches normally (first-match on arms). When the observable is **irrelevant** (e.g. an `ctx.http.domain` match on a non-HTTP request), the match block contributes its pre-compiled constraints to the `SandboxOut` and returns an implicit `Allow`.
+
+### DenyOverrides for When Bodies
+
+When a `(when ...)` block has multiple body items (e.g. an effect + constraint match blocks), the body uses `DenyOverrides` semantics: all children are evaluated (not just the first match), allowing both the decision effect and constraints to be collected.
+
+### Enforcement
 
 The sandbox policy is enforced at the kernel level:
 - **Linux**: Landlock LSM restricts file and network access
 - **macOS**: Seatbelt sandbox profiles restrict file and network access
 
-Network enforcement in sandboxes has three tiers:
+Network enforcement has three tiers:
 
-- **Wildcard** `(allow (net))` — unrestricted network access
-- **Domain-specific** `(allow (net "crates.io"))` — a local HTTP proxy enforces domain filtering. The OS sandbox restricts the process to localhost-only connections; the proxy checks each request against the allowlist. On macOS, Seatbelt enforces the localhost restriction at the kernel level. On Linux, seccomp cannot filter `connect()` by destination (pointer argument), so proxy enforcement is advisory for programs that bypass `HTTP_PROXY`/`HTTPS_PROXY`.
-- **No net rule** — all network access denied at the kernel level
-
-When no `:sandbox` is specified on an exec allow, the spawned process gets a deny-all sandbox by default.
+- **Allow** — unrestricted network access
+- **AllowDomains** — a local HTTP proxy enforces domain filtering. The OS sandbox restricts the process to localhost-only connections; the proxy checks each request against the allowlist. On macOS, Seatbelt enforces the localhost restriction at the kernel level. On Linux, seccomp cannot filter `connect()` by destination (pointer argument), so proxy enforcement is advisory for programs that bypass `HTTP_PROXY`/`HTTPS_PROXY`.
+- **Deny** — all network access denied at the kernel level
 
 All sandbox policies automatically include read/write/create/delete/execute access to system temp directories, so sandboxed tools (compilers, package managers, etc.) can create temporary files without explicit policy rules. On macOS this covers `/private/tmp` and `/private/var/folders`; on Linux `/tmp` and `/var/tmp`; plus `$TMPDIR` if set to a non-standard location.
 
@@ -190,8 +193,6 @@ This ensures that git commands (commit, push, etc.) work correctly inside worktr
 When the path is not inside a worktree, `:worktree` has no effect — the filter compiles to a plain `subpath`. The default policy uses `(subpath :worktree (env PWD))` for CWD access rules.
 
 Sandbox enforcement covers filesystem and network access only. Exec-level argument matching (e.g., distinguishing `git push` from `git status`) is not enforced on child processes within the sandbox — only the top-level command is checked against exec rules. See [#136](https://github.com/empathic/clash/issues/136) for the tracking issue.
-
-*(Note: Kernel-level sandbox enforcement is a future PR. Currently the sandbox reference is validated and compiled but not yet enforced.)*
 
 ---
 

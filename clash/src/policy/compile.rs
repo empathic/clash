@@ -326,13 +326,13 @@ fn compile_policy_item_to_node(
             let body_node = if child_nodes.len() == 1 {
                 child_nodes.pop().unwrap()
             } else {
-                let seq_id = ids.alloc(NodeMeta {
+                let body_id = ids.alloc(NodeMeta {
                     description: format!("when body ({} items)", child_nodes.len()),
                     origin_policy: Some(origin.to_string()),
                     ..Default::default()
                 });
-                Node::Sequence {
-                    id: seq_id,
+                Node::DenyOverrides {
+                    id: body_id,
                     children: child_nodes,
                 }
             };
@@ -353,7 +353,9 @@ fn compile_policy_item_to_node(
             compile_policy_match_to_node(block, origin, env, ids)
         }
         PolicyItem::Sandbox { body } => {
-            // Compile sandbox items into a SandboxPolicy.
+            // Compile sandbox items into a SandboxPolicy, then wrap it as
+            // a synthetic Node::Match with constraint_policy so the eval
+            // path can collect it via the standard constraint derivation.
             let policy = compile_sandbox_items(body, env)?;
 
             let sandbox_id = ids.alloc(NodeMeta {
@@ -361,9 +363,14 @@ fn compile_policy_item_to_node(
                 origin_policy: Some(origin.to_string()),
                 ..Default::default()
             });
-            Ok(Some(Node::Sandbox {
+            // Use a synthetic Match on HttpDomain with no arms and the
+            // full sandbox policy as constraint_policy.  At eval time the
+            // observable is irrelevant → constraint derivation fires.
+            Ok(Some(Node::Match {
                 id: sandbox_id,
-                policy,
+                observable: crate::policy::tree::Observable::HttpDomain,
+                arms: vec![],
+                constraint_policy: Some(policy),
             }))
         }
         PolicyItem::Effect(effect) => {
@@ -1051,6 +1058,10 @@ fn pattern_to_op_pattern(pat: &Pattern) -> Result<OpPattern> {
 }
 
 /// Compile a policy-level match block into a Node::Match.
+///
+/// When the observable is a constraint-derivable dimension (ctx.http.*,
+/// ctx.fs.*), also pre-compiles a `SandboxPolicy` from the arms so that
+/// the eval path can derive sandbox constraints from surviving match blocks.
 fn compile_policy_match_to_node(
     block: &MatchBlock,
     origin: &str,
@@ -1077,6 +1088,31 @@ fn compile_policy_match_to_node(
         });
     }
 
+    // Pre-compile constraint policy for constraint-derivable observables.
+    let constraint_policy = if is_constraint_observable(&block.observable) {
+        let mut sandbox_rules = Vec::new();
+        let mut network = NetworkPolicy::Deny;
+        compile_match_to_sandbox(block, env, &mut sandbox_rules, &mut network)?;
+
+        // Add temp directory rules.
+        for path in DecisionTree::temp_directory_paths() {
+            sandbox_rules.push(SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::all(),
+                path,
+                path_match: PathMatch::Subpath,
+            });
+        }
+
+        Some(SandboxPolicy {
+            default: Cap::READ | Cap::EXECUTE,
+            rules: sandbox_rules,
+            network,
+        })
+    } else {
+        None
+    };
+
     let match_id = ids.alloc(NodeMeta {
         description: format!("(match {} ...)", block.observable),
         origin_policy: Some(origin.to_string()),
@@ -1087,7 +1123,22 @@ fn compile_policy_match_to_node(
         id: match_id,
         observable: ir_observable,
         arms: ir_arms,
+        constraint_policy,
     }))
+}
+
+/// Whether an observable is a constraint-derivable dimension (maps to sandbox enforcement).
+fn is_constraint_observable(obs: &Observable) -> bool {
+    matches!(
+        obs,
+        Observable::HttpDomain
+            | Observable::HttpMethod
+            | Observable::HttpPort
+            | Observable::HttpPath
+            | Observable::FsAction
+            | Observable::FsPath
+            | Observable::FsExists
+    ) || matches!(obs, Observable::Tuple(elems) if elems.iter().any(|e| is_constraint_observable(e)))
 }
 
 /// Compile an AST Observable to an IR Observable.

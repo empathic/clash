@@ -1,8 +1,13 @@
 //! Tree-shaped policy IR.
 //!
 //! Replaces the flat `DecisionTree` for evaluation. Old flat syntax compiles
-//! to degenerate linear trees via `from_decision_tree()`. The tree structure
-//! supports future `when`/`match`/`sandbox` syntax (Phase 2).
+//! to degenerate linear trees via `from_decision_tree()`. v2/v3 structured
+//! syntax compiles to When/Match/Leaf trees via `compile_tree_ast()`.
+//!
+//! **Constraint derivation**: Match blocks on `ctx.http.*` / `ctx.fs.*` that
+//! survive tree shaking carry a pre-compiled `SandboxPolicy`. When the
+//! observable is irrelevant (e.g. http.domain during a command query), the
+//! policy is merged into `sandbox_out` and implicit Allow is returned.
 
 use std::collections::HashMap;
 
@@ -16,7 +21,7 @@ use crate::policy::decision_tree::{
 };
 use crate::policy::eval::{CapQuery, tool_to_queries};
 use crate::policy::ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
-use crate::policy::sandbox_types::SandboxPolicy;
+use crate::policy::sandbox_types::{NetworkPolicy, SandboxPolicy};
 use crate::settings::PolicyLevel;
 
 /// Stable node identifier, used as index into `PolicyTree::node_meta`.
@@ -66,14 +71,23 @@ pub enum Node {
         predicate: Predicate,
         body: Box<Node>,
     },
-    /// Resolve observable, try arms in order; first match wins. (Phase 2)
+    /// Resolve observable, try arms in order; first match wins.
+    ///
+    /// When the observable is irrelevant (not in query context) and
+    /// `constraint_policy` is present, the pre-compiled policy is merged
+    /// into `sandbox_out` and implicit Allow is returned — this is how
+    /// surviving match blocks on `ctx.http.*` / `ctx.fs.*` derive sandbox
+    /// constraints from the decision tree.
     Match {
         id: NodeId,
         observable: Observable,
         arms: Vec<MatchArm>,
+        /// Pre-compiled sandbox policy derived from this match block's arms
+        /// when the observable is a constraint-derivable dimension
+        /// (ctx.http.*, ctx.fs.*). Set at compile time; collected at eval
+        /// time when the observable is irrelevant to the current query.
+        constraint_policy: Option<SandboxPolicy>,
     },
-    /// Return Allow + attached pre-compiled sandbox policy.
-    Sandbox { id: NodeId, policy: SandboxPolicy },
     /// Return the effect unconditionally.
     Leaf { id: NodeId, effect: Effect },
 }
@@ -182,7 +196,6 @@ impl Node {
             | Node::DenyOverrides { id, .. }
             | Node::When { id, .. }
             | Node::Match { id, .. }
-            | Node::Sandbox { id, .. }
             | Node::Leaf { id, .. } => *id,
         }
     }
@@ -193,7 +206,7 @@ impl Node {
 pub enum SandboxOut {
     /// v1: lookup by name from `sandbox_policies` map.
     Named(String),
-    /// v2: pre-compiled sandbox policy from a `Node::Sandbox`.
+    /// Pre-compiled sandbox policy derived from surviving constraint match blocks.
     Compiled(SandboxPolicy),
 }
 
@@ -498,7 +511,7 @@ fn renumber_node(node: &mut Node, offset: NodeId) {
                 renumber_node(&mut arm.body, offset);
             }
         }
-        Node::Sandbox { id, .. } | Node::Leaf { id, .. } => {
+        Node::Leaf { id, .. } => {
             *id += offset;
         }
     }
@@ -819,32 +832,40 @@ impl PolicyTree {
                 id,
                 observable,
                 arms,
+                constraint_policy,
             } => {
-                // Skip silently if observable is irrelevant to the query.
-                if !observable_is_relevant(observable, ctx) {
-                    return None;
-                }
-
-                for arm in arms {
-                    if match_arm_against_ctx(observable, &arm.pattern, ctx) {
-                        trace!(node_id = id, "match arm matched");
-                        return self.eval_node(&arm.body, ctx, matched, skipped, sandbox_out);
+                if observable_is_relevant(observable, ctx) {
+                    // Observable is in query context → normal first-match evaluation.
+                    for arm in arms {
+                        if match_arm_against_ctx(observable, &arm.pattern, ctx) {
+                            trace!(node_id = id, "match arm matched");
+                            return self.eval_node(&arm.body, ctx, matched, skipped, sandbox_out);
+                        }
                     }
+                    None
+                } else if let Some(policy) = constraint_policy {
+                    // Observable is irrelevant but this match block carries a
+                    // pre-compiled constraint policy.  Merge it into sandbox_out
+                    // and return implicit Allow — the surviving match block
+                    // defines what the invocation may access.
+                    trace!(
+                        node_id = id,
+                        "constraint derivation: merging sandbox policy from match block"
+                    );
+                    let meta = &self.node_meta[*id as usize];
+                    matched.push(RuleMatch {
+                        rule_index: 0,
+                        description: meta.description.clone(),
+                        effect: Effect::Allow,
+                        has_active_constraints: true,
+                        node_id: Some(*id),
+                    });
+                    merge_sandbox_out(sandbox_out, policy);
+                    Some(Effect::Allow)
+                } else {
+                    // Observable irrelevant, no constraints — skip silently.
+                    None
                 }
-                None
-            }
-
-            Node::Sandbox { id, policy } => {
-                let meta = &self.node_meta[*id as usize];
-                matched.push(RuleMatch {
-                    rule_index: 0,
-                    description: meta.description.clone(),
-                    effect: Effect::Allow,
-                    has_active_constraints: true,
-                    node_id: Some(*id),
-                });
-                *sandbox_out = Some(SandboxOut::Compiled(policy.clone()));
-                Some(Effect::Allow)
             }
         }
     }
@@ -993,6 +1014,38 @@ fn match_pattern_strings(pattern: &MatchPattern, values: &[String]) -> bool {
                 .all(|(pat, val)| pat.matches(val))
         }
         MatchPattern::Exec(_) => false, // exec patterns don't match string values
+    }
+}
+
+/// Merge a constraint policy into `sandbox_out`.
+///
+/// When multiple match blocks survive tree shaking, their constraint policies
+/// are merged: sandbox rules are concatenated and network policies are combined.
+fn merge_sandbox_out(sandbox_out: &mut Option<SandboxOut>, policy: &SandboxPolicy) {
+    match sandbox_out {
+        Some(SandboxOut::Compiled(existing)) => {
+            // Merge rules.
+            existing.rules.extend(policy.rules.iter().cloned());
+            // Merge network policy: allow > allow-domains > deny.
+            existing.network = match (&existing.network, &policy.network) {
+                (NetworkPolicy::Allow, _) | (_, NetworkPolicy::Allow) => NetworkPolicy::Allow,
+                (NetworkPolicy::AllowDomains(a), NetworkPolicy::AllowDomains(b)) => {
+                    let mut combined = a.clone();
+                    combined.extend(b.iter().cloned());
+                    NetworkPolicy::AllowDomains(combined)
+                }
+                (NetworkPolicy::AllowDomains(d), _) | (_, NetworkPolicy::AllowDomains(d)) => {
+                    NetworkPolicy::AllowDomains(d.clone())
+                }
+                (NetworkPolicy::Localhost, _) | (_, NetworkPolicy::Localhost) => {
+                    NetworkPolicy::Localhost
+                }
+                _ => NetworkPolicy::Deny,
+            };
+        }
+        _ => {
+            *sandbox_out = Some(SandboxOut::Compiled(policy.clone()));
+        }
     }
 }
 

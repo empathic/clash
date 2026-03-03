@@ -33,7 +33,8 @@ def_decl        = "(" "def" ATOM expression ")"                  ; v2 only, any 
 
 ; v1 policy items
 policy_item     = include | rule                                  ; v1
-                | include | when_block | sandbox_block | effect_kw ; v2
+                | include | when_block | match_block | effect_kw  ; v3
+                | include | when_block | sandbox_block | effect_kw ; v2 (sandbox removed in v3)
 
 include         = "(" "include" QUOTED_STRING ")"
 rule            = "(" effect cap_matcher keyword_args* ")"        ; v1 only
@@ -341,42 +342,9 @@ Keywords are atoms starting with `:`. They appear in three positions:
 - **Inside subpath filters:** `:worktree` (see [Worktree-Aware Subpath](#worktree-aware-subpath) above)
 - **After capability matchers:** `:sandbox` (see below)
 
-### `:sandbox`
+### `:sandbox` (v1 only, removed in v3)
 
-The `:sandbox` keyword on exec rules defines the kernel-level sandbox for matching commands. It accepts either a named policy reference or inline rules.
-
-#### Named sandbox
-
-Reference a named policy whose rules define the sandbox:
-
-```
-(policy "cargo-env"
-  (allow (fs read (subpath (env PWD))))
-  (allow (net)))
-
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "cargo-env"))
-```
-
-#### Inline sandbox
-
-Define sandbox rules directly on the exec rule, without a separate named policy:
-
-```
-(allow (exec "clash" "bug" *) :sandbox (allow (net *)))
-```
-
-Multiple inline rules are supported:
-
-```
-(allow (exec "cargo" *) :sandbox
-  (allow (net *))
-  (allow (fs read (subpath (env PWD)))))
-```
-
-Inline sandbox rules cannot have nested `:sandbox` annotations.
-
-When the exec rule matches, the sandbox's fs/net rules are used to build a kernel-level sandbox for the spawned process. See the [sandbox section](./policy-guide.md#sandbox-policies) in the policy guide.
+> **Removed in v3:** The `:sandbox` keyword and `(sandbox ...)` blocks are removed. In v3, runtime constraints (filesystem, network) are derived automatically from surviving `(match ...)` blocks in the decision tree after tree shaking. Use `(match ctx.http.domain ...)`, `(match ctx.fs.path ...)`, etc. instead. Run `clash policy upgrade` to auto-migrate.
 
 ---
 
@@ -440,8 +408,8 @@ Use `clash policy upgrade` to automatically transform a v1 policy to v2 syntax.
 ### Grammar
 
 ```ebnf
-; v2 policy items (inside a policy body)
-policy_item_v2  = include | when_block | match_block | sandbox_block | effect_kw
+; v3 policy items (inside a policy body)
+policy_item_v3  = include | when_block | match_block | effect_kw
 
 when_block      = "(" "when" when_guard when_body+ ")"
 when_guard      = "(" "command" pattern? args_spec ")"
@@ -449,17 +417,12 @@ when_guard      = "(" "command" pattern? args_spec ")"
                 | "(" observable pattern ")"
                 | "(" observable path_filter ")"        ; for ctx.fs.path
 when_body       = effect_kw                             ; inline effect
-                | sandbox_block                         ; nested sandbox
+                | match_block                           ; nested match (constraint source)
                 | when_block                            ; nested when
 
 effect_kw       = ":allow" | ":deny" | ":ask"
 
-sandbox_block   = "(" "sandbox" sandbox_item+ ")"
-sandbox_item    = rule                                  ; flat capability rule
-                | sandbox_match_block                   ; observable dispatch
-
-match_block     = "(" "match" observable match_arm+ ")"     ; policy level (allows :ask)
-sandbox_match_block = "(" "match" observable sandbox_match_arm+ ")"  ; sandbox level (no :ask)
+match_block     = "(" "match" observable match_arm+ ")"
 observable      = "command" | "tool"
                 | "ctx.http.domain" | "ctx.http.method" | "ctx.http.port" | "ctx.http.path"
                 | "ctx.fs.action" | "ctx.fs.path" | "ctx.fs.exists"
@@ -469,8 +432,6 @@ observable      = "command" | "tool"
                 | "[" observable observable+ "]"         ; tuple
 ctx_tool_arg_field = "ctx.tool.args." FIELD_NAME "?"  ; nullable dynamic field accessor
 match_arm       = arm_pattern effect_kw
-sandbox_match_arm = arm_pattern sandbox_effect_kw
-sandbox_effect_kw = ":allow" | ":deny"
 arm_pattern     = pattern | path_filter                 ; scalar observable
                 | exec_arm_pattern                      ; command observable
                 | "[" arm_element+ "]"                  ; tuple observable
@@ -482,14 +443,17 @@ expression      = "[" QUOTED_STRING* "]"                 ; bracket list (expands
                 | pattern                                ; general pattern
                 | when_block                             ; compound when block
                 | match_block                            ; compound match block
-                | sandbox_block                          ; compound sandbox block
 ```
+
+> **v3 change:** `(sandbox ...)` blocks are removed. Runtime constraints are derived
+> automatically from `(match ...)` blocks on `ctx.http.*` and `ctx.fs.*` observables
+> that survive tree shaking. See [Constraint Derivation](#constraint-derivation) below.
 
 ### `when` blocks
 
 A `when` block gates its body on an observable guard. The guard tests a single observable value against a pattern. All observables are supported as guards.
 
-The body contains one or more items: an effect keyword (`:allow`, `:deny`, `:ask`), a `(sandbox ...)` block, or a nested `(when ...)` block.
+The body contains one or more items: an effect keyword (`:allow`, `:deny`, `:ask`), a `(match ...)` block, or a nested `(when ...)` block.
 
 ```
 ; Allow all git commands
@@ -513,32 +477,34 @@ The body contains one or more items: an effect keyword (`:allow`, `:deny`, `:ask
 ; Guard on filesystem path
 (when (ctx.fs.path (subpath (env PWD))) :allow)
 
-; Allow with a sandbox
+; Allow cargo with network constraints
 (when (command "cargo" *)
   :allow
-  (sandbox
-    (allow (fs read (subpath (env PWD))))
-    (allow (net))))
+  (match ctx.http.domain
+    "crates.io"  :allow
+    "github.com" :allow
+    *            :deny))
 ```
 
 When the body is a single effect keyword, it renders on one line: `(when (command "git" *) :allow)`. Multi-item bodies are indented.
 
-### `sandbox` blocks
+### Constraint Derivation
 
-A `sandbox` block defines kernel-level restrictions for commands matched by a parent `(when (command ...) ...)` block. Sandbox items are capability grants — they use the same `(allow (fs ...))` / `(allow (net ...))` syntax as v1 flat rules.
+In v3, runtime constraints (filesystem sandbox rules, network policies) are derived automatically from `(match ...)` blocks on `ctx.http.*` and `ctx.fs.*` observables that survive decision tree evaluation. There is no explicit `(sandbox ...)` form.
 
-Sandbox blocks can also contain `(match ...)` blocks for observable-based dispatch.
+When a `when` block fires (its guard matches), all match blocks in its body are evaluated. Match blocks on constraint-derivable observables (`ctx.http.domain`, `ctx.http.method`, `ctx.http.port`, `ctx.http.path`, `ctx.fs.action`, `ctx.fs.path`, `ctx.fs.exists`) are pre-compiled into a `SandboxPolicy` at compile time. At runtime, when the observable is irrelevant (e.g. an HTTP domain match on a non-HTTP request), the match block contributes its constraints and returns an implicit allow.
 
 ```
-(when (command *)
+(when (command "cargo" *)
   :allow
-  (sandbox
-    (allow (fs (or read write) (subpath (env PWD))))
-    (allow (net "github.com"))
-    (match ctx.http.domain
-      "crates.io" :allow
-      "github.com" :allow
-      *           :deny)))
+  (match ctx.http.domain
+    "crates.io"  :allow
+    "github.com" :allow
+    *            :deny)
+  (match [ctx.fs.action ctx.fs.path]
+    ["read"  (subpath (env PWD))]  :allow
+    ["write" (subpath (env PWD))]  :allow
+    [*       *]                    :deny))
 ```
 
 ### `match` blocks
@@ -649,7 +615,7 @@ Values may be bracket lists (backwards compatible), patterns, or compound forms 
 
 ; Compound match block — spliced into policy/when body
 (def github-net
-  (match proxy.domain
+  (match ctx.http.domain
     "github.com" :allow))
 
 (policy "main"
@@ -670,10 +636,10 @@ In v2 contexts (when bodies, match arms), effects use keyword syntax:
 | `:deny` | Block the action |
 | `:ask` | Prompt the user |
 
-### Complete v2 example
+### Complete v3 example
 
 ```
-(version 2)
+(version 3)
 (use "main")
 (def builders ["cargo" "make" "cmake"])
 
@@ -682,15 +648,17 @@ In v2 contexts (when bodies, match arms), effects use keyword syntax:
   (when (command "git" "push" :has "--force") :deny)
   (when (command "git" *) :allow)
 
-  ; Allow build tools with filesystem + network sandbox
+  ; Allow build tools with filesystem + network constraints
   (when (command builders *)
     :allow
-    (sandbox
-      (allow (fs (or read write) (subpath (env PWD))))
-      (match ctx.http.domain
-        "crates.io"  :allow
-        "github.com" :allow
-        *            :deny)))
+    (match [ctx.fs.action ctx.fs.path]
+      ["read"  (subpath (env PWD))]  :allow
+      ["write" (subpath (env PWD))]  :allow
+      [*       *]                    :deny)
+    (match ctx.http.domain
+      "crates.io"  :allow
+      "github.com" :allow
+      *            :deny))
 
   ; Dispatch on tool name at policy level
   (match tool
@@ -704,19 +672,18 @@ In v2 contexts (when bodies, match arms), effects use keyword syntax:
   :deny)                             ; fallback for unmatched requests
 ```
 
-### Upgrading from v1 to v2
+### Upgrading to v3
 
-Run `clash policy upgrade` to automatically transform v1 flat rules to v2 structured syntax. The transformation:
+Run `clash policy upgrade` to automatically transform older policies to v3 syntax. The transformation handles both v1 flat rules and v2 sandbox blocks:
 
-| v1 flat rule | v2 equivalent |
-|-------------|--------------|
+| v1/v2 form | v3 equivalent |
+|------------|--------------|
 | `(allow (exec "git" *))` | `(when (command "git" *) :allow)` |
 | `(deny (exec "git" "push" *))` | `(when (command "git" "push" *) :deny)` |
 | `(allow (tool "Agent"))` | `(when (tool "Agent") :allow)` |
-| `(allow (fs read (subpath X)))` | `(when (tool (or "Read" "Glob" "Grep")) :allow)` + sandbox |
-| `(allow (net "github.com"))` | `(when (tool (or "WebFetch" "WebSearch")) :allow)` + sandbox |
+| `(sandbox (match ctx.http.domain ...))` | `(match ctx.http.domain ...)` (inline) |
 
-Filesystem and network allow rules also generate sandbox entries inside a `(when (command *) (sandbox ...))` block, so that sandboxed commands inherit the appropriate kernel-level capabilities.
+In v3, `(sandbox ...)` blocks are replaced by inline `(match ...)` blocks. Runtime constraints are derived from the surviving match blocks in the decision tree.
 
 ---
 
@@ -728,7 +695,7 @@ ESCAPE          = '\\' ('"' | '\\')
 REGEX           = '/' (CHAR_NO_SLASH)* '/'
 INTEGER         = [0-9]+
 ENV_NAME        = [A-Z_][A-Z0-9_]*
-KEYWORD         = ':' ATOM                     ; e.g. :sandbox
+KEYWORD         = ':' ATOM                     ; e.g. :allow, :deny, :has
 COMMENT         = ';' (any char)* NEWLINE
 WHITESPACE      = ' ' | '\t' | '\n' | '\r'
 ```
