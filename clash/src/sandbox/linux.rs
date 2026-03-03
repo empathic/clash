@@ -261,24 +261,33 @@ fn install_seccomp_network_filter() -> Result<(), SandboxError> {
     apply_seccomp_filter(rules, arch)
 }
 
-/// Install a permissive seccomp filter for `AllowDomains` on Linux.
+/// Install a permissive seccomp filter for `AllowDomains`/`Localhost` on Linux.
 ///
 /// Allows socket creation for AF_INET/AF_INET6 (needed for proxy connection)
-/// and outbound connections, but blocks bind/listen/accept to prevent the
-/// sandboxed process from running a server. Domain filtering is handled by
-/// the HTTP proxy, not seccomp.
+/// and outbound connections. Domain filtering is handled by the HTTP proxy,
+/// not seccomp.
+///
+/// We intentionally do NOT block bind/listen/accept here because seccomp can
+/// only inspect syscall arguments by position, and these syscalls take a file
+/// descriptor as their first argument — not the socket family. Blocking them
+/// unconditionally breaks AF_UNIX IPC used by tools like terraform (go-plugin),
+/// cargo, and other programs that communicate with child processes via Unix
+/// domain sockets. Since the proxy already controls outbound connections and
+/// Landlock restricts where socket files can be created, the security impact
+/// of allowing these syscalls is minimal.
 #[instrument(level = Level::TRACE)]
 fn install_seccomp_advisory_network_filter() -> Result<(), SandboxError> {
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
-    // Block server-side operations and ptrace
-    let deny_syscalls = [
-        libc::SYS_accept,
-        libc::SYS_accept4,
-        libc::SYS_bind,
-        libc::SYS_listen,
-        libc::SYS_ptrace,
-    ];
+    // Only block ptrace (prevents privilege escalation).
+    //
+    // We do not block bind/listen/accept because their first argument is a
+    // file descriptor, and seccomp cannot distinguish AF_UNIX fds from
+    // AF_INET fds. Blocking them breaks Unix domain socket IPC (go-plugin,
+    // cargo subprocess communication, etc.). The HTTP proxy handles domain
+    // filtering for outbound connections, and without inbound routing to
+    // the sandboxed process, server-side syscalls pose no real risk.
+    let deny_syscalls = [libc::SYS_ptrace];
 
     for &syscall in &deny_syscalls {
         rules.insert(syscall, vec![]);
