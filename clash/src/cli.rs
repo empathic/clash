@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 
 use crate::cmd::debug::DebugCmd;
 use crate::cmd::statusline::StatuslineCmd;
+use crate::cmd::trace::TraceCmd;
 use crate::sandbox_cmd::SandboxCmd;
 
 #[derive(Parser, Debug)]
@@ -172,6 +173,10 @@ pub enum Commands {
     /// Debug policy enforcement: view logs, replay commands, inspect sandbox
     #[command(subcommand)]
     Debug(DebugCmd),
+
+    /// View and export session traces
+    #[command(subcommand)]
+    Trace(TraceCmd),
 
     // --- Hidden/internal commands ---
     /// Agent hook callbacks

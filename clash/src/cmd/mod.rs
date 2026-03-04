@@ -12,4 +12,5 @@ pub mod schema;
 pub mod status;
 pub mod statusline;
 pub mod uninstall;
+pub mod trace;
 pub mod update;
