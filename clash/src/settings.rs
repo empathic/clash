@@ -37,11 +37,11 @@ fn is_truthy_disable_value(value: &str) -> bool {
 /// Higher-precedence levels override lower ones: Session > Project > User.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PolicyLevel {
-    /// User-level policy: `~/.clash/policy.sexpr`
+    /// User-level policy: `~/.clash/policy.json`
     User = 0,
-    /// Project-level policy: `<project_root>/.clash/policy.sexpr`
+    /// Project-level policy: `<project_root>/.clash/policy.json`
     Project = 1,
-    /// Session-level policy: `/tmp/clash-<session_id>/policy.sexpr`
+    /// Session-level policy: `/tmp/clash-<session_id>/policy.json`
     /// Temporary rules that last only for the current Claude Code session.
     Session = 2,
 }
@@ -85,13 +85,13 @@ impl std::str::FromStr for PolicyLevel {
 }
 
 /// Default policy source embedded at compile time.
-pub const DEFAULT_POLICY: &str = include_str!("default_policy.sexpr");
+pub const DEFAULT_POLICY: &str = include_str!("default_policy.json");
 
 /// Internal policies embedded at compile time. Each entry is (name, source).
 /// These are always active unless the user defines a policy with the same name.
 pub const INTERNAL_POLICIES: &[(&str, &str)] = &[
-    ("__internal_clash__", include_str!("internal_clash.sexpr")),
-    ("__internal_claude__", include_str!("internal_claude.sexpr")),
+    ("__internal_clash__", include_str!("internal_clash.json")),
+    ("__internal_claude__", include_str!("internal_claude.json")),
 ];
 
 /// Session-level context from Claude Code hook input.
@@ -187,7 +187,7 @@ impl ClashSettings {
         if let Ok(p) = std::env::var("CLASH_POLICY_FILE") {
             return Ok(PathBuf::from(p));
         }
-        Self::settings_dir().map(|d| d.join("policy.sexpr"))
+        Self::settings_dir().map(|d| d.join("policy.json"))
     }
 
     /// Returns the policy file path for a specific level.
@@ -198,7 +198,7 @@ impl ClashSettings {
             PolicyLevel::User => Self::policy_file(),
             PolicyLevel::Project => {
                 let root = Self::project_root()?;
-                Ok(root.join(".clash").join("policy.sexpr"))
+                Ok(root.join(".clash").join("policy.json"))
             }
             PolicyLevel::Session => {
                 let session_id = Self::active_session_id()?;
@@ -209,7 +209,7 @@ impl ClashSettings {
 
     // Returns the policy file path for a session, given its ID.
     pub fn session_policy_path(session_id: &str) -> PathBuf {
-        crate::audit::session_dir(session_id).join("policy.sexpr")
+        crate::audit::session_dir(session_id).join("policy.json")
     }
 
     /// Path to the active-session marker file.
@@ -352,7 +352,7 @@ impl ClashSettings {
 
     /// Set the policy source directly (compile from s-expression text).
     pub fn set_policy_source(&mut self, source: &str) {
-        match crate::policy::compile_to_tree(source, &crate::policy::compile::StdEnvResolver) {
+        match crate::policy::compile::compile_to_tree(source, &crate::policy::compile::StdEnvResolver) {
             Ok(tree) => {
                 self.compiled = Some(tree);
                 self.policy_error = None;
@@ -463,7 +463,7 @@ impl ClashSettings {
                 // policy.yaml for notification/audit config.
                 self.load_notification_audit_config();
 
-                match crate::policy::compile_to_tree(
+                match crate::policy::compile::compile_to_tree(
                     &contents,
                     &crate::policy::compile::StdEnvResolver,
                 ) {
@@ -581,13 +581,13 @@ impl ClashSettings {
         // Compile (single-level or multi-level) directly to PolicyTree.
         let result = if level_sources.len() == 1 {
             let (_, source) = &level_sources[0];
-            crate::policy::compile_to_tree_with_internals(source, &resolver, INTERNAL_POLICIES)
+            crate::policy::compile::compile_to_tree_with_internals(source, &resolver, INTERNAL_POLICIES)
         } else {
             let level_refs: Vec<(PolicyLevel, &str)> = level_sources
                 .iter()
                 .map(|(l, s)| (*l, s.as_str()))
                 .collect();
-            crate::policy::compile_multi_level_to_tree(&level_refs, &resolver, INTERNAL_POLICIES)
+            crate::policy::compile::compile_multi_level_to_tree(&level_refs, &resolver, INTERNAL_POLICIES)
         };
 
         match result {
@@ -776,7 +776,7 @@ mod test {
     #[test]
     fn load_missing_file_returns_false() {
         let mut settings = ClashSettings::default();
-        let path = std::path::Path::new("/tmp/clash-test-nonexistent-policy.sexpr");
+        let path = std::path::Path::new("/tmp/clash-test-nonexistent-policy.json");
         let _ = std::fs::remove_file(path);
         let result = settings.load_policy_from_path(path);
         assert!(!result);
@@ -789,7 +789,7 @@ mod test {
     #[test]
     fn load_directory_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
+        let policy_path = dir.path().join("policy.json");
         std::fs::create_dir(&policy_path).unwrap();
 
         let mut settings = ClashSettings::default();
@@ -805,7 +805,7 @@ mod test {
     #[test]
     fn load_empty_file_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
+        let policy_path = dir.path().join("policy.json");
         std::fs::write(&policy_path, "").unwrap();
 
         let mut settings = ClashSettings::default();
@@ -821,7 +821,7 @@ mod test {
     #[test]
     fn load_whitespace_only_file_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
+        let policy_path = dir.path().join("policy.json");
         std::fs::write(&policy_path, "   \n\n  \t  \n").unwrap();
 
         let mut settings = ClashSettings::default();
@@ -837,7 +837,7 @@ mod test {
     #[test]
     fn load_oversized_file_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
+        let policy_path = dir.path().join("policy.json");
         let mut f = std::fs::File::create(&policy_path).unwrap();
         let chunk = vec![b'#'; 8192];
         for _ in 0..(ClashSettings::MAX_POLICY_SIZE / 8192 + 1) {
@@ -858,13 +858,9 @@ mod test {
     #[test]
     fn load_valid_policy_succeeds() {
         // Use a policy without (env PWD) to avoid needing env vars in tests.
-        let simple_policy = r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath "/tmp"))))
-"#;
+        let simple_policy = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}}}}}]}]}"#;
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
+        let policy_path = dir.path().join("policy.json");
         std::fs::write(&policy_path, simple_policy).unwrap();
 
         let mut settings = ClashSettings::default();
@@ -877,8 +873,8 @@ mod test {
     #[test]
     fn load_malformed_policy_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
-        std::fs::write(&policy_path, "(((invalid policy").unwrap();
+        let policy_path = dir.path().join("policy.json");
+        std::fs::write(&policy_path, r#"{"schema_version": 1, "invalid": true"#).unwrap();
 
         let mut settings = ClashSettings::default();
         let result = settings.load_policy_from_path(&policy_path);
@@ -896,11 +892,7 @@ mod test {
     #[test]
     fn set_policy_source_works() {
         // Use a policy without (env PWD) to avoid needing env vars in tests.
-        let simple_policy = r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath "/tmp"))))
-"#;
+        let simple_policy = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}}}}}]}]}"#;
         let mut settings = ClashSettings::default();
         settings.set_policy_source(simple_policy);
         assert!(settings.decision_tree().is_some());
@@ -910,7 +902,7 @@ mod test {
     #[test]
     fn ensure_policy_creates_file_when_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join(".clash").join("policy.sexpr");
+        let policy_path = dir.path().join(".clash").join("policy.json");
 
         let result = ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
         assert!(result.is_some(), "should have created the file");
@@ -924,8 +916,8 @@ mod test {
     #[test]
     fn ensure_policy_noop_when_exists() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
-        std::fs::write(&policy_path, "(default deny \"main\")\n(policy \"main\")").unwrap();
+        let policy_path = dir.path().join("policy.json");
+        std::fs::write(&policy_path, r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": []}]}"#).unwrap();
 
         let result = ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
         assert!(result.is_none(), "should not recreate existing file");
@@ -933,7 +925,7 @@ mod test {
         // Verify original content is preserved.
         let contents = std::fs::read_to_string(&policy_path).unwrap();
         assert!(
-            contents.contains("default deny"),
+            contents.contains("default_effect"),
             "original content preserved"
         );
         assert!(
@@ -948,7 +940,7 @@ mod test {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join(".clash").join("policy.sexpr");
+        let policy_path = dir.path().join(".clash").join("policy.json");
 
         ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
         let mode = std::fs::metadata(&policy_path)
@@ -1019,15 +1011,17 @@ mod test {
         // Verify TRANSCRIPT_DIR resolves to the actual directory
         assert_eq!(resolver.resolve("TRANSCRIPT_DIR").unwrap(), "/tmp/session");
 
-        // Verify the internal_claude.sexpr compiles with this resolver
-        let source = format!(
-            "(default deny \"main\")\n(policy \"main\")\n{}",
-            include_str!("internal_claude.sexpr")
+        // Verify the internal_claude.json compiles with this resolver
+        let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": []}]}"#;
+        let internal = include_str!("internal_claude.json");
+        let result = crate::policy::compile::compile_policy_with_internals(
+            user_source,
+            &resolver,
+            &[("__internal_claude__", internal)],
         );
-        let result = crate::policy::compile::compile_policy_with_env(&source, &resolver);
         assert!(
             result.is_ok(),
-            "internal_claude.sexpr should compile with session resolver: {:?}",
+            "internal_claude.json should compile with session resolver: {:?}",
             result.err()
         );
     }
@@ -1036,14 +1030,16 @@ mod test {
     fn internal_claude_policy_compiles_without_session_context() {
         // Even without hook context, the policy should compile (using sentinel).
         let resolver = SessionEnvResolver { hook_ctx: None };
-        let source = format!(
-            "(default deny \"main\")\n(policy \"main\")\n{}",
-            include_str!("internal_claude.sexpr")
+        let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": []}]}"#;
+        let internal = include_str!("internal_claude.json");
+        let result = crate::policy::compile::compile_policy_with_internals(
+            user_source,
+            &resolver,
+            &[("__internal_claude__", internal)],
         );
-        let result = crate::policy::compile::compile_policy_with_env(&source, &resolver);
         assert!(
             result.is_ok(),
-            "internal_claude.sexpr should compile with sentinel: {:?}",
+            "internal_claude.json should compile with sentinel: {:?}",
             result.err()
         );
     }

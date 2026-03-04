@@ -147,13 +147,7 @@ mod tests {
 
     #[test]
     fn print_tree_output() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *))
-  (allow (net "github.com")))
-"#;
+        let source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}]}}}, {"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}, {"rule": {"effect": "allow", "net": {"domain": {"literal": "github.com"}}}}]}]}"#;
         let env = TestEnv(HashMap::from([("PWD".into(), "/tmp".into())]));
         let dt = compile_policy_with_env(source, &env).unwrap();
         let tree = PolicyTree::from_decision_tree(dt);
@@ -169,15 +163,8 @@ mod tests {
     fn print_builtin_annotation() {
         use crate::policy::compile::compile_policy_with_internals;
 
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
-        let internal = r#"
-(policy "__internal_test__"
-  (allow (fs read (subpath "/test"))))
-"#;
+        let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
+        let internal = r#"{"policies": [{"name": "__internal_test__", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/test"}}}}}}]}]}"#;
         let env = TestEnv(HashMap::new());
         let dt =
             compile_policy_with_internals(user_source, &env, &[("__internal_test__", internal)])
@@ -198,16 +185,7 @@ mod tests {
 
     #[test]
     fn print_tree_v2_structure() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "cargo")
-    (sandbox
-      (match ctx.http.domain
-        "crates.io" :allow
-        * :deny))))
-"#;
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "command", "pattern": {"exec": {"bin": {"literal": "cargo"}}}, "body": [{"match": {"observable": "ctx.http.domain", "arms": [{"pattern": {"single": {"literal": "crates.io"}}, "effect": "allow"}, {"pattern": {"single": {"any": null}}, "effect": "deny"}]}}]}}]}]}"#;
         let env = TestEnv(HashMap::from([("PWD".into(), "/tmp".into())]));
         let tree = compile_to_tree(source, &env).unwrap();
         let output = print_tree(&tree);

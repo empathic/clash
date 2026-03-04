@@ -14,7 +14,7 @@ pub fn run(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
     if let Some(ref path) = policy_path {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read policy file: {}", path))?;
-        crate::policy::compile_policy(&contents)
+        crate::policy::compile::compile_policy(&contents)
             .with_context(|| format!("failed to compile policy file: {}", path))?;
         info!(path, "Using policy file");
     }

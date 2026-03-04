@@ -1,71 +1,102 @@
 //! AST types for the policy language.
 //!
-//! Every node implements `Display` so the AST round-trips to valid source text.
+//! All types derive `Serialize` and `Deserialize` so the AST serves as the
+//! serialization IR — policies are authored and stored as JSON/YAML.
 
 use std::fmt;
 
-use crate::policy::Effect;
-use crate::policy::sexpr::SExpr;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// A top-level declaration in a policy file.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TopLevel {
-    /// `(version 1)` — declares the policy syntax version.
-    /// Absent = implicit version 1 (backwards compatibility).
-    Version(u32),
-    /// `(default deny "main")` — sets the default effect and active policy name.
-    Default { effect: Effect, policy: String },
-    /// `(use "name")` — v2 directive selecting the entry policy to evaluate.
-    Use(String),
-    /// `(policy name ...)` — a named policy containing rules and includes.
-    Policy { name: String, body: Vec<PolicyItem> },
-    /// `(def name <expr>)` — v2 macro definition binding a name to any expression.
-    Def { name: String, value: SExpr },
+use crate::policy::Effect;
+
+// ---------------------------------------------------------------------------
+// PolicyDocument — top-level serde type
+// ---------------------------------------------------------------------------
+
+fn default_schema_version() -> u32 {
+    4
 }
 
-/// An item inside a `(policy ...)` block.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A complete policy document — the top-level unit of serialization.
+///
+/// Replaces the former `Vec<TopLevel>` representation with an explicit struct
+/// that carries document-level metadata as fields.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PolicyDocument {
+    /// Schema version (currently 4).
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+    /// The entry policy to evaluate (formerly `(use "name")`).
+    #[serde(rename = "use", skip_serializing_if = "Option::is_none")]
+    pub use_policy: Option<String>,
+    /// Default effect for unmatched requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effect: Option<Effect>,
+    /// Named policy definitions.
+    pub policies: Vec<PolicyDef>,
+}
+
+/// A named policy containing rules and includes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PolicyDef {
+    pub name: String,
+    pub body: Vec<PolicyItem>,
+}
+
+// ---------------------------------------------------------------------------
+// PolicyItem — items inside a policy block
+// ---------------------------------------------------------------------------
+
+/// An item inside a policy block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PolicyItem {
-    /// `(include "other-policy")` — import rules from another policy by name.
+    /// Import rules from another policy by name.
     Include(String),
-    /// A rule: `(effect (capability ...))`.
+    /// A permission rule: effect + capability matcher.
     Rule(Rule),
-    /// `(when (observable pattern) body...)` — v2 conditional block.
-    /// When `is_eq` is true, the guard was written as `(eq observable pattern)`.
+    /// Conditional block: when an observable matches a pattern, apply body.
     When {
         observable: Observable,
         pattern: ArmPattern,
         body: Vec<PolicyItem>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         is_eq: bool,
     },
-    /// `(match observable arms...)` — v2 dispatch block at policy level.
+    /// Dispatch block: match an observable against multiple arms.
     Match(MatchBlock),
-    /// `(sandbox items...)` — v2 sandbox block (only inside `when`).
-    Sandbox { body: Vec<SandboxItem> },
-    /// `:allow`, `:deny`, `:ask` — v2 inline effect (only inside `when`).
+    /// Bare effect (only inside `when` bodies).
     Effect(Effect),
 }
 
-/// How a sandbox is specified on an exec rule.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SandboxRef {
-    /// Reference a named policy: `:sandbox "name"`.
-    Named(String),
-    /// Inline rules: `:sandbox (allow (net *)) (allow (fs read ...))`.
-    Inline(Vec<Rule>),
-}
+// ---------------------------------------------------------------------------
+// Rule and capability matchers
+// ---------------------------------------------------------------------------
 
 /// A single permission rule.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rule {
     pub effect: Effect,
+    #[serde(flatten)]
     pub matcher: CapMatcher,
     /// Optional sandbox policy for exec rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<SandboxRef>,
 }
 
+/// How a sandbox is specified on an exec rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxRef {
+    /// Reference a named policy.
+    Named(String),
+    /// Inline rules.
+    Inline(Vec<Rule>),
+}
+
 /// A capability matcher — one of the four capability domains.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CapMatcher {
     Exec(ExecMatcher),
     Fs(FsMatcher),
@@ -73,72 +104,75 @@ pub enum CapMatcher {
     Tool(ToolMatcher),
 }
 
-/// Matches command execution: `(exec bin [args...] [:has patterns...])`.
-///
-/// Arguments before `:has` are matched positionally (left-to-right).
-/// Arguments after `:has` are matched orderlessly — each pattern must match
-/// at least one of the remaining arguments, regardless of position.
-///
-/// Examples:
-/// ```text
-/// (exec "git" "push" *)                 ; positional only
-/// (exec "git" :has "push" "--force")     ; orderless only
-/// (exec "git" "push" :has "--force")     ; positional "push", then --force anywhere
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Matches command execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecMatcher {
     /// Binary pattern. `Pattern::Any` if omitted.
+    #[serde(default = "Pattern::any")]
     pub bin: Pattern,
-    /// Positional argument patterns. Each pattern matches the arg at the same
-    /// index. Empty = match any args.
+    /// Positional argument patterns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<Pattern>,
-    /// Orderless argument patterns (after `:has`). Each pattern must match at
-    /// least one of the remaining args (those not consumed by positional).
-    /// Empty = no orderless constraint.
+    /// Orderless argument patterns (`:has` in the old syntax).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub has_args: Vec<Pattern>,
 }
 
-/// Matches filesystem operations: `(fs [op] [path])`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Matches filesystem operations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsMatcher {
-    /// Operation filter. `OpPattern::Any` if omitted.
+    /// Operation filter.
+    #[serde(default = "OpPattern::any")]
     pub op: OpPattern,
-    /// Path filter. `None` = match any path.
+    /// Path filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathFilter>,
 }
 
-/// Matches network access: `(net [domain] [path])`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Matches network access.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetMatcher {
-    /// Domain pattern. `Pattern::Any` if omitted.
+    /// Domain pattern.
+    #[serde(default = "Pattern::any")]
     pub domain: Pattern,
-    /// Optional URL path filter. `None` = match any path.
+    /// Optional URL path filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathFilter>,
 }
 
-/// Matches Claude Code tools by name: `(tool [name])`.
-///
-/// This capability domain matches tools that don't map to exec/fs/net,
-/// such as `Skill`, `Task`, `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`, etc.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Matches tools by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolMatcher {
-    /// Tool name pattern. `Pattern::Any` if omitted.
+    /// Tool name pattern.
+    #[serde(default = "Pattern::any")]
     pub name: Pattern,
 }
 
+// ---------------------------------------------------------------------------
+// OpPattern / FsOp
+// ---------------------------------------------------------------------------
+
 /// A filesystem operation pattern.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OpPattern {
     /// Matches any operation.
     Any,
     /// A single operation.
     Single(FsOp),
-    /// `(or read write ...)` — matches any of the listed operations.
+    /// Matches any of the listed operations.
     Or(Vec<FsOp>),
 }
 
+impl OpPattern {
+    pub fn any() -> Self {
+        OpPattern::Any
+    }
+}
+
 /// Filesystem operation kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum FsOp {
     Read,
     Write,
@@ -146,372 +180,248 @@ pub enum FsOp {
     Delete,
 }
 
-/// A general-purpose pattern used for matching strings (binary names, args, domains).
-#[derive(Debug, Clone, PartialEq, Eq)]
+// ---------------------------------------------------------------------------
+// Pattern
+// ---------------------------------------------------------------------------
+
+/// A general-purpose pattern used for matching strings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Pattern {
-    /// `*` — matches anything.
+    /// `"*"` — matches anything.
     Any,
-    /// `"literal"` or bare `atom` — exact string match.
+    /// Exact string match.
     Literal(String),
-    /// `/pattern/` — regex match.
+    /// Regex match.
     Regex(String),
-    /// `(or p1 p2 ...)` — matches any of.
+    /// Matches any of.
     Or(Vec<Pattern>),
-    /// `(not p)` — negation.
+    /// Negation.
     Not(Box<Pattern>),
 }
 
-/// A path filter used in `(fs ...)` position 2.
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl Pattern {
+    pub fn any() -> Self {
+        Pattern::Any
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PathFilter / PathExpr
+// ---------------------------------------------------------------------------
+
+/// A path filter used in fs/net matchers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PathFilter {
-    /// `(subpath expr)` or `(subpath :worktree expr)` — recursive subtree match.
-    /// When `worktree` is true, the compiler expands to also include the backing
-    /// git worktree directories (if the resolved path is inside a worktree).
-    Subpath(PathExpr, bool),
-    /// `"path"` or bare atom — exact file match.
+    /// Recursive subtree match.
+    Subpath {
+        path: PathExpr,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        worktree: bool,
+    },
+    /// Exact file match.
     Literal(String),
-    /// `/pattern/` — regex on resolved path.
+    /// Regex on resolved path.
     Regex(String),
-    /// `(or f1 f2 ...)`.
+    /// Or combinator.
     Or(Vec<PathFilter>),
-    /// `(not f)`.
+    /// Negation.
     Not(Box<PathFilter>),
 }
 
 /// A path expression that may reference environment variables.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PathExpr {
     /// A static path string.
     Static(String),
-    /// `(env NAME)` — resolved at compile time.
+    /// Resolved from an environment variable at compile time.
     Env(String),
-    /// `(join expr1 expr2 ...)` — concatenate resolved parts.
+    /// Concatenate resolved parts.
     Join(Vec<PathExpr>),
 }
 
 // ---------------------------------------------------------------------------
-// v2 types: when / sandbox / match
+// Observable — custom string-based serde
 // ---------------------------------------------------------------------------
 
 /// Unified observable reference for `when` guards and `match` dispatch.
-///
-/// Replaces the former `WhenPredicate` (command/tool only) and `ObservableRef`
-/// (proxy/fs only) with a single enum covering all observable domains.
-///
-/// Observable names follow the `ctx.*` namespace defined in the v2 language spec.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Observable {
-    /// `command` — invocation-type predicate matching exec queries (binary + args).
+    /// `command` — invocation-type predicate matching exec queries.
     Command,
-    /// `tool` — invocation-type predicate matching tool queries by name.
+    /// `tool` — invocation-type predicate matching tool queries.
     Tool,
-    /// `agent` — invocation-type predicate matching subagent spawning by name.
+    /// `agent` — invocation-type predicate matching subagent spawning.
     Agent,
-    /// `mcp` — invocation-type predicate matching MCP tool invocations by server name.
+    /// `mcp` — invocation-type predicate matching MCP tool invocations.
     Mcp,
 
-    // -- ctx.http namespace --------------------------------------------------
-    /// `ctx.http.domain` — destination domain (formerly `proxy.domain`).
+    // -- ctx.http namespace --
     HttpDomain,
-    /// `ctx.http.method` — HTTP method (formerly `proxy.method`).
     HttpMethod,
-    /// `ctx.http.port` — destination port.
     HttpPort,
-    /// `ctx.http.path` — URL path.
     HttpPath,
 
-    // -- ctx.fs namespace ----------------------------------------------------
-    /// `ctx.fs.action` — operation type (formerly `fs.action`).
+    // -- ctx.fs namespace --
     FsAction,
-    /// `ctx.fs.path` — file path (formerly `fs.path`).
     FsPath,
-    /// `ctx.fs.exists` — whether the target exists.
     FsExists,
 
-    // -- ctx.process namespace -----------------------------------------------
-    /// `ctx.process.command` — executable name.
+    // -- ctx.process namespace --
     ProcessCommand,
-    /// `ctx.process.args` — argument list.
     ProcessArgs,
 
-    // -- ctx.tool namespace --------------------------------------------------
-    /// `ctx.tool.name` — tool name.
+    // -- ctx.tool namespace --
     ToolName,
-    /// `ctx.tool.args` — tool arguments (dynamic, nullable accessors).
     ToolArgs,
     /// `ctx.tool.args.<field>?` — nullable accessor for a specific tool argument field.
     ToolArgField(String),
 
-    // -- ctx.agent namespace -------------------------------------------------
-    /// `ctx.agent.name` — subagent name.
+    // -- ctx.agent namespace --
     AgentName,
 
-    // -- ctx.mcp namespace ---------------------------------------------------
-    /// `ctx.mcp.server` — MCP server name.
+    // -- ctx.mcp namespace --
     McpServer,
-    /// `ctx.mcp.tool` — MCP tool name.
     McpTool,
 
-    // -- ctx.state -----------------------------------------------------------
-    /// `ctx.state` — agent state.
+    // -- ctx.state --
     State,
 
-    /// `[ctx.fs.action ctx.fs.path]` — tuple of observables.
+    /// Tuple of observables.
     Tuple(Vec<Observable>),
 }
 
-/// An item inside a `(sandbox ...)` block.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SandboxItem {
-    /// A flat rule: `(allow (fs read ...))`.
-    Rule(Rule),
-    /// `(match observable arms...)`.
-    Match(MatchBlock),
-}
-
-/// A `(match observable arms...)` block.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MatchBlock {
-    pub observable: Observable,
-    /// Optional default effect for unmatched arms: `(default :deny)`.
-    pub default: Option<Effect>,
-    pub arms: Vec<MatchArmAst>,
-}
-
-/// One arm of a `match` block: pattern → effect.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MatchArmAst {
-    pub pattern: ArmPattern,
-    pub effect: Effect,
-}
-
-/// Pattern in a match arm.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ArmPattern {
-    /// A single pattern: `"github.com"`, `*`, `(or ...)`, `(not ...)`.
-    Single(Pattern),
-    /// A single path pattern: `(subpath $PWD)`.
-    SinglePath(PathFilter),
-    /// An exec-style pattern for `command` observable: `("git" *)`.
-    Exec(ExecMatcher),
-    /// A tuple pattern: `["read" (subpath $PWD)]`.
-    Tuple(Vec<ArmPatternElement>),
-}
-
-/// An element in a tuple match arm pattern.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ArmPatternElement {
-    /// A general pattern.
-    Pat(Pattern),
-    /// A path filter (for fs.path observables).
-    Path(PathFilter),
-}
-
-// ---------------------------------------------------------------------------
-// Display implementations for round-trip printing
-// ---------------------------------------------------------------------------
-
-impl fmt::Display for TopLevel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Observable {
+    /// Return the canonical string name for this observable.
+    pub fn as_str(&self) -> String {
         match self {
-            TopLevel::Version(v) => write!(f, "(version {v})"),
-            TopLevel::Default { effect, policy } => {
-                write!(f, "(default {effect} \"{policy}\")")
-            }
-            TopLevel::Use(name) => write!(f, "(use \"{name}\")"),
-            TopLevel::Policy { name, body } => {
-                write!(f, "(policy \"{name}\"")?;
-                for item in body {
-                    write!(f, "\n  {item}")?;
-                }
-                if body.is_empty() {
-                    write!(f, ")")
-                } else {
-                    write!(f, "\n)")
-                }
-            }
-            TopLevel::Def { name, value } => {
-                write!(f, "(def {name} {value})")
+            Observable::Command => "command".into(),
+            Observable::Tool => "tool".into(),
+            Observable::Agent => "agent".into(),
+            Observable::Mcp => "mcp".into(),
+            Observable::HttpDomain => "ctx.http.domain".into(),
+            Observable::HttpMethod => "ctx.http.method".into(),
+            Observable::HttpPort => "ctx.http.port".into(),
+            Observable::HttpPath => "ctx.http.path".into(),
+            Observable::FsAction => "ctx.fs.action".into(),
+            Observable::FsPath => "ctx.fs.path".into(),
+            Observable::FsExists => "ctx.fs.exists".into(),
+            Observable::ProcessCommand => "ctx.process.command".into(),
+            Observable::ProcessArgs => "ctx.process.args".into(),
+            Observable::ToolName => "ctx.tool.name".into(),
+            Observable::ToolArgs => "ctx.tool.args".into(),
+            Observable::ToolArgField(field) => format!("ctx.tool.args.{field}?"),
+            Observable::AgentName => "ctx.agent.name".into(),
+            Observable::McpServer => "ctx.mcp.server".into(),
+            Observable::McpTool => "ctx.mcp.tool".into(),
+            Observable::State => "ctx.state".into(),
+            Observable::Tuple(obs) => {
+                let parts: Vec<String> = obs.iter().map(|o| o.as_str()).collect();
+                format!("[{}]", parts.join(" "))
             }
         }
     }
-}
 
-impl fmt::Display for PolicyItem {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PolicyItem::Include(name) => write!(f, "(include \"{name}\")"),
-            PolicyItem::Rule(rule) => write!(f, "{rule}"),
-            PolicyItem::When {
-                observable,
-                pattern,
-                body,
-                is_eq,
-            } => {
-                write!(f, "(when ")?;
-                display_when_guard(f, observable, pattern, *is_eq)?;
-                // Single inline effect: render on one line
-                if body.len() == 1 && matches!(&body[0], PolicyItem::Effect(_)) {
-                    write!(f, " {}", body[0])?;
-                } else {
-                    for item in body {
-                        write!(f, "\n    {item}")?;
-                    }
-                }
-                write!(f, ")")
+    /// Parse an observable from its string name.
+    pub fn from_str_name(s: &str) -> Result<Self, String> {
+        match s {
+            "command" => Ok(Observable::Command),
+            "tool" => Ok(Observable::Tool),
+            "agent" => Ok(Observable::Agent),
+            "mcp" => Ok(Observable::Mcp),
+            "ctx.http.domain" => Ok(Observable::HttpDomain),
+            "ctx.http.method" => Ok(Observable::HttpMethod),
+            "ctx.http.port" => Ok(Observable::HttpPort),
+            "ctx.http.path" => Ok(Observable::HttpPath),
+            "ctx.fs.action" => Ok(Observable::FsAction),
+            "ctx.fs.path" => Ok(Observable::FsPath),
+            "ctx.fs.exists" => Ok(Observable::FsExists),
+            "ctx.process.command" => Ok(Observable::ProcessCommand),
+            "ctx.process.args" => Ok(Observable::ProcessArgs),
+            "ctx.tool.name" => Ok(Observable::ToolName),
+            "ctx.tool.args" => Ok(Observable::ToolArgs),
+            "ctx.agent.name" => Ok(Observable::AgentName),
+            "ctx.mcp.server" => Ok(Observable::McpServer),
+            "ctx.mcp.tool" => Ok(Observable::McpTool),
+            "ctx.state" => Ok(Observable::State),
+            s if s.starts_with("ctx.tool.args.") && s.ends_with('?') => {
+                let field = s
+                    .strip_prefix("ctx.tool.args.")
+                    .unwrap()
+                    .strip_suffix('?')
+                    .unwrap();
+                Ok(Observable::ToolArgField(field.to_string()))
             }
-            PolicyItem::Match(block) => write!(f, "{block}"),
-            PolicyItem::Sandbox { body } => {
-                write!(f, "(sandbox")?;
-                for item in body {
-                    write!(f, "\n      {item}")?;
-                }
-                write!(f, ")")
+            s if s.starts_with('[') && s.ends_with(']') => {
+                let inner = &s[1..s.len() - 1];
+                let parts: Result<Vec<Observable>, String> = inner
+                    .split_whitespace()
+                    .map(Observable::from_str_name)
+                    .collect();
+                Ok(Observable::Tuple(parts?))
             }
-            PolicyItem::Effect(effect) => write!(f, ":{effect}"),
-        }
-    }
-}
-
-/// Write the when guard `(observable pattern)` combined form.
-///
-/// When `is_eq` is true, renders as `(eq observable pattern)` instead.
-fn display_when_guard(
-    f: &mut fmt::Formatter<'_>,
-    observable: &Observable,
-    pattern: &ArmPattern,
-    is_eq: bool,
-) -> fmt::Result {
-    if is_eq {
-        write!(f, "(eq {observable}")?;
-        match pattern {
-            ArmPattern::Single(pat) => write!(f, " {pat}")?,
-            ArmPattern::SinglePath(pf) => write!(f, " {pf}")?,
-            _ => {}
-        }
-        return write!(f, ")");
-    }
-    match observable {
-        Observable::Command => {
-            write!(f, "(command")?;
-            if let ArmPattern::Exec(m) = pattern {
-                let has_content = !m.args.is_empty() || !m.has_args.is_empty();
-                if m.bin != Pattern::Any || has_content {
-                    write!(f, " {}", m.bin)?;
-                }
-                for arg in &m.args {
-                    write!(f, " {arg}")?;
-                }
-                if !m.has_args.is_empty() {
-                    write!(f, " :has")?;
-                    for arg in &m.has_args {
-                        write!(f, " {arg}")?;
-                    }
-                }
-            }
-            write!(f, ")")
-        }
-        Observable::Tool => {
-            write!(f, "(tool")?;
-            if let ArmPattern::Single(pat) = pattern {
-                if *pat != Pattern::Any {
-                    write!(f, " {pat}")?;
-                }
-            }
-            write!(f, ")")
-        }
-        Observable::Agent => {
-            write!(f, "(agent")?;
-            if let ArmPattern::Single(pat) = pattern {
-                if *pat != Pattern::Any {
-                    write!(f, " {pat}")?;
-                }
-            }
-            write!(f, ")")
-        }
-        Observable::Mcp => {
-            write!(f, "(mcp")?;
-            if let ArmPattern::Single(pat) = pattern {
-                if *pat != Pattern::Any {
-                    write!(f, " {pat}")?;
-                }
-            }
-            write!(f, ")")
-        }
-        _ => {
-            // proxy.domain, fs.action, fs.path — render as (observable pattern)
-            write!(f, "({observable}")?;
-            match pattern {
-                ArmPattern::Single(pat) => write!(f, " {pat}")?,
-                ArmPattern::SinglePath(pf) => write!(f, " {pf}")?,
-                _ => {}
-            }
-            write!(f, ")")
+            _ => Err(format!("unknown observable: {s:?}")),
         }
     }
 }
 
 impl fmt::Display for Observable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Observable::Command => write!(f, "command"),
-            Observable::Tool => write!(f, "tool"),
-            Observable::Agent => write!(f, "agent"),
-            Observable::Mcp => write!(f, "mcp"),
-            Observable::HttpDomain => write!(f, "ctx.http.domain"),
-            Observable::HttpMethod => write!(f, "ctx.http.method"),
-            Observable::HttpPort => write!(f, "ctx.http.port"),
-            Observable::HttpPath => write!(f, "ctx.http.path"),
-            Observable::FsAction => write!(f, "ctx.fs.action"),
-            Observable::FsPath => write!(f, "ctx.fs.path"),
-            Observable::FsExists => write!(f, "ctx.fs.exists"),
-            Observable::ProcessCommand => write!(f, "ctx.process.command"),
-            Observable::ProcessArgs => write!(f, "ctx.process.args"),
-            Observable::ToolName => write!(f, "ctx.tool.name"),
-            Observable::ToolArgs => write!(f, "ctx.tool.args"),
-            Observable::ToolArgField(field) => write!(f, "ctx.tool.args.{field}?"),
-            Observable::McpServer => write!(f, "ctx.mcp.server"),
-            Observable::McpTool => write!(f, "ctx.mcp.tool"),
-            Observable::AgentName => write!(f, "ctx.agent.name"),
-            Observable::State => write!(f, "ctx.state"),
-            Observable::Tuple(obs) => {
-                write!(f, "[")?;
-                for (i, o) in obs.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "{o}")?;
-                }
-                write!(f, "]")
-            }
-        }
+        write!(f, "{}", self.as_str())
     }
 }
 
-impl fmt::Display for SandboxItem {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SandboxItem::Rule(rule) => write!(f, "{rule}"),
-            SandboxItem::Match(block) => write!(f, "{block}"),
-        }
+impl Serialize for Observable {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.as_str())
     }
 }
 
-impl fmt::Display for MatchBlock {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "(match {}", self.observable)?;
-        if let Some(effect) = &self.default {
-            write!(f, "\n        (default :{effect})")?;
-        }
-        for arm in &self.arms {
-            write!(f, "\n        {} {}", arm.pattern, arm.effect_keyword())?;
-        }
-        write!(f, ")")
+impl<'de> Deserialize<'de> for Observable {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Observable::from_str_name(&s).map_err(serde::de::Error::custom)
     }
+}
+
+// ---------------------------------------------------------------------------
+// SandboxItem (used in compiled sandbox blocks)
+// ---------------------------------------------------------------------------
+
+/// An item inside a sandbox block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxItem {
+    /// A flat rule.
+    Rule(Rule),
+    /// A match dispatch block.
+    Match(MatchBlock),
+}
+
+// ---------------------------------------------------------------------------
+// Match types
+// ---------------------------------------------------------------------------
+
+/// A match dispatch block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MatchBlock {
+    pub observable: Observable,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Effect>,
+    pub arms: Vec<MatchArmAst>,
+}
+
+/// One arm of a `match` block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MatchArmAst {
+    pub pattern: ArmPattern,
+    pub effect: Effect,
 }
 
 impl MatchArmAst {
-    /// Display the effect as a keyword (`:allow`, `:deny`).
+    /// Display the effect as a keyword.
     pub fn effect_keyword(&self) -> &'static str {
         match self.effect {
             Effect::Allow => ":allow",
@@ -521,151 +431,33 @@ impl MatchArmAst {
     }
 }
 
-impl fmt::Display for ArmPattern {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ArmPattern::Single(p) => write!(f, "{p}"),
-            ArmPattern::SinglePath(pf) => write!(f, "{pf}"),
-            ArmPattern::Exec(m) => {
-                // Bare wildcard: just `*`
-                if m.bin == Pattern::Any && m.args.is_empty() && m.has_args.is_empty() {
-                    return write!(f, "*");
-                }
-                // Otherwise: ("git" "push" *) or ("git" :has "--force")
-                write!(f, "({}", m.bin)?;
-                for arg in &m.args {
-                    write!(f, " {arg}")?;
-                }
-                if !m.has_args.is_empty() {
-                    write!(f, " :has")?;
-                    for arg in &m.has_args {
-                        write!(f, " {arg}")?;
-                    }
-                }
-                write!(f, ")")
-            }
-            ArmPattern::Tuple(elems) => {
-                write!(f, "[")?;
-                for (i, e) in elems.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "{e}")?;
-                }
-                write!(f, "]")
-            }
-        }
-    }
+/// Pattern in a match arm.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArmPattern {
+    /// A single pattern.
+    Single(Pattern),
+    /// A single path pattern.
+    SinglePath(PathFilter),
+    /// An exec-style pattern for `command` observable.
+    Exec(ExecMatcher),
+    /// A tuple pattern.
+    Tuple(Vec<ArmPatternElement>),
 }
 
-impl fmt::Display for ArmPatternElement {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ArmPatternElement::Pat(p) => write!(f, "{p}"),
-            ArmPatternElement::Path(pf) => write!(f, "{pf}"),
-        }
-    }
+/// An element in a tuple match arm pattern.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArmPatternElement {
+    /// A general pattern.
+    Pat(Pattern),
+    /// A path filter.
+    Path(PathFilter),
 }
 
-impl fmt::Display for Rule {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "({} {}", self.effect, self.matcher)?;
-        match &self.sandbox {
-            Some(SandboxRef::Named(name)) => write!(f, " :sandbox \"{name}\"")?,
-            Some(SandboxRef::Inline(rules)) => {
-                write!(f, " :sandbox")?;
-                for rule in rules {
-                    write!(f, " {rule}")?;
-                }
-            }
-            None => {}
-        }
-        write!(f, ")")
-    }
-}
-
-impl fmt::Display for CapMatcher {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CapMatcher::Exec(m) => write!(f, "{m}"),
-            CapMatcher::Fs(m) => write!(f, "{m}"),
-            CapMatcher::Net(m) => write!(f, "{m}"),
-            CapMatcher::Tool(m) => write!(f, "{m}"),
-        }
-    }
-}
-
-impl fmt::Display for ExecMatcher {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "(exec")?;
-        let has_content = !self.args.is_empty() || !self.has_args.is_empty();
-        if self.bin != Pattern::Any || has_content {
-            write!(f, " {}", self.bin)?;
-        }
-        for arg in &self.args {
-            write!(f, " {arg}")?;
-        }
-        if !self.has_args.is_empty() {
-            write!(f, " :has")?;
-            for arg in &self.has_args {
-                write!(f, " {arg}")?;
-            }
-        }
-        write!(f, ")")
-    }
-}
-
-impl fmt::Display for FsMatcher {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "(fs")?;
-        if self.op != OpPattern::Any || self.path.is_some() {
-            write!(f, " {}", self.op)?;
-        }
-        if let Some(path) = &self.path {
-            write!(f, " {path}")?;
-        }
-        write!(f, ")")
-    }
-}
-
-impl fmt::Display for NetMatcher {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "(net")?;
-        if self.domain != Pattern::Any || self.path.is_some() {
-            write!(f, " {}", self.domain)?;
-        }
-        if let Some(path) = &self.path {
-            write!(f, " {path}")?;
-        }
-        write!(f, ")")
-    }
-}
-
-impl fmt::Display for ToolMatcher {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "(tool")?;
-        if self.name != Pattern::Any {
-            write!(f, " {}", self.name)?;
-        }
-        write!(f, ")")
-    }
-}
-
-impl fmt::Display for OpPattern {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            OpPattern::Any => write!(f, "*"),
-            OpPattern::Single(op) => write!(f, "{op}"),
-            OpPattern::Or(ops) => {
-                write!(f, "(or")?;
-                for op in ops {
-                    write!(f, " {op}")?;
-                }
-                write!(f, ")")
-            }
-        }
-    }
-}
+// ---------------------------------------------------------------------------
+// Display implementations (human-readable, not s-expr)
+// ---------------------------------------------------------------------------
 
 impl fmt::Display for FsOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -678,69 +470,43 @@ impl fmt::Display for FsOp {
     }
 }
 
-impl fmt::Display for Pattern {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Pattern::Any => write!(f, "*"),
-            Pattern::Literal(s) => {
-                write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-            }
-            Pattern::Regex(r) => write!(f, "/{r}/"),
-            Pattern::Or(ps) => {
-                write!(f, "(or")?;
-                for p in ps {
-                    write!(f, " {p}")?;
+// ---------------------------------------------------------------------------
+// Display impls (JSON-ish human-readable output)
+// ---------------------------------------------------------------------------
+
+macro_rules! display_as_json {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl fmt::Display for $ty {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    match serde_json::to_string(self) {
+                        Ok(s) => write!(f, "{s}"),
+                        Err(_) => write!(f, "{:?}", self),
+                    }
                 }
-                write!(f, ")")
             }
-            Pattern::Not(p) => write!(f, "(not {p})"),
-        }
-    }
+        )+
+    };
 }
 
-impl fmt::Display for PathFilter {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PathFilter::Subpath(expr, worktree) => {
-                if *worktree {
-                    write!(f, "(subpath :worktree {expr})")
-                } else {
-                    write!(f, "(subpath {expr})")
-                }
-            }
-            PathFilter::Literal(s) => {
-                write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-            }
-            PathFilter::Regex(r) => write!(f, "/{r}/"),
-            PathFilter::Or(fs) => {
-                write!(f, "(or")?;
-                for pf in fs {
-                    write!(f, " {pf}")?;
-                }
-                write!(f, ")")
-            }
-            PathFilter::Not(pf) => write!(f, "(not {pf})"),
-        }
-    }
-}
+display_as_json!(
+    Rule,
+    CapMatcher,
+    PolicyItem,
+    ArmPattern,
+    ExecMatcher,
+    FsMatcher,
+    NetMatcher,
+    ToolMatcher,
+    OpPattern,
+    Pattern,
+    PathFilter,
+    PathExpr,
+);
 
-impl fmt::Display for PathExpr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PathExpr::Static(s) => {
-                write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-            }
-            PathExpr::Env(name) => write!(f, "(env {name})"),
-            PathExpr::Join(parts) => {
-                write!(f, "(join")?;
-                for part in parts {
-                    write!(f, " {part}")?;
-                }
-                write!(f, ")")
-            }
-        }
-    }
-}
+// ---------------------------------------------------------------------------
+// Test strategies (proptest)
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 pub(crate) mod strategies {
@@ -748,7 +514,7 @@ pub(crate) mod strategies {
 
     use super::*;
 
-    /// Generate a safe identifier string (no special chars that break s-expr parsing).
+    /// Generate a safe identifier string.
     fn arb_identifier() -> impl Strategy<Value = String> {
         "[a-z][a-z0-9_-]{0,12}".prop_map(|s| s.to_string())
     }
@@ -833,14 +599,14 @@ pub(crate) mod strategies {
             prop_oneof![
                 arb_identifier().prop_map(|s| PathFilter::Literal(format!("/tmp/{s}"))),
                 (arb_path_expr(), proptest::bool::ANY)
-                    .prop_map(|(expr, wt)| PathFilter::Subpath(expr, wt)),
+                    .prop_map(|(expr, wt)| PathFilter::Subpath { path: expr, worktree: wt }),
             ]
             .boxed()
         } else {
             prop_oneof![
                 3 => arb_identifier().prop_map(|s| PathFilter::Literal(format!("/tmp/{s}"))),
                 2 => (arb_path_expr(), proptest::bool::ANY)
-                    .prop_map(|(expr, wt)| PathFilter::Subpath(expr, wt)),
+                    .prop_map(|(expr, wt)| PathFilter::Subpath { path: expr, worktree: wt }),
                 1 => prop::collection::vec(arb_path_filter_inner(depth - 1), 2..=3)
                     .prop_map(PathFilter::Or),
                 1 => arb_path_filter_inner(depth - 1)
@@ -891,7 +657,7 @@ pub(crate) mod strategies {
         prop_oneof![Just(Effect::Allow), Just(Effect::Deny), Just(Effect::Ask)]
     }
 
-    /// Generate an arbitrary Rule (without sandbox to keep parsing simple).
+    /// Generate an arbitrary Rule (without sandbox).
     pub fn arb_rule() -> impl Strategy<Value = Rule> {
         (arb_effect(), arb_cap_matcher()).prop_map(|(effect, matcher)| Rule {
             effect,
@@ -927,168 +693,73 @@ mod tests {
     use super::*;
 
     #[test]
-    fn display_default() {
-        let d = TopLevel::Default {
-            effect: Effect::Deny,
-            policy: "main".into(),
-        };
-        assert_eq!(d.to_string(), r#"(default deny "main")"#);
-    }
-
-    #[test]
-    fn display_simple_policy() {
-        let p = TopLevel::Policy {
-            name: "main".into(),
-            body: vec![
-                PolicyItem::Include("cwd-access".into()),
-                PolicyItem::Rule(Rule {
-                    effect: Effect::Allow,
-                    matcher: CapMatcher::Exec(ExecMatcher {
-                        bin: Pattern::Literal("git".into()),
-                        args: vec![Pattern::Any],
-                        has_args: vec![],
-                    }),
-                    sandbox: None,
-                }),
+    fn json_roundtrip_policy_document() {
+        let doc = PolicyDocument {
+            schema_version: 4,
+            use_policy: Some("main".into()),
+            default_effect: Some(Effect::Deny),
+            policies: vec![
+                PolicyDef {
+                    name: "cwd-access".into(),
+                    body: vec![PolicyItem::Rule(Rule {
+                        effect: Effect::Allow,
+                        matcher: CapMatcher::Fs(FsMatcher {
+                            op: OpPattern::Single(FsOp::Read),
+                            path: Some(PathFilter::Subpath {
+                                path: PathExpr::Env("PWD".into()),
+                                worktree: true,
+                            }),
+                        }),
+                        sandbox: None,
+                    })],
+                },
+                PolicyDef {
+                    name: "main".into(),
+                    body: vec![PolicyItem::Include("cwd-access".into())],
+                },
             ],
         };
-        let s = p.to_string();
-        assert!(s.contains(r#"(include "cwd-access")"#));
-        assert!(s.contains("(allow (exec \"git\" *))"));
+        let json = serde_json::to_string_pretty(&doc).unwrap();
+        let deserialized: PolicyDocument = serde_json::from_str(&json).unwrap();
+        assert_eq!(doc, deserialized);
     }
 
     #[test]
-    fn display_rule_with_sandbox() {
-        let r = Rule {
-            effect: Effect::Allow,
-            matcher: CapMatcher::Exec(ExecMatcher {
-                bin: Pattern::Literal("cargo".into()),
-                args: vec![Pattern::Any],
-                has_args: vec![],
-            }),
-            sandbox: Some(SandboxRef::Named("cargo-env".into())),
-        };
-        assert_eq!(
-            r.to_string(),
-            r#"(allow (exec "cargo" *) :sandbox "cargo-env")"#
-        );
+    fn observable_serde_roundtrip() {
+        let obs = Observable::HttpDomain;
+        let json = serde_json::to_string(&obs).unwrap();
+        assert_eq!(json, "\"ctx.http.domain\"");
+        let deserialized: Observable = serde_json::from_str(&json).unwrap();
+        assert_eq!(obs, deserialized);
     }
 
     #[test]
-    fn display_fs_matcher() {
-        let m = FsMatcher {
-            op: OpPattern::Or(vec![FsOp::Read, FsOp::Write]),
-            path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), false)),
-        };
-        assert_eq!(m.to_string(), "(fs (or read write) (subpath (env PWD)))");
+    fn observable_tool_arg_field_roundtrip() {
+        let obs = Observable::ToolArgField("file_path".into());
+        let json = serde_json::to_string(&obs).unwrap();
+        assert_eq!(json, "\"ctx.tool.args.file_path?\"");
+        let deserialized: Observable = serde_json::from_str(&json).unwrap();
+        assert_eq!(obs, deserialized);
     }
 
     #[test]
-    fn display_net_regex() {
-        let m = NetMatcher {
-            domain: Pattern::Regex(r".*\.evil\.com".into()),
-            path: None,
-        };
-        assert_eq!(m.to_string(), r"(net /.*\.evil\.com/)");
+    fn observable_tuple_roundtrip() {
+        let obs = Observable::Tuple(vec![Observable::FsAction, Observable::FsPath]);
+        let json = serde_json::to_string(&obs).unwrap();
+        let deserialized: Observable = serde_json::from_str(&json).unwrap();
+        assert_eq!(obs, deserialized);
     }
 
-    #[test]
-    fn display_net_with_path() {
-        let m = NetMatcher {
-            domain: Pattern::Literal("github.com".into()),
-            path: Some(PathFilter::Subpath(
-                PathExpr::Static("/owner/repo".into()),
-                false,
-            )),
-        };
-        assert_eq!(
-            m.to_string(),
-            r#"(net "github.com" (subpath "/owner/repo"))"#
-        );
-    }
-
-    #[test]
-    fn display_path_join() {
-        let expr = PathExpr::Join(vec![
-            PathExpr::Env("HOME".into()),
-            PathExpr::Static("/.clash".into()),
-        ]);
-        assert_eq!(expr.to_string(), r#"(join (env HOME) "/.clash")"#);
-    }
-
-    #[test]
-    fn display_pattern_not() {
-        let p = Pattern::Not(Box::new(Pattern::Literal("secret".into())));
-        assert_eq!(p.to_string(), "(not \"secret\")");
-    }
-
-    // -----------------------------------------------------------------------
-    // Property-based tests
-    // -----------------------------------------------------------------------
-
+    // JSON roundtrip for arbitrary rules
     use proptest::prelude::*;
-
     use super::strategies::*;
 
     proptest! {
-        /// Round-trip stability: rule → Display → parse → Display must be identical.
         #[test]
-        fn rule_display_roundtrips(rule in arb_rule()) {
-            let displayed = rule.to_string();
-            let source = format!("(policy \"_test\" {displayed})");
-            let parsed = crate::policy::parse::parse(&source);
-            prop_assert!(parsed.is_ok(), "parse failed for: {}", source);
-            let top_levels = parsed.unwrap();
-            let mut found = false;
-            for tl in &top_levels {
-                if let TopLevel::Policy { body, .. } = tl {
-                    for item in body {
-                        if let PolicyItem::Rule(r) = item {
-                            let redisplayed = r.to_string();
-                            prop_assert_eq!(&displayed, &redisplayed,
-                                "round-trip mismatch:\n  original: {}\n  reparsed: {}",
-                                displayed, redisplayed);
-                            found = true;
-                        }
-                    }
-                }
-            }
-            prop_assert!(found, "no rule found after parsing: {}", source);
-        }
-
-        /// Display is always valid s-expr: wrapping in (policy ...) and parsing never fails.
-        #[test]
-        fn rule_display_is_valid_sexpr(rule in arb_rule()) {
-            let displayed = rule.to_string();
-            let source = format!("(policy \"_test\" {displayed})");
-            let result = crate::policy::parse::parse(&source);
-            prop_assert!(result.is_ok(),
-                "Display produced invalid s-expr: {}\n  error: {:?}",
-                source, result.err());
-        }
-
-        /// Sandboxed rule Display also round-trips.
-        #[test]
-        fn sandboxed_rule_display_roundtrips(rule in arb_rule_with_sandbox()) {
-            let displayed = rule.to_string();
-            let source = format!("(policy \"_test\" {displayed})");
-            let parsed = crate::policy::parse::parse(&source);
-            prop_assert!(parsed.is_ok(),
-                "parse failed for sandboxed rule: {}\n  error: {:?}",
-                source, parsed.err());
-            let top_levels = parsed.unwrap();
-            for tl in &top_levels {
-                if let TopLevel::Policy { body, .. } = tl {
-                    for item in body {
-                        if let PolicyItem::Rule(r) = item {
-                            let redisplayed = r.to_string();
-                            prop_assert_eq!(&displayed, &redisplayed,
-                                "sandboxed round-trip mismatch:\n  original: {}\n  reparsed: {}",
-                                displayed, redisplayed);
-                        }
-                    }
-                }
-            }
+        fn rule_json_roundtrips(rule in arb_rule()) {
+            let json = serde_json::to_string(&rule).unwrap();
+            let deserialized: Rule = serde_json::from_str(&json).unwrap();
+            prop_assert_eq!(rule, deserialized);
         }
     }
 }

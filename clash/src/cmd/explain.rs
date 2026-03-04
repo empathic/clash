@@ -267,12 +267,19 @@ mod tests {
             }
         }
 
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "cargo" *) :allow))
-"#;
+        let source = r#"{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "main",
+      "body": [
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } } } }
+      ]
+    }
+  ]
+}"#;
         let env = TestEnv(
             [("PWD".to_string(), "/home/user".to_string())]
                 .into_iter()

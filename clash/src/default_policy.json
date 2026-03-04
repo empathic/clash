@@ -1,0 +1,27 @@
+{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "cwd-access",
+      "body": [
+        {
+          "rule": {
+            "effect": "allow",
+            "fs": {
+              "op": { "single": "read" },
+              "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "main",
+      "body": [
+        { "include": "cwd-access" }
+      ]
+    }
+  ]
+}

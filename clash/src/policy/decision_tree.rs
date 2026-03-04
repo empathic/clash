@@ -657,15 +657,19 @@ mod tests {
     fn build_sandbox_policy_fs_and_net() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "build-env"
-  (allow (fs (or read write) (subpath (env PWD))))
-  (deny  (fs write "/home/user/project/.git"))
-  (allow (net "crates.io")))
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "build-env"))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "build-env", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"or": ["read", "write"]}, "path": {"subpath": {"path": {"env": "PWD"}}} } } },
+      { "rule": { "effect": "deny",  "fs": { "op": {"single": "write"}, "path": {"literal": "/home/user/project/.git"} } } },
+      { "rule": { "effect": "allow", "net": { "domain": {"literal": "crates.io"} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] }, "sandbox": {"named": "build-env"} } }
+    ]}
+  ]
+}"#,
             &env,
         )
         .unwrap();
@@ -704,11 +708,12 @@ mod tests {
     fn has_mode_order_independent() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "git" :has "push" "--force")))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "has_args": [{"literal": "push"}, {"literal": "--force"}] } } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -738,11 +743,12 @@ mod tests {
     fn has_mode_with_regex() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "git" :has "push" /--force/)))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "has_args": [{"literal": "push"}, {"regex": "--force"}] } } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -762,11 +768,12 @@ mod tests {
     fn has_mode_with_wildcard_redundant() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "git" :has "push" *)))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "has_args": [{"literal": "push"}, {"any": null}] } } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -787,11 +794,12 @@ mod tests {
     fn has_mode_single_arg() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "git" :has "push")))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "has_args": [{"literal": "push"}] } } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -813,11 +821,12 @@ mod tests {
     fn has_mode_mixed_positional() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "git" "push" :has "--force")))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}], "has_args": [{"literal": "--force"}] } } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -845,11 +854,12 @@ mod tests {
     fn build_sandbox_policy_missing_name_returns_none() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "cargo" *)))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] } } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -864,13 +874,14 @@ mod tests {
     fn implicit_sandbox_from_fs_rules() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (fs (or write create) (subpath (env PWD))))
-  (allow (net)))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": {} } },
+    { "rule": { "effect": "allow", "fs": { "op": {"or": ["write", "create"]}, "path": {"subpath": {"path": {"env": "PWD"}}} } } },
+    { "rule": { "effect": "allow", "net": {} } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -898,12 +909,13 @@ mod tests {
     fn implicit_sandbox_net_only_without_fs_rules() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (net)))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": {} } },
+    { "rule": { "effect": "allow", "net": {} } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -922,11 +934,12 @@ mod tests {
     fn implicit_sandbox_none_when_no_rules() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec)))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": {} } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -939,14 +952,18 @@ mod tests {
     fn explicit_sandbox_overrides_implicit() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "custom-sandbox"
-  (allow (fs read (subpath "/custom"))))
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "custom-sandbox")
-  (allow (fs (or write create) (subpath (env PWD)))))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "custom-sandbox", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/custom"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] }, "sandbox": {"named": "custom-sandbox"} } },
+      { "rule": { "effect": "allow", "fs": { "op": {"or": ["write", "create"]}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]}
+  ]
+}"#,
             &env,
         )
         .unwrap();
@@ -971,12 +988,13 @@ mod tests {
     fn domain_specific_net_rule_denies_sandbox_network() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (net "github.com")))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": {} } },
+    { "rule": { "effect": "allow", "net": { "domain": {"literal": "github.com"} } } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -995,12 +1013,13 @@ mod tests {
     fn multiple_domain_specific_net_rules_deny_sandbox_network() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (net (or "github.com" "crates.io"))))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": {} } },
+    { "rule": { "effect": "allow", "net": { "domain": {"or": [{"literal": "github.com"}, {"literal": "crates.io"}]} } } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -1018,12 +1037,13 @@ mod tests {
     fn wildcard_net_rule_allows_sandbox_network() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (net)))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": {} } },
+    { "rule": { "effect": "allow", "net": {} } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -1039,12 +1059,13 @@ mod tests {
     fn sandbox_includes_temp_directory_rules() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (fs write (subpath (env PWD)))))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": {} } },
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "write"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -1075,13 +1096,17 @@ mod tests {
     fn explicit_sandbox_includes_temp_directory_rules() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "build-env"
-  (allow (fs write (subpath (env PWD)))))
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "build-env"))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "build-env", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "write"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] }, "sandbox": {"named": "build-env"} } }
+    ]}
+  ]
+}"#,
             &env,
         )
         .unwrap();
@@ -1110,12 +1135,7 @@ mod tests {
     fn localhost_net_rule_produces_localhost_policy() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (net "localhost")))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {}}}, {"rule": {"effect": "allow", "net": {"domain": {"literal": "localhost"}}}}]}]}"#,
             &env,
         )
         .unwrap();
@@ -1130,12 +1150,7 @@ mod tests {
     fn loopback_ip_net_rule_produces_localhost_policy() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (net "127.0.0.1")))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {}}}, {"rule": {"effect": "allow", "net": {"domain": {"literal": "127.0.0.1"}}}}]}]}"#,
             &env,
         )
         .unwrap();
@@ -1150,12 +1165,7 @@ mod tests {
     fn ipv6_loopback_net_rule_produces_localhost_policy() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (net "::1")))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {}}}, {"rule": {"effect": "allow", "net": {"domain": {"literal": "::1"}}}}]}]}"#,
             &env,
         )
         .unwrap();
@@ -1170,12 +1180,7 @@ mod tests {
     fn mixed_loopback_domains_produces_localhost_policy() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (net (or "localhost" "127.0.0.1" "::1"))))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {}}}, {"rule": {"effect": "allow", "net": {"domain": {"or": [{"literal": "localhost"}, {"literal": "127.0.0.1"}, {"literal": "::1"}]}}}}]}]}"#,
             &env,
         )
         .unwrap();
@@ -1190,12 +1195,7 @@ mod tests {
     fn localhost_plus_external_domain_produces_allow_domains() {
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (net (or "localhost" "github.com"))))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {}}}, {"rule": {"effect": "allow", "net": {"domain": {"or": [{"literal": "localhost"}, {"literal": "github.com"}]}}}}]}]}"#,
             &env,
         )
         .unwrap();

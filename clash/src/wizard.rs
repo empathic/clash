@@ -107,9 +107,9 @@ fn describe_net(m: &NetMatcher) -> String {
 
 fn describe_net_path_filter(pf: &PathFilter) -> String {
     match pf {
-        PathFilter::Subpath(PathExpr::Static(s), _) => format!("under {s}"),
-        PathFilter::Subpath(PathExpr::Env(name), _) => format!("under ${name}"),
-        PathFilter::Subpath(PathExpr::Join(parts), _) => {
+        PathFilter::Subpath { path: PathExpr::Static(s), .. } => format!("under {s}"),
+        PathFilter::Subpath { path: PathExpr::Env(name), .. } => format!("under ${name}"),
+        PathFilter::Subpath { path: PathExpr::Join(parts), .. } => {
             let desc: Vec<String> = parts
                 .iter()
                 .map(|p| match p {
@@ -150,7 +150,7 @@ fn describe_pattern(p: &Pattern) -> String {
 
 fn describe_path_filter(pf: &PathFilter) -> String {
     match pf {
-        PathFilter::Subpath(PathExpr::Env(name), worktree) => {
+        PathFilter::Subpath { path: PathExpr::Env(name), worktree } => {
             let wt = if *worktree {
                 " (and git worktree paths)"
             } else {
@@ -158,7 +158,7 @@ fn describe_path_filter(pf: &PathFilter) -> String {
             };
             format!("files under ${name}{wt}")
         }
-        PathFilter::Subpath(PathExpr::Static(s), worktree) => {
+        PathFilter::Subpath { path: PathExpr::Static(s), worktree } => {
             let wt = if *worktree {
                 " (and git worktree paths)"
             } else {
@@ -166,7 +166,7 @@ fn describe_path_filter(pf: &PathFilter) -> String {
             };
             format!("files under {s}{wt}")
         }
-        PathFilter::Subpath(PathExpr::Join(parts), worktree) => {
+        PathFilter::Subpath { path: PathExpr::Join(parts), worktree } => {
             let desc: Vec<String> = parts
                 .iter()
                 .map(|p| match p {
@@ -264,7 +264,7 @@ mod tests {
             effect: Effect::Allow,
             matcher: CapMatcher::Fs(FsMatcher {
                 op: OpPattern::Single(FsOp::Read),
-                path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), false)),
+                path: Some(PathFilter::Subpath { path: PathExpr::Env("PWD".into()), worktree: false }),
             }),
             sandbox: None,
         };
@@ -277,7 +277,7 @@ mod tests {
             effect: Effect::Allow,
             matcher: CapMatcher::Fs(FsMatcher {
                 op: OpPattern::Single(FsOp::Read),
-                path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), true)),
+                path: Some(PathFilter::Subpath { path: PathExpr::Env("PWD".into()), worktree: true }),
             }),
             sandbox: None,
         };
@@ -293,10 +293,10 @@ mod tests {
             effect: Effect::Allow,
             matcher: CapMatcher::Fs(FsMatcher {
                 op: OpPattern::Single(FsOp::Write),
-                path: Some(PathFilter::Subpath(
-                    PathExpr::Static("/tmp/project".into()),
-                    true,
-                )),
+                path: Some(PathFilter::Subpath {
+                    path: PathExpr::Static("/tmp/project".into()),
+                    worktree: true,
+                }),
             }),
             sandbox: None,
         };
@@ -312,13 +312,13 @@ mod tests {
             effect: Effect::Allow,
             matcher: CapMatcher::Fs(FsMatcher {
                 op: OpPattern::Single(FsOp::Read),
-                path: Some(PathFilter::Subpath(
-                    PathExpr::Join(vec![
+                path: Some(PathFilter::Subpath {
+                    path: PathExpr::Join(vec![
                         PathExpr::Env("HOME".into()),
                         PathExpr::Static("/projects".into()),
                     ]),
-                    true,
-                )),
+                    worktree: true,
+                }),
             }),
             sandbox: None,
         };
@@ -334,7 +334,7 @@ mod tests {
             effect: Effect::Allow,
             matcher: CapMatcher::Fs(FsMatcher {
                 op: OpPattern::Or(vec![FsOp::Write, FsOp::Create]),
-                path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), false)),
+                path: Some(PathFilter::Subpath { path: PathExpr::Env("PWD".into()), worktree: false }),
             }),
             sandbox: None,
         };
@@ -473,10 +473,10 @@ mod tests {
             effect: Effect::Allow,
             matcher: CapMatcher::Net(NetMatcher {
                 domain: Pattern::Literal("github.com".into()),
-                path: Some(PathFilter::Subpath(
-                    PathExpr::Static("/owner/repo".into()),
-                    false,
-                )),
+                path: Some(PathFilter::Subpath {
+                    path: PathExpr::Static("/owner/repo".into()),
+                    worktree: false,
+                }),
             }),
             sandbox: None,
         };

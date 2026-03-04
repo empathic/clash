@@ -110,7 +110,7 @@ fn pattern_rank(p: &Pattern) -> u8 {
 /// Rank a path filter by specificity.
 fn path_filter_rank(pf: &PathFilter) -> u8 {
     match pf {
-        PathFilter::Subpath(_, _) => 1,
+        PathFilter::Subpath { .. } => 1,
         PathFilter::Regex(_) => 2,
         PathFilter::Literal(_) => 3,
         PathFilter::Or(fs) => {
@@ -175,7 +175,7 @@ mod tests {
         }));
         let b = Specificity::from_matcher(&CapMatcher::Fs(FsMatcher {
             op: OpPattern::Single(FsOp::Write),
-            path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), false)),
+            path: Some(PathFilter::Subpath { path: PathExpr::Env("PWD".into()), worktree: false }),
         }));
         assert!(a > b);
     }
@@ -262,10 +262,10 @@ mod tests {
     fn net_with_path_more_specific_than_without() {
         let with_path = Specificity::from_matcher(&CapMatcher::Net(NetMatcher {
             domain: Pattern::Literal("github.com".into()),
-            path: Some(PathFilter::Subpath(
-                PathExpr::Static("/owner/repo".into()),
-                false,
-            )),
+            path: Some(PathFilter::Subpath {
+                path: PathExpr::Static("/owner/repo".into()),
+                worktree: false,
+            }),
         }));
         let without_path = Specificity::from_matcher(&CapMatcher::Net(NetMatcher {
             domain: Pattern::Literal("github.com".into()),
@@ -282,10 +282,10 @@ mod tests {
         }));
         let subpath = Specificity::from_matcher(&CapMatcher::Net(NetMatcher {
             domain: Pattern::Literal("github.com".into()),
-            path: Some(PathFilter::Subpath(
-                PathExpr::Static("/owner/repo".into()),
-                false,
-            )),
+            path: Some(PathFilter::Subpath {
+                path: PathExpr::Static("/owner/repo".into()),
+                worktree: false,
+            }),
         }));
         assert!(literal > subpath);
     }

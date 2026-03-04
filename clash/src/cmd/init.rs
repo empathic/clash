@@ -228,70 +228,15 @@ fn run_init_project() -> Result<()> {
     Ok(())
 }
 
-/// Migrate a legacy YAML policy to s-expression format using `claude -p`.
-fn migrate_yaml_policy(yaml_path: &std::path::Path, sexpr_path: &std::path::Path) -> Result<()> {
-    let yaml_content =
-        std::fs::read_to_string(yaml_path).context("failed to read legacy policy.yaml")?;
-
-    let grammar = include_str!("../../docs/policy-grammar.md");
-
-    let prompt = format!(
-        "Convert this YAML clash policy to the s-expression format described in the grammar below.\n\
-         Output ONLY the s-expression policy text. No markdown fences, no explanation.\n\n\
-         ## Grammar\n\n{grammar}\n\n\
-         ## YAML Policy\n\n```yaml\n{yaml_content}\n```"
-    );
-
-    println!(
-        "{} Migrating legacy policy.yaml to s-expression format...",
-        style::cyan("~")
-    );
-
-    let output = std::process::Command::new("claude")
-        .arg("-p")
-        .arg(&prompt)
-        .output()
-        .context("failed to run `claude -p` for policy migration — is claude on PATH?")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!(stderr = %stderr, "claude -p failed during YAML migration");
-        eprintln!("Migration failed — writing default policy instead.");
-        eprintln!(
-            "Your legacy policy.yaml is preserved at {}",
-            yaml_path.display()
-        );
-        std::fs::create_dir_all(sexpr_path.parent().unwrap())?;
-        std::fs::write(sexpr_path, DEFAULT_POLICY)?;
-        return Ok(());
-    }
-
-    let sexpr_content = String::from_utf8_lossy(&output.stdout).trim().to_string();
-
-    // Validate the converted policy compiles.
-    match crate::policy::compile_policy(&sexpr_content) {
-        Ok(_) => {
-            std::fs::create_dir_all(sexpr_path.parent().unwrap())?;
-            std::fs::write(sexpr_path, &sexpr_content)?;
-            println!(
-                "{} Migrated policy written to {}",
-                style::green_bold("✓"),
-                sexpr_path.display()
-            );
-            println!(
-                "  Legacy policy.yaml preserved at {}\n",
-                yaml_path.display()
-            );
-        }
-        Err(e) => {
-            warn!(error = %e, "migrated policy failed validation");
-            eprintln!("Converted policy failed validation: {e}");
-            eprintln!("Writing default policy instead. Your legacy policy.yaml is preserved.");
-            std::fs::create_dir_all(sexpr_path.parent().unwrap())?;
-            std::fs::write(sexpr_path, DEFAULT_POLICY)?;
-        }
-    }
-
+/// Migrate a legacy YAML policy by writing the default JSON policy.
+///
+/// Legacy YAML/s-expr migration is no longer supported. We preserve the old
+/// file and write the default policy instead.
+fn migrate_yaml_policy(_yaml_path: &std::path::Path, json_path: &std::path::Path) -> Result<()> {
+    eprintln!("Legacy YAML/s-expr policy migration is no longer supported.");
+    eprintln!("Writing default JSON policy instead.");
+    std::fs::create_dir_all(json_path.parent().unwrap())?;
+    std::fs::write(json_path, DEFAULT_POLICY)?;
     Ok(())
 }
 

@@ -49,18 +49,7 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
         style::header("Policy version"),
         style::dim(&format!("(syntax v{})", tree.version))
     );
-    if tree.version < crate::policy::version::CURRENT_VERSION {
-        println!(
-            "  {} Policy uses version {}. Version {} is available with when/match/sandbox/def support.",
-            style::yellow_bold("!"),
-            tree.version,
-            crate::policy::version::CURRENT_VERSION,
-        );
-        println!(
-            "  Run {} to upgrade (your existing rules are fully compatible).",
-            style::bold("clash policy upgrade")
-        );
-    }
+    // Schema version 4 is current; no upgrade needed.
     println!();
 
     let loaded = settings.loaded_policies();

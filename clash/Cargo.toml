@@ -16,8 +16,6 @@ serde = { workspace = true }
 dirs = { workspace = true }
 figment = { workspace = true }
 tracing = { workspace = true }
-pest = { workspace = true }
-pest_derive = { workspace = true }
 regex = { workspace = true }
 serde_regex = { workspace = true }
 toml = { workspace = true }
@@ -25,8 +23,6 @@ tracing-subscriber = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 bitflags = { workspace = true }
-lexpr = { workspace = true }
-
 libc = { workspace = true }
 uuid = { workspace = true }
 hotln = { workspace = true }
@@ -39,11 +35,7 @@ bytes = { workspace = true }
 base64 = { workspace = true }
 console = { workspace = true }
 nu-ansi-term = { workspace = true }
-ratatui = { workspace = true }
-crossterm = { workspace = true }
 reedline = { workspace = true }
-similar = { workspace = true }
-nucleo-matcher = { workspace = true }
 dialoguer = { workspace = true }
 semver = { workspace = true }
 sha2 = { workspace = true }

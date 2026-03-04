@@ -562,16 +562,18 @@ mod tests {
         crate::policy::compile::compile_to_tree(source, &env).unwrap()
     }
 
+    /// Common JSON policy: deny git push, allow git *
+    const GIT_POLICY: &str = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}]}}}, {"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
+
+    /// Common JSON policy: allow fs read under PWD
+    const FS_READ_PWD: &str = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}]}]}"#;
+
+    /// Common JSON policy: net with or + regex
+    const NET_POLICY: &str = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "net": {"domain": {"or": [{"literal": "github.com"}, {"literal": "crates.io"}]}}}}, {"rule": {"effect": "deny", "net": {"domain": {"regex": ".*\\.evil\\.com"}}}}]}]}"#;
+
     #[test]
     fn bash_git_push_denied() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#,
-        );
+        let tree = compile(GIT_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -583,14 +585,7 @@ mod tests {
 
     #[test]
     fn bash_git_status_allowed() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#,
-        );
+        let tree = compile(GIT_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -602,13 +597,7 @@ mod tests {
 
     #[test]
     fn read_under_cwd_allowed() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath (env PWD)))))
-"#,
-        );
+        let tree = compile(FS_READ_PWD);
 
         let decision = tree.evaluate(
             "Read",
@@ -620,13 +609,7 @@ mod tests {
 
     #[test]
     fn read_outside_cwd_default_deny() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath (env PWD)))))
-"#,
-        );
+        let tree = compile(FS_READ_PWD);
 
         let decision = tree.evaluate(
             "Read",
@@ -638,14 +621,7 @@ mod tests {
 
     #[test]
     fn webfetch_allowed_domain() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (net (or "github.com" "crates.io")))
-  (deny  (net /.*\.evil\.com/)))
-"#,
-        );
+        let tree = compile(NET_POLICY);
 
         let decision = tree.evaluate(
             "WebFetch",
@@ -657,14 +633,7 @@ mod tests {
 
     #[test]
     fn webfetch_evil_domain_denied() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (net (or "github.com" "crates.io")))
-  (deny  (net /.*\.evil\.com/)))
-"#,
-        );
+        let tree = compile(NET_POLICY);
 
         let decision = tree.evaluate(
             "WebFetch",
@@ -677,11 +646,7 @@ mod tests {
     #[test]
     fn unknown_tool_uses_default() {
         let tree = compile(
-            r#"
-(default ask "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "ask", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
         );
 
         let decision = tree.evaluate(
@@ -694,14 +659,7 @@ mod tests {
 
     #[test]
     fn decision_trace_contains_matched_rule() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#,
-        );
+        let tree = compile(GIT_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -715,11 +673,7 @@ mod tests {
     #[test]
     fn write_tool_maps_to_fs_write() {
         let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (fs write (subpath (env PWD)))))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "write"}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}]}]}"#,
         );
 
         let decision = tree.evaluate(
@@ -733,11 +687,7 @@ mod tests {
     #[test]
     fn edit_tool_maps_to_fs_write() {
         let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (fs write (subpath (env PWD)))))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "write"}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}]}]}"#,
         );
 
         let decision = tree.evaluate(
@@ -750,13 +700,7 @@ mod tests {
 
     #[test]
     fn relative_path_resolved_against_cwd() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath (env PWD)))))
-"#,
-        );
+        let tree = compile(FS_READ_PWD);
 
         let decision = tree.evaluate(
             "Read",
@@ -769,26 +713,25 @@ mod tests {
     #[test]
     fn full_pipeline_integration() {
         let tree = compile(
-            r#"
-(default deny "main")
-
-(policy "cwd-access"
-  (allow (fs read (subpath (env PWD)))))
-
-(policy "main"
-  (include "cwd-access")
-
-  (deny  (exec "git" "push" *))
-  (deny  (exec "git" "reset" *))
-  (ask   (exec "git" "commit" *))
-  (allow (exec "git" *))
-
-  (allow (fs (or read write) (subpath (env PWD))))
-  (deny  (fs write ".env"))
-
-  (allow (net (or "github.com" "crates.io")))
-  (deny  (net /.*\.evil\.com/)))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "cwd-access", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "include": "cwd-access" },
+      { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } },
+      { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "reset"}, {"any": null}] } } },
+      { "rule": { "effect": "ask",   "exec": { "bin": {"literal": "git"}, "args": [{"literal": "commit"}, {"any": null}] } } },
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
+      { "rule": { "effect": "allow", "fs": { "op": {"or": ["read", "write"]}, "path": {"subpath": {"path": {"env": "PWD"}}} } } },
+      { "rule": { "effect": "deny",  "fs": { "op": {"single": "write"}, "path": {"literal": ".env"} } } },
+      { "rule": { "effect": "allow", "net": { "domain": {"or": [{"literal": "github.com"}, {"literal": "crates.io"}]} } } },
+      { "rule": { "effect": "deny",  "net": { "domain": {"regex": ".*\\.evil\\.com"} } } }
+    ]}
+  ]
+}"#,
         );
 
         // git push → deny
@@ -873,13 +816,17 @@ mod tests {
     fn exec_with_sandbox_trace() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "cargo-env"
-  (allow (fs read (subpath (env PWD)))))
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "cargo-env"))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "cargo-env", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] }, "sandbox": {"named": "cargo-env"} } }
+    ]}
+  ]
+}"#,
             &env,
         )
         .unwrap();
@@ -903,13 +850,17 @@ mod tests {
     fn exec_with_sandbox_produces_sandbox_policy() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "cargo-env"
-  (allow (fs read (subpath (env PWD)))))
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "cargo-env"))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "cargo-env", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] }, "sandbox": {"named": "cargo-env"} } }
+    ]}
+  ]
+}"#,
             &env,
         )
         .unwrap();
@@ -942,13 +893,17 @@ mod tests {
     fn sandbox_network_defaults_to_deny() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "restricted"
-  (allow (fs read (subpath (env PWD)))))
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "restricted"))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "restricted", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] }, "sandbox": {"named": "restricted"} } }
+    ]}
+  ]
+}"#,
             &env,
         )
         .unwrap();
@@ -969,14 +924,18 @@ mod tests {
     fn sandbox_with_domain_specific_net_denies_network() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "with-net"
-  (allow (fs read (subpath (env PWD))))
-  (allow (net "crates.io")))
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "with-net"))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "with-net", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } },
+      { "rule": { "effect": "allow", "net": { "domain": {"literal": "crates.io"} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] }, "sandbox": {"named": "with-net"} } }
+    ]}
+  ]
+}"#,
             &env,
         )
         .unwrap();
@@ -998,13 +957,17 @@ mod tests {
     fn sandbox_net_only_domain_specific_denies_network() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "net-only"
-  (allow (net "crates.io")))
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "net-only"))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "net-only", "body": [
+      { "rule": { "effect": "allow", "net": { "domain": {"literal": "crates.io"} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] }, "sandbox": {"named": "net-only"} } }
+    ]}
+  ]
+}"#,
             &env,
         )
         .unwrap();
@@ -1031,11 +994,12 @@ mod tests {
     fn inline_sandbox_produces_sandbox_policy() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "clash" "bug" *) :sandbox (allow (net *))))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "clash"}, "args": [{"literal": "bug"}, {"any": null}] }, "sandbox": {"inline": [{"effect": "allow", "net": {}}]} } }
+  ]}]
+}"#,
             &env,
         )
         .unwrap();
@@ -1059,14 +1023,18 @@ mod tests {
     fn sandbox_denied_exec_has_no_sandbox() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "cargo-env"
-  (allow (fs read (subpath (env PWD)))))
-(policy "main"
-  (deny  (exec "cargo" "publish" *))
-  (allow (exec "cargo" *) :sandbox "cargo-env"))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "cargo-env", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "cargo"}, "args": [{"literal": "publish"}, {"any": null}] } } },
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] }, "sandbox": {"named": "cargo-env"} } }
+    ]}
+  ]
+}"#,
             &env,
         )
         .unwrap();
@@ -1156,15 +1124,12 @@ mod tests {
         assert!(args.is_empty());
     }
 
+    /// Common JSON policy: allow cargo *
+    const CARGO_POLICY: &str = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "cargo"}, "args": [{"any": null}]}}}]}]}"#;
+
     #[test]
     fn bash_env_var_prefix_recognized() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "cargo" *)))
-"#,
-        );
+        let tree = compile(CARGO_POLICY);
 
         // Single env var prefix
         let decision = tree.evaluate(
@@ -1177,13 +1142,7 @@ mod tests {
 
     #[test]
     fn bash_multiple_env_var_prefixes() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "cargo" *)))
-"#,
-        );
+        let tree = compile(CARGO_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -1195,13 +1154,7 @@ mod tests {
 
     #[test]
     fn bash_env_utility_prefix() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "cargo" *)))
-"#,
-        );
+        let tree = compile(CARGO_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -1213,14 +1166,7 @@ mod tests {
 
     #[test]
     fn bash_env_prefix_deny_still_works() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#,
-        );
+        let tree = compile(GIT_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -1385,14 +1331,7 @@ mod tests {
 
     #[test]
     fn transparent_time_preserves_deny() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#,
-        );
+        let tree = compile(GIT_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -1404,14 +1343,7 @@ mod tests {
 
     #[test]
     fn transparent_time_preserves_allow() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#,
-        );
+        let tree = compile(GIT_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -1423,14 +1355,7 @@ mod tests {
 
     #[test]
     fn transparent_nice_preserves_deny() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#,
-        );
+        let tree = compile(GIT_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -1442,14 +1367,7 @@ mod tests {
 
     #[test]
     fn transparent_nohup_preserves_deny() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#,
-        );
+        let tree = compile(GIT_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -1461,14 +1379,7 @@ mod tests {
 
     #[test]
     fn transparent_timeout_preserves_deny() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#,
-        );
+        let tree = compile(GIT_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -1480,14 +1391,7 @@ mod tests {
 
     #[test]
     fn transparent_chained_preserves_deny() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#,
-        );
+        let tree = compile(GIT_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -1499,14 +1403,7 @@ mod tests {
 
     #[test]
     fn transparent_prefix_with_env_preserves_deny() {
-        let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#,
-        );
+        let tree = compile(GIT_POLICY);
 
         let decision = tree.evaluate(
             "Bash",
@@ -1519,11 +1416,7 @@ mod tests {
     #[test]
     fn transparent_command_v_falls_through_to_default() {
         let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
         );
 
         // command -v is a query, not transparent — evaluates as bin="command"
@@ -1642,11 +1535,7 @@ mod tests {
     #[test]
     fn webfetch_with_net_path_subpath_allowed() {
         let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (net "github.com" (subpath "/owner/repo"))))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "net": {"domain": {"literal": "github.com"}, "path": {"subpath": {"path": {"static": "/owner/repo"}}}}}}]}]}"#,
         );
 
         // URL under /owner/repo → allow
@@ -1661,11 +1550,7 @@ mod tests {
     #[test]
     fn webfetch_with_net_path_subpath_exact_match() {
         let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (net "github.com" (subpath "/owner/repo"))))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "net": {"domain": {"literal": "github.com"}, "path": {"subpath": {"path": {"static": "/owner/repo"}}}}}}]}]}"#,
         );
 
         // URL exactly at /owner/repo → allow
@@ -1680,11 +1565,7 @@ mod tests {
     #[test]
     fn webfetch_with_net_path_subpath_denied_different_path() {
         let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (net "github.com" (subpath "/owner/repo"))))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "net": {"domain": {"literal": "github.com"}, "path": {"subpath": {"path": {"static": "/owner/repo"}}}}}}]}]}"#,
         );
 
         // URL under different repo → deny (falls to default)
@@ -1699,11 +1580,7 @@ mod tests {
     #[test]
     fn webfetch_with_net_path_subpath_denied_no_path() {
         let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (net "github.com" (subpath "/owner/repo"))))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "net": {"domain": {"literal": "github.com"}, "path": {"subpath": {"path": {"static": "/owner/repo"}}}}}}]}]}"#,
         );
 
         // URL with no path → deny (path filter requires a path)
@@ -1718,11 +1595,7 @@ mod tests {
     #[test]
     fn webfetch_net_path_regex() {
         let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (net "api.github.com" /\/repos\/owner\/.*/)))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "net": {"domain": {"literal": "api.github.com"}, "path": {"regex": "/repos/owner/.*"}}}}]}]}"#,
         );
 
         let decision = tree.evaluate(
@@ -1743,11 +1616,7 @@ mod tests {
     #[test]
     fn webfetch_net_domain_only_still_works() {
         let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (net "github.com")))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "net": {"domain": {"literal": "github.com"}}}}]}]}"#,
         );
 
         // Domain-only rule matches any path on that domain
@@ -1770,12 +1639,7 @@ mod tests {
     #[test]
     fn net_path_specificity_ordering() {
         let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (net "github.com"))
-  (deny  (net "github.com" (subpath "/evil-org"))))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "net": {"domain": {"literal": "github.com"}}}}, {"rule": {"effect": "deny", "net": {"domain": {"literal": "github.com"}, "path": {"subpath": {"path": {"static": "/evil-org"}}}}}}]}]}"#,
         );
 
         // Path-scoped deny should be more specific and win
@@ -1798,11 +1662,7 @@ mod tests {
     #[test]
     fn websearch_unaffected_by_net_path_rules() {
         let tree = compile(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (net "github.com" (subpath "/owner/repo"))))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "net": {"domain": {"literal": "github.com"}, "path": {"subpath": {"path": {"static": "/owner/repo"}}}}}}]}]}"#,
         );
 
         // WebSearch has no path — path-scoped rule should not match
@@ -1894,13 +1754,7 @@ mod tests {
     #[test]
     fn mcp_when_guard_matches_server() {
         let tree = compile_v2(
-            r#"
-(version 2)
-(use "main")
-(policy "main"
-  (when (mcp "puppeteer") :allow)
-  :deny)
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "mcp", "pattern": {"single": {"literal": "puppeteer"}}, "body": [{"effect": "allow"}]}}]}]}"#,
         );
 
         let decision = tree.evaluate("mcp__puppeteer__navigate", &json!({}), "/tmp");
@@ -1913,16 +1767,7 @@ mod tests {
     #[test]
     fn mcp_match_ctx_mcp_tool() {
         let tree = compile_v2(
-            r#"
-(version 2)
-(use "main")
-(policy "main"
-  (when (mcp "puppeteer")
-    (match ctx.mcp.tool
-      "puppeteer_navigate"   :ask
-      "puppeteer_screenshot" :allow))
-  :deny)
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "mcp", "pattern": {"single": {"literal": "puppeteer"}}, "body": [{"match": {"observable": "ctx.mcp.tool", "arms": [{"pattern": {"single": {"literal": "puppeteer_navigate"}}, "effect": "ask"}, {"pattern": {"single": {"literal": "puppeteer_screenshot"}}, "effect": "allow"}]}}]}}]}]}"#,
         );
 
         let decision = tree.evaluate("mcp__puppeteer__puppeteer_navigate", &json!({}), "/tmp");
@@ -1939,13 +1784,7 @@ mod tests {
     #[test]
     fn mcp_regex_pattern() {
         let tree = compile_v2(
-            r#"
-(version 2)
-(use "main")
-(policy "main"
-  (when (mcp /puppet.*/) :allow)
-  :deny)
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "mcp", "pattern": {"single": {"regex": "puppet.*"}}, "body": [{"effect": "allow"}]}}]}]}"#,
         );
 
         let decision = tree.evaluate("mcp__puppeteer__navigate", &json!({}), "/tmp");
@@ -1958,14 +1797,7 @@ mod tests {
     #[test]
     fn mcp_does_not_match_regular_tools() {
         let tree = compile_v2(
-            r#"
-(version 2)
-(use "main")
-(policy "main"
-  (when (mcp "puppeteer") :allow)
-  (when (tool "Skill") :allow)
-  :deny)
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "mcp", "pattern": {"single": {"literal": "puppeteer"}}, "body": [{"effect": "allow"}]}}, {"when": {"observable": "tool", "pattern": {"single": {"literal": "Skill"}}, "body": [{"effect": "allow"}]}}]}]}"#,
         );
 
         // MCP tool matches mcp guard, not tool guard
@@ -1984,15 +1816,7 @@ mod tests {
     #[test]
     fn mcp_match_on_server_observable() {
         let tree = compile_v2(
-            r#"
-(version 2)
-(use "main")
-(policy "main"
-  (match ctx.mcp.server
-    "puppeteer" :allow
-    * :deny)
-  :deny)
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"match": {"observable": "ctx.mcp.server", "arms": [{"pattern": {"single": {"literal": "puppeteer"}}, "effect": "allow"}, {"pattern": {"single": {"any": null}}, "effect": "deny"}]}}]}]}"#,
         );
 
         let decision = tree.evaluate("mcp__puppeteer__navigate", &json!({}), "/tmp");

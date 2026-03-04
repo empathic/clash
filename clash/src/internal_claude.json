@@ -1,0 +1,31 @@
+{
+  "schema_version": 4,
+  "policies": [
+    {
+      "name": "__internal_claude__",
+      "body": [
+        {
+          "rule": {
+            "effect": "allow",
+            "fs": {
+              "op": { "or": ["read", "write"] },
+              "path": { "subpath": { "path": { "join": [{ "env": "HOME" }, { "static": "/.claude" }] } } }
+            }
+          }
+        },
+        {
+          "rule": {
+            "effect": "allow",
+            "fs": {
+              "op": { "single": "read" },
+              "path": { "subpath": { "path": { "env": "TRANSCRIPT_DIR" } } }
+            }
+          }
+        },
+        {
+          "rule": { "effect": "allow", "tool": {} }
+        }
+      ]
+    }
+  ]
+}

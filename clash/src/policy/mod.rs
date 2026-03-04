@@ -1,10 +1,9 @@
-//! Capability-based policy language with s-expression syntax.
+//! Capability-based policy language.
 //!
 //! Four capability domains: `exec` (commands), `fs` (filesystem), `net` (network), `tool` (agent tools).
-//! Rules are `(effect (capability ...))` forms, e.g. `(deny (exec "git" "push" *))`.
 //!
-//! The policy speaks in capabilities, not Claude Code tool names — the eval
-//! layer maps tools to capabilities.
+//! Policies are authored and stored as JSON. The AST types serve as the
+//! serialization IR via serde.
 
 pub mod ast;
 pub mod compile;
@@ -13,19 +12,16 @@ pub mod edit;
 pub mod error;
 pub mod eval;
 pub mod ir;
-pub mod parse;
 pub mod print;
 pub mod sandbox_types;
 pub mod schema;
-pub mod sexpr;
 pub mod specificity;
 pub mod tree;
-pub mod version;
 
+pub use ast::PolicyDocument;
 pub use compile::{
-    AllShadows, ShadowInfo, compile_multi_level, compile_multi_level_to_tree,
-    compile_multi_level_with_internals, compile_policy, compile_policy_with_internals,
-    compile_to_tree, compile_to_tree_with_internals, detect_all_shadows,
+    AllShadows, ShadowInfo, compile_document, compile_document_to_tree,
+    compile_document_to_tree_with_internals, compile_multi_level_to_tree, detect_all_shadows,
     detect_all_shadows_from_rules,
 };
 pub use decision_tree::DecisionTree;

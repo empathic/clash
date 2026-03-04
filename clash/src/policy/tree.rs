@@ -1314,16 +1314,12 @@ mod tests {
         }
     }
 
+    const GIT_POLICY: &str = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}]}}}, {"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
+
     #[test]
     fn parallel_bash_deny() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#;
         assert_same_decision(
-            source,
+            GIT_POLICY,
             "Bash",
             json!({"command": "git push origin main"}),
             "/home/user/project",
@@ -1332,29 +1328,20 @@ mod tests {
 
     #[test]
     fn parallel_bash_allow() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#;
         assert_same_decision(
-            source,
+            GIT_POLICY,
             "Bash",
             json!({"command": "git status"}),
             "/home/user/project",
         );
     }
 
+    const FS_READ_PWD: &str = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}]}]}"#;
+
     #[test]
     fn parallel_read_allowed() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath (env PWD)))))
-"#;
         assert_same_decision(
-            source,
+            FS_READ_PWD,
             "Read",
             json!({"file_path": "/home/user/project/src/main.rs"}),
             "/home/user/project",
@@ -1363,29 +1350,20 @@ mod tests {
 
     #[test]
     fn parallel_read_denied() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath (env PWD)))))
-"#;
         assert_same_decision(
-            source,
+            FS_READ_PWD,
             "Read",
             json!({"file_path": "/etc/passwd"}),
             "/home/user/project",
         );
     }
 
+    const NET_POLICY: &str = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "net": {"domain": {"or": [{"literal": "github.com"}, {"literal": "crates.io"}]}}}}, {"rule": {"effect": "deny", "net": {"domain": {"regex": ".*\\.evil\\.com"}}}}]}]}"#;
+
     #[test]
     fn parallel_webfetch_allow() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (net (or "github.com" "crates.io")))
-  (deny  (net /.*\.evil\.com/)))
-"#;
         assert_same_decision(
-            source,
+            NET_POLICY,
             "WebFetch",
             json!({"url": "https://github.com/foo/bar"}),
             "/home/user/project",
@@ -1394,14 +1372,8 @@ mod tests {
 
     #[test]
     fn parallel_webfetch_deny() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (net (or "github.com" "crates.io")))
-  (deny  (net /.*\.evil\.com/)))
-"#;
         assert_same_decision(
-            source,
+            NET_POLICY,
             "WebFetch",
             json!({"url": "https://malware.evil.com/payload"}),
             "/home/user/project",
@@ -1410,11 +1382,7 @@ mod tests {
 
     #[test]
     fn parallel_unknown_tool_default() {
-        let source = r#"
-(default ask "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
+        let source = r#"{"schema_version": 1, "default_effect": "ask", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
         assert_same_decision(
             source,
             "SomeUnknownTool",
@@ -1425,11 +1393,7 @@ mod tests {
 
     #[test]
     fn parallel_tool_rule() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (tool)))
-"#;
+        let source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "tool": {}}}]}]}"#;
         assert_same_decision(
             source,
             "AskUserQuestion",
@@ -1440,26 +1404,7 @@ mod tests {
 
     #[test]
     fn parallel_full_pipeline() {
-        let source = r#"
-(default deny "main")
-
-(policy "cwd-access"
-  (allow (fs read (subpath (env PWD)))))
-
-(policy "main"
-  (include "cwd-access")
-
-  (deny  (exec "git" "push" *))
-  (deny  (exec "git" "reset" *))
-  (ask   (exec "git" "commit" *))
-  (allow (exec "git" *))
-
-  (allow (fs (or read write) (subpath (env PWD))))
-  (deny  (fs write ".env"))
-
-  (allow (net (or "github.com" "crates.io")))
-  (deny  (net /.*\.evil\.com/)))
-"#;
+        let source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "cwd-access", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}]}, {"name": "main", "includes": ["cwd-access"], "body": [{"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}]}}}, {"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "reset"}, {"any": null}]}}}, {"rule": {"effect": "ask", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "commit"}, {"any": null}]}}}, {"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}, {"rule": {"effect": "allow", "fs": {"op": {"or": ["read", "write"]}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}, {"rule": {"effect": "deny", "fs": {"op": {"single": "write"}, "path": {"literal": ".env"}}}}, {"rule": {"effect": "allow", "net": {"domain": {"or": [{"literal": "github.com"}, {"literal": "crates.io"}]}}}}, {"rule": {"effect": "deny", "net": {"domain": {"regex": ".*\\.evil\\.com"}}}}]}]}"#;
         let cwd = "/home/user/project";
         assert_same_decision(
             source,
@@ -1493,13 +1438,7 @@ mod tests {
 
     #[test]
     fn parallel_sandbox_exec() {
-        let source = r#"
-(default deny "main")
-(policy "cargo-env"
-  (allow (fs read (subpath (env PWD)))))
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "cargo-env"))
-"#;
+        let source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "cargo-env", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}]}, {"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "cargo"}, "args": [{"any": null}]}, "sandbox": {"named": "cargo-env"}}}]}]}"#;
         assert_same_decision(
             source,
             "Bash",
@@ -1510,14 +1449,8 @@ mod tests {
 
     #[test]
     fn parallel_env_prefix() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#;
         assert_same_decision(
-            source,
+            GIT_POLICY,
             "Bash",
             json!({"command": "GIT_SSH_COMMAND=ssh git push origin main"}),
             "/home/user/project",
@@ -1528,12 +1461,7 @@ mod tests {
 
     #[test]
     fn sequence_first_wins() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *))
-  (deny  (exec "git" "status")))
-"#;
+        let source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}, {"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "status"}]}}}]}]}"#;
         // "deny git status" is more specific -> sorted first -> deny wins
         let tree = compile_tree(source);
         let decision = tree.evaluate(
@@ -1546,11 +1474,7 @@ mod tests {
 
     #[test]
     fn when_skip_no_match() {
-        let source = r#"
-(default ask "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
+        let source = r#"{"schema_version": 1, "default_effect": "ask", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
         let tree = compile_tree(source);
         let decision = tree.evaluate("Bash", &json!({"command": "ls"}), "/home/user/project");
         assert_eq!(decision.effect, Effect::Ask);
@@ -1561,11 +1485,7 @@ mod tests {
     fn from_decision_tree_preserves_metadata() {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let dt = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#,
+            r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
             &env,
         )
         .unwrap();
@@ -1587,13 +1507,7 @@ mod tests {
 
     #[test]
     fn implicit_sandbox_from_tree() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (fs (or write create) (subpath (env PWD))))
-  (allow (net)))
-"#;
+        let source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {}}}, {"rule": {"effect": "allow", "fs": {"op": {"or": ["write", "create"]}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}, {"rule": {"effect": "allow", "net": {}}}]}]}"#;
         let tree = compile_tree(source);
         let sandbox = tree
             .build_implicit_sandbox()
@@ -1614,16 +1528,7 @@ mod tests {
     fn nullable_accessor_present_field_matches() {
         // Use "Skill" — a tool that doesn't map to fs/net/exec capabilities,
         // so tool-level observables (ctx.tool.args.*) are relevant.
-        let source = r#"
-(version 2)
-(use "main")
-(policy "main"
-  (when (tool "Skill")
-    (match ctx.tool.args.name?
-      "deploy" :allow
-      * :deny))
-  :deny)
-"#;
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "tool", "pattern": {"single": {"literal": "Skill"}}, "body": [{"match": {"observable": "ctx.tool.args.name?", "arms": [{"pattern": {"single": {"literal": "deploy"}}, "effect": "allow"}, {"pattern": {"single": {"any": null}}, "effect": "deny"}]}}]}}]}]}"#;
         let tree = compile_v2_tree(source);
         let decision = tree.evaluate("Skill", &json!({"name": "deploy"}), "/home/user/project");
         assert_eq!(decision.effect, Effect::Allow);
@@ -1631,16 +1536,7 @@ mod tests {
 
     #[test]
     fn nullable_accessor_present_field_no_match_falls_to_wildcard() {
-        let source = r#"
-(version 2)
-(use "main")
-(policy "main"
-  (when (tool "Skill")
-    (match ctx.tool.args.name?
-      "deploy" :allow
-      * :deny))
-  :deny)
-"#;
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "tool", "pattern": {"single": {"literal": "Skill"}}, "body": [{"match": {"observable": "ctx.tool.args.name?", "arms": [{"pattern": {"single": {"literal": "deploy"}}, "effect": "allow"}, {"pattern": {"single": {"any": null}}, "effect": "deny"}]}}]}}]}]}"#;
         let tree = compile_v2_tree(source);
         let decision = tree.evaluate("Skill", &json!({"name": "rollback"}), "/home/user/project");
         assert_eq!(decision.effect, Effect::Deny);
@@ -1648,16 +1544,7 @@ mod tests {
 
     #[test]
     fn nullable_accessor_absent_field_short_circuits_to_default() {
-        let source = r#"
-(version 2)
-(use "main")
-(policy "main"
-  (when (tool "Skill")
-    (match ctx.tool.args.name?
-      "deploy" :allow
-      * :allow))
-  :deny)
-"#;
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "tool", "pattern": {"single": {"literal": "Skill"}}, "body": [{"match": {"observable": "ctx.tool.args.name?", "arms": [{"pattern": {"single": {"literal": "deploy"}}, "effect": "allow"}, {"pattern": {"single": {"any": null}}, "effect": "allow"}]}}]}}]}]}"#;
         let tree = compile_v2_tree(source);
         // tool_input has no "name" field → match short-circuits → default :deny
         let decision = tree.evaluate(
@@ -1670,15 +1557,7 @@ mod tests {
 
     #[test]
     fn nullable_accessor_null_field_treated_as_absent() {
-        let source = r#"
-(version 2)
-(use "main")
-(policy "main"
-  (when (tool "Skill")
-    (match ctx.tool.args.name?
-      * :allow))
-  :deny)
-"#;
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "tool", "pattern": {"single": {"literal": "Skill"}}, "body": [{"match": {"observable": "ctx.tool.args.name?", "arms": [{"pattern": {"single": {"any": null}}, "effect": "allow"}]}}]}}]}]}"#;
         let tree = compile_v2_tree(source);
         // null value → treated as absent → short-circuit → default :deny
         let decision = tree.evaluate("Skill", &json!({"name": null}), "/home/user/project");

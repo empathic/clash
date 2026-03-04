@@ -55,58 +55,79 @@ impl EnvResolver for StdEnvResolver {
     }
 }
 
-/// Compile a policy source string into a decision tree, injecting internal policies.
+/// Compile a JSON policy source string into a decision tree, injecting internal policies.
 pub fn compile_policy(source: &str) -> Result<DecisionTree> {
-    compile_policy_with_internals(source, &StdEnvResolver, crate::settings::INTERNAL_POLICIES)
+    let doc: PolicyDocument =
+        serde_json::from_str(source).map_err(|e| anyhow::anyhow!("invalid policy JSON: {e}"))?;
+    compile_document(&doc, &StdEnvResolver, crate::settings::INTERNAL_POLICIES)
 }
 
-/// Compile with a custom environment resolver (useful for testing).
-/// Does NOT inject internal policies — existing tests use this directly.
-pub fn compile_policy_with_env(source: &str, env: &dyn EnvResolver) -> Result<DecisionTree> {
-    let ast = super::parse::parse(source)?;
-    compile_ast(&ast, env)
+/// Compile a PolicyDocument with internal policies, returning a flat DecisionTree.
+pub fn compile_document(
+    doc: &PolicyDocument,
+    env: &dyn EnvResolver,
+    internals: &[(&str, &str)],
+) -> Result<DecisionTree> {
+    let mut doc = doc.clone();
+    inject_internal_policies(&mut doc, internals)?;
+    compile_document_ast(&doc, env)
 }
 
-/// Compile a policy source string directly to a `PolicyTree`.
-///
-/// - v1 policies: parse → DecisionTree → `from_decision_tree()`
-/// - v2 policies: parse → `compile_tree_ast()` (builds PolicyTree directly)
+/// Compile a PolicyDocument with a custom env resolver (no internal policies).
+pub fn compile_document_with_env(
+    doc: &PolicyDocument,
+    env: &dyn EnvResolver,
+) -> Result<DecisionTree> {
+    compile_document_ast(doc, env)
+}
+
+/// Compile a PolicyDocument directly to a `PolicyTree`.
+pub fn compile_document_to_tree(
+    doc: &PolicyDocument,
+    env: &dyn EnvResolver,
+) -> Result<PolicyTree> {
+    compile_document_tree_ast(doc, env)
+}
+
+/// Compile a JSON source string to a `PolicyTree`.
 pub fn compile_to_tree(source: &str, env: &dyn EnvResolver) -> Result<PolicyTree> {
-    let ast = super::parse::parse(source)?;
-    let version = super::version::extract_version(&ast)?;
-    super::version::validate_version(version)?;
-
-    if version >= 2 {
-        compile_tree_ast(&ast, env)
-    } else {
-        let dt = compile_ast(&ast, env)?;
-        Ok(PolicyTree::from_decision_tree(dt))
-    }
+    let doc: PolicyDocument =
+        serde_json::from_str(source).map_err(|e| anyhow::anyhow!("invalid policy JSON: {e}"))?;
+    compile_document_to_tree(&doc, env)
 }
 
-/// Compile a v2 AST directly into a PolicyTree.
-fn compile_tree_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<PolicyTree> {
-    let version = super::version::extract_version(top_levels)?;
+/// Compile a JSON source string with a custom env resolver (no internal policies).
+pub fn compile_policy_with_env(source: &str, env: &dyn EnvResolver) -> Result<DecisionTree> {
+    let doc: PolicyDocument =
+        serde_json::from_str(source).map_err(|e| anyhow::anyhow!("invalid policy JSON: {e}"))?;
+    compile_document_ast(&doc, env)
+}
 
-    // Resolve active policy: (use "name") takes priority, then (default _ "name"), then "main".
-    let use_policy = top_levels.iter().find_map(|tl| match tl {
-        TopLevel::Use(name) => Some(name.as_str()),
-        _ => None,
-    });
-    let default_decl = top_levels.iter().find_map(|tl| match tl {
-        TopLevel::Default { effect, policy } => Some((*effect, policy.as_str())),
-        _ => None,
-    });
-    let active_policy = use_policy
-        .or(default_decl.map(|(_, p)| p))
+/// Compile a JSON source string with internal policies, returning a DecisionTree.
+pub fn compile_policy_with_internals(
+    source: &str,
+    env: &dyn EnvResolver,
+    internals: &[(&str, &str)],
+) -> Result<DecisionTree> {
+    let doc: PolicyDocument =
+        serde_json::from_str(source).map_err(|e| anyhow::anyhow!("invalid policy JSON: {e}"))?;
+    compile_document(&doc, env, internals)
+}
+
+/// Compile a PolicyDocument directly into a PolicyTree.
+fn compile_document_tree_ast(doc: &PolicyDocument, env: &dyn EnvResolver) -> Result<PolicyTree> {
+    let version = doc.schema_version;
+
+    // Resolve active policy.
+    let active_policy = doc
+        .use_policy
+        .as_deref()
         .unwrap_or("main");
 
     // Build policy name → body map.
     let mut policies: HashMap<&str, &[PolicyItem]> = HashMap::new();
-    for tl in top_levels {
-        if let TopLevel::Policy { name, body } = tl {
-            policies.insert(name.as_str(), body);
-        }
+    for def in &doc.policies {
+        policies.insert(def.name.as_str(), def.body.as_slice());
     }
 
     // Flatten the active policy, resolving includes, keeping v2 items.
@@ -125,7 +146,7 @@ fn compile_tree_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<Po
         _ => None,
     });
     let default_effect = body_effect
-        .or(default_decl.map(|(e, _)| e))
+        .or(doc.default_effect)
         .unwrap_or(Effect::Deny);
 
     // Build the tree.
@@ -324,7 +345,7 @@ fn compile_policy_item_to_node(
             };
 
             let leaf_id = ids.alloc(NodeMeta {
-                description: rule.to_string(),
+                description: format!("{:?}", rule),
                 origin_policy: Some(origin.to_string()),
                 ..Default::default()
             });
@@ -334,7 +355,7 @@ fn compile_policy_item_to_node(
             };
 
             let when_id = ids.alloc(NodeMeta {
-                description: rule.to_string(),
+                description: format!("{:?}", rule),
                 origin_policy: Some(origin.to_string()),
                 sandbox_name: sandbox_key,
                 ..Default::default()
@@ -403,27 +424,7 @@ fn compile_policy_item_to_node(
             // Compile a policy-level match block into a Node::Match.
             compile_policy_match_to_node(block, origin, env, ids)
         }
-        PolicyItem::Sandbox { body } => {
-            // Compile sandbox items into a SandboxPolicy, then wrap it as
-            // a synthetic Node::Match with constraint_policy so the eval
-            // path can collect it via the standard constraint derivation.
-            let policy = compile_sandbox_items(body, env)?;
-
-            let sandbox_id = ids.alloc(NodeMeta {
-                description: "(sandbox ...)".to_string(),
-                origin_policy: Some(origin.to_string()),
-                ..Default::default()
-            });
-            // Use a synthetic Match on HttpDomain with no arms and the
-            // full sandbox policy as constraint_policy.  At eval time the
-            // observable is irrelevant → constraint derivation fires.
-            Ok(Some(Node::Match {
-                id: sandbox_id,
-                observable: crate::policy::tree::Observable::HttpDomain,
-                arms: vec![],
-                constraint_policy: Some(policy),
-            }))
-        }
+        // PolicyItem::Sandbox was removed in schema v4
         PolicyItem::Effect(effect) => {
             let leaf_id = ids.alloc(NodeMeta {
                 description: format!(":{effect}"),
@@ -1326,7 +1327,9 @@ pub fn compile_multi_level_with_internals(
     // Compile each level independently (no internal policies yet).
     let mut level_trees: Vec<(PolicyLevel, DecisionTree)> = Vec::new();
     for (level, source) in levels {
-        let tree = compile_policy_with_env(source, env)
+        let doc: PolicyDocument = serde_json::from_str(source)
+            .map_err(|e| anyhow::anyhow!("{} policy: invalid JSON: {}", level.name(), e))?;
+        let tree = compile_document_with_env(&doc, env)
             .map_err(|e| anyhow::anyhow!("{} policy: {}", level.name(), e))?;
         level_trees.push((*level, tree));
     }
@@ -1426,52 +1429,51 @@ fn inject_internals(
     internals: &[(&str, &str)],
 ) -> Result<()> {
     for (name, source) in internals {
-        let int_ast = super::parse::parse(source)?;
-        for tl in &int_ast {
-            if let TopLevel::Policy { body, .. } = tl {
-                for item in body {
-                    if let PolicyItem::Rule(rule) = item {
-                        let specificity = Specificity::from_matcher(&rule.matcher);
-                        let compiled_matcher = compile_matcher(&rule.matcher, env)?;
-                        let sandbox_key = match &rule.sandbox {
-                            Some(SandboxRef::Named(n)) => Some(n.clone()),
-                            Some(SandboxRef::Inline(inline_rules)) => {
-                                let key = format!("__internal_inline_sandbox_{name}__");
-                                let mut compiled_sandbox_rules = Vec::new();
-                                for r in inline_rules {
-                                    let sp = Specificity::from_matcher(&r.matcher);
-                                    let cm = compile_matcher(&r.matcher, env)?;
-                                    compiled_sandbox_rules.push(CompiledRule {
-                                        effect: r.effect,
-                                        matcher: cm,
-                                        source: r.clone(),
-                                        specificity: sp,
-                                        sandbox: None,
-                                        origin_policy: None,
-                                        origin_level: None,
-                                    });
-                                }
-                                tree.sandbox_policies
-                                    .insert(key.clone(), compiled_sandbox_rules);
-                                Some(key)
+        let int_doc: PolicyDocument = serde_json::from_str(source)
+            .map_err(|e| anyhow::anyhow!("failed to parse internal policy {name}: {e}"))?;
+        for def in &int_doc.policies {
+            for item in &def.body {
+                if let PolicyItem::Rule(rule) = item {
+                    let specificity = Specificity::from_matcher(&rule.matcher);
+                    let compiled_matcher = compile_matcher(&rule.matcher, env)?;
+                    let sandbox_key = match &rule.sandbox {
+                        Some(SandboxRef::Named(n)) => Some(n.clone()),
+                        Some(SandboxRef::Inline(inline_rules)) => {
+                            let key = format!("__internal_inline_sandbox_{name}__");
+                            let mut compiled_sandbox_rules = Vec::new();
+                            for r in inline_rules {
+                                let sp = Specificity::from_matcher(&r.matcher);
+                                let cm = compile_matcher(&r.matcher, env)?;
+                                compiled_sandbox_rules.push(CompiledRule {
+                                    effect: r.effect,
+                                    matcher: cm,
+                                    source: r.clone(),
+                                    specificity: sp,
+                                    sandbox: None,
+                                    origin_policy: None,
+                                    origin_level: None,
+                                });
                             }
-                            None => None,
-                        };
-                        let compiled = CompiledRule {
-                            effect: rule.effect,
-                            matcher: compiled_matcher,
-                            source: rule.clone(),
-                            specificity,
-                            sandbox: sandbox_key,
-                            origin_policy: Some(name.to_string()),
-                            origin_level: None,
-                        };
-                        match &rule.matcher {
-                            CapMatcher::Exec(_) => tree.exec_rules.push(compiled),
-                            CapMatcher::Fs(_) => tree.fs_rules.push(compiled),
-                            CapMatcher::Net(_) => tree.net_rules.push(compiled),
-                            CapMatcher::Tool(_) => tree.tool_rules.push(compiled),
+                            tree.sandbox_policies
+                                .insert(key.clone(), compiled_sandbox_rules);
+                            Some(key)
                         }
+                        None => None,
+                    };
+                    let compiled = CompiledRule {
+                        effect: rule.effect,
+                        matcher: compiled_matcher,
+                        source: rule.clone(),
+                        specificity,
+                        sandbox: sandbox_key,
+                        origin_policy: Some(name.to_string()),
+                        origin_level: None,
+                    };
+                    match &rule.matcher {
+                        CapMatcher::Exec(_) => tree.exec_rules.push(compiled),
+                        CapMatcher::Fs(_) => tree.fs_rules.push(compiled),
+                        CapMatcher::Net(_) => tree.net_rules.push(compiled),
+                        CapMatcher::Tool(_) => tree.tool_rules.push(compiled),
                     }
                 }
             }
@@ -1480,63 +1482,51 @@ fn inject_internals(
     Ok(())
 }
 
-/// Inject internal policy definitions and includes into a parsed AST.
+/// Inject internal policy definitions and includes into a PolicyDocument.
 ///
 /// 1. Checks which internal policy names the user already defined (override)
-/// 2. For non-overridden ones, parses embedded source, appends `TopLevel::Policy` items
-/// 3. Prepends `(include "__internal_X__")` to the active policy body
-fn inject_internal_includes(ast: &mut Vec<TopLevel>, internals: &[(&str, &str)]) -> Result<()> {
+/// 2. For non-overridden ones, deserializes embedded JSON, appends PolicyDef items
+/// 3. Prepends `Include("__internal_X__")` to the active policy body
+fn inject_internal_policies(
+    doc: &mut PolicyDocument,
+    internals: &[(&str, &str)],
+) -> Result<()> {
     // Collect user-defined policy names.
-    let user_policies: std::collections::HashSet<String> = ast
+    let user_policies: std::collections::HashSet<String> = doc
+        .policies
         .iter()
-        .filter_map(|tl| match tl {
-            TopLevel::Policy { name, .. } => Some(name.clone()),
-            _ => None,
-        })
+        .map(|p| p.name.clone())
         .collect();
 
-    // Find the active policy name: (use ...) takes priority over (default ...).
-    let active_policy = ast
-        .iter()
-        .find_map(|tl| match tl {
-            TopLevel::Use(name) => Some(name.clone()),
-            _ => None,
-        })
-        .or_else(|| {
-            ast.iter().find_map(|tl| match tl {
-                TopLevel::Default { policy, .. } => Some(policy.clone()),
-                _ => None,
-            })
-        })
+    let active_policy = doc
+        .use_policy
+        .clone()
         .unwrap_or_else(|| "main".to_string());
 
     // Parse and inject non-overridden internal policies.
     let mut internal_includes = Vec::new();
     for (name, int_source) in internals {
         if user_policies.contains(*name) {
-            continue; // user overrides this internal policy
+            continue;
         }
-        let int_ast = super::parse::parse(int_source)?;
-        for tl in int_ast {
-            if let TopLevel::Policy { .. } = &tl {
-                ast.push(tl);
-                internal_includes.push(name.to_string());
-            }
+        let int_doc: PolicyDocument = serde_json::from_str(int_source)
+            .map_err(|e| anyhow::anyhow!("failed to parse internal policy {name}: {e}"))?;
+        for def in int_doc.policies {
+            internal_includes.push(def.name.clone());
+            doc.policies.push(def);
         }
     }
 
     // Prepend include directives for internal policies to the active policy.
     if !internal_includes.is_empty() {
-        for tl in ast.iter_mut() {
-            if let TopLevel::Policy { name, body } = tl
-                && *name == active_policy
-            {
+        for def in &mut doc.policies {
+            if def.name == active_policy {
                 let mut new_body: Vec<PolicyItem> = internal_includes
                     .iter()
                     .map(|n| PolicyItem::Include(n.clone()))
                     .collect();
-                new_body.append(body);
-                *body = new_body;
+                new_body.append(&mut def.body);
+                def.body = new_body;
                 break;
             }
         }
@@ -1545,37 +1535,26 @@ fn inject_internal_includes(ast: &mut Vec<TopLevel>, internals: &[(&str, &str)])
     Ok(())
 }
 
-/// Compile with internal policies injected (returns flat `DecisionTree`).
-pub fn compile_policy_with_internals(
-    source: &str,
+/// Compile a PolicyDocument with internal policies, returning a `PolicyTree`.
+pub fn compile_document_to_tree_with_internals(
+    doc: &PolicyDocument,
     env: &dyn EnvResolver,
     internals: &[(&str, &str)],
-) -> Result<DecisionTree> {
-    let mut ast = super::parse::parse(source)?;
-    inject_internal_includes(&mut ast, internals)?;
-    compile_ast(&ast, env)
+) -> Result<PolicyTree> {
+    let mut doc = doc.clone();
+    inject_internal_policies(&mut doc, internals)?;
+    compile_document_tree_ast(&doc, env)
 }
 
-/// Compile a policy source with internal policies, returning a `PolicyTree`.
-///
-/// Dispatches v1 → `DecisionTree` → `from_decision_tree()`, v2 → `compile_tree_ast()`.
+/// Compile a JSON source string with internal policies, returning a `PolicyTree`.
 pub fn compile_to_tree_with_internals(
     source: &str,
     env: &dyn EnvResolver,
     internals: &[(&str, &str)],
 ) -> Result<PolicyTree> {
-    let mut ast = super::parse::parse(source)?;
-    inject_internal_includes(&mut ast, internals)?;
-
-    let version = super::version::extract_version(&ast)?;
-    super::version::validate_version(version)?;
-
-    if version >= 2 {
-        compile_tree_ast(&ast, env)
-    } else {
-        let dt = compile_ast(&ast, env)?;
-        Ok(PolicyTree::from_decision_tree(dt))
-    }
+    let doc: PolicyDocument =
+        serde_json::from_str(source).map_err(|e| anyhow::anyhow!("invalid policy JSON: {e}"))?;
+    compile_document_to_tree_with_internals(&doc, env, internals)
 }
 
 /// Compile multiple policy levels with internals, returning a merged `PolicyTree`.
@@ -1604,11 +1583,13 @@ pub fn compile_multi_level_to_tree(
     // Compile each level; inject internals into lowest-precedence.
     let mut level_trees = Vec::new();
     for (i, (level, source)) in sorted.iter().enumerate() {
+        let doc: PolicyDocument = serde_json::from_str(source)
+            .map_err(|e| anyhow::anyhow!("{} policy: invalid JSON: {}", level.name(), e))?;
         let tree = if i == 0 {
-            compile_to_tree_with_internals(source, env, internals)
+            compile_document_to_tree_with_internals(&doc, env, internals)
                 .map_err(|e| anyhow::anyhow!("{} policy: {}", level.name(), e))?
         } else {
-            compile_to_tree(source, env)
+            compile_document_to_tree(&doc, env)
                 .map_err(|e| anyhow::anyhow!("{} policy: {}", level.name(), e))?
         };
         level_trees.push(tree);
@@ -1620,32 +1601,20 @@ pub fn compile_multi_level_to_tree(
     Ok(PolicyTree::merge_levels(level_trees))
 }
 
-/// Compile a parsed AST into a decision tree.
-fn compile_ast(top_levels: &[TopLevel], env: &dyn EnvResolver) -> Result<DecisionTree> {
-    // Validate the declared policy syntax version.
-    let version = super::version::extract_version(top_levels)?;
-    super::version::validate_version(version)?;
+/// Compile a PolicyDocument into a flat decision tree.
+fn compile_document_ast(doc: &PolicyDocument, env: &dyn EnvResolver) -> Result<DecisionTree> {
+    let version = doc.schema_version;
 
-    // Find the active policy: (use ...) takes priority over (default ...).
-    let use_policy = top_levels.iter().find_map(|tl| match tl {
-        TopLevel::Use(name) => Some(name.as_str()),
-        _ => None,
-    });
-    let default_decl = top_levels.iter().find_map(|tl| match tl {
-        TopLevel::Default { effect, policy } => Some((*effect, policy.as_str())),
-        _ => None,
-    });
-    let active_policy = use_policy
-        .or(default_decl.map(|(_, p)| p))
+    let active_policy = doc
+        .use_policy
+        .as_deref()
         .unwrap_or("main");
-    let default_effect = default_decl.map(|(e, _)| e).unwrap_or(Effect::Deny);
+    let default_effect = doc.default_effect.unwrap_or(Effect::Deny);
 
     // Build a map of policy name → body.
     let mut policies: HashMap<&str, &[PolicyItem]> = HashMap::new();
-    for tl in top_levels {
-        if let TopLevel::Policy { name, body } = tl {
-            policies.insert(name.as_str(), body);
-        }
+    for def in &doc.policies {
+        policies.insert(def.name.as_str(), def.body.as_slice());
     }
 
     // Flatten the active policy, resolving includes.
@@ -1802,11 +1771,9 @@ fn flatten_policy(
             PolicyItem::Rule(rule) => {
                 rules.push((rule.clone(), name.to_string()));
             }
-            // v2 items are handled by compile_tree_ast, not flat compilation.
-            // For v1 flatten, skip them (they won't appear in v1 policies).
+            // v2 items are handled by compile_document_tree_ast, not flat compilation.
             PolicyItem::When { .. }
             | PolicyItem::Match(_)
-            | PolicyItem::Sandbox { .. }
             | PolicyItem::Effect(_) => {}
         }
     }
@@ -2210,7 +2177,7 @@ fn compiled_pattern_to_path_filter(cp: CompiledPattern) -> CompiledPathFilter {
 
 fn compile_path_filter(pf: &PathFilter, env: &dyn EnvResolver) -> Result<CompiledPathFilter> {
     match pf {
-        PathFilter::Subpath(expr, worktree) => {
+        PathFilter::Subpath { path: expr, worktree } => {
             let resolved = resolve_path_expr(expr, env)?;
             if *worktree {
                 // When :worktree is set, expand to include git worktree directories.
@@ -2399,12 +2366,20 @@ mod tests {
 
     #[test]
     fn compile_basic_policy() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *))
-  (deny  (exec "git" "push" *)))
-"#;
+        let source = r#"{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "main",
+      "body": [
+        { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
+        { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } }
+      ]
+    }
+  ]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.default, Effect::Deny);
@@ -2417,14 +2392,26 @@ mod tests {
 
     #[test]
     fn compile_with_includes() {
-        let source = r#"
-(default deny "main")
-(policy "cwd-access"
-  (allow (fs read (subpath (env PWD)))))
-(policy "main"
-  (include "cwd-access")
-  (allow (exec "git" *)))
-"#;
+        let source = r#"{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "cwd-access",
+      "body": [
+        { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+      ]
+    },
+    {
+      "name": "main",
+      "body": [
+        { "include": "cwd-access" },
+        { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+      ]
+    }
+  ]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 1);
@@ -2433,11 +2420,15 @@ mod tests {
 
     #[test]
     fn compile_circular_include_error() {
-        let source = r#"
-(default deny "a")
-(policy "a" (include "b"))
-(policy "b" (include "a"))
-"#;
+        let source = r#"{
+  "schema_version": 4,
+  "use": "a",
+  "default_effect": "deny",
+  "policies": [
+    { "name": "a", "body": [{ "include": "b" }] },
+    { "name": "b", "body": [{ "include": "a" }] }
+  ]
+}"#;
         let env = TestEnv::new(&[]);
         let err = compile_policy_with_env(source, &env).unwrap_err();
         assert!(err.to_string().contains("circular include"));
@@ -2445,12 +2436,20 @@ mod tests {
 
     #[test]
     fn compile_conflict_detection() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *))
-  (deny  (exec "git" *)))
-"#;
+        let source = r#"{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "main",
+      "body": [
+        { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
+        { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+      ]
+    }
+  ]
+}"#;
         // Same matcher, different effects = conflict.
         let env = TestEnv::new(&[]);
         let err = compile_policy_with_env(source, &env).unwrap_err();
@@ -2459,12 +2458,20 @@ mod tests {
 
     #[test]
     fn no_conflict_different_literals() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *))
-  (deny  (exec "npm" *)))
-"#;
+        let source = r#"{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "main",
+      "body": [
+        { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
+        { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "npm"}, "args": [{"any": null}] } } }
+      ]
+    }
+  ]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 2);
@@ -2472,12 +2479,13 @@ mod tests {
 
     #[test]
     fn compile_no_conflict_same_effect() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *))
-  (allow (exec "npm" *)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "npm"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 2);
@@ -2485,12 +2493,13 @@ mod tests {
 
     #[test]
     fn compile_no_conflict_different_specificity() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } },
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 2);
@@ -2499,11 +2508,12 @@ mod tests {
 
     #[test]
     fn compile_env_resolution() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath (env HOME)))))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "HOME"}}} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("HOME", "/home/user")]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.fs_rules.len(), 1);
@@ -2518,11 +2528,12 @@ mod tests {
 
     #[test]
     fn compile_join_resolution() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath (join (env HOME) "/.clash")))))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"join": [{"env": "HOME"}, {"static": "/.clash"}]}}} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("HOME", "/home/user")]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.fs_rules.len(), 1);
@@ -2537,11 +2548,12 @@ mod tests {
 
     #[test]
     fn compile_missing_env_error() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath (env NONEXISTENT)))))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "NONEXISTENT"}}} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let err = compile_policy_with_env(source, &env).unwrap_err();
         assert!(err.to_string().contains("not set: NONEXISTENT"));
@@ -2549,11 +2561,12 @@ mod tests {
 
     #[test]
     fn compile_regex_patterns() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (deny (net /.*\.evil\.com/)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "net": { "domain": {"regex": ".*\\.evil\\.com"} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.net_rules.len(), 1);
@@ -2568,30 +2581,37 @@ mod tests {
 
     #[test]
     fn round_trip_to_source() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } },
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         let regenerated = tree.to_source();
         assert!(regenerated.contains(r#"(default deny "main")"#));
-        assert!(regenerated.contains("(deny (exec \"git\" \"push\" *))"));
-        assert!(regenerated.contains("(allow (exec \"git\" *))"));
+        assert!(regenerated.contains(r#""effect":"deny""#));
+        assert!(regenerated.contains(r#""literal":"git""#));
+        assert!(regenerated.contains(r#""literal":"push""#));
+        assert!(regenerated.contains(r#""effect":"allow""#));
     }
 
     #[test]
     fn compile_sandbox_reference_valid() {
-        let source = r#"
-(default deny "main")
-(policy "cargo-env"
-  (allow (fs read (subpath (env PWD))))
-  (allow (net "crates.io")))
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "cargo-env"))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "cargo-env", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } },
+      { "rule": { "effect": "allow", "net": { "domain": {"literal": "crates.io"} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] }, "sandbox": {"named": "cargo-env"} } }
+    ]}
+  ]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 1);
@@ -2602,11 +2622,12 @@ mod tests {
 
     #[test]
     fn compile_sandbox_reference_missing() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "nonexistent"))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] }, "sandbox": {"named": "nonexistent"} } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let err = compile_policy_with_env(source, &env).unwrap_err();
         assert!(
@@ -2619,11 +2640,12 @@ mod tests {
 
     #[test]
     fn compile_inline_sandbox() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "clash" "bug" *) :sandbox (allow (net *))))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "clash"}, "args": [{"literal": "bug"}, {"any": null}] }, "sandbox": {"inline": [{"effect": "allow", "net": {}}]} } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 1);
@@ -2645,11 +2667,12 @@ mod tests {
 
     #[test]
     fn compile_inline_sandbox_multiple_rules() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "cargo" *) :sandbox (allow (net *)) (allow (fs read (subpath "/tmp")))))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"}, "args": [{"any": null}] }, "sandbox": {"inline": [{"effect": "allow", "net": {}}, {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}}}}]} } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         let sandbox_key = tree.exec_rules[0]
@@ -2662,15 +2685,18 @@ mod tests {
 
     #[test]
     fn compile_with_internals_injects_rules() {
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
-        let internal = r#"
-(policy "__internal_test__"
-  (allow (fs read (subpath "/test"))))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
+        let internal = r#"{
+  "schema_version": 4,
+  "policies": [{ "name": "__internal_test__", "body": [
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/test"}}} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree =
             compile_policy_with_internals(user_source, &env, &[("__internal_test__", internal)])
@@ -2688,18 +2714,24 @@ mod tests {
 
     #[test]
     fn compile_with_internals_user_overrides() {
-        let user_source = r#"
-(default deny "main")
-(policy "__internal_test__"
-  (deny (fs read (subpath "/custom"))))
-(policy "main"
-  (include "__internal_test__")
-  (allow (exec "git" *)))
-"#;
-        let internal = r#"
-(policy "__internal_test__"
-  (allow (fs read (subpath "/test"))))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "__internal_test__", "body": [
+      { "rule": { "effect": "deny", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/custom"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "include": "__internal_test__" },
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+    ]}
+  ]
+}"#;
+        let internal = r#"{
+  "schema_version": 4,
+  "policies": [{ "name": "__internal_test__", "body": [
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/test"}}} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree =
             compile_policy_with_internals(user_source, &env, &[("__internal_test__", internal)])
@@ -2711,11 +2743,12 @@ mod tests {
 
     #[test]
     fn compile_with_internals_no_internals() {
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_internals(user_source, &env, &[]).unwrap();
         assert_eq!(tree.exec_rules.len(), 1);
@@ -2724,15 +2757,19 @@ mod tests {
 
     #[test]
     fn compile_provenance_tracking() {
-        let source = r#"
-(default deny "main")
-(policy "shared"
-  (allow (fs read (subpath "/shared"))))
-(policy "main"
-  (include "shared")
-  (deny (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "shared", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/shared"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "include": "shared" },
+      { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } },
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+    ]}
+  ]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_policy_with_env(source, &env).unwrap();
         assert_eq!(tree.fs_rules[0].origin_policy.as_deref(), Some("shared"));
@@ -2742,26 +2779,25 @@ mod tests {
 
     #[test]
     fn compile_full_example() {
-        let source = r#"
-(default deny "main")
-
-(policy "cwd-access"
-  (allow (fs read (subpath (env PWD)))))
-
-(policy "main"
-  (include "cwd-access")
-
-  (deny  (exec "git" "push" *))
-  (deny  (exec "git" "reset" *))
-  (ask   (exec "git" "commit" *))
-  (allow (exec "git" *))
-
-  (allow (fs (or read write) (subpath (env PWD))))
-  (deny  (fs write ".env"))
-
-  (allow (net (or "github.com" "crates.io")))
-  (deny  (net /.*\.evil\.com/)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "cwd-access", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "include": "cwd-access" },
+      { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } },
+      { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "reset"}, {"any": null}] } } },
+      { "rule": { "effect": "ask",   "exec": { "bin": {"literal": "git"}, "args": [{"literal": "commit"}, {"any": null}] } } },
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
+      { "rule": { "effect": "allow", "fs": { "op": {"or": ["read", "write"]}, "path": {"subpath": {"path": {"env": "PWD"}}} } } },
+      { "rule": { "effect": "deny",  "fs": { "op": {"single": "write"}, "path": {"literal": ".env"} } } },
+      { "rule": { "effect": "allow", "net": { "domain": {"or": [{"literal": "github.com"}, {"literal": "crates.io"}]} } } },
+      { "rule": { "effect": "deny",  "net": { "domain": {"regex": ".*\\.evil\\.com"} } } }
+    ]}
+  ]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_policy_with_env(source, &env).unwrap();
 
@@ -2778,11 +2814,12 @@ mod tests {
 
     #[test]
     fn test_multi_level_user_only() {
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree =
             compile_multi_level_with_internals(&[(PolicyLevel::User, user_source)], &env, &[])
@@ -2795,12 +2832,13 @@ mod tests {
 
     #[test]
     fn test_multi_level_project_only() {
-        let project_source = r#"
-(default allow "main")
-(policy "main"
-  (deny (exec "rm" *))
-  (deny (net "evil.com")))
-"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "allow",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "rm"}, "args": [{"any": null}] } } },
+    { "rule": { "effect": "deny", "net": { "domain": {"literal": "evil.com"} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
             &[(PolicyLevel::Project, project_source)],
@@ -2817,16 +2855,18 @@ mod tests {
 
     #[test]
     fn test_multi_level_project_overrides_user() {
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
-        let project_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "git" "push" *)))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -2849,16 +2889,18 @@ mod tests {
 
     #[test]
     fn test_multi_level_default_from_highest_level() {
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
-        let project_source = r#"
-(default allow "proj")
-(policy "proj"
-  (deny (exec "rm" *)))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "proj", "default_effect": "allow",
+  "policies": [{ "name": "proj", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "rm"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -2876,18 +2918,20 @@ mod tests {
 
     #[test]
     fn test_multi_level_origin_level_set() {
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *))
-  (allow (fs read (subpath "/home"))))
-"#;
-        let project_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "rm" *))
-  (deny (net "evil.com")))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/home"}}} } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "rm"}, "args": [{"any": null}] } } },
+    { "rule": { "effect": "deny", "net": { "domain": {"literal": "evil.com"} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -2916,18 +2960,20 @@ mod tests {
 
     #[test]
     fn test_multi_level_both_rules_present() {
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *))
-  (allow (net "github.com")))
-"#;
-        let project_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "rm" *))
-  (allow (fs read (subpath "/project"))))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
+    { "rule": { "effect": "allow", "net": { "domain": {"literal": "github.com"} } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "rm"}, "args": [{"any": null}] } } },
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/project"}}} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -2948,16 +2994,18 @@ mod tests {
     fn test_multi_level_user_specificity_wins() {
         // A more-specific user rule should beat a less-specific project rule
         // because specificity sorting puts it first.
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" "commit" *)))
-"#;
-        let project_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "git" *)))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"literal": "commit"}, {"any": null}] } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -2979,20 +3027,24 @@ mod tests {
 
     #[test]
     fn test_multi_level_with_internals() {
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
-        let project_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "rm" *)))
-"#;
-        let internal = r#"
-(policy "__internal_test__"
-  (allow (fs read (subpath "/internal"))))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "rm"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
+        let internal = r#"{
+  "schema_version": 4,
+  "policies": [{ "name": "__internal_test__", "body": [
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/internal"}}} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -3019,21 +3071,24 @@ mod tests {
     fn test_multi_level_session_overrides_all() {
         // Session (level=2) should override both Project (level=1) and User (level=0)
         // when rules have the same specificity.
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
-        let project_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
-        let session_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "git" *)))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
+        let session_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -3056,24 +3111,27 @@ mod tests {
     fn test_multi_level_three_levels() {
         // All three levels present; session wins when it has a matching rule,
         // and rules from all levels are merged.
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *))
-  (allow (net "github.com")))
-"#;
-        let project_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "rm" *))
-  (allow (fs read (subpath "/project"))))
-"#;
-        let session_source = r#"
-(default allow "session")
-(policy "session"
-  (deny (exec "git" "push" *))
-  (deny (net "evil.com")))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
+    { "rule": { "effect": "allow", "net": { "domain": {"literal": "github.com"} } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "rm"}, "args": [{"any": null}] } } },
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/project"}}} } } }
+  ]}]
+}"#;
+        let session_source = r#"{
+  "schema_version": 4, "use": "session", "default_effect": "allow",
+  "policies": [{ "name": "session", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } },
+    { "rule": { "effect": "deny", "net": { "domain": {"literal": "evil.com"} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -3103,21 +3161,24 @@ mod tests {
     #[test]
     fn test_multi_level_session_falls_through() {
         // Session has no matching rule for exec, so project/user rules apply.
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
-        let project_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "git" "push" *)))
-"#;
-        let session_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (net "evil.com")))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } }
+  ]}]
+}"#;
+        let session_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "net": { "domain": {"literal": "evil.com"} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -3149,12 +3210,13 @@ mod tests {
     #[test]
     fn shadow_none_when_single_level() {
         // Rules from a single level should never shadow each other.
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *))
-  (deny  (exec "git" "push" *)))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
+    { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree =
             compile_multi_level_with_internals(&[(PolicyLevel::User, user_source)], &env, &[])
@@ -3170,16 +3232,18 @@ mod tests {
     fn shadow_higher_level_shadows_lower_same_specificity() {
         // Project-level "git *" should shadow user-level "git *" because
         // Project has higher precedence and same specificity.
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
-        let project_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "git" *)))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -3207,16 +3271,18 @@ mod tests {
     fn shadow_no_shadow_when_lower_is_more_specific() {
         // User-level "git commit *" is more specific than project-level "git *".
         // More specific rules always win regardless of level, so no shadow.
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" "commit" *)))
-"#;
-        let project_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "git" *)))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"literal": "commit"}, {"any": null}] } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -3245,16 +3311,18 @@ mod tests {
     fn shadow_no_shadow_when_matchers_dont_overlap() {
         // Project denies "rm *", user allows "git *" — completely different
         // binaries, so no overlap and no shadow.
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
-        let project_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "rm" *)))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "rm"}, "args": [{"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -3279,16 +3347,15 @@ mod tests {
 
     #[test]
     fn compile_to_tree_v1_policy() {
-        let source = r#"
-(version 1)
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *))
-  (allow (fs read (subpath "/home/user"))))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/home/user"}}} } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
-        assert_eq!(tree.version, 1);
         assert_eq!(tree.default, Effect::Deny);
         assert_eq!(tree.policy_name, "main");
         // v1 policies should still populate flat rule lists.
@@ -3298,75 +3365,41 @@ mod tests {
 
     #[test]
     fn compile_to_tree_v2_basic() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "git" *) :allow)
-  (when (command "cargo")
-    (sandbox
-      (match ctx.http.domain
-        "crates.io" :allow
-        * :deny))))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}, "body": [{"effect": "allow"}] } },
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "cargo"}}}, "body": [
+      {"match": {"observable": "ctx.http.domain", "arms": [
+        {"pattern": {"single": {"literal": "crates.io"}}, "effect": "allow"},
+        {"pattern": {"single": {"any": null}}, "effect": "deny"}
+      ]}}
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
-        assert_eq!(tree.version, 2);
         assert_eq!(tree.default, Effect::Deny);
         // v2 when blocks don't populate flat rule lists.
         assert_eq!(tree.exec_rules.len(), 0);
     }
 
-    #[test]
-    fn compile_to_tree_v2_example_policy() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(def tmpdirs ["/tmp" "/var/folders"])
-(policy "rust"
-  (when (command (or "cargo" "rustc"))
-    (sandbox
-      (match ctx.http.domain
-        (or "github.com" "crates.io") :allow)
-      (match [ctx.fs.action ctx.fs.path]
-        ["read" (subpath "/home/user/project")] :allow
-        [* (subpath "/tmp")] :allow))))
-(policy "web"
-  (when (tool (or "WebSearch" "WebFetch"))
-    (sandbox
-      (match ctx.http.domain
-        "github.com" :allow
-        * :deny))))
-(policy "main"
-  (include "rust")
-  (include "web"))
-"#;
-        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
-        let tree = compile_to_tree(source, &env).unwrap();
-        assert_eq!(tree.version, 2);
-        assert_eq!(tree.default, Effect::Deny);
-        assert_eq!(tree.policy_name, "main");
-    }
+    // compile_to_tree_v2_example_policy — removed (depended on def and sandbox blocks)
 
     #[test]
     fn compile_to_tree_v2_evaluate_when_match() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "cargo")
-    (sandbox
-      (match ctx.http.domain
-        "crates.io" :allow
-        * :deny)
-      (match [ctx.fs.action ctx.fs.path]
-        ["read" (subpath "/home/user")] :allow
-        [* (subpath "/tmp")] :allow))))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "cargo"}}}, "body": [
+      {"effect": "allow"}
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
 
-        // cargo command should match the when predicate → Allow (via sandbox).
+        // cargo command should match the when predicate → Allow.
         let input = serde_json::json!({
             "command": "cargo build"
         });
@@ -3374,22 +3407,20 @@ mod tests {
         assert_eq!(
             decision.effect,
             Effect::Allow,
-            "cargo should be allowed via sandbox"
+            "cargo should be allowed"
         );
-        assert!(decision.sandbox.is_some(), "should have sandbox policy");
     }
 
     #[test]
     fn compile_to_tree_v2_no_match_uses_default() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "cargo")
-    (sandbox
-      (match ctx.http.domain
-        "crates.io" :allow))))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "cargo"}}}, "body": [
+      {"effect": "allow"}
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
 
@@ -3403,18 +3434,17 @@ mod tests {
 
     #[test]
     fn compile_to_tree_with_internals_v2() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "cargo")
-    (sandbox
-      (match ctx.http.domain
-        "crates.io" :allow))))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "cargo"}}}, "body": [
+      {"effect": "allow"}
+    ] } }
+  ]}]
+}"#;
         let internals: &[(&str, &str)] = &[(
             "__test_internal__",
-            r#"(policy "__test_internal__" (allow (exec "git" *)))"#,
+            r#"{"schema_version": 4, "policies": [{"name": "__test_internal__", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
         )];
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree_with_internals(source, &env, internals).unwrap();
@@ -3431,17 +3461,19 @@ mod tests {
 
     #[test]
     fn compile_multi_level_to_tree_basic() {
-        let user_source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *))
-  (allow (fs read (subpath "/home/user"))))
-"#;
-        let project_source = r#"
-(default deny "main")
-(policy "main"
-  (deny (exec "git" "push" *)))
-"#;
+        let user_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/home/user"}}} } } }
+  ]}]
+}"#;
+        let project_source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "deny", "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_multi_level_to_tree(
             &[
@@ -3470,12 +3502,12 @@ mod tests {
 
     #[test]
     fn compile_to_tree_v2_agent_when_allows() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (agent "Explore") :allow))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "agent", "pattern": {"single": {"literal": "Explore"}}, "body": [{"effect": "allow"}] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
 
@@ -3490,12 +3522,12 @@ mod tests {
 
     #[test]
     fn compile_to_tree_v2_agent_when_denies_other() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (agent "Explore") :allow))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "agent", "pattern": {"single": {"literal": "Explore"}}, "body": [{"effect": "allow"}] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
 
@@ -3510,12 +3542,12 @@ mod tests {
 
     #[test]
     fn compile_to_tree_v2_agent_or_pattern() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (agent (or "Explore" "Verify")) :ask))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "agent", "pattern": {"single": {"or": [{"literal": "Explore"}, {"literal": "Verify"}]}}, "body": [{"effect": "ask"}] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
 
@@ -3526,12 +3558,12 @@ mod tests {
 
     #[test]
     fn compile_to_tree_v2_agent_does_not_match_tool() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (agent "Explore") :allow))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "agent", "pattern": {"single": {"literal": "Explore"}}, "body": [{"effect": "allow"}] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
 
@@ -3547,16 +3579,18 @@ mod tests {
 
     #[test]
     fn compile_to_tree_v2_ctx_agent_name_match() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (agent *)
-    (match ctx.agent.name
-      "Explore" :allow
-      "Plan" :allow
-      * :ask)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "agent", "pattern": {"single": {"any": null}}, "body": [
+      {"match": {"observable": "ctx.agent.name", "arms": [
+        {"pattern": {"single": {"literal": "Explore"}}, "effect": "allow"},
+        {"pattern": {"single": {"literal": "Plan"}}, "effect": "allow"},
+        {"pattern": {"single": {"any": null}}, "effect": "ask"}
+      ]}}
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
 
@@ -3573,16 +3607,15 @@ mod tests {
 
     #[test]
     fn overlapping_sibling_match_blocks_rejected() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "cargo")
-    (match ctx.http.domain
-      "crates.io" :allow)
-    (match ctx.http.domain
-      "github.com" :allow)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "cargo"}}}, "body": [
+      {"match": {"observable": "ctx.http.domain", "arms": [{"pattern": {"single": {"literal": "crates.io"}}, "effect": "allow"}]}},
+      {"match": {"observable": "ctx.http.domain", "arms": [{"pattern": {"single": {"literal": "github.com"}}, "effect": "allow"}]}}
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let err = compile_to_tree(source, &env).unwrap_err();
         assert!(
@@ -3593,33 +3626,32 @@ mod tests {
 
     #[test]
     fn disjoint_sibling_match_blocks_accepted() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "cargo")
-    (match ctx.http.domain
-      "crates.io" :allow)
-    (match ctx.fs.path
-      (subpath "/home") :allow)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "cargo"}}}, "body": [
+      {"match": {"observable": "ctx.http.domain", "arms": [{"pattern": {"single": {"literal": "crates.io"}}, "effect": "allow"}]}},
+      {"match": {"observable": "ctx.fs.path", "arms": [{"pattern": {"single_path": {"subpath": {"path": {"static": "/home"}}}}, "effect": "allow"}]}}
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         compile_to_tree(source, &env).expect("disjoint match blocks should compile");
     }
 
     #[test]
     fn overlapping_when_blocks_same_dimension_rejected() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "git" *)
-    (match ctx.http.domain
-      "github.com" :allow))
-  (when (command "git" *)
-    (match ctx.http.domain
-      "crates.io" :allow)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}, "body": [
+      {"match": {"observable": "ctx.http.domain", "arms": [{"pattern": {"single": {"literal": "github.com"}}, "effect": "allow"}]}}
+    ] } },
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}, "body": [
+      {"match": {"observable": "ctx.http.domain", "arms": [{"pattern": {"single": {"literal": "crates.io"}}, "effect": "allow"}]}}
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let err = compile_to_tree(source, &env).unwrap_err();
         assert!(
@@ -3630,50 +3662,51 @@ mod tests {
 
     #[test]
     fn disjoint_when_predicates_same_dimension_accepted() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "git" *)
-    (match ctx.http.domain
-      "github.com" :allow))
-  (when (command "cargo" *)
-    (match ctx.http.domain
-      "crates.io" :allow)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}, "body": [
+      {"match": {"observable": "ctx.http.domain", "arms": [{"pattern": {"single": {"literal": "github.com"}}, "effect": "allow"}]}}
+    ] } },
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "cargo"}, "args": [{"any": null}]}}, "body": [
+      {"match": {"observable": "ctx.http.domain", "arms": [{"pattern": {"single": {"literal": "crates.io"}}, "effect": "allow"}]}}
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         compile_to_tree(source, &env).expect("disjoint predicates should compile");
     }
 
     #[test]
     fn overlapping_when_blocks_different_dimensions_accepted() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "git" *)
-    (match ctx.http.domain
-      "github.com" :allow))
-  (when (command "git" *)
-    (match ctx.fs.path
-      (subpath "/home") :allow)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}, "body": [
+      {"match": {"observable": "ctx.http.domain", "arms": [{"pattern": {"single": {"literal": "github.com"}}, "effect": "allow"}]}}
+    ] } },
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}, "body": [
+      {"match": {"observable": "ctx.fs.path", "arms": [{"pattern": {"single_path": {"subpath": {"path": {"static": "/home"}}}}, "effect": "allow"}]}}
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         compile_to_tree(source, &env).expect("different dimensions should compile");
     }
 
     #[test]
     fn tuple_dimension_overlap_with_scalar_rejected() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "cargo")
-    (match [ctx.fs.action ctx.fs.path]
-      ["read" (subpath "/home")] :allow)
-    (match ctx.fs.action
-      "write" :deny)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "cargo"}}}, "body": [
+      {"match": {"observable": "[ctx.fs.action ctx.fs.path]", "arms": [
+        {"pattern": {"tuple": [{"pat": {"literal": "read"}}, {"path": {"subpath": {"path": {"static": "/home"}}}}]}, "effect": "allow"}
+      ]}},
+      {"match": {"observable": "ctx.fs.action", "arms": [{"pattern": {"single": {"literal": "write"}}, "effect": "deny"}]}}
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let err = compile_to_tree(source, &env).unwrap_err();
         assert!(
@@ -3684,34 +3717,34 @@ mod tests {
 
     #[test]
     fn cross_domain_when_blocks_accepted() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "git" *)
-    (match ctx.http.domain
-      "github.com" :allow))
-  (when (ctx.http.domain "example.com")
-    (match ctx.http.path
-      "/api" :allow)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}, "body": [
+      {"match": {"observable": "ctx.http.domain", "arms": [{"pattern": {"single": {"literal": "github.com"}}, "effect": "allow"}]}}
+    ] } },
+    { "when": { "observable": "ctx.http.domain", "pattern": {"single": {"literal": "example.com"}}, "body": [
+      {"match": {"observable": "ctx.http.path", "arms": [{"pattern": {"single": {"literal": "/api"}}, "effect": "allow"}]}}
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         compile_to_tree(source, &env).expect("cross-domain when blocks should compile");
     }
 
     #[test]
     fn when_blocks_with_overlapping_exec_predicates_rejected() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "git" *)
-    (match ctx.http.domain
-      "github.com" :allow))
-  (when (command "git" "push")
-    (match ctx.http.domain
-      "example.com" :allow)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}, "body": [
+      {"match": {"observable": "ctx.http.domain", "arms": [{"pattern": {"single": {"literal": "github.com"}}, "effect": "allow"}]}}
+    ] } },
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"literal": "push"}]}}, "body": [
+      {"match": {"observable": "ctx.http.domain", "arms": [{"pattern": {"single": {"literal": "example.com"}}, "effect": "allow"}]}}
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let err = compile_to_tree(source, &env).unwrap_err();
         assert!(
@@ -3722,18 +3755,19 @@ mod tests {
 
     #[test]
     fn nested_when_overlap_rejected() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "git" *)
-    (when (ctx.http.domain "github.com")
-      (match ctx.http.path
-        "/api" :allow))
-    (when (ctx.http.domain "github.com")
-      (match ctx.http.path
-        "/web" :allow))))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}, "body": [
+      { "when": { "observable": "ctx.http.domain", "pattern": {"single": {"literal": "github.com"}}, "body": [
+        {"match": {"observable": "ctx.http.path", "arms": [{"pattern": {"single": {"literal": "/api"}}, "effect": "allow"}]}}
+      ] } },
+      { "when": { "observable": "ctx.http.domain", "pattern": {"single": {"literal": "github.com"}}, "body": [
+        {"match": {"observable": "ctx.http.path", "arms": [{"pattern": {"single": {"literal": "/web"}}, "effect": "allow"}]}}
+      ] } }
+    ] } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let err = compile_to_tree(source, &env).unwrap_err();
         assert!(
@@ -3749,48 +3783,48 @@ mod tests {
     #[test]
     fn ask_under_tool_is_valid() {
         let env = TestEnv::new(&[("PWD", "/home/user")]);
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (tool "Skill") :ask))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "tool", "pattern": {"single": {"literal": "Skill"}}, "body": [{"effect": "ask"}] } }
+  ]}]
+}"#;
         assert!(compile_to_tree(source, &env).is_ok());
     }
 
     #[test]
     fn ask_under_mcp_is_valid() {
         let env = TestEnv::new(&[("PWD", "/home/user")]);
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (mcp "puppeteer") :ask))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "mcp", "pattern": {"single": {"literal": "puppeteer"}}, "body": [{"effect": "ask"}] } }
+  ]}]
+}"#;
         assert!(compile_to_tree(source, &env).is_ok());
     }
 
     #[test]
     fn ask_under_agent_is_valid() {
         let env = TestEnv::new(&[("PWD", "/home/user")]);
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (agent "Explore") :ask))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "agent", "pattern": {"single": {"literal": "Explore"}}, "body": [{"effect": "ask"}] } }
+  ]}]
+}"#;
         assert!(compile_to_tree(source, &env).is_ok());
     }
 
     #[test]
     fn ask_under_command_is_invalid() {
         let env = TestEnv::new(&[("PWD", "/home/user")]);
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "git" *) :ask))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}, "body": [{"effect": "ask"}] } }
+  ]}]
+}"#;
         let err = compile_to_tree(source, &env).unwrap_err();
         assert!(
             err.to_string().contains(":ask may only appear inside"),
@@ -3801,12 +3835,12 @@ mod tests {
     #[test]
     fn ask_with_no_invocation_guard_is_invalid() {
         let env = TestEnv::new(&[("PWD", "/home/user")]);
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  :ask)
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    {"effect": "ask"}
+  ]}]
+}"#;
         let err = compile_to_tree(source, &env).unwrap_err();
         assert!(
             err.to_string().contains(":ask may only appear inside"),
@@ -3817,13 +3851,14 @@ mod tests {
     #[test]
     fn ask_nested_command_then_tool_is_valid() {
         let env = TestEnv::new(&[("PWD", "/home/user")]);
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (tool "Skill")
-    (when (command "git" *) :ask)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "tool", "pattern": {"single": {"literal": "Skill"}}, "body": [
+      { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}, "body": [{"effect": "ask"}] } }
+    ] } }
+  ]}]
+}"#;
         // The outer (when (tool ...)) makes the inner :ask valid.
         assert!(compile_to_tree(source, &env).is_ok());
     }
@@ -3831,27 +3866,29 @@ mod tests {
     #[test]
     fn ask_in_match_arm_under_mcp_is_valid() {
         let env = TestEnv::new(&[("PWD", "/home/user")]);
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (mcp "puppeteer")
-    (match ctx.mcp.tool
-      "navigate" :allow
-      * :ask)))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "mcp", "pattern": {"single": {"literal": "puppeteer"}}, "body": [
+      {"match": {"observable": "ctx.mcp.tool", "arms": [
+        {"pattern": {"single": {"literal": "navigate"}}, "effect": "allow"},
+        {"pattern": {"single": {"any": null}}, "effect": "ask"}
+      ]}}
+    ] } }
+  ]}]
+}"#;
         assert!(compile_to_tree(source, &env).is_ok());
     }
 
     #[test]
     fn ask_in_when_without_invocation_guard_is_invalid() {
         let env = TestEnv::new(&[("PWD", "/home/user")]);
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (ctx.http.domain "github.com") :ask))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "ctx.http.domain", "pattern": {"single": {"literal": "github.com"}}, "body": [{"effect": "ask"}] } }
+  ]}]
+}"#;
         let err = compile_to_tree(source, &env).unwrap_err();
         assert!(
             err.to_string().contains(":ask may only appear inside"),
@@ -3862,13 +3899,13 @@ mod tests {
     #[test]
     fn allow_and_deny_under_command_are_valid() {
         let env = TestEnv::new(&[("PWD", "/home/user")]);
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (command "git" *) :allow)
-  (when (command "rm" *) :deny))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}, "body": [{"effect": "allow"}] } },
+    { "when": { "observable": "command", "pattern": {"exec": {"bin": {"literal": "rm"}, "args": [{"any": null}]}}, "body": [{"effect": "deny"}] } }
+  ]}]
+}"#;
         assert!(compile_to_tree(source, &env).is_ok());
     }
 
@@ -3876,12 +3913,12 @@ mod tests {
 
     #[test]
     fn compile_to_tree_v2_eq_process_command() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (eq ctx.process.command "cargo") :allow))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "ctx.process.command", "pattern": {"single": {"literal": "cargo"}}, "body": [{"effect": "allow"}], "is_eq": true } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
 
@@ -3902,12 +3939,12 @@ mod tests {
 
     #[test]
     fn compile_to_tree_v2_eq_http_domain() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (eq ctx.http.domain "github.com") :allow))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "ctx.http.domain", "pattern": {"single": {"literal": "github.com"}}, "body": [{"effect": "allow"}], "is_eq": true } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
 
@@ -3932,12 +3969,12 @@ mod tests {
 
     #[test]
     fn compile_to_tree_v2_eq_tool_name() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (eq ctx.tool.name "Skill") :allow))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "ctx.tool.name", "pattern": {"single": {"literal": "Skill"}}, "body": [{"effect": "allow"}], "is_eq": true } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
 
@@ -3962,12 +3999,12 @@ mod tests {
 
     #[test]
     fn compile_to_tree_v2_eq_with_or_pattern() {
-        let source = r#"
-(version 2)
-(default deny "main")
-(policy "main"
-  (when (eq ctx.process.command (or "cargo" "rustc")) :allow))
-"#;
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "when": { "observable": "ctx.process.command", "pattern": {"single": {"or": [{"literal": "cargo"}, {"literal": "rustc"}]}}, "body": [{"effect": "allow"}], "is_eq": true } }
+  ]}]
+}"#;
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree(source, &env).unwrap();
 

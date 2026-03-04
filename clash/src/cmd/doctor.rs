@@ -156,7 +156,7 @@ fn check_policy_parsing() -> CheckResult {
                     errors.push(format!("{}: file is empty", level));
                     continue;
                 }
-                if let Err(e) = crate::policy::compile_policy(&source) {
+                if let Err(e) = crate::policy::compile::compile_policy(&source) {
                     errors.push(format!("{}: {}", level, e));
                 }
             }
