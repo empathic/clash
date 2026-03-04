@@ -1,66 +1,80 @@
 ---
 name: amend
-description: Edit the clash policy — add and remove rules using the transactional shell editor
+description: Edit the clash policy — add and remove rules by editing the JSON policy file
 ---
-Help the user modify their clash policy. Use `clash policy shell` for all policy editing — it provides a transactional editor that accumulates changes in memory and applies them atomically.
+Help the user modify their clash policy by editing the JSON policy file directly.
 
-## Preferred approach: `clash policy shell`
+## Policy file location
 
-Use `clash policy shell -c '<statement>'` for one-liner changes, or pipe mode for multiple changes.
+- Project-level: `<project>/.clash/policy.json`
+- User-level: `~/.clash/policy.json`
+- Prefer the project-level file if it exists; fall back to user-level.
 
-### Rule format
+## JSON policy format
 
-Rules are either:
+Rules are objects in a policy's `body` array:
 
-- **Full s-expression**: `(allow (exec "git" *))` — the effect is part of the rule
-- **Shortcut**: `allow:bash`, `deny:web`, `ask:edit` — effect:verb format
-
-### Commands
-
-| Command | Syntax | Description |
-|---------|--------|-------------|
-| `add` | `add [<policy>] <rule>` | Add a rule |
-| `remove` | `remove [<policy>] <rule>` | Remove a rule by its text |
-| `create` | `create <policy>` | Create a new policy block |
-| `default` | `default <effect> [<policy>]` | Change the default effect |
+```json
+{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "main",
+      "body": [
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } },
+        { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
+      ]
+    }
+  ]
+}
+```
 
 ## Steps
 
-1. **Dry-run first** to preview the change:
+1. **Read the current policy file** to understand the existing structure.
+
+2. **Dry-run by describing the change** to the user — show the exact JSON rule that will be added or the rule that will be removed, and explain what the resulting policy will do.
+
+3. **Get confirmation**, then edit the JSON policy file directly.
+
+4. **For adding a rule**, insert it into the appropriate policy's `body` array. Common patterns:
+
+   - Allow all git commands:
+     ```json
+     { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
+     ```
+   - Deny git push:
+     ```json
+     { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
+     ```
+   - Allow reads under cwd:
+     ```json
+     { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } }
+     ```
+   - Allow network access to a domain:
+     ```json
+     { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
+     ```
+   - Include another policy block:
+     ```json
+     { "include": "other-policy-name" }
+     ```
+
+5. **For removing a rule**, delete the corresponding entry from the `body` array.
+
+6. **Validate the change** after editing:
    ```bash
-   clash policy shell --scope project --dry-run -c 'add (allow (exec "git" *))'
-   ```
-   Show the output to the user and explain what the resulting policy will do.
-
-2. **Get confirmation**, then apply:
-   ```bash
-   clash policy shell --scope project -c 'add (allow (exec "git" *))'
+   clash policy validate
    ```
 
-3. **For multiple changes**, use pipe mode:
-   ```bash
-   clash policy shell --scope project --dry-run <<EOF
-   add (allow (exec "cargo" *))
-   add (deny (exec "git" "push" :has "--force"))
-   remove (deny (exec "npm" *))
-   EOF
-   ```
-   Then apply without `--dry-run` after confirmation.
-
-4. **Report success** and summarize what changed.
-
-## Scope selection
-
-- `--scope project` — saved in `<project>/.clash/policy.sexpr`, persists across sessions
-- `--scope user` — saved in `~/.clash/policy.sexpr`, applies everywhere
-- `--scope session` — temporary, lasts only for the current Claude Code session
+7. **Report success** and summarize what changed.
 
 ## Safety guidelines
 
-- Always dry-run first and show the result before applying
+- Always show the user the exact JSON change before applying it
 - Prefer scoped rules over broad wildcards
 - Warn the user when removing deny rules — they may be there for good reason
-
-## Legacy: `clash amend`
-
-`clash amend` still works but `clash policy shell` is preferred. If you encounter `clash amend` in existing workflows, it continues to function identically.

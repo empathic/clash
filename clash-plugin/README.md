@@ -38,7 +38,7 @@ The plugin registers four hook types via `hooks/hooks.json`:
 | **PermissionRequest** | Responds to permission prompts on behalf of the user |
 | **Notification** | Handles notification events (permission prompts, idle detection, etc.) |
 
-Policy rules are read from `~/.clash/policy.sexpr`. See the [Policy Writing Guide](../docs/policy-guide.md) for syntax.
+Policy rules are read from `~/.clash/policy.json`. See the [Policy Writing Guide](../docs/policy-guide.md) for syntax.
 
 ## Skills
 

@@ -58,7 +58,7 @@ files you specify.
 <div class="cards">
   <div class="card card--green">
     <h3>Rule</h3>
-    <p>An effect paired with a capability matcher. <code>(allow (exec "git" *))</code> lets the agent run any git command. <code>(deny (exec "git" "push" *))</code> blocks pushes. Rules are sorted by specificity — more specific rules always win.</p>
+    <p>An effect paired with a capability matcher. <code>{ "effect": "allow", "exec": { "bin": { "literal": "git" } } }</code> lets the agent run any git command. <code>{ "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } }</code> blocks pushes. Rules are sorted by specificity — more specific rules always win.</p>
   </div>
   <div class="card card--amber">
     <h3>Domain</h3>
@@ -106,28 +106,33 @@ files you specify.
 
 ## A minimal policy
 
-```lisp
-; ~/.clash/policy.sexpr (user level)
-(default ask "main")
-
-(policy "main"
-  (include "cwd-access")
-
-  ; Dev tools — auto-approve
-  (allow (exec "cargo" *))
-  (allow (exec "git" *))
-
-  ; Guardrails — always block
-  (deny (exec "git" "push" *))
-  (deny (exec "git" "reset" "--hard" *))
-
-  ; Network — allow GitHub
-  (allow (net "github.com")))
-
-; Reusable file-access block
-(policy "cwd-access"
-  (allow (fs read (subpath (env PWD))))
-  (allow (fs (or write create) (subpath (env PWD)))))
+```json
+// ~/.clash/policy.json (user level)
+{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "ask",
+  "policies": [
+    {
+      "name": "cwd-access",
+      "body": [
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } },
+        { "rule": { "effect": "allow", "fs": { "op": { "or": ["write", "create"] }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } }
+      ]
+    },
+    {
+      "name": "main",
+      "body": [
+        { "include": "cwd-access" },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "reset" }, { "literal": "--hard" }, { "any": null }] } } },
+        { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
+      ]
+    }
+  ]
+}
 ```
 
 Three effects: <span class="badge badge--allow">allow</span> auto-approves, <span class="badge badge--deny">deny</span> blocks, <span class="badge badge--ask">ask</span> prompts you. Deny always wins over allow. More specific rules beat less specific. Edits take effect immediately — no restart needed.

@@ -26,7 +26,7 @@ Clash operates on three capability domains, not individual tools. Tool invocatio
 ## Compilation Pipeline
 
 ```
-S-expression source text
+JSON source text
     │
     ▼
 Vec<TopLevel> (AST)             ← parse.rs
@@ -37,7 +37,7 @@ Vec<TopLevel> (AST)             ← parse.rs
     │
     ▼
 PolicyTree (IR)                 ← compile.rs, tree.rs
-    │                             (v1 also compiles to flat DecisionTree)
+    │
     ├── default: Effect
     ├── policy_name: String
     ├── root: Node               (tree-shaped decision structure)
@@ -51,18 +51,18 @@ PolicyTree (IR)                 ← compile.rs, tree.rs
 
 ### Compilation Steps
 
-1. **Parse** — s-expression text → AST (`Vec<TopLevel>`)
-2. **Extract version** — read the `(version N)` declaration from the AST (default: 1 if absent)
-3. **Validate version** — verify the declared version is a known version (≤ `CURRENT_VERSION`); reject unknown future versions. Future: check for deprecated features based on the declared version.
-4. **Find default** — extract the `(default effect "name")` declaration
-5. **Build policy map** — index all `(policy "name" ...)` blocks by name
-6. **Flatten** — recursively resolve `(include ...)` into a flat rule list
-7. **Validate sandbox references** — verify each named `:sandbox "name"` points to an existing policy; compile inline `:sandbox (rule ...)` rules immediately
+1. **Parse** — JSON text → AST (`Vec<TopLevel>`)
+2. **Extract version** — read the `schema_version` field from the AST
+3. **Validate version** — verify the declared version is a known version (≤ `CURRENT_VERSION`); reject unknown future versions.
+4. **Find default** — extract the `default_effect` and `use` declarations
+5. **Build policy map** — index all policy objects by name
+6. **Flatten** — recursively resolve `{ "include": "name" }` into a flat rule list
+7. **Validate sandbox references** — verify each named `"sandbox": { "named": "name" }` points to an existing policy
 8. **Group** — split rules by capability domain (exec/fs/net)
-9. **Compile matchers** — convert AST patterns to IR with pre-compiled regexes, resolve `(env NAME)` references
+9. **Compile matchers** — convert AST patterns to IR with pre-compiled regexes, resolve `{ "env": "NAME" }` references
 10. **Sort by specificity** — most specific rules first within each domain
 11. **Detect conflicts** — reject rules with equal specificity but different effects that could match the same request
-12. **Compile sandbox policies** — for each named sandbox reference, compile the referenced policy's rules into standalone rule sets (inline sandbox rules are compiled in step 7)
+12. **Compile sandbox policies** — for each named sandbox reference, compile the referenced policy's rules into standalone rule sets
 
 ---
 
@@ -136,7 +136,7 @@ Within a capability domain, the first matching rule wins. This is safe because:
 
 ### Path Resolution
 
-Relative paths in tool inputs are resolved against the current working directory before matching against path filters. This means `(subpath (env PWD))` correctly matches both absolute paths under CWD and relative paths.
+Relative paths in tool inputs are resolved against the current working directory before matching against path filters. This means `{ "subpath": { "path": { "env": "PWD" } } }` correctly matches both absolute paths under CWD and relative paths.
 
 ---
 
@@ -182,7 +182,7 @@ All sandbox policies automatically include read/write/create/delete/execute acce
 
 ### Worktree-Aware Path Expansion
 
-The `(subpath :worktree <path>)` path filter supports git worktrees at compile time. When the resolved path is inside a git worktree, the compiler detects this by reading the `.git` file's `gitdir:` pointer and the `commondir` file, then expands the single `subpath` into an `or` filter covering:
+The `{ "subpath": { "path": { "env": "PWD" }, "worktree": true } }` path filter supports git worktrees at compile time. When the resolved path is inside a git worktree, the compiler detects this by reading the `.git` file's `gitdir:` pointer and the `commondir` file, then expands the single `subpath` into an `or` filter covering:
 
 1. The original resolved path
 2. The worktree-specific git directory (e.g., `/path/to/repo/.git/worktrees/my-branch`)
@@ -190,7 +190,7 @@ The `(subpath :worktree <path>)` path filter supports git worktrees at compile t
 
 This ensures that git commands (commit, push, etc.) work correctly inside worktrees, since git stores its data (objects, refs, config) in the main repository's `.git/` directory outside the worktree's own directory tree.
 
-When the path is not inside a worktree, `:worktree` has no effect — the filter compiles to a plain `subpath`. The default policy uses `(subpath :worktree (env PWD))` for CWD access rules.
+When the path is not inside a worktree, `"worktree": true` has no effect — the filter compiles to a plain `subpath`. The default policy uses `"worktree": true` on `env PWD` subpath rules for CWD access rules.
 
 Sandbox enforcement covers filesystem and network access only. Exec-level argument matching (e.g., distinguishing `git push` from `git status`) is not enforced on child processes within the sandbox — only the top-level command is checked against exec rules. See [#136](https://github.com/empathic/clash/issues/136) for the tracking issue.
 
@@ -203,11 +203,11 @@ The deny-overrides principle applies at two levels:
 1. **Within a domain**: first-match wins (specificity ordering ensures the most specific rule is checked first)
 2. **Across domains**: if a request matches rules in multiple domains, deny > ask > allow
 
-A deny rule can never be overridden by an allow rule. To express "deny everything except X", use negation patterns:
+A deny rule can never be overridden by an allow rule. To express "deny everything except X", use more specific allow rules combined with broader deny rules:
 
-```
-(deny  (fs write (not (subpath (env PWD)))))   ; deny writes outside CWD
-(allow (fs write (subpath (env PWD))))          ; allow writes inside CWD
+```json
+{ "rule": { "effect": "deny", "fs": { "op": { "single": "write" } } } }
+{ "rule": { "effect": "allow", "fs": { "op": { "single": "write" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
 ```
 
 See [ADR-002](./adr/002-deny-overrides.md) for the full rationale.

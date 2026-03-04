@@ -6,16 +6,25 @@ A practical guide to writing clash policies. For formal grammar details, see [po
 
 ## Quick Start
 
-Clash policies use an s-expression format with three capability domains: **exec** (shell commands), **fs** (file operations), and **net** (network access).
+Clash policies use JSON format with three capability domains: **exec** (shell commands), **fs** (file operations), and **net** (network access).
 
-```
-(default deny "main")
-
-(policy "main"
-  (allow (exec "git" *))
-  (deny  (exec "git" "push" *))
-  (allow (fs read (subpath (env PWD))))
-  (allow (net "github.com")))
+```json
+{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "main",
+      "body": [
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
+        { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
+      ]
+    }
+  ]
+}
 ```
 
 This policy allows git commands (except push), file reads under the current directory, and network access to github.com. Everything else is denied.
@@ -26,7 +35,7 @@ This policy allows git commands (except push), file reads under the current dire
 
 | Path | Scope |
 |------|-------|
-| `~/.clash/policy` | User-level (applies to all projects) |
+| `~/.clash/policy.json` | User-level (applies to all projects) |
 
 Clash reads the policy on every hook invocation, so changes take effect immediately.
 
@@ -38,24 +47,23 @@ Clash controls three capability domains, not individual tools. A single rule can
 
 ### Exec — Shell Commands
 
-```
-(allow (exec "git" *))              ; allow all git commands
-(deny  (exec "git" "push" *))       ; deny git push specifically
-(ask   (exec "git" "commit" *))     ; prompt before any rm
-(allow (exec "cargo" "test" *))     ; allow cargo test
+```json
+{ "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
+{ "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
+{ "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" }, "args": [{ "literal": "test" }, { "any": null }] } } }
 ```
 
-The first pattern matches the binary name, subsequent patterns match positional arguments. More arguments = more specific.
+The `bin` field matches the binary name; `args` matches positional arguments. More arguments = more specific.
 
-> **Scope:** Exec rules evaluate the top-level command that Claude Code invokes via the Bash tool. They do not apply to child processes spawned by that command. For example, `(deny (exec "git" "push" *))` prevents Claude from directly running `git push`, but if an allowed command like `make deploy` internally calls `git push`, the deny rule does not fire — the policy engine only sees the top-level `make` command. Sandbox restrictions for filesystem and network access *are* enforced on all child processes at the kernel level (see [Sandbox Policies](#sandbox-policies)).
+> **Scope:** Exec rules evaluate the top-level command that Claude Code invokes via the Bash tool. They do not apply to child processes spawned by that command. For example, a deny rule on `git push` prevents Claude from directly running `git push`, but if an allowed command like `make deploy` internally calls `git push`, the deny rule does not fire — the policy engine only sees the top-level `make` command. Sandbox restrictions for filesystem and network access *are* enforced on all child processes at the kernel level (see [Sandbox Policies](#sandbox-policies)).
 
 ### Fs — File Operations
 
-```
-(allow (fs read (subpath (env PWD))))                ; read files under CWD
-(allow (fs (or read write) (subpath (env PWD))))     ; read + write under CWD
-(deny  (fs write ".env"))                            ; block writing .env
-(deny  (fs * (subpath "/etc")))                      ; block all fs ops on /etc
+```json
+{ "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
+{ "rule": { "effect": "allow", "fs": { "op": { "or": ["read", "write"] }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
+{ "rule": { "effect": "deny", "fs": { "op": { "single": "write" }, "path": { "literal": ".env" } } } }
+{ "rule": { "effect": "deny", "fs": { "op": "*", "path": { "subpath": { "path": { "static": "/etc" } } } } } }
 ```
 
 The fs domain maps to these tools:
@@ -66,10 +74,10 @@ The fs domain maps to these tools:
 
 ### Net — Network Access
 
-```
-(allow (net "github.com"))                    ; allow github.com
-(allow (net (or "github.com" "crates.io")))   ; allow multiple domains
-(deny  (net /.*\.evil\.com/))                 ; deny evil.com subdomains
+```json
+{ "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
+{ "rule": { "effect": "allow", "net": { "domain": { "or": [{ "literal": "github.com" }, { "literal": "crates.io" }] } } } }
+{ "rule": { "effect": "deny", "net": { "domain": { "regex": ".*\\.evil\\.com" } } } }
 ```
 
 The net domain maps to:
@@ -95,9 +103,9 @@ Literal path > Regex path > Subpath > No path
 
 ### Example
 
-```
-(deny  (exec "git" "push" *))    ; specificity: high (literal bin + literal arg + wildcard)
-(allow (exec "git" *))           ; specificity: lower (literal bin + wildcard)
+```json
+{ "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
+{ "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
 ```
 
 `git push origin main` matches the deny rule first (more specific). `git status` skips the deny (doesn't match "push") and matches the allow.
@@ -110,31 +118,45 @@ If two rules have the same specificity but different effects and could match the
 
 When a request matches rules in multiple capability domains (rare), deny-overrides applies: deny > ask > allow.
 
-If no rules match, the `default` effect applies.
+If no rules match, the `default_effect` applies.
 
 ---
 
 ## Policy Composition
 
-Break policies into reusable pieces with `(include ...)`:
+Break policies into reusable pieces with `{ "include": "name" }`:
 
-```
-(default deny "main")
-
-(policy "cwd-access"
-  (allow (fs read (subpath (env PWD))))
-  (allow (fs write (subpath (env PWD)))))
-
-(policy "safe-git"
-  (deny  (exec "git" "push" *))
-  (deny  (exec "git" "reset" *))
-  (ask   (exec "git" "commit" *))
-  (allow (exec "git" *)))
-
-(policy "main"
-  (include "cwd-access")
-  (include "safe-git")
-  (allow (net (or "github.com" "crates.io"))))
+```json
+{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "cwd-access",
+      "body": [
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "write" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
+      ]
+    },
+    {
+      "name": "safe-git",
+      "body": [
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "reset" }, { "any": null }] } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
+      ]
+    },
+    {
+      "name": "main",
+      "body": [
+        { "include": "cwd-access" },
+        { "include": "safe-git" },
+        { "rule": { "effect": "allow", "net": { "domain": { "or": [{ "literal": "github.com" }, { "literal": "crates.io" }] } } } }
+      ]
+    }
+  ]
+}
 ```
 
 Include inlines the referenced policy's rules. Circular includes are rejected at compile time.
@@ -143,55 +165,53 @@ Include inlines the referenced policy's rules. Circular includes are rejected at
 
 ## Sandbox Policies
 
-Exec rules can attach a **sandbox policy** using the `:sandbox` keyword. The sandbox policy defines what filesystem and network access a spawned process gets.
-
-### Inline sandbox
-
-For simple cases, define sandbox rules directly on the exec rule:
-
-```
-(allow (exec "clash" "bug" *) :sandbox (allow (net *)))
-```
-
-Multiple inline rules are supported:
-
-```
-(allow (exec "cargo" "build" *) :sandbox
-  (allow (fs read (subpath (env PWD))))
-  (allow (fs write (subpath "./target")))
-  (allow (net)))
-```
+Exec rules can attach a **sandbox policy** using the `"sandbox"` key. The sandbox policy defines what filesystem and network access a spawned process gets.
 
 ### Named sandbox
 
 For sandbox policies reused across multiple exec rules, define a named policy and reference it by name:
 
-```
-(default deny "main")
-
-(policy "cargo-env"
-  (allow (fs read (subpath (env PWD))))
-  (allow (fs write (subpath "./target")))
-  (allow (net)))
-
-(policy "git-env"
-  (allow (fs read (subpath (env PWD)))))
-
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "cargo" *) :sandbox "cargo-env")
-  (allow (exec "git" *)   :sandbox "git-env")
-  (allow (fs read (subpath (env PWD))))
-  (allow (net "github.com")))
+```json
+{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "cargo-env",
+      "body": [
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "write" }, "path": { "subpath": { "path": { "static": "./target" } } } } } },
+        { "rule": { "effect": "allow", "net": { "domain": "*" } } }
+      ]
+    },
+    {
+      "name": "git-env",
+      "body": [
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
+      ]
+    },
+    {
+      "name": "main",
+      "body": [
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } }, "sandbox": { "named": "cargo-env" } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } }, "sandbox": { "named": "git-env" } } },
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
+        { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
+      ]
+    }
+  ]
+}
 ```
 
 When `cargo build` matches the exec rule, the `"cargo-env"` policy defines the sandbox: the process can read the project, write to `./target`, and has unrestricted network access. When `git status` matches, it gets only read access to the project via `"git-env"`.
 
-Named sandbox references must point to a policy defined with `(policy "name" ...)` in the same file. A compile error is raised if the referenced policy doesn't exist.
+Named sandbox references must point to a policy defined in the `"policies"` array of the same file. A compile error is raised if the referenced policy doesn't exist.
 
 ### Default behavior
 
-When no `:sandbox` is specified on an exec allow, the spawned process gets no filesystem/network access beyond bare minimum (deny-all sandbox by default).
+When no `"sandbox"` is specified on an exec allow, the spawned process gets no filesystem/network access beyond bare minimum (deny-all sandbox by default).
 
 ### What sandboxes enforce
 
@@ -207,16 +227,16 @@ Sandboxes automatically grant access to:
 
 Sandbox network access has four modes:
 
-- `(allow (net))` or `(allow (net *))` — sandbox **allows** all network access (no restrictions)
-- `(allow (net "localhost"))` — sandbox allows **localhost-only** connections, enforced at the kernel level without a proxy
-- `(allow (net "domain.com"))` — sandbox allows network access **only to listed domains** via a local HTTP proxy
+- `{ "rule": { "effect": "allow", "net": { "domain": "*" } } }` — sandbox **allows** all network access (no restrictions)
+- `{ "rule": { "effect": "allow", "net": { "domain": { "literal": "localhost" } } } }` — sandbox allows **localhost-only** connections, enforced at the kernel level without a proxy
+- `{ "rule": { "effect": "allow", "net": { "domain": { "literal": "domain.com" } } } }` — sandbox allows network access **only to listed domains** via a local HTTP proxy
 - No net rule — sandbox **denies** all network access
 
 **Localhost-only mode**: When all allowed domains are loopback addresses (`"localhost"`, `"127.0.0.1"`, `"::1"`), Clash uses a lightweight localhost-only mode that is enforced directly by the OS sandbox without spawning an HTTP proxy. This is useful for processes that need to connect to local development servers but should not access the internet. On macOS, Seatbelt blocks non-localhost connections at the kernel level. On Linux, enforcement is advisory (seccomp cannot filter connect destinations).
 
-**Domain filtering**: Domain-specific net rules like `(allow (net "crates.io"))` are enforced using a local HTTP proxy. The OS sandbox restricts the process to localhost-only connections, and clash starts a proxy that checks each request against the domain allowlist. Programs that respect `HTTP_PROXY`/`HTTPS_PROXY` environment variables (curl, cargo, npm, pip, etc.) are filtered; programs that bypass the proxy can still reach any host on Linux (advisory enforcement). On macOS, Seatbelt blocks non-localhost connections at the kernel level.
+**Domain filtering**: Domain-specific net rules like `{ "domain": { "literal": "crates.io" } }` are enforced using a local HTTP proxy. The OS sandbox restricts the process to localhost-only connections, and clash starts a proxy that checks each request against the domain allowlist. Programs that respect `HTTP_PROXY`/`HTTPS_PROXY` environment variables (curl, cargo, npm, pip, etc.) are filtered; programs that bypass the proxy can still reach any host on Linux (advisory enforcement). On macOS, Seatbelt blocks non-localhost connections at the kernel level.
 
-Subdomain matching is supported: `(allow (net "github.com"))` also permits `api.github.com`.
+Subdomain matching is supported: `{ "domain": { "literal": "github.com" } }` also permits `api.github.com`.
 
 ---
 
@@ -224,38 +244,39 @@ Subdomain matching is supported: `(allow (net "github.com"))` also permits `api.
 
 ### Wildcards
 
-`*` matches anything in that position:
+`{ "any": null }` or `"*"` matches anything in that position:
 
-```
-(exec "git" *)        ; git with any arguments
-(fs read *)           ; read any file (path filter omitted = any)
-(net *)               ; any domain
+```json
+{ "exec": { "bin": { "literal": "git" } } }
+{ "fs": { "op": { "single": "read" } } }
+{ "net": { "domain": "*" } }
 ```
 
 ### Literals
 
-Quoted strings match exactly:
+`{ "literal": "value" }` matches exactly:
 
-```
-(exec "git" "push")   ; only "git push" with no further args
-(net "github.com")     ; only github.com, not subdomain.github.com
+```json
+{ "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }] } }
+{ "net": { "domain": { "literal": "github.com" } } }
 ```
 
 ### Regex
 
-Slash-delimited regex for flexible matching:
+`{ "regex": "pattern" }` for flexible matching:
 
-```
-(exec /^cargo-.*/)              ; cargo-build, cargo-test, cargo-clippy
-(net /.*\.example\.com/)        ; any subdomain of example.com
-(fs read /.*\.log/)             ; any .log file
+```json
+{ "exec": { "bin": { "regex": "^cargo-.*" } } }
+{ "net": { "domain": { "regex": ".*\\.example\\.com" } } }
+{ "fs": { "op": { "single": "read" }, "path": { "regex": ".*\\.log" } } }
 ```
 
-### Combinators
+### Glob
 
-```
-(or "github.com" "crates.io")   ; match either
-(not "secret")                   ; match anything except "secret"
+`{ "glob": "pattern" }` for glob-style matching:
+
+```json
+{ "fs": { "op": { "single": "read" }, "path": { "glob": "**/*.log" } } }
 ```
 
 ---
@@ -266,51 +287,35 @@ Slash-delimited regex for flexible matching:
 
 Match a directory and everything beneath it:
 
-```
-(subpath (env PWD))     ; current working directory tree
-(subpath "/home/user")   ; fixed path
+```json
+{ "subpath": { "path": { "env": "PWD" } } }
+{ "subpath": { "path": { "static": "/home/user" } } }
 ```
 
 ### Worktree-Aware Subpath
 
-When working in a git worktree, git operations write to the backing repository's `.git/` directory — which is outside the worktree's directory tree. The `:worktree` flag on `subpath` tells the compiler to detect this and automatically extend access:
+When working in a git worktree, git operations write to the backing repository's `.git/` directory — which is outside the worktree's directory tree. The `"worktree": true` flag on `subpath` tells the compiler to detect this and automatically extend access:
 
-```
-(subpath :worktree (env PWD))   ; CWD + git worktree dirs (if applicable)
+```json
+{ "subpath": { "path": { "env": "PWD" }, "worktree": true } }
 ```
 
-The default policy uses `:worktree` on `(env PWD)` rules so git commands work out of the box in worktrees. If you override the default policy, add `:worktree` to your CWD subpath rules if you need git operations to work in worktrees.
+The default policy uses `"worktree": true` on `env PWD` rules so git commands work out of the box in worktrees. If you override the default policy, add `"worktree": true` to your CWD subpath rules if you need git operations to work in worktrees.
 
 ### Environment Variables
 
-`(env NAME)` is resolved at compile time:
+`{ "env": "NAME" }` is resolved at compile time:
 
-```
-(subpath (env PWD))    ; → /home/user/project (or wherever you are)
-(subpath (env HOME))   ; → /home/user
-```
-
-### Path Combinators
-
-```
-(or (subpath "/tmp") (subpath (env PWD)))   ; either location
-(not (subpath ".git"))                       ; exclude .git
+```json
+{ "subpath": { "path": { "env": "PWD" } } }
+{ "subpath": { "path": { "env": "HOME" } } }
 ```
 
----
+### Path Join
 
-## Naming Convention
-
-All user-provided names must be **quoted strings**:
-
+```json
+{ "subpath": { "path": { "join": [{ "env": "HOME" }, { "static": "/projects" }] } } }
 ```
-(default deny "main")             ; policy name is a string
-(policy "cwd-access" ...)         ; policy name is a string
-(include "cwd-access")            ; include target is a string
-(allow (exec "cargo" *) :sandbox "cargo-env")  ; named sandbox ref is a string
-```
-
-Bare atoms (`allow`, `deny`, `exec`, `fs`, `net`, `or`, `not`, `subpath`, `env`, `include`, `default`, `policy`) are reserved for language keywords.
 
 ---
 
@@ -320,121 +325,143 @@ Bare atoms (`allow`, `deny`, `exec`, `fs`, `net`, `or`, `not`, `subpath`, `env`,
 
 Deny everything by default, explicitly allow only safe operations:
 
-```
-(default deny "main")
-
-(policy "main"
-  (allow (fs read (subpath (env PWD))))
-  (ask   (exec *)))
+```json
+{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "main",
+      "body": [
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
+      ]
+    }
+  ]
+}
 ```
 
 ### 2. Developer-Friendly
 
-Allow reads and common dev tools, ask for writes, deny destructive operations:
+Allow reads and common dev tools, deny destructive operations:
 
-```
-(default ask "main")
-
-(policy "cwd-access"
-  (allow (fs (or read write) (subpath (env PWD)))))
-
-(policy "main"
-  (include "cwd-access")
-
-  (allow (exec "cargo" *))
-  (allow (exec "npm" *))
-  (allow (exec "git" "status"))
-  (allow (exec "git" "diff" *))
-  (allow (exec "git" "log" *))
-  (allow (exec "git" "add" *))
-  (ask   (exec "git" "commit" *))
-  (deny  (exec "git" "push" *))
-  (deny  (exec "git" "reset" *))
-  (deny  (exec "sudo" *))
-  (deny  (exec "rm" "-rf" *))
-
-  (allow (net (or "github.com" "crates.io" "npmjs.com"))))
+```json
+{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "cwd-access",
+      "body": [
+        { "rule": { "effect": "allow", "fs": { "op": { "or": ["read", "write"] }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
+      ]
+    },
+    {
+      "name": "main",
+      "body": [
+        { "include": "cwd-access" },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "npm" } } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "status" }] } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "diff" }, { "any": null }] } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "log" }, { "any": null }] } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "add" }, { "any": null }] } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "reset" }, { "any": null }] } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "sudo" } } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "rm" }, "args": [{ "literal": "-rf" }, { "any": null }] } } },
+        { "rule": { "effect": "allow", "net": { "domain": { "or": [{ "literal": "github.com" }, { "literal": "crates.io" }, { "literal": "npmjs.com" }] } } } }
+      ]
+    }
+  ]
+}
 ```
 
 ### 3. Full Trust with Guardrails
 
 Allow almost everything, but block the truly dangerous:
 
-```
-(default allow "main")
-
-(policy "main"
-  (deny (exec "git" "push" "--force" *))
-  (deny (exec "git" "reset" "--hard" *))
-  (deny (exec "rm" "-rf" /*))
-  (deny (exec "sudo" *))
-  (deny (fs write ".env"))
-  (deny (fs write (subpath (env HOME))))
-  (ask  (exec "git" "push" *)))
+```json
+{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "allow",
+  "policies": [
+    {
+      "name": "main",
+      "body": [
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "literal": "--force" }, { "any": null }] } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "reset" }, { "literal": "--hard" }, { "any": null }] } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "sudo" } } } },
+        { "rule": { "effect": "deny", "fs": { "op": { "single": "write" }, "path": { "literal": ".env" } } } },
+        { "rule": { "effect": "deny", "fs": { "op": { "single": "write" }, "path": { "subpath": { "path": { "env": "HOME" } } } } } }
+      ]
+    }
+  ]
+}
 ```
 
 ### 4. Read-Only Audit
 
 Allow reading only, deny all modifications:
 
-```
-(default deny "main")
-
-(policy "main"
-  (allow (fs read *))
-  (allow (exec "cat" *))
-  (allow (exec "ls" *))
-  (allow (exec "grep" *)))
+```json
+{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "main",
+      "body": [
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" } } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cat" } } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "ls" } } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "grep" } } } }
+      ]
+    }
+  ]
+}
 ```
 
 ### 5. Sandboxed Build Tools
 
 Allow build tools with constrained sandbox environments:
 
+```json
+{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "deny",
+  "policies": [
+    {
+      "name": "cargo-env",
+      "body": [
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "write" }, "path": { "subpath": { "path": { "static": "./target" } } } } } },
+        { "rule": { "effect": "allow", "net": { "domain": "*" } } }
+      ]
+    },
+    {
+      "name": "npm-env",
+      "body": [
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "write" }, "path": { "subpath": { "path": { "static": "./node_modules" } } } } } },
+        { "rule": { "effect": "allow", "net": { "domain": { "literal": "registry.npmjs.org" } } } }
+      ]
+    },
+    {
+      "name": "main",
+      "body": [
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } }, "sandbox": { "named": "cargo-env" } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "npm" } }, "sandbox": { "named": "npm-env" } } },
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
+      ]
+    }
+  ]
+}
 ```
-(default deny "main")
-
-(policy "cargo-env"
-  (allow (fs read (subpath (env PWD))))
-  (allow (fs write (subpath "./target")))
-  (allow (net)))
-
-(policy "npm-env"
-  (allow (fs read (subpath (env PWD))))
-  (allow (fs write (subpath "./node_modules")))
-  (allow (net "registry.npmjs.org")))
-
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "cargo-env")
-  (allow (exec "npm" *)   :sandbox "npm-env")
-  (allow (fs read (subpath (env PWD)))))
-```
-
----
-
-## Versioning
-
-Policies can declare a version at the top of the file using `(version N)`:
-
-```
-(version 1)
-(default deny "main")
-
-(policy "main"
-  (allow (exec "git" *)))
-```
-
-If the `(version N)` declaration is omitted, version 1 is assumed.
-
-When clash introduces backwards-incompatible changes to the policy language, the version number is bumped. Clash will warn if your policy uses an outdated version and guide you to upgrade.
-
-To add the version declaration and apply any migrations for deprecated syntax, run:
-
-```bash
-clash policy upgrade
-```
-
-This updates the `(version N)` declaration to the latest version and applies auto-fixes for any deprecated features. Use `--dry-run` to preview changes without writing to disk.
 
 ---
 

@@ -21,10 +21,20 @@ meta:
   name: git commands are allowed
 
 clash:
-  policy_sexpr: |
-    (default deny "main")
-    (policy "main"
-      (allow (exec "git" *)))
+  policy_json: |
+    {
+      "schema_version": 4,
+      "use": "main",
+      "default_effect": "deny",
+      "policies": [
+        {
+          "name": "main",
+          "body": [
+            { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
+          ]
+        }
+      ]
+    }
 
 steps:
   - name: git status is allowed
@@ -58,17 +68,27 @@ meta:
 
 ### `clash`
 
-Optional. Configures the clash policy for the test. Use `policy_sexpr` for s-expression policies (current format).
+Optional. Configures the clash policy for the test. Use `policy_json` for JSON policies (current format).
 
 ```yaml
 clash:
-  policy_sexpr: |
-    (default deny "main")
-    (policy "main"
-      (allow (exec "git" *))
-      (deny (exec "git" "push" *))
-      (allow (fs read (subpath "/tmp")))
-      (allow (net "github.com")))
+  policy_json: |
+    {
+      "schema_version": 4,
+      "use": "main",
+      "default_effect": "deny",
+      "policies": [
+        {
+          "name": "main",
+          "body": [
+            { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
+            { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
+            { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "literal": "/tmp" } } } } } },
+            { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
+          ]
+        }
+      ]
+    }
 ```
 
 ### `settings`
@@ -160,31 +180,22 @@ tool_input:
 Run clash CLI commands directly. Use these to test interactive policy modification — adding, removing, or inspecting rules mid-test.
 
 ```yaml
-- name: add an allow rule
-  command: policy allow '(exec "npm" *)'
+- name: inspect the policy
+  command: policy list
   expect:
     exit_code: 0
 ```
 
-The `command` value is the arguments to `clash` (not including `clash` itself). It's parsed with shell-style quoting, so single quotes work for s-expressions.
+The `command` value is the arguments to `clash` (not including `clash` itself). It's parsed with shell-style quoting.
 
 **Common commands:**
 
 ```yaml
-# Add rules
-command: policy allow '(exec "npm" *)'
-command: policy deny '(exec "git" "push" *)'
-command: policy allow '(fs read (subpath "/tmp"))'
-
-# Remove rules
-command: policy remove '(allow (exec "npm" *))'
-
-# Preview without persisting
-command: policy allow '(exec "npm" *)' --dry-run
-
 # Inspect the policy
 command: policy list
-command: policy explain bash "git push"
+command: policy validate
+command: policy show
+command: explain bash "git push"
 command: status
 ```
 
@@ -198,7 +209,7 @@ expect:
   exit_code: 0              # expected process exit code (default: not checked)
   no_decision: true         # expect no hook-specific output (for post-tool-use/notification)
   reason_contains: "policy" # substring match on the decision reason
-  stdout_contains: "(allow" # substring match on stdout
+  stdout_contains: "allow"  # substring match on stdout
   stderr_contains: "warning" # substring match on stderr
 ```
 
@@ -219,11 +230,21 @@ Set up a policy and verify tool invocations are evaluated correctly:
 
 ```yaml
 clash:
-  policy_sexpr: |
-    (default deny "main")
-    (policy "main"
-      (allow (exec "git" *))
-      (deny (fs read "/etc/passwd")))
+  policy_json: |
+    {
+      "schema_version": 4,
+      "use": "main",
+      "default_effect": "deny",
+      "policies": [
+        {
+          "name": "main",
+          "body": [
+            { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
+            { "rule": { "effect": "deny", "fs": { "path": { "literal": "/etc/passwd" } } } }
+          ]
+        }
+      ]
+    }
 
 steps:
   - name: git is allowed
@@ -245,10 +266,20 @@ Modify the policy mid-test and verify the changes take effect:
 
 ```yaml
 clash:
-  policy_sexpr: |
-    (default deny "main")
-    (policy "main"
-      (allow (exec "git" *)))
+  policy_json: |
+    {
+      "schema_version": 4,
+      "use": "main",
+      "default_effect": "deny",
+      "policies": [
+        {
+          "name": "main",
+          "body": [
+            { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
+          ]
+        }
+      ]
+    }
 
 steps:
   # Baseline
@@ -258,36 +289,16 @@ steps:
     tool_input: { command: npm install }
     expect: { decision: deny }
 
-  # Modify policy
-  - name: allow npm
-    command: policy allow '(exec "npm" *)'
+  # Verify change took effect after modifying the policy file
+  - name: validate policy
+    command: policy validate
     expect: { exit_code: 0 }
 
-  # Verify change took effect
-  - name: npm is now allowed
+  - name: git status is still allowed
     hook: pre-tool-use
     tool_name: Bash
-    tool_input: { command: npm install }
+    tool_input: { command: git status }
     expect: { decision: allow }
-```
-
-### Testing dry-run (no side effects)
-
-Verify that `--dry-run` previews changes without persisting them:
-
-```yaml
-steps:
-  - name: dry-run shows the new rule
-    command: policy allow '(exec "npm" *)' --dry-run
-    expect:
-      exit_code: 0
-      stdout_contains: "(allow (exec \"npm\" *))"
-
-  - name: npm is still denied (dry-run didn't persist)
-    hook: pre-tool-use
-    tool_name: Bash
-    tool_input: { command: npm install }
-    expect: { decision: deny }
 ```
 
 ### Testing deny overrides allow
@@ -296,33 +307,34 @@ Verify that deny rules take precedence:
 
 ```yaml
 clash:
-  policy_sexpr: |
-    (default deny "main")
-    (policy "main"
-      (allow (exec "git" *)))
+  policy_json: |
+    {
+      "schema_version": 4,
+      "use": "main",
+      "default_effect": "deny",
+      "policies": [
+        {
+          "name": "main",
+          "body": [
+            { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
+            { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
+          ]
+        }
+      ]
+    }
 
 steps:
-  - name: git push is allowed (baseline)
-    hook: pre-tool-use
-    tool_name: Bash
-    tool_input: { command: git push origin main }
-    expect: { decision: allow }
-
-  - name: deny git push
-    command: policy deny '(exec "git" "push" *)'
-    expect: { exit_code: 0 }
-
-  - name: git push is now denied
-    hook: pre-tool-use
-    tool_name: Bash
-    tool_input: { command: git push origin main }
-    expect: { decision: deny }
-
-  - name: git status is still allowed
+  - name: git status is allowed
     hook: pre-tool-use
     tool_name: Bash
     tool_input: { command: git status }
     expect: { decision: allow }
+
+  - name: git push is denied
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input: { command: git push origin main }
+    expect: { decision: deny }
 ```
 
 ## How It Works
@@ -335,7 +347,7 @@ Each test script runs in an isolated environment:
 │   ├── .claude/
 │   │   └── settings.json  <- from settings.user
 │   └── .clash/
-│       └── policy.sexpr   <- from clash.policy_sexpr
+│       └── policy.json    <- from clash.policy_json
 └── project/               <- cwd for the test
     ├── .claude/
     │   ├── settings.json  <- from settings.project
@@ -343,9 +355,9 @@ Each test script runs in an isolated environment:
     └── .git/              <- so clash finds the project root
 ```
 
-- `HOME` is set to the temp `home/` directory, so clash reads/writes `$HOME/.clash/policy.sexpr` in isolation.
+- `HOME` is set to the temp `home/` directory, so clash reads/writes `$HOME/.clash/policy.json` in isolation.
 - `CLASH_CONFIG` and `CLASH_POLICY_FILE` are removed to prevent system config from leaking in.
-- Command steps that modify the policy (e.g., `policy allow`) write to the same `policy.sexpr` file that subsequent hook steps read from — this is how interactive policy changes are tested.
+- Command steps that modify the policy write to the same `policy.json` file that subsequent hook steps read from — this is how interactive policy changes are tested.
 - The temp directory is cleaned up when the test finishes.
 
 ## Running

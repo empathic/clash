@@ -20,63 +20,57 @@ If the user has already stated what they want to change, proceed. Otherwise, ask
 - Changing the default permission behavior
 - Viewing rules in a different profile
 
+## Policy file location
+
+The JSON policy file to edit:
+
+- Project-level: `<project>/.clash/policy.json` — persists across sessions, project-specific
+- User-level: `~/.clash/policy.json` — applies everywhere
+- Prefer the project-level file if it exists; fall back to user-level.
+
 ## Adding a rule
 
-Translate the user's intent into a rule. The effect (allow/deny) is part of the subcommand:
+Read the policy file, then insert the appropriate rule into the policy's `body` array. Common rule patterns:
 
-- **Bare verb shortcuts**: `clash policy allow edit` (expands to allow editing with cwd-scoped filesystem access)
-- **Exec rules**: `clash policy allow '(exec "git" *)'` — allow all git commands
-- **Fs rules**: `clash policy allow '(fs read (subpath (env PWD)))'` — allow reads under cwd
-- **Net rules**: `clash policy allow '(net "github.com")'` — allow network access to github.com
-- **Deny**: `clash policy deny '(exec "git" "push" *)'` — block git push
+- Allow all git commands:
+  ```json
+  { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
+  ```
+- Deny git push:
+  ```json
+  { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
+  ```
+- Allow filesystem reads under cwd:
+  ```json
+  { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } }
+  ```
+- Allow filesystem read/write/create under cwd:
+  ```json
+  { "rule": { "effect": "allow", "fs": { "op": { "or": ["read", "write", "create"] }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } }
+  ```
+- Allow network access to a domain:
+  ```json
+  { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
+  ```
 
-Preview the change with `--dry-run`:
-
-```bash
-clash policy allow '(exec "git" *)' --dry-run
-```
-
-Show the preview to the user. After confirmation, apply:
-
-```bash
-clash policy allow '(exec "git" *)'
-```
-
-## Scope selection
-
-By default, `clash edit` and `clash policy` commands target the project-level policy if one exists, otherwise the user-level policy. To target a specific scope, add `--scope`:
-
-- `--scope user` — edit `~/.clash/policy.sexpr`, applies everywhere
-- `--scope project` — edit `<project>/.clash/policy.sexpr`, persists across sessions
-- `--scope session` — edit the temporary session policy, lasts only for the current Claude Code session
-
-Example — editing the user-level policy:
-
-```bash
-clash policy allow '(exec "git" *)' --scope user --dry-run
-clash policy allow '(exec "git" *)' --scope user
-```
+Show the user the exact JSON change before applying it. After confirmation, edit the file.
 
 ## Removing a rule
 
-Preview the removal:
-
-```bash
-clash policy remove '(allow (exec "git" *))' --dry-run
-```
-
-After confirmation:
-
-```bash
-clash policy remove '(allow (exec "git" *))'
-```
+Read the policy file, identify the rule entry to remove, show it to the user, then delete that entry from the `body` array after confirmation.
 
 ## Validating changes
 
-After applying a change, validate it by running explain with a simulated request:
+After applying a change, validate the policy:
 
 ```bash
-clash policy explain bash "git push"
+clash policy validate
+```
+
+Then verify behavior with explain:
+
+```bash
+clash explain bash "git push"
 ```
 
 Suggest follow-up skills:

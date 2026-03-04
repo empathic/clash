@@ -21,6 +21,7 @@
 * `clash` is an installed binary on the user's PATH. ALWAYS run it directly as `clash` (e.g., `clash status`, `clash policy list`).
 * NEVER use `cargo run --bin clash` to run clash. That is for building/testing the crate, not for invoking the tool.
 * Skills reference `clash` commands — execute them exactly as written.
+* Available CLI commands: `clash init`, `clash status`, `clash policy list`, `clash policy validate`, `clash policy show`, `clash explain`, `clash doctor`, `clash update`, `clash launch`, `clash sandbox`.
 
 ## Development
 
@@ -42,19 +43,18 @@
 
 ## Policy Model
 
-* Clash uses a capability-based policy language with s-expression syntax
+* Clash uses a capability-based policy language with JSON format
 * Three capability domains: `exec` (commands), `fs` (filesystem), `net` (network)
 * Policy source: `clash/src/policy/v2/` — parse, compile, eval, IR
-* Rules are `(effect (capability ...))` forms, e.g. `(deny (exec "git" "push" *))`
+* Rules are JSON objects with an `effect` and a capability matcher, e.g. `{ "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }`
 * The policy speaks in capabilities, not Claude Code tool names — the eval layer maps tools to capabilities
-* See `docs/policy-grammar.md` for the formal grammar
+* Policy files use the `.json` extension, e.g. `policy.json`
 
 ## Backwards Compatibility
 
 * All backwards-incompatible changes to the policy language MUST bump the version number in `clash/src/policy/version.rs` (`CURRENT_VERSION`)
 * Each version bump MUST include deprecation entries in `all_deprecations()` describing what changed
-* Auto-fix functions SHOULD be provided when possible so `clash policy upgrade` can migrate users automatically
-* The `(version N)` declaration in policy files allows clash to detect outdated syntax and guide users to upgrade
+* The `schema_version` field in policy files allows clash to detect outdated syntax and guide users to upgrade
 
 ## Site
 
