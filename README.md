@@ -49,7 +49,7 @@ This downloads the latest release binary to `~/.local/bin/` (Apple Silicon Mac, 
 cargo install clash
 ```
 
-`clash init` writes a default policy, installs the Claude Code plugin from GitHub, installs the status line, and walks you through initial configuration. After init, every `claude` session automatically loads clash.
+`clash init` writes a default `.star` policy (or `.json`), installs the Claude Code plugin from GitHub, installs the status line, and walks you through initial configuration. After init, every `claude` session automatically loads clash.
 
 If you have the repo checked out, you can also use `just install` which registers the plugin from the local source tree instead of GitHub.
 
@@ -85,7 +85,9 @@ If you're new, start with `/clash:onboard` — it walks you through creating a p
 
 ## Policy Rules
 
-Policies use JSON format. Clash reads them on every tool invocation, so edits take effect immediately — no restart needed.
+Policies are written in **Starlark** (`.star`), a Python-like configuration language that compiles to JSON IR. Clash reads policies on every tool invocation, so edits take effect immediately — no restart needed.
+
+You can also write policies directly in JSON if you prefer — see the [Policy Writing Guide](docs/policy-guide.md) for the JSON schema.
 
 ### Policy Layers
 
@@ -93,13 +95,34 @@ Clash supports three policy levels, each automatically included and evaluated in
 
 | Level | Location | Purpose |
 |-------|----------|---------|
-| **User** | `~/.clash/policy.json` | Your personal defaults across all projects |
-| **Project** | `<project>/.clash/policy.json` | Shared rules for a specific repository |
+| **User** | `~/.clash/policy.star` | Your personal defaults across all projects |
+| **Project** | `<project>/.clash/policy.star` | Shared rules for a specific repository |
 | **Session** | Created via `--scope session` | Temporary overrides for the current session |
+
+> **Note:** Both `.star` and `.json` are supported. When both exist at the same level, `.star` takes precedence.
 
 **Layer precedence:** Session > Project > User. Higher layers can shadow rules from lower layers — for example, a project-level deny overrides a user-level allow for the same capability. Use `clash status` to see all active layers and which rules are shadowed.
 
 ### Example
+
+```python
+# ~/.clash/policy.star
+def main():
+    cwd_access = sandbox(
+        default = deny,
+        fs = [cwd(follow_worktrees = True, read = allow, write = allow)],
+    )
+    return policy(
+        default = ask,
+        rules = [
+            exe("cargo", sandbox = cwd_access),
+            exe("git", sandbox = cwd_access),
+        ],
+    )
+```
+
+<details>
+<summary>Equivalent JSON IR</summary>
 
 ```json
 {
@@ -112,10 +135,7 @@ Clash supports three policy levels, each automatically included and evaluated in
       "body": [
         { "include": "cwd-access" },
         { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } } } },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
-        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
-        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "reset" }, { "literal": "--hard" }, { "any": null }] } } },
-        { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
       ]
     },
     {
@@ -129,65 +149,49 @@ Clash supports three policy levels, each automatically included and evaluated in
 }
 ```
 
+</details>
+
 **Effects:** `allow` (auto-approve), `deny` (block), `ask` (prompt you)
 
 **Capabilities:** `exec` (commands), `fs` (filesystem), `net` (network)
 
 **Precedence:** `deny` always wins. More specific rules beat less specific. Within the same specificity, `ask` beats `allow`. Higher layers shadow lower layers at the same specificity. See [Policy Semantics](docs/policy-semantics.md) for the full algorithm.
 
-### Policy Blocks
+### Reusable Sandboxes
 
-Rules are organized into named **policy blocks** that can include other blocks, letting you compose reusable layers:
+Starlark replaces JSON's named policy blocks and `include` with standard `load()` imports and function composition:
 
-```json
-{
-  "schema_version": 4,
-  "use": "main",
-  "default_effect": "deny",
-  "policies": [
-    {
-      "name": "readonly",
-      "body": [
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } }
-      ]
-    },
-    {
-      "name": "main",
-      "body": [
-        { "include": "readonly" },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
-      ]
-    }
-  ]
-}
+```python
+load("@clash//rust.star", "rust_sandbox")
+
+def main():
+    return policy(
+        default = deny,
+        rules = [
+            match(exe = ["rustc", "cargo"], sandbox = rust_sandbox),
+            exe("git", sandbox = sandbox(default = deny, fs = [cwd(read = allow)])),
+        ],
+    )
 ```
+
+The `@clash//` prefix loads from the built-in standard library, which includes sandboxes for common toolchains (`rust.star`, `node.star`, `python.star`).
 
 ### Kernel Sandbox
 
-Allowed exec rules can carry sandbox constraints that clash compiles into OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS):
+Exec rules can carry sandbox constraints that clash compiles into OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS):
 
-```json
-{
-  "schema_version": 4,
-  "use": "main",
-  "default_effect": "deny",
-  "policies": [
-    {
-      "name": "main",
-      "body": [
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } }, "sandbox": { "named": "cargo-sandbox" } } }
-      ]
-    },
-    {
-      "name": "cargo-sandbox",
-      "body": [
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } },
-        { "rule": { "effect": "allow", "fs": { "op": { "or": ["write", "create"] }, "path": { "subpath": { "path": { "static": "./target" } } } } } },
-        { "rule": { "effect": "allow", "net": { "domain": "*" } } }
-      ]
-    }
-  ]
-}
+```python
+def main():
+    cargo_box = sandbox(
+        default = deny,
+        fs = [
+            cwd(read = allow),
+            path("./target", write = allow),
+            tempdir(allow_all = True),
+        ],
+        net = allow,
+    )
+    return policy(default = deny, rules = [exe("cargo", sandbox = cargo_box)])
 ```
 
 Even if a command is allowed by policy, the sandbox ensures it can only access the paths you specify.
@@ -383,6 +387,7 @@ just release 0.4.0  # bump versions, commit, tag (push to trigger release)
 ```
 clash/
 ├── clash/              # CLI binary + library (Rust)
+├── clash_starlark/     # Starlark policy evaluator (.star → JSON IR)
 ├── clash-plugin/       # Claude Code plugin (hooks, skills, bin/)
 ├── clash_notify/       # Notification support (desktop, Zulip)
 ├── claude_settings/    # Claude Code settings library

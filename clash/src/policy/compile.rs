@@ -1421,8 +1421,7 @@ fn inject_internals(
     internals: &[(&str, &str)],
 ) -> Result<()> {
     for (name, source) in internals {
-        let int_doc: PolicyDocument = serde_json::from_str(source)
-            .map_err(|e| anyhow::anyhow!("failed to parse internal policy {name}: {e}"))?;
+        let int_doc: PolicyDocument = eval_internal_star(name, source)?;
         for def in &int_doc.policies {
             for item in &def.body {
                 if let PolicyItem::Rule(rule) = item {
@@ -1474,10 +1473,32 @@ fn inject_internals(
     Ok(())
 }
 
+/// Evaluate an internal `.star` policy source into a `PolicyDocument`.
+///
+/// The Starlark evaluator always names the active policy `"main"`. We rename it
+/// to match the internal policy name (e.g. `"__internal_clash__"`) so that the
+/// injection pipeline can reference it correctly.
+fn eval_internal_star(name: &str, star_source: &str) -> Result<PolicyDocument> {
+    let output = clash_starlark::evaluate(star_source, name, std::path::Path::new("."))
+        .map_err(|e| anyhow::anyhow!("failed to evaluate internal policy {name}: {e}"))?;
+    let mut doc: PolicyDocument = serde_json::from_str(&output.json)
+        .map_err(|e| anyhow::anyhow!("failed to parse compiled internal policy {name}: {e}"))?;
+    // Rename the "main" policy to the internal policy name.
+    for def in &mut doc.policies {
+        if def.name == "main" {
+            def.name = name.to_string();
+        }
+    }
+    if doc.use_policy.as_deref() == Some("main") {
+        doc.use_policy = Some(name.to_string());
+    }
+    Ok(doc)
+}
+
 /// Inject internal policy definitions and includes into a PolicyDocument.
 ///
 /// 1. Checks which internal policy names the user already defined (override)
-/// 2. For non-overridden ones, deserializes embedded JSON, appends PolicyDef items
+/// 2. For non-overridden ones, evaluates embedded `.star` source, appends PolicyDef items
 /// 3. Prepends `Include("__internal_X__")` to the active policy body
 fn inject_internal_policies(doc: &mut PolicyDocument, internals: &[(&str, &str)]) -> Result<()> {
     // Collect user-defined policy names.
@@ -1492,8 +1513,7 @@ fn inject_internal_policies(doc: &mut PolicyDocument, internals: &[(&str, &str)]
         if user_policies.contains(*name) {
             continue;
         }
-        let int_doc: PolicyDocument = serde_json::from_str(int_source)
-            .map_err(|e| anyhow::anyhow!("failed to parse internal policy {name}: {e}"))?;
+        let int_doc: PolicyDocument = eval_internal_star(name, int_source)?;
         for def in int_doc.policies {
             internal_includes.push(def.name.clone());
             doc.policies.push(def);
@@ -2672,12 +2692,12 @@ mod tests {
     { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } }
   ]}]
 }"#;
-        let internal = r#"{
-  "schema_version": 4,
-  "policies": [{ "name": "__internal_test__", "body": [
-    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/test"}}} } } }
-  ]}]
-}"#;
+        let internal = r#"
+def main():
+    return policy(default = deny, rules = [
+        path("/test", read = allow),
+    ])
+"#;
         let env = TestEnv::new(&[]);
         let tree =
             compile_policy_with_internals(user_source, &env, &[("__internal_test__", internal)])
@@ -2707,12 +2727,12 @@ mod tests {
     ]}
   ]
 }"#;
-        let internal = r#"{
-  "schema_version": 4,
-  "policies": [{ "name": "__internal_test__", "body": [
-    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/test"}}} } } }
-  ]}]
-}"#;
+        let internal = r#"
+def main():
+    return policy(default = deny, rules = [
+        path("/test", read = allow),
+    ])
+"#;
         let env = TestEnv::new(&[]);
         let tree =
             compile_policy_with_internals(user_source, &env, &[("__internal_test__", internal)])
@@ -3020,12 +3040,12 @@ mod tests {
     { "rule": { "effect": "deny", "exec": { "bin": {"literal": "rm"}, "args": [{"any": null}] } } }
   ]}]
 }"#;
-        let internal = r#"{
-  "schema_version": 4,
-  "policies": [{ "name": "__internal_test__", "body": [
-    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/internal"}}} } } }
-  ]}]
-}"#;
+        let internal = r#"
+def main():
+    return policy(default = deny, rules = [
+        path("/internal", read = allow),
+    ])
+"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
         let tree = compile_multi_level_with_internals(
             &[
@@ -3421,7 +3441,10 @@ mod tests {
 }"#;
         let internals: &[(&str, &str)] = &[(
             "__test_internal__",
-            r#"{"schema_version": 4, "policies": [{"name": "__test_internal__", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
+            r#"
+def main():
+    return policy(default = deny, rules = [exe("git")])
+"#,
         )];
         let env = TestEnv::new(&[("PWD", "/home/user")]);
         let tree = compile_to_tree_with_internals(source, &env, internals).unwrap();

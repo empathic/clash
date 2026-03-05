@@ -44,12 +44,11 @@ tar = { workspace = true }
 
 # from the workspace
 clash_notify = { workspace = true }
-clash_starlark = { workspace = true, optional = true }
+clash_starlark = { workspace = true }
 claude_settings = { workspace = true }
 
 [features]
-default = ["starlark"]
-starlark = ["dep:clash_starlark"]
+default = []
 
 [dev-dependencies]
 tempfile = { workspace = true }

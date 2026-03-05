@@ -11,13 +11,15 @@ use starlark::values::{
 };
 
 use super::exec::{ExecBindingValue, ToolBindingValue};
+use super::path::PathValue;
 use super::unpack_effect_or_default;
 
-/// Binding — either an exec or tool binding to extend a base policy with.
+/// Binding — an exec, tool, or path binding to extend a base policy with.
 #[derive(Debug, Clone)]
 pub enum Binding {
     Exec(ExecBindingValue),
     Tool(ToolBindingValue),
+    Path(PathValue),
 }
 
 /// A base policy value — the return type of `main()`.
@@ -68,9 +70,11 @@ fn base_policy_methods(builder: &mut starlark::environment::MethodsBuilder) {
             result.bindings.push(Binding::Exec(exec.clone()));
         } else if let Some(tool) = binding.downcast_ref::<ToolBindingValue>() {
             result.bindings.push(Binding::Tool(tool.clone()));
+        } else if let Some(path) = binding.downcast_ref::<PathValue>() {
+            result.bindings.push(Binding::Path(path.clone()));
         } else {
             anyhow::bail!(
-                ".extend() expects an exe(), match(), allow_tool(), or deny_tool() value, got {}",
+                ".extend() expects an exe(), match(), tool().allow(), tool().deny(), or path value, got {}",
                 binding.get_type()
             );
         }
@@ -110,9 +114,11 @@ impl BasePolicyValue {
                     bindings.push(Binding::Exec(exec.clone()));
                 } else if let Some(tool) = item.downcast_ref::<ToolBindingValue>() {
                     bindings.push(Binding::Tool(tool.clone()));
+                } else if let Some(path) = item.downcast_ref::<PathValue>() {
+                    bindings.push(Binding::Path(path.clone()));
                 } else {
                     anyhow::bail!(
-                        "policy rules list items must be exe(), match(), allow_tool(), or deny_tool(), got {}",
+                        "policy rules list items must be exe(), match(), tool().allow(), tool().deny(), or path value, got {}",
                         item.get_type()
                     );
                 }

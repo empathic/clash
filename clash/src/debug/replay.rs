@@ -4,7 +4,10 @@
 //! evaluates it against the current compiled policy, showing the full
 //! decision trace, sandbox policy, and actionable suggestions.
 
+use std::str::FromStr;
+
 use anyhow::{Context, Result};
+use serde_json::{Value, value};
 
 use crate::policy::eval::CapQuery;
 use crate::policy::ir::PolicyDecision;
@@ -282,7 +285,10 @@ pub(crate) fn resolve_tool_input(
     tool: &str,
     input: Option<&str>,
 ) -> Result<(String, serde_json::Value)> {
-    let noun = input.unwrap_or_default();
+    let noun = input
+        .map(Value::from_str)
+        .map(|x| x.unwrap_or(Value::Null))
+        .unwrap_or_default();
 
     if tool.to_lowercase() == "tool" {
         return Ok((noun.to_string(), serde_json::json!({})));
@@ -306,10 +312,7 @@ pub(crate) fn resolve_tool_input(
         }
     };
 
-    Ok((
-        tool_name.to_string(),
-        serde_json::json!({ input_field: noun }),
-    ))
+    Ok((tool_name.to_string(), noun))
 }
 
 /// Build a minimal tool_input JSON from tool name and noun.

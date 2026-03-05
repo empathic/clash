@@ -85,13 +85,13 @@ impl std::str::FromStr for PolicyLevel {
 }
 
 /// Default policy source embedded at compile time.
-pub const DEFAULT_POLICY: &str = include_str!("default_policy.json");
+pub const DEFAULT_POLICY: &str = include_str!("default_policy.star");
 
 /// Internal policies embedded at compile time. Each entry is (name, source).
 /// These are always active unless the user defines a policy with the same name.
 pub const INTERNAL_POLICIES: &[(&str, &str)] = &[
-    ("__internal_clash__", include_str!("internal_clash.json")),
-    ("__internal_claude__", include_str!("internal_claude.json")),
+    ("__internal_clash__", include_str!("internal_clash.star")),
+    ("__internal_claude__", include_str!("internal_claude.star")),
 ];
 
 /// Session-level context from Claude Code hook input.
@@ -189,7 +189,7 @@ impl ClashSettings {
             return Ok(PathBuf::from(p));
         }
         let dir = Self::settings_dir()?;
-        Ok(discover_policy_file(&dir).unwrap_or_else(|| dir.join("policy.json")))
+        Ok(discover_policy_file(&dir).unwrap_or_else(|| dir.join("policy.star")))
     }
 
     /// Returns the policy file path for a specific level.
@@ -202,7 +202,7 @@ impl ClashSettings {
             PolicyLevel::Project => {
                 let root = Self::project_root()?;
                 let dir = root.join(".clash");
-                Ok(discover_policy_file(&dir).unwrap_or_else(|| dir.join("policy.json")))
+                Ok(discover_policy_file(&dir).unwrap_or_else(|| dir.join("policy.star")))
             }
             PolicyLevel::Session => {
                 let session_id = Self::active_session_id()?;
@@ -660,7 +660,6 @@ impl ClashSettings {
         }
 
         // Handle .star files via starlark evaluation
-        #[cfg(feature = "starlark")]
         if path.extension().and_then(|e| e.to_str()) == Some("star") {
             match evaluate_star_policy(path) {
                 Ok(json_source) => {
@@ -783,7 +782,6 @@ fn discover_policy_file(dir: &std::path::Path) -> Option<PathBuf> {
 }
 
 /// Evaluate a `.star` policy file and return the compiled JSON source.
-#[cfg(feature = "starlark")]
 fn evaluate_star_policy(path: &std::path::Path) -> Result<String> {
     let source = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
@@ -856,11 +854,14 @@ mod test {
 
     #[test]
     fn default_policy_compiles() -> anyhow::Result<()> {
-        let tree = crate::policy::compile::compile_policy_with_env(DEFAULT_POLICY, &TestEnv)?;
-        assert!(
-            !tree.fs_rules.is_empty(),
-            "default policy should have fs rules"
-        );
+        let output = clash_starlark::evaluate(
+            DEFAULT_POLICY,
+            "default_policy.star",
+            std::path::Path::new("."),
+        )?;
+        let tree = crate::policy::compile::compile_policy_with_env(&output.json, &TestEnv)?;
+        // Default policy is deny-all with no rules; just verify it compiles.
+        let _ = tree;
         Ok(())
     }
 
@@ -1102,9 +1103,9 @@ mod test {
         // Verify TRANSCRIPT_DIR resolves to the actual directory
         assert_eq!(resolver.resolve("TRANSCRIPT_DIR").unwrap(), "/tmp/session");
 
-        // Verify the internal_claude.json compiles with this resolver
+        // Verify the internal_claude.star compiles with this resolver
         let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": []}]}"#;
-        let internal = include_str!("internal_claude.json");
+        let internal = include_str!("internal_claude.star");
         let result = crate::policy::compile::compile_policy_with_internals(
             user_source,
             &resolver,
@@ -1112,7 +1113,7 @@ mod test {
         );
         assert!(
             result.is_ok(),
-            "internal_claude.json should compile with session resolver: {:?}",
+            "internal_claude.star should compile with session resolver: {:?}",
             result.err()
         );
     }
@@ -1122,7 +1123,7 @@ mod test {
         // Even without hook context, the policy should compile (using sentinel).
         let resolver = SessionEnvResolver { hook_ctx: None };
         let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": []}]}"#;
-        let internal = include_str!("internal_claude.json");
+        let internal = include_str!("internal_claude.star");
         let result = crate::policy::compile::compile_policy_with_internals(
             user_source,
             &resolver,
@@ -1130,7 +1131,7 @@ mod test {
         );
         assert!(
             result.is_ok(),
-            "internal_claude.json should compile with sentinel: {:?}",
+            "internal_claude.star should compile with sentinel: {:?}",
             result.err()
         );
     }

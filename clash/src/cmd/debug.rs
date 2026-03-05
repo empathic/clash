@@ -146,7 +146,6 @@ fn run_log(
     Ok(())
 }
 
-#[instrument(level = Level::TRACE)]
 fn run_replay(
     tool: Option<String>,
     args: Vec<String>,

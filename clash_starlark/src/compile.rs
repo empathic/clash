@@ -60,6 +60,9 @@ fn compile_base_policy(base: &BasePolicyValue) -> anyhow::Result<JsonValue> {
             Binding::Tool(tool) => {
                 main_body.push(tool.to_rule_json());
             }
+            Binding::Path(path) => {
+                main_body.extend(path.to_rules_json());
+            }
         }
     }
 

@@ -3,7 +3,6 @@ use dialoguer::Confirm;
 use tracing::{Level, info, instrument, warn};
 
 use crate::settings::{ClashSettings, DEFAULT_POLICY};
-use crate::shell::ShellSession;
 use crate::style;
 
 /// GitHub repository used to install the clash plugin marketplace.
@@ -125,8 +124,7 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
             .unwrap_or(false)
     {
         migrate_yaml_policy(&yaml_path, &sexpr_path)?;
-        let mut session = ShellSession::new(None, false, true)?;
-        return session.run_interactive();
+        return super::policy::open_in_editor(&sexpr_path);
     }
 
     // Fresh install — write default policy.
@@ -186,9 +184,8 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
         sexpr_path.display()
     );
 
-    // Launch the policy shell so the user can customize immediately.
-    let mut session = ShellSession::new(None, false, true)?;
-    session.run_interactive()
+    // Open the policy file in $EDITOR so the user can customize immediately.
+    super::policy::open_in_editor(&sexpr_path)
 }
 
 /// Initialize a project-level policy in the project root's `.clash/` directory.
@@ -197,13 +194,20 @@ fn run_init_project() -> Result<()> {
         .context("could not find project root — are you inside a git repository?")?;
 
     let clash_dir = project_root.join(".clash");
-    let policy_path = clash_dir.join("policy.json");
+    let policy_path = clash_dir.join("policy.star");
 
-    if policy_path.exists() {
+    // Also check for legacy .json to avoid overwriting an existing project policy.
+    let json_path = clash_dir.join("policy.json");
+    if policy_path.exists() || json_path.exists() {
+        let existing = if policy_path.exists() {
+            &policy_path
+        } else {
+            &json_path
+        };
         println!(
             "{} Project policy already exists at {}",
             style::dim("·"),
-            policy_path.display()
+            existing.display()
         );
         return Ok(());
     }
@@ -211,8 +215,7 @@ fn run_init_project() -> Result<()> {
     std::fs::create_dir_all(&clash_dir)
         .with_context(|| format!("failed to create {}", clash_dir.display()))?;
 
-    let project_policy = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": []}]}
-"#;
+    let project_policy = "def main():\n    return policy(default = deny, rules = [])\n";
     std::fs::write(&policy_path, project_policy)
         .with_context(|| format!("failed to write {}", policy_path.display()))?;
 
@@ -221,23 +224,20 @@ fn run_init_project() -> Result<()> {
         style::green_bold("✓"),
         policy_path.display()
     );
-    println!(
-        "\n{}",
-        style::dim("Add rules with: clash policy allow --scope project <rule>"),
-    );
-    println!("{}", style::dim("View status with: clash status"),);
-    Ok(())
+
+    // Open the policy file in $EDITOR so the user can customize immediately.
+    super::policy::open_in_editor(&policy_path)
 }
 
-/// Migrate a legacy YAML policy by writing the default JSON policy.
+/// Migrate a legacy YAML policy by writing the default Starlark policy.
 ///
 /// Legacy YAML/s-expr migration is no longer supported. We preserve the old
 /// file and write the default policy instead.
-fn migrate_yaml_policy(_yaml_path: &std::path::Path, json_path: &std::path::Path) -> Result<()> {
+fn migrate_yaml_policy(_yaml_path: &std::path::Path, policy_path: &std::path::Path) -> Result<()> {
     eprintln!("Legacy YAML/s-expr policy migration is no longer supported.");
-    eprintln!("Writing default JSON policy instead.");
-    std::fs::create_dir_all(json_path.parent().unwrap())?;
-    std::fs::write(json_path, DEFAULT_POLICY)?;
+    eprintln!("Writing default policy instead.");
+    std::fs::create_dir_all(policy_path.parent().unwrap())?;
+    std::fs::write(policy_path, DEFAULT_POLICY)?;
     Ok(())
 }
 

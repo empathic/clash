@@ -51,6 +51,12 @@ pub enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Open the policy file in $EDITOR
+    Edit {
+        /// Policy scope to edit: "user" or "project" (default: auto-detect)
+        #[arg(long)]
+        scope: Option<String>,
+    },
     // --- Hidden/power-user subcommands ---
     /// Show policy summary: active policy, default effect, rule count
     #[command(hide = true)]

@@ -1,8 +1,10 @@
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use tracing::{Level, instrument};
 
 use crate::cli::PolicyCmd;
-use crate::settings::ClashSettings;
+use crate::settings::{ClashSettings, PolicyLevel};
 use crate::style;
 
 /// Handle `clash policy` subcommands.
@@ -21,6 +23,7 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Validate { file, json } => handle_validate(file, json),
         PolicyCmd::Show { json } => handle_show(json),
+        PolicyCmd::Edit { scope } => handle_edit(scope),
     }
 }
 
@@ -346,6 +349,38 @@ fn validate_single_file(path: &std::path::Path, json: bool) -> Result<()> {
             std::process::exit(1);
         }
     }
+}
+
+/// Open a policy file in `$EDITOR` (falls back to `vi`).
+pub fn open_in_editor(path: &Path) -> Result<()> {
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
+    let status = std::process::Command::new(&editor)
+        .arg(path)
+        .status()
+        .with_context(|| format!("failed to launch editor: {editor}"))?;
+    if !status.success() {
+        anyhow::bail!("editor exited with {status}");
+    }
+    Ok(())
+}
+
+/// Handle `clash policy edit`.
+fn handle_edit(scope: Option<String>) -> Result<()> {
+    let level = match scope.as_deref() {
+        Some("user") => PolicyLevel::User,
+        Some("project") => PolicyLevel::Project,
+        Some(other) => anyhow::bail!("unknown scope: \"{other}\" (expected \"user\" or \"project\")"),
+        None => ClashSettings::default_scope(),
+    };
+    let path = ClashSettings::policy_file_for_level(level)?;
+    if !path.exists() {
+        anyhow::bail!(
+            "no policy file at {} — run `clash init {}` first",
+            path.display(),
+            level,
+        );
+    }
+    open_in_editor(&path)
 }
 
 /// Extract a help hint from an anyhow error chain.

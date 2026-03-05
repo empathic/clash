@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use tracing::{debug, trace};
+use tracing::{debug, instrument, trace};
 
 use crate::policy::Effect;
 use crate::policy::ast::FsOp;
@@ -352,6 +352,7 @@ impl QueryContext {
         cwd: &str,
         tool_input: &serde_json::Value,
     ) -> Self {
+        println!("{tool_input}");
         let mut ctx = Self {
             tool_name: tool_name.to_string(),
             bin: None,
@@ -765,7 +766,6 @@ impl PolicyTree {
                     )
                 }
             }
-
             Node::Sequence { children, .. } => {
                 for child in children {
                     if let Some(eff) = self.eval_node(child, ctx, matched, skipped, sandbox_out) {

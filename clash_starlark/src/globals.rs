@@ -5,7 +5,7 @@ use starlark::starlark_module;
 use starlark::values::{Heap, Value};
 
 use crate::builders::base::BasePolicyValue;
-use crate::builders::exec::{ExecBindingValue, ToolBindingValue};
+use crate::builders::exec::{ExecBindingValue, ToolRefValue};
 use crate::builders::net::NetValue;
 use crate::builders::path::PathValue;
 use crate::builders::sandbox::SandboxValue;
@@ -86,11 +86,13 @@ fn register_globals(builder: &mut GlobalsBuilder) {
 
     // -- Exec/tool builders --
 
-    fn exe(
+    fn exe<'v>(
         #[starlark(require = pos)] name: &str,
+        #[starlark(require = named)] args: Option<Value<'v>>,
+        #[starlark(require = named)] effect: Option<&str>,
         #[starlark(require = named)] sandbox: Option<&SandboxValue>,
     ) -> anyhow::Result<ExecBindingValue> {
-        ExecBindingValue::new_single(name, sandbox)
+        ExecBindingValue::new_single(name, args, effect, sandbox)
     }
 
     fn r#match<'v>(
@@ -100,16 +102,12 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         ExecBindingValue::new_multi(exe, sandbox)
     }
 
-    fn allow_tool(
+    fn tool(
         #[starlark(require = pos)] name: Option<&str>,
-    ) -> anyhow::Result<ToolBindingValue> {
-        Ok(ToolBindingValue::allow(name))
-    }
-
-    fn deny_tool(
-        #[starlark(require = pos)] name: Option<&str>,
-    ) -> anyhow::Result<ToolBindingValue> {
-        Ok(ToolBindingValue::deny(name))
+    ) -> anyhow::Result<ToolRefValue> {
+        Ok(ToolRefValue {
+            name: name.map(String::from),
+        })
     }
 
     // -- Base policy --

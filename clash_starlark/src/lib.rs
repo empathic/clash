@@ -86,7 +86,7 @@ mod tests {
     fn test_simple_policy() {
         let source = r#"
 def main():
-    return policy(default = deny, rules = [allow_tool()])
+    return policy(default = deny, rules = [tool().allow()])
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
@@ -110,7 +110,7 @@ def main():
         default = deny,
         rules = [
             exe("git", sandbox = box),
-            allow_tool(),
+            tool().allow(),
         ],
     )
 "#;
@@ -136,8 +136,8 @@ def main():
     return policy(
         default = deny,
         rules = [
-            allow_tool("WebSearch"),
-            deny_tool("Bash"),
+            tool("WebSearch").allow(),
+            tool("Bash").deny(),
         ],
     )
 "#;
@@ -171,14 +171,14 @@ def main():
     fn test_extend_pattern() {
         let source = r#"
 def main():
-    base = policy(default = deny, rules = [allow_tool()])
+    base = policy(default = deny, rules = [tool().allow()])
     base = base.extend(exe("git"))
     return base
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
         let main_body = doc["policies"][0]["body"].as_array().unwrap();
-        assert_eq!(main_body.len(), 2); // allow_tool + exe
+        assert_eq!(main_body.len(), 2); // tool().allow() + exe
     }
 
     #[test]
@@ -476,7 +476,7 @@ def main():
     base = policy(default = deny, rules = [])
     base = base.extend(exe("git", sandbox = gitbox))
     base = base.extend(match(exe = ["rustc", "cargo"], sandbox = rust_sandbox))
-    base = base.extend(allow_tool())
+    base = base.extend(tool().allow())
     return base
 "#;
         let result = evaluate(source, "policy.star", &PathBuf::from(".")).unwrap();
@@ -494,7 +494,7 @@ def main():
             policies.len()
         );
 
-        // Main policy should have 3 rules: exe(git), match(rustc/cargo), allow_tool
+        // Main policy should have 3 rules: exe(git), match(rustc/cargo), tool().allow()
         let main_pol = policies.last().unwrap();
         assert_eq!(main_pol["name"], "main");
         let main_body = main_pol["body"].as_array().unwrap();

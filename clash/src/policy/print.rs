@@ -164,7 +164,12 @@ mod tests {
         use crate::policy::compile::compile_policy_with_internals;
 
         let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
-        let internal = r#"{"policies": [{"name": "__internal_test__", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/test"}}}}}}]}]}"#;
+        let internal = r#"
+def main():
+    return policy(default = deny, rules = [
+        path("/test", read = allow),
+    ])
+"#;
         let env = TestEnv(HashMap::new());
         let dt =
             compile_policy_with_internals(user_source, &env, &[("__internal_test__", internal)])
