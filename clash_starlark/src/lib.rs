@@ -85,6 +85,8 @@ mod tests {
     #[test]
     fn test_simple_policy() {
         let source = r#"
+load("@clash//std.star", "tool")
+
 def main():
     return policy(default = deny, rules = [tool().allow()])
 "#;
@@ -98,6 +100,8 @@ def main():
     #[test]
     fn test_sandbox_policy() {
         let source = r#"
+load("@clash//std.star", "exe", "tool")
+
 def main():
     box = sandbox(
         default = deny,
@@ -109,7 +113,7 @@ def main():
     return policy(
         default = deny,
         rules = [
-            exe("git", sandbox = box),
+            exe("git").allow().sandbox(box),
             tool().allow(),
         ],
     )
@@ -132,6 +136,8 @@ def main():
     #[test]
     fn test_tool_bindings() {
         let source = r#"
+load("@clash//std.star", "tool")
+
 def main():
     return policy(
         default = deny,
@@ -150,12 +156,14 @@ def main():
     #[test]
     fn test_match_multi_exe() {
         let source = r#"
+load("@clash//std.star", "match_exes")
+
 def main():
     box = sandbox(default = deny, fs = [cwd(read = allow)])
     return policy(
         default = deny,
         rules = [
-            match(exe = ["rustc", "cargo", "cargo-clippy"], sandbox = box),
+            match_exes(["rustc", "cargo", "cargo-clippy"]).allow().sandbox(box),
         ],
     )
 "#;
@@ -170,9 +178,11 @@ def main():
     #[test]
     fn test_extend_pattern() {
         let source = r#"
+load("@clash//std.star", "exe", "tool")
+
 def main():
     base = policy(default = deny, rules = [tool().allow()])
-    base = base.extend(exe("git"))
+    base = base.extend(exe("git").allow())
     return base
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
@@ -184,6 +194,8 @@ def main():
     #[test]
     fn test_domains_net() {
         let source = r#"
+load("@clash//std.star", "exe")
+
 def main():
     box = sandbox(
         default = deny,
@@ -191,7 +203,7 @@ def main():
             domains({"github.com": allow, "crates.io": allow}),
         ],
     )
-    return policy(default = deny, rules = [exe("cargo", sandbox = box)])
+    return policy(default = deny, rules = [exe("cargo").allow().sandbox(box)])
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
@@ -208,6 +220,8 @@ def main():
     #[test]
     fn test_home_child() {
         let source = r#"
+load("@clash//std.star", "exe")
+
 def main():
     box = sandbox(
         default = deny,
@@ -215,7 +229,7 @@ def main():
             home().child(".ssh", read = allow),
         ],
     )
-    return policy(default = deny, rules = [exe("git", sandbox = box)])
+    return policy(default = deny, rules = [exe("git").allow().sandbox(box)])
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
@@ -246,9 +260,11 @@ def main():
 
         let source = format!(
             r#"
+load("@clash//std.star", "exe")
+
 def main():
     base = import_json("{}")
-    base = base.extend(exe("git"))
+    base = base.extend(exe("git").allow())
     return base
 "#,
             json_path.display()
@@ -265,12 +281,14 @@ def main():
     #[test]
     fn test_wildcard_domain() {
         let source = r#"
+load("@clash//std.star", "exe")
+
 def main():
     box = sandbox(
         default = deny,
         net = [domains({"*.npmjs.org": allow})],
     )
-    return policy(default = deny, rules = [exe("npm", sandbox = box)])
+    return policy(default = deny, rules = [exe("npm").allow().sandbox(box)])
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
@@ -284,12 +302,14 @@ def main():
     #[test]
     fn test_cwd_worktree() {
         let source = r#"
+load("@clash//std.star", "exe")
+
 def main():
     box = sandbox(
         default = deny,
         fs = [cwd(follow_worktrees = True, read = allow, write = allow)],
     )
-    return policy(default = deny, rules = [exe("git", sandbox = box)])
+    return policy(default = deny, rules = [exe("git").allow().sandbox(box)])
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
@@ -303,12 +323,14 @@ def main():
     #[test]
     fn test_tempdir_path() {
         let source = r#"
+load("@clash//std.star", "exe")
+
 def main():
     box = sandbox(
         default = deny,
         fs = [tempdir(allow_all = True)],
     )
-    return policy(default = deny, rules = [exe("test", sandbox = box)])
+    return policy(default = deny, rules = [exe("test").allow().sandbox(box)])
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
@@ -323,12 +345,14 @@ def main():
     #[test]
     fn test_path_static() {
         let source = r#"
+load("@clash//std.star", "exe")
+
 def main():
     box = sandbox(
         default = deny,
         fs = [path("/usr/local/bin", read = allow, execute = allow)],
     )
-    return policy(default = deny, rules = [exe("test", sandbox = box)])
+    return policy(default = deny, rules = [exe("test").allow().sandbox(box)])
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
@@ -340,12 +364,14 @@ def main():
     #[test]
     fn test_path_env() {
         let source = r#"
+load("@clash//std.star", "exe")
+
 def main():
     box = sandbox(
         default = deny,
         fs = [path(env = "CARGO_HOME", read = allow, write = allow)],
     )
-    return policy(default = deny, rules = [exe("cargo", sandbox = box)])
+    return policy(default = deny, rules = [exe("cargo").allow().sandbox(box)])
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
@@ -365,9 +391,11 @@ def main():
         let _result = evaluate(source, "test.star", &PathBuf::from("."));
         // Test with a path builder that validates effects
         let source2 = r#"
+load("@clash//std.star", "exe")
+
 def main():
     box = sandbox(default = deny, fs = [cwd(read = "invalid")])
-    return policy(default = deny, rules = [exe("test", sandbox = box)])
+    return policy(default = deny, rules = [exe("test").allow().sandbox(box)])
 "#;
         let result2 = evaluate(source2, "test2.star", &PathBuf::from("."));
         assert!(result2.is_err());
@@ -377,12 +405,13 @@ def main():
     fn test_stdlib_load() {
         let source = r#"
 load("@clash//rust.star", "rust_sandbox")
+load("@clash//std.star", "match_exes")
 
 def main():
     return policy(
         default = deny,
         rules = [
-            match(exe = ["rustc", "cargo"], sandbox = rust_sandbox),
+            match_exes(["rustc", "cargo"]).allow().sandbox(rust_sandbox),
         ],
     )
 "#;
@@ -400,11 +429,12 @@ def main():
             let source = format!(
                 r#"
 load("@clash//{module}", "{sandbox_name}")
+load("@clash//std.star", "exe")
 
 def main():
     return policy(
         default = deny,
-        rules = [exe("test", sandbox = {sandbox_name})],
+        rules = [exe("test").allow().sandbox({sandbox_name})],
     )
 "#
             );
@@ -441,9 +471,10 @@ my_sandbox = sandbox(default = deny, fs = [cwd(read = allow)])
 
         let source = r#"
 load("helpers.star", "my_sandbox")
+load("@clash//std.star", "exe")
 
 def main():
-    return policy(default = deny, rules = [exe("test", sandbox = my_sandbox)])
+    return policy(default = deny, rules = [exe("test").allow().sandbox(my_sandbox)])
 "#;
         let result = evaluate(source, "policy.star", dir.path()).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
@@ -456,6 +487,7 @@ def main():
     fn test_full_example_from_plan() {
         let source = r#"
 load("@clash//rust.star", "rust_sandbox")
+load("@clash//std.star", "exe", "tool", "match_exes")
 
 def main():
     gitbox = sandbox(
@@ -474,8 +506,8 @@ def main():
     )
 
     base = policy(default = deny, rules = [])
-    base = base.extend(exe("git", sandbox = gitbox))
-    base = base.extend(match(exe = ["rustc", "cargo"], sandbox = rust_sandbox))
+    base = base.extend(exe("git").allow().sandbox(gitbox))
+    base = base.extend(match_exes(["rustc", "cargo"]).allow().sandbox(rust_sandbox))
     base = base.extend(tool().allow())
     return base
 "#;

@@ -1,3 +1,5 @@
+load("@clash//std.star", "tool")
+
 def main():
     return policy(default = deny, rules = [
         home().child(".claude", read = allow, write = allow),

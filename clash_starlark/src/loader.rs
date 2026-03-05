@@ -57,8 +57,10 @@ impl starlark::eval::FileLoader for ClashLoader {
                 ))
             })?
         };
+        let mut dialect = Dialect::Standard;
+        dialect.enable_types = starlark::syntax::DialectTypes::Enable;
 
-        let ast = AstModule::parse(path, source, &Dialect::Standard)
+        let ast = AstModule::parse(path, source, &dialect)
             .map_err(|e| starlark::Error::new_other(anyhow::anyhow!("{e}")))?;
 
         let globals = clash_globals();

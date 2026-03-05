@@ -10,15 +10,14 @@ use starlark::values::{
     NoSerialize, ProvidesStaticType, StarlarkValue, Trace, Value, ValueLike, starlark_value,
 };
 
-use super::exec::{ExecBindingValue, ToolBindingValue};
 use super::path::PathValue;
+use super::rule::RuleValue;
 use super::unpack_effect_or_default;
 
-/// Binding — an exec, tool, or path binding to extend a base policy with.
+/// Binding — a rule or path binding to extend a base policy with.
 #[derive(Debug, Clone)]
 pub enum Binding {
-    Exec(ExecBindingValue),
-    Tool(ToolBindingValue),
+    Rule(RuleValue),
     Path(PathValue),
 }
 
@@ -66,15 +65,13 @@ fn base_policy_methods(builder: &mut starlark::environment::MethodsBuilder) {
     ) -> anyhow::Result<BasePolicyValue> {
         let mut result = this.clone();
 
-        if let Some(exec) = binding.downcast_ref::<ExecBindingValue>() {
-            result.bindings.push(Binding::Exec(exec.clone()));
-        } else if let Some(tool) = binding.downcast_ref::<ToolBindingValue>() {
-            result.bindings.push(Binding::Tool(tool.clone()));
+        if let Some(rule) = binding.downcast_ref::<RuleValue>() {
+            result.bindings.push(Binding::Rule(rule.clone()));
         } else if let Some(path) = binding.downcast_ref::<PathValue>() {
             result.bindings.push(Binding::Path(path.clone()));
         } else {
             anyhow::bail!(
-                ".extend() expects an exe(), match(), tool().allow(), tool().deny(), or path value, got {}",
+                ".extend() expects a rule() or path value, got {}",
                 binding.get_type()
             );
         }
@@ -110,15 +107,13 @@ impl BasePolicyValue {
             let list = ListRef::from_value(rules_val)
                 .ok_or_else(|| anyhow::anyhow!("rules= must be a list"))?;
             for item in list.iter() {
-                if let Some(exec) = item.downcast_ref::<ExecBindingValue>() {
-                    bindings.push(Binding::Exec(exec.clone()));
-                } else if let Some(tool) = item.downcast_ref::<ToolBindingValue>() {
-                    bindings.push(Binding::Tool(tool.clone()));
+                if let Some(rule) = item.downcast_ref::<RuleValue>() {
+                    bindings.push(Binding::Rule(rule.clone()));
                 } else if let Some(path) = item.downcast_ref::<PathValue>() {
                     bindings.push(Binding::Path(path.clone()));
                 } else {
                     anyhow::bail!(
-                        "policy rules list items must be exe(), match(), tool().allow(), tool().deny(), or path value, got {}",
+                        "policy rules list items must be rule() or path values, got {}",
                         item.get_type()
                     );
                 }

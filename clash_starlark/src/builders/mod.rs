@@ -1,7 +1,7 @@
 pub mod base;
-pub mod exec;
 pub mod net;
 pub mod path;
+pub mod rule;
 pub mod sandbox;
 
 /// Validate that a string is a valid effect name.

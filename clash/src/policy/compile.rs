@@ -3442,8 +3442,10 @@ def main():
         let internals: &[(&str, &str)] = &[(
             "__test_internal__",
             r#"
+load("@clash//std.star", "exe")
+
 def main():
-    return policy(default = deny, rules = [exe("git")])
+    return policy(default = deny, rules = [exe("git").allow()])
 "#,
         )];
         let env = TestEnv::new(&[("PWD", "/home/user")]);

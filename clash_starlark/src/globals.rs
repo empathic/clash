@@ -1,18 +1,19 @@
 //! Pre-loaded Starlark globals: effect constants and DSL builder functions.
 
-use starlark::environment::GlobalsBuilder;
+use starlark::environment::{GlobalsBuilder, LibraryExtension};
 use starlark::starlark_module;
 use starlark::values::{Heap, Value};
 
 use crate::builders::base::BasePolicyValue;
-use crate::builders::exec::{ExecBindingValue, ToolRefValue};
 use crate::builders::net::NetValue;
 use crate::builders::path::PathValue;
+use crate::builders::rule::{RuleValue, starlark_to_json};
 use crate::builders::sandbox::SandboxValue;
 
 /// Build the globals environment with all Clash DSL functions and constants.
 pub fn clash_globals() -> starlark::environment::Globals {
     let mut builder = GlobalsBuilder::standard();
+    LibraryExtension::StructType.add(&mut builder);
     register_globals(&mut builder);
     builder.build()
 }
@@ -23,6 +24,16 @@ fn register_globals(builder: &mut GlobalsBuilder) {
     const allow: &str = "allow";
     const deny: &str = "deny";
     const ask: &str = "ask";
+
+    // -- Rule builder (the single bridge from Starlark dicts to typed rules) --
+
+    fn rule<'v>(#[starlark(require = pos)] value: Value<'v>) -> anyhow::Result<RuleValue> {
+        let json = starlark_to_json(value)?;
+        Ok(RuleValue {
+            json,
+            sandbox: None,
+        })
+    }
 
     // -- Sandbox builder --
 
@@ -82,32 +93,6 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = pos)] effect: &str,
     ) -> anyhow::Result<NetValue> {
         NetValue::single_domain(name, effect)
-    }
-
-    // -- Exec/tool builders --
-
-    fn exe<'v>(
-        #[starlark(require = pos)] name: &str,
-        #[starlark(require = named)] args: Option<Value<'v>>,
-        #[starlark(require = named)] effect: Option<&str>,
-        #[starlark(require = named)] sandbox: Option<&SandboxValue>,
-    ) -> anyhow::Result<ExecBindingValue> {
-        ExecBindingValue::new_single(name, args, effect, sandbox)
-    }
-
-    fn r#match<'v>(
-        #[starlark(require = named)] exe: Option<Value<'v>>,
-        #[starlark(require = named)] sandbox: Option<&SandboxValue>,
-    ) -> anyhow::Result<ExecBindingValue> {
-        ExecBindingValue::new_multi(exe, sandbox)
-    }
-
-    fn tool(
-        #[starlark(require = pos)] name: Option<&str>,
-    ) -> anyhow::Result<ToolRefValue> {
-        Ok(ToolRefValue {
-            name: name.map(String::from),
-        })
     }
 
     // -- Base policy --

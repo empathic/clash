@@ -46,19 +46,20 @@ fn compile_base_policy(base: &BasePolicyValue) -> anyhow::Result<JsonValue> {
     // Process bindings
     for binding in &base.bindings {
         match binding {
-            Binding::Exec(exec) => {
-                let sandbox_name = if let Some(ref sb) = exec.sandbox {
+            Binding::Rule(rule) => {
+                let mut rule_json = rule.json.clone();
+
+                if let Some(ref sb) = rule.sandbox {
                     let name = format!("__sandbox_{}", sandbox_counter);
                     sandbox_counter += 1;
                     sandbox_defs.push((name.clone(), sb));
-                    Some(name)
-                } else {
-                    None
-                };
-                main_body.push(exec.to_rule_json(sandbox_name.as_deref()));
-            }
-            Binding::Tool(tool) => {
-                main_body.push(tool.to_rule_json());
+                    // Inject sandbox reference into the rule
+                    if let Some(inner) = rule_json.get_mut("rule").and_then(|r| r.as_object_mut()) {
+                        inner.insert("sandbox".into(), json!({"named": name}));
+                    }
+                }
+
+                main_body.push(rule_json);
             }
             Binding::Path(path) => {
                 main_body.extend(path.to_rules_json());

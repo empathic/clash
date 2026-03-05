@@ -4,7 +4,7 @@ use crate::policy::tree::PolicyTree;
 use anyhow::{Context, Result};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
-use tracing::{Level, info, instrument, warn};
+use tracing::{Level, error, info, instrument, warn};
 
 use crate::audit::AuditConfig;
 use crate::notifications::NotificationConfig;
@@ -674,7 +674,7 @@ impl ClashSettings {
                     return Some((json_source, loaded));
                 }
                 Err(e) => {
-                    warn!(
+                    error!(
                         path = %path.display(),
                         level = %level,
                         error = %e,
@@ -798,8 +798,8 @@ fn evaluate_star_policy(path: &std::path::Path) -> Result<String> {
         return Ok(cached);
     }
 
-    let output = clash_starlark::evaluate(&source, &path.display().to_string(), base_dir)
-        .with_context(|| format!("failed to evaluate {}", path.display()))?;
+    let output = clash_starlark::evaluate(&source, &path.display().to_string(), base_dir)?;
+    // .with_context(|| format!("failed to evaluate {}", path.display()))?;
 
     // Update cache with full key (including loaded files)
     let full_key = clash_starlark::StarCache::cache_key(&source, &output.loaded_files);
