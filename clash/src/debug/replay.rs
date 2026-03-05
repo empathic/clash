@@ -296,7 +296,14 @@ pub(crate) fn resolve_tool_input(
         _ => tool,
     };
 
-    Ok((tool_name.to_string(), build_tool_input(tool_name, noun)))
+    // If the input is already a JSON object, use it directly (e.g. from audit log).
+    // Otherwise, wrap the plain string in the expected field.
+    let tool_input = serde_json::from_str::<serde_json::Value>(noun)
+        .ok()
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| build_tool_input(tool_name, noun));
+
+    Ok((tool_name.to_string(), tool_input))
 }
 
 /// Build a minimal tool_input JSON from tool name and noun.
@@ -364,6 +371,15 @@ mod tests {
         let (name, input) = resolve_tool_input("tool", Some("CustomTool")).unwrap();
         assert_eq!(name, "CustomTool");
         assert_eq!(input, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_resolve_tool_input_json_passthrough() {
+        let json_input = r#"{"command":"ls -lha","description":"List files"}"#;
+        let (name, input) = resolve_tool_input("Bash", Some(json_input)).unwrap();
+        assert_eq!(name, "Bash");
+        assert_eq!(input["command"], "ls -lha");
+        assert_eq!(input["description"], "List files");
     }
 
     #[test]
