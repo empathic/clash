@@ -29,6 +29,6 @@ expression: output
 ┌───────│                                                              │───────┐
 │AUTO AL│                                                              │       │
 │Source:│  Save? y confirm  n/Esc cancel  j/k scroll  g/G top/bottom   │       │
-│Rule: (└──────────────────────────────────────────────────────────────┘       │
-│"cargo" > Exec > allow                                                        │
+│ID: 841└──────────────────────────────────────────────────────────────┘       │
+│Rule: (allow (exec "cargo")                                                   │
 j/k move  Tab effect  e edit  E edit rule  x delete  [/] all  a add  / search  w

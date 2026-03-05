@@ -197,10 +197,11 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
                     };
 
                     let effect_str = style::effect(&format!("{:<5}", rule.effect));
+                    let id_str = style::dim(&rule.source.id());
 
                     println!(
-                        "    [{}] {:<45} {}{}",
-                        effect_str, rule.source.matcher, tag, shadow_note,
+                        "    {} [{}] {:<45} {}{}",
+                        id_str, effect_str, rule.source.matcher, tag, shadow_note,
                     );
                 }
             };

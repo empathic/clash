@@ -687,6 +687,10 @@ pub(crate) fn description_for_row(kind: &TreeNodeKind) -> Vec<Line<'static>> {
                     Span::styled(format!("{policy} [{level}]"), tui_style::TAG),
                 ]),
                 Line::from(vec![
+                    Span::styled("ID: ", tui_style::DIM),
+                    Span::styled(rule.id(), tui_style::DIM),
+                ]),
+                Line::from(vec![
                     Span::styled("Rule: ", tui_style::DIM),
                     Span::raw(format!(
                         "({} {})",

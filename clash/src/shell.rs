@@ -501,13 +501,14 @@ impl ShellSession {
                             PolicyItem::Rule(r) => {
                                 if self.interactive {
                                     output.push_str(&format!(
-                                        "    {} {} {}\n",
+                                        "    {} {} {} {}\n",
+                                        style::dim(&r.id()),
                                         style::effect(&format!("{:<5}", r.effect)),
                                         r.matcher,
                                         style::dim(&format!("— {}", describe_rule(r)))
                                     ));
                                 } else {
-                                    output.push_str(&format!("    {r}\n"));
+                                    output.push_str(&format!("    {} {r}\n", r.id()));
                                 }
                             }
                             PolicyItem::Include(name) => {
@@ -562,13 +563,14 @@ impl ShellSession {
                     if let PolicyItem::Rule(r) = item {
                         if self.interactive {
                             output.push_str(&format!(
-                                "  {} {} {}\n",
+                                "  {} {} {} {}\n",
+                                style::dim(&r.id()),
                                 style::effect(&format!("{:<5}", r.effect)),
                                 r.matcher,
                                 style::dim(&format!("— {}", describe_rule(r)))
                             ));
                         } else {
-                            output.push_str(&format!("{r}\n"));
+                            output.push_str(&format!("{} {r}\n", r.id()));
                         }
                     }
                 }

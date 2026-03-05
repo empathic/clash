@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use sha2::{Digest, Sha256};
+
 use crate::policy::Effect;
 use crate::policy::sexpr::SExpr;
 
@@ -305,6 +307,26 @@ pub enum ArmPatternElement {
     Pat(Pattern),
     /// A path filter (for fs.path observables).
     Path(PathFilter),
+}
+
+impl Rule {
+    /// Compute a short content-hash identifier for this rule.
+    ///
+    /// The ID is derived from the SHA-256 hash of the rule's canonical
+    /// s-expression (via `Display`), truncated to 7 hex characters (28 bits).
+    ///
+    /// **Stability note**: Changing `Display` on `Rule` or any of its
+    /// constituent types will change rule IDs. This is intentional,
+    /// the Display impl is the canonical form and is covered by
+    /// property-based round-trip tests.
+    pub fn id(&self) -> String {
+        let canonical = self.to_string();
+        let hash = Sha256::digest(canonical.as_bytes());
+        format!(
+            "{:07x}",
+            u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]) & 0x0FFF_FFFF
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,6 +1045,117 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Rule ID tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn rule_id_is_7_hex_chars() {
+        let rule = Rule {
+            effect: Effect::Allow,
+            matcher: CapMatcher::Exec(ExecMatcher {
+                bin: Pattern::Literal("git".into()),
+                args: vec![Pattern::Any],
+                has_args: vec![],
+            }),
+            sandbox: None,
+        };
+        let id = rule.id();
+        assert_eq!(id.len(), 7, "ID should be 7 chars, got: {}", id);
+        assert!(
+            id.chars().all(|c| c.is_ascii_hexdigit()),
+            "ID should be hex, got: {}",
+            id
+        );
+    }
+
+    #[test]
+    fn rule_id_is_deterministic() {
+        let make_rule = || Rule {
+            effect: Effect::Allow,
+            matcher: CapMatcher::Exec(ExecMatcher {
+                bin: Pattern::Literal("git".into()),
+                args: vec![Pattern::Any],
+                has_args: vec![],
+            }),
+            sandbox: None,
+        };
+        assert_eq!(make_rule().id(), make_rule().id());
+    }
+
+    #[test]
+    fn rule_id_differs_by_effect() {
+        let allow_rule = Rule {
+            effect: Effect::Allow,
+            matcher: CapMatcher::Exec(ExecMatcher {
+                bin: Pattern::Literal("git".into()),
+                args: vec![Pattern::Any],
+                has_args: vec![],
+            }),
+            sandbox: None,
+        };
+        let deny_rule = Rule {
+            effect: Effect::Deny,
+            matcher: CapMatcher::Exec(ExecMatcher {
+                bin: Pattern::Literal("git".into()),
+                args: vec![Pattern::Any],
+                has_args: vec![],
+            }),
+            sandbox: None,
+        };
+        assert_ne!(allow_rule.id(), deny_rule.id());
+    }
+
+    #[test]
+    fn rule_id_differs_by_matcher() {
+        let git_rule = Rule {
+            effect: Effect::Allow,
+            matcher: CapMatcher::Exec(ExecMatcher {
+                bin: Pattern::Literal("git".into()),
+                args: vec![Pattern::Any],
+                has_args: vec![],
+            }),
+            sandbox: None,
+        };
+        let cargo_rule = Rule {
+            effect: Effect::Allow,
+            matcher: CapMatcher::Exec(ExecMatcher {
+                bin: Pattern::Literal("cargo".into()),
+                args: vec![Pattern::Any],
+                has_args: vec![],
+            }),
+            sandbox: None,
+        };
+        assert_ne!(git_rule.id(), cargo_rule.id());
+    }
+
+    #[test]
+    fn rule_id_stable_across_parse_roundtrip() {
+        let rule = Rule {
+            effect: Effect::Allow,
+            matcher: CapMatcher::Exec(ExecMatcher {
+                bin: Pattern::Literal("git".into()),
+                args: vec![Pattern::Any],
+                has_args: vec![],
+            }),
+            sandbox: None,
+        };
+        let id_before = rule.id();
+
+        // Round-trip through Display → parse
+        let source = format!("(policy \"_test\" {})", rule);
+        let parsed = crate::policy::parse::parse(&source).unwrap();
+        let reparsed_rule = match &parsed[0] {
+            TopLevel::Policy { body, .. } => match &body[0] {
+                PolicyItem::Rule(r) => r,
+                _ => panic!("expected Rule"),
+            },
+            _ => panic!("expected Policy"),
+        };
+
+        assert_eq!(id_before, reparsed_rule.id());
+    }
+
+    // -----------------------------------------------------------------------
     // Property-based tests
     // -----------------------------------------------------------------------
 
@@ -1065,6 +1198,26 @@ mod tests {
             prop_assert!(result.is_ok(),
                 "Display produced invalid s-expr: {}\n  error: {:?}",
                 source, result.err());
+        }
+
+        /// Rule ID is stable across parse round-trips.
+        #[test]
+        fn rule_id_stable_across_roundtrip(rule in arb_rule()) {
+            let id_before = rule.id();
+            let source = format!("(policy \"_test\" {})", rule);
+            let parsed = crate::policy::parse::parse(&source);
+            prop_assert!(parsed.is_ok(), "parse failed for: {}", source);
+            let top_levels = parsed.unwrap();
+            for tl in &top_levels {
+                if let TopLevel::Policy { body, .. } = tl {
+                    for item in body {
+                        if let PolicyItem::Rule(r) = item {
+                            prop_assert_eq!(&id_before, &r.id(),
+                                "ID changed across round-trip for: {}", rule);
+                        }
+                    }
+                }
+            }
         }
 
         /// Sandboxed rule Display also round-trips.
