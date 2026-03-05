@@ -4,10 +4,7 @@
 //! evaluates it against the current compiled policy, showing the full
 //! decision trace, sandbox policy, and actionable suggestions.
 
-use std::str::FromStr;
-
 use anyhow::{Context, Result};
-use serde_json::{Value, value};
 
 use crate::policy::eval::CapQuery;
 use crate::policy::ir::PolicyDecision;
@@ -285,34 +282,21 @@ pub(crate) fn resolve_tool_input(
     tool: &str,
     input: Option<&str>,
 ) -> Result<(String, serde_json::Value)> {
-    let noun = input
-        .map(Value::from_str)
-        .map(|x| x.unwrap_or(Value::Null))
-        .unwrap_or_default();
+    let noun = input.unwrap_or_default();
 
     if tool.to_lowercase() == "tool" {
         return Ok((noun.to_string(), serde_json::json!({})));
     }
 
-    let (tool_name, input_field) = match tool.to_lowercase().as_str() {
-        "bash" => ("Bash", "command"),
-        "read" => ("Read", "file_path"),
-        "write" => ("Write", "file_path"),
-        "edit" => ("Edit", "file_path"),
-        _ => {
-            let field = match tool {
-                "Bash" => "command",
-                "Read" | "Write" | "Edit" | "NotebookEdit" => "file_path",
-                "Glob" | "Grep" => "pattern",
-                "WebFetch" => "url",
-                "WebSearch" => "query",
-                _ => "command",
-            };
-            return Ok((tool.to_string(), serde_json::json!({ field: noun })));
-        }
+    let tool_name = match tool.to_lowercase().as_str() {
+        "bash" => "Bash",
+        "read" => "Read",
+        "write" => "Write",
+        "edit" => "Edit",
+        _ => tool,
     };
 
-    Ok((tool_name.to_string(), noun))
+    Ok((tool_name.to_string(), build_tool_input(tool_name, noun)))
 }
 
 /// Build a minimal tool_input JSON from tool name and noun.
