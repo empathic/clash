@@ -48,7 +48,9 @@
 * Policy source: `clash/src/policy/v2/` — parse, compile, eval, IR
 * Rules are JSON objects with an `effect` and a capability matcher, e.g. `{ "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }`
 * The policy speaks in capabilities, not Claude Code tool names — the eval layer maps tools to capabilities
-* Policy files use the `.json` extension, e.g. `policy.json`
+* Policy files use `.json` or `.star` extension (`.star` preferred when both exist)
+* The `clash-starlark` crate evaluates `.star` files → JSON using Starlark (a Python-like config language)
+* Starlark policies define a `main()` function that returns a policy value
 
 ## Backwards Compatibility
 
@@ -66,6 +68,7 @@
 ## Layout
 
 - *clash* Clash binary + library
+* *clash-starlark* Starlark policy evaluator — compiles `.star` files to JSON policy format
 * *clash-plugin* Claude plugin refered to by the .claude-plugin definitions
 * *clash_notify* Helper crate for extended notifications outside of the terminal
 * *claude_settings* Helper crate for interacting with a user's ".claude" settings directories

@@ -82,10 +82,7 @@ pub fn compile_document_with_env(
 }
 
 /// Compile a PolicyDocument directly to a `PolicyTree`.
-pub fn compile_document_to_tree(
-    doc: &PolicyDocument,
-    env: &dyn EnvResolver,
-) -> Result<PolicyTree> {
+pub fn compile_document_to_tree(doc: &PolicyDocument, env: &dyn EnvResolver) -> Result<PolicyTree> {
     compile_document_tree_ast(doc, env)
 }
 
@@ -119,10 +116,7 @@ fn compile_document_tree_ast(doc: &PolicyDocument, env: &dyn EnvResolver) -> Res
     let version = doc.schema_version;
 
     // Resolve active policy.
-    let active_policy = doc
-        .use_policy
-        .as_deref()
-        .unwrap_or("main");
+    let active_policy = doc.use_policy.as_deref().unwrap_or("main");
 
     // Build policy name → body map.
     let mut policies: HashMap<&str, &[PolicyItem]> = HashMap::new();
@@ -145,9 +139,7 @@ fn compile_document_tree_ast(doc: &PolicyDocument, env: &dyn EnvResolver) -> Res
         PolicyItem::Effect(e) => Some(*e),
         _ => None,
     });
-    let default_effect = body_effect
-        .or(doc.default_effect)
-        .unwrap_or(Effect::Deny);
+    let default_effect = body_effect.or(doc.default_effect).unwrap_or(Effect::Deny);
 
     // Build the tree.
     let mut ids = IdAllocator::new();
@@ -1487,21 +1479,12 @@ fn inject_internals(
 /// 1. Checks which internal policy names the user already defined (override)
 /// 2. For non-overridden ones, deserializes embedded JSON, appends PolicyDef items
 /// 3. Prepends `Include("__internal_X__")` to the active policy body
-fn inject_internal_policies(
-    doc: &mut PolicyDocument,
-    internals: &[(&str, &str)],
-) -> Result<()> {
+fn inject_internal_policies(doc: &mut PolicyDocument, internals: &[(&str, &str)]) -> Result<()> {
     // Collect user-defined policy names.
-    let user_policies: std::collections::HashSet<String> = doc
-        .policies
-        .iter()
-        .map(|p| p.name.clone())
-        .collect();
+    let user_policies: std::collections::HashSet<String> =
+        doc.policies.iter().map(|p| p.name.clone()).collect();
 
-    let active_policy = doc
-        .use_policy
-        .clone()
-        .unwrap_or_else(|| "main".to_string());
+    let active_policy = doc.use_policy.clone().unwrap_or_else(|| "main".to_string());
 
     // Parse and inject non-overridden internal policies.
     let mut internal_includes = Vec::new();
@@ -1605,10 +1588,7 @@ pub fn compile_multi_level_to_tree(
 fn compile_document_ast(doc: &PolicyDocument, env: &dyn EnvResolver) -> Result<DecisionTree> {
     let version = doc.schema_version;
 
-    let active_policy = doc
-        .use_policy
-        .as_deref()
-        .unwrap_or("main");
+    let active_policy = doc.use_policy.as_deref().unwrap_or("main");
     let default_effect = doc.default_effect.unwrap_or(Effect::Deny);
 
     // Build a map of policy name → body.
@@ -1772,9 +1752,7 @@ fn flatten_policy(
                 rules.push((rule.clone(), name.to_string()));
             }
             // v2 items are handled by compile_document_tree_ast, not flat compilation.
-            PolicyItem::When { .. }
-            | PolicyItem::Match(_)
-            | PolicyItem::Effect(_) => {}
+            PolicyItem::When { .. } | PolicyItem::Match(_) | PolicyItem::Effect(_) => {}
         }
     }
 
@@ -2177,7 +2155,10 @@ fn compiled_pattern_to_path_filter(cp: CompiledPattern) -> CompiledPathFilter {
 
 fn compile_path_filter(pf: &PathFilter, env: &dyn EnvResolver) -> Result<CompiledPathFilter> {
     match pf {
-        PathFilter::Subpath { path: expr, worktree } => {
+        PathFilter::Subpath {
+            path: expr,
+            worktree,
+        } => {
             let resolved = resolve_path_expr(expr, env)?;
             if *worktree {
                 // When :worktree is set, expand to include git worktree directories.
@@ -3404,11 +3385,7 @@ mod tests {
             "command": "cargo build"
         });
         let decision = tree.evaluate("Bash", &input, "/home/user");
-        assert_eq!(
-            decision.effect,
-            Effect::Allow,
-            "cargo should be allowed"
-        );
+        assert_eq!(decision.effect, Effect::Allow, "cargo should be allowed");
     }
 
     #[test]

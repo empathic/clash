@@ -197,7 +197,7 @@ fn run_init_project() -> Result<()> {
         .context("could not find project root — are you inside a git repository?")?;
 
     let clash_dir = project_root.join(".clash");
-    let policy_path = clash_dir.join("policy.sexpr");
+    let policy_path = clash_dir.join("policy.json");
 
     if policy_path.exists() {
         println!(
@@ -211,7 +211,8 @@ fn run_init_project() -> Result<()> {
     std::fs::create_dir_all(&clash_dir)
         .with_context(|| format!("failed to create {}", clash_dir.display()))?;
 
-    let project_policy = "(default deny \"main\")\n(policy \"main\")\n";
+    let project_policy = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": []}]}
+"#;
     std::fs::write(&policy_path, project_policy)
         .with_context(|| format!("failed to write {}", policy_path.display()))?;
 

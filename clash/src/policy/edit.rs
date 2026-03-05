@@ -7,7 +7,7 @@
 use anyhow::{Result, bail};
 
 use crate::policy::Effect;
-use crate::policy::ast::{PolicyDocument, PolicyDef, PolicyItem, Rule};
+use crate::policy::ast::{PolicyDef, PolicyDocument, PolicyItem, Rule};
 
 /// Add a rule to the named policy block in a document.
 ///
@@ -96,11 +96,7 @@ pub fn ensure_policy_block(doc: &mut PolicyDocument, name: &str) {
 /// Find a rule in the named policy that has the same capability matcher
 /// as `rule` but differs in effect or sandbox. Returns a clone of the
 /// conflicting rule, or `None` if no conflict exists.
-pub fn find_conflicting_rule(
-    doc: &PolicyDocument,
-    policy_name: &str,
-    rule: &Rule,
-) -> Option<Rule> {
+pub fn find_conflicting_rule(doc: &PolicyDocument, policy_name: &str, rule: &Rule) -> Option<Rule> {
     for def in &doc.policies {
         if def.name == policy_name {
             for item in &def.body {

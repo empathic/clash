@@ -232,7 +232,10 @@ fn suggest_fs_read_rule(tool_input: &serde_json::Value, cwd: &str) -> Option<Rul
         effect: Effect::Allow,
         matcher: CapMatcher::Fs(FsMatcher {
             op: OpPattern::Single(FsOp::Read),
-            path: Some(PathFilter::Subpath { path: PathExpr::Static(parent), worktree: false }),
+            path: Some(PathFilter::Subpath {
+                path: PathExpr::Static(parent),
+                worktree: false,
+            }),
         }),
         sandbox: None,
     })
@@ -254,7 +257,10 @@ fn suggest_fs_write_rule(tool_input: &serde_json::Value, cwd: &str) -> Option<Ru
         effect: Effect::Allow,
         matcher: CapMatcher::Fs(FsMatcher {
             op: OpPattern::Or(vec![FsOp::Read, FsOp::Write, FsOp::Create]),
-            path: Some(PathFilter::Subpath { path: PathExpr::Static(parent), worktree: false }),
+            path: Some(PathFilter::Subpath {
+                path: PathExpr::Static(parent),
+                worktree: false,
+            }),
         }),
         sandbox: None,
     })
@@ -378,7 +384,10 @@ mod tests {
         let s = rule.to_string();
         assert!(s.contains("net"), "expected net rule, got: {s}");
         // WebSearch allows any domain
-        assert!(s.contains("\"any\""), "websearch should use wildcard, got: {s}");
+        assert!(
+            s.contains("\"any\""),
+            "websearch should use wildcard, got: {s}"
+        );
     }
 
     #[test]

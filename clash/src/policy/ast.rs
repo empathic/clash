@@ -598,8 +598,10 @@ pub(crate) mod strategies {
         if depth == 0 {
             prop_oneof![
                 arb_identifier().prop_map(|s| PathFilter::Literal(format!("/tmp/{s}"))),
-                (arb_path_expr(), proptest::bool::ANY)
-                    .prop_map(|(expr, wt)| PathFilter::Subpath { path: expr, worktree: wt }),
+                (arb_path_expr(), proptest::bool::ANY).prop_map(|(expr, wt)| PathFilter::Subpath {
+                    path: expr,
+                    worktree: wt
+                }),
             ]
             .boxed()
         } else {
@@ -751,8 +753,8 @@ mod tests {
     }
 
     // JSON roundtrip for arbitrary rules
-    use proptest::prelude::*;
     use super::strategies::*;
+    use proptest::prelude::*;
 
     proptest! {
         #[test]

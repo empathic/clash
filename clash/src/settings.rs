@@ -183,22 +183,26 @@ impl ClashSettings {
     /// Returns the user-level policy file path.
     ///
     /// Respects `CLASH_POLICY_FILE` env var for backward compatibility.
+    /// Prefers `policy.star` over `policy.json` when both exist.
     pub fn policy_file() -> Result<PathBuf> {
         if let Ok(p) = std::env::var("CLASH_POLICY_FILE") {
             return Ok(PathBuf::from(p));
         }
-        Self::settings_dir().map(|d| d.join("policy.json"))
+        let dir = Self::settings_dir()?;
+        Ok(discover_policy_file(&dir).unwrap_or_else(|| dir.join("policy.json")))
     }
 
     /// Returns the policy file path for a specific level.
     ///
     /// For `Session`, reads the active session ID from `~/.clash/active_session`.
+    /// Prefers `policy.star` over `policy.json` when both exist.
     pub fn policy_file_for_level(level: PolicyLevel) -> Result<PathBuf> {
         match level {
             PolicyLevel::User => Self::policy_file(),
             PolicyLevel::Project => {
                 let root = Self::project_root()?;
-                Ok(root.join(".clash").join("policy.json"))
+                let dir = root.join(".clash");
+                Ok(discover_policy_file(&dir).unwrap_or_else(|| dir.join("policy.json")))
             }
             PolicyLevel::Session => {
                 let session_id = Self::active_session_id()?;
@@ -352,7 +356,10 @@ impl ClashSettings {
 
     /// Set the policy source directly (compile from s-expression text).
     pub fn set_policy_source(&mut self, source: &str) {
-        match crate::policy::compile::compile_to_tree(source, &crate::policy::compile::StdEnvResolver) {
+        match crate::policy::compile::compile_to_tree(
+            source,
+            &crate::policy::compile::StdEnvResolver,
+        ) {
             Ok(tree) => {
                 self.compiled = Some(tree);
                 self.policy_error = None;
@@ -581,13 +588,21 @@ impl ClashSettings {
         // Compile (single-level or multi-level) directly to PolicyTree.
         let result = if level_sources.len() == 1 {
             let (_, source) = &level_sources[0];
-            crate::policy::compile::compile_to_tree_with_internals(source, &resolver, INTERNAL_POLICIES)
+            crate::policy::compile::compile_to_tree_with_internals(
+                source,
+                &resolver,
+                INTERNAL_POLICIES,
+            )
         } else {
             let level_refs: Vec<(PolicyLevel, &str)> = level_sources
                 .iter()
                 .map(|(l, s)| (*l, s.as_str()))
                 .collect();
-            crate::policy::compile::compile_multi_level_to_tree(&level_refs, &resolver, INTERNAL_POLICIES)
+            crate::policy::compile::compile_multi_level_to_tree(
+                &level_refs,
+                &resolver,
+                INTERNAL_POLICIES,
+            )
         };
 
         match result {
@@ -641,6 +656,35 @@ impl ClashSettings {
                     mode = format!("{:o}", mode),
                     "policy file is readable by other users; consider `chmod 600`"
                 );
+            }
+        }
+
+        // Handle .star files via starlark evaluation
+        #[cfg(feature = "starlark")]
+        if path.extension().and_then(|e| e.to_str()) == Some("star") {
+            match evaluate_star_policy(path) {
+                Ok(json_source) => {
+                    if level == PolicyLevel::User {
+                        self.load_notification_audit_config();
+                    }
+                    let loaded = LoadedPolicy {
+                        level,
+                        path: path.to_path_buf(),
+                        source: json_source.clone(),
+                    };
+                    return Some((json_source, loaded));
+                }
+                Err(e) => {
+                    warn!(
+                        path = %path.display(),
+                        level = %level,
+                        error = %e,
+                        "Failed to evaluate starlark policy"
+                    );
+                    self.policy_error =
+                        Some(format!("Failed to evaluate {}: {}", path.display(), e));
+                    return None;
+                }
             }
         }
 
@@ -721,6 +765,53 @@ fn parse_audit_config(yaml_str: &str) -> AuditConfig {
         Ok(raw) => raw.audit.unwrap_or_default(),
         Err(_) => AuditConfig::default(),
     }
+}
+
+/// Discover the preferred policy file in a directory.
+///
+/// Prefers `policy.star` over `policy.json`.
+fn discover_policy_file(dir: &std::path::Path) -> Option<PathBuf> {
+    let star = dir.join("policy.star");
+    if star.exists() {
+        return Some(star);
+    }
+    let json = dir.join("policy.json");
+    if json.exists() {
+        return Some(json);
+    }
+    None
+}
+
+/// Evaluate a `.star` policy file and return the compiled JSON source.
+#[cfg(feature = "starlark")]
+fn evaluate_star_policy(path: &std::path::Path) -> Result<String> {
+    let source = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    let base_dir = path.parent().unwrap_or(std::path::Path::new("."));
+
+    // Check disk cache first
+    let cache = clash_starlark::StarCache::new();
+    let cache_key = clash_starlark::StarCache::cache_key(&source, &[]);
+    if let Some(ref cache) = cache
+        && let Some(cached) = cache.get(&cache_key)
+    {
+        tracing::debug!(path = %path.display(), "starlark cache hit");
+        return Ok(cached);
+    }
+
+    let output = clash_starlark::evaluate(&source, &path.display().to_string(), base_dir)
+        .with_context(|| format!("failed to evaluate {}", path.display()))?;
+
+    // Update cache with full key (including loaded files)
+    let full_key = clash_starlark::StarCache::cache_key(&source, &output.loaded_files);
+    if let Some(ref cache) = cache
+        && let Err(e) = cache.put(&full_key, &output.json)
+    {
+        tracing::warn!(error = %e, "failed to cache starlark output");
+    }
+
+    Ok(output.json)
 }
 
 /// Find the nearest ancestor directory containing the given name.
