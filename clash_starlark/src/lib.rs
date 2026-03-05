@@ -532,4 +532,71 @@ def main():
         let main_body = main_pol["body"].as_array().unwrap();
         assert_eq!(main_body.len(), 3);
     }
+
+    #[test]
+    fn test_exe_regex_pattern() {
+        let source = r#"
+load("@clash//std.star", "exe", "regex")
+
+def main():
+    return policy(default = deny, rules = [
+        exe(regex("cargo.*")).allow(),
+    ])
+"#;
+        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
+        let rule = &doc["policies"][0]["body"][0]["rule"];
+        assert_eq!(rule["exec"]["bin"]["regex"], "cargo.*");
+    }
+
+    #[test]
+    fn test_exe_any_pattern() {
+        let source = r#"
+load("@clash//std.star", "exe")
+
+def main():
+    return policy(default = deny, rules = [
+        exe().deny(),
+    ])
+"#;
+        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
+        let rule = &doc["policies"][0]["body"][0]["rule"];
+        assert!(rule["exec"]["bin"]["any"].is_null());
+    }
+
+    #[test]
+    fn test_tool_regex_pattern() {
+        let source = r#"
+load("@clash//std.star", "tool", "regex")
+
+def main():
+    return policy(default = deny, rules = [
+        tool(regex("mcp__.*")).ask(),
+    ])
+"#;
+        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
+        let rule = &doc["policies"][0]["body"][0]["rule"];
+        assert_eq!(rule["tool"]["name"]["regex"], "mcp__.*");
+        assert_eq!(rule["effect"], "ask");
+    }
+
+    #[test]
+    fn test_match_exes_with_regex() {
+        let source = r#"
+load("@clash//std.star", "match_exes", "regex")
+
+def main():
+    return policy(default = deny, rules = [
+        match_exes(["git", regex("gh.*")]).allow(),
+    ])
+"#;
+        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
+        let bin = &doc["policies"][0]["body"][0]["rule"]["exec"]["bin"];
+        let or_pats = bin["or"].as_array().unwrap();
+        assert_eq!(or_pats[0]["literal"], "git");
+        assert_eq!(or_pats[1]["regex"], "gh.*");
+    }
 }

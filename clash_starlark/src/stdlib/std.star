@@ -1,65 +1,85 @@
-def exe(name, args = None):
+def _pattern(value):
+    """Convert a value to a matcher pattern.
+
+    - None          → {"any": null}     (match anything)
+    - "foo"         → {"literal": "foo"} (exact match)
+    - regex("...")  → {"regex": "..."}   (regex match)
+    """
+    if value == None:
+        return {"any": None}
+    if type(value) == "struct" and hasattr(value, "_regex"):
+        return {"regex": value._regex}
+    return {"literal": value}
+
+def _patterns(values):
+    """Convert a list of values to a single matcher pattern (or-ing multiple)."""
+    pats = [_pattern(v) for v in values]
+    if len(pats) == 1:
+        return pats[0]
+    return {"or": pats}
+
+def regex(pattern):
+    """Create a regex pattern for use in exe() or tool().
+
+    Usage:
+        exe(regex("cargo.*")).allow()
+        tool(regex("mcp__.*")).deny()
+    """
+    return struct(_regex = pattern)
+
+def _finalizers(build_rule):
+    """Create allow/deny/ask finalizer methods for a rule builder."""
+    def _allow():
+        return build_rule("allow")
+    def _deny():
+        return build_rule("deny")
+    def _ask():
+        return build_rule("ask")
+    return struct(allow = _allow, deny = _deny, ask = _ask)
+
+def exe(name = None, args = None):
     """Build an exec rule for a single binary.
 
     Usage:
         exe("git").allow()
         exe("git", args=["push"]).deny()
-        exe("cargo").allow().sandbox(my_sandbox)
+        exe(regex("cargo.*")).allow().sandbox(my_sandbox)
+        exe().deny()  # deny all exec
     """
-    _exec = {"bin": {"literal": name}}
+    _exec = {"bin": _pattern(name)}
     if args != None:
-        _args = [{"literal": a} for a in args]
+        _args = [_pattern(a) for a in args]
         _args.append({"any": None})
         _exec["args"] = _args
 
-    def _allow():
-        return rule({"rule": {"effect": "allow", "exec": _exec}})
+    def _build(effect):
+        return rule({"rule": {"effect": effect, "exec": _exec}})
 
-    def _deny():
-        return rule({"rule": {"effect": "deny", "exec": _exec}})
-
-    def _ask():
-        return rule({"rule": {"effect": "ask", "exec": _exec}})
-
-    return struct(allow = _allow, deny = _deny, ask = _ask)
+    return _finalizers(_build)
 
 def tool(name = None):
     """Build a tool rule.
 
     Usage:
-        tool().allow()           # allow all tools
-        tool("WebSearch").deny() # deny specific tool
+        tool().allow()                    # allow all tools
+        tool("WebSearch").deny()          # deny specific tool
+        tool(regex("mcp__.*")).ask()      # ask for all MCP tools
     """
-    _name = {"any": None} if name == None else {"literal": name}
+    def _build(effect):
+        return rule({"rule": {"effect": effect, "tool": {"name": _pattern(name)}}})
 
-    def _allow():
-        return rule({"rule": {"effect": "allow", "tool": {"name": _name}}})
-
-    def _deny():
-        return rule({"rule": {"effect": "deny", "tool": {"name": _name}}})
-
-    def _ask():
-        return rule({"rule": {"effect": "ask", "tool": {"name": _name}}})
-
-    return struct(allow = _allow, deny = _deny, ask = _ask)
+    return _finalizers(_build)
 
 def match_exes(exe_list):
     """Build an exec rule matching multiple binaries.
 
     Usage:
         match_exes(["rustc", "cargo"]).allow().sandbox(rust_sandbox)
+        match_exes(["git", regex("gh.*")]).ask()
     """
-    bins = [{"literal": b} for b in exe_list]
-    bin_pattern = {"or": bins} if len(bins) > 1 else bins[0]
-    _exec = {"bin": bin_pattern}
+    _exec = {"bin": _patterns(exe_list)}
 
-    def _allow():
-        return rule({"rule": {"effect": "allow", "exec": _exec}})
+    def _build(effect):
+        return rule({"rule": {"effect": effect, "exec": _exec}})
 
-    def _deny():
-        return rule({"rule": {"effect": "deny", "exec": _exec}})
-
-    def _ask():
-        return rule({"rule": {"effect": "ask", "exec": _exec}})
-
-    return struct(allow = _allow, deny = _deny, ask = _ask)
+    return _finalizers(_build)
