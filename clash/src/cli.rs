@@ -89,8 +89,8 @@ pub enum PolicyCmd {
 pub enum Commands {
     /// Initialize a new clash policy with a safe default configuration
     ///
-    /// Pass "user" to create a global policy (~/.clash/policy.json) or
-    /// "project" to create a repo-scoped policy (.clash/policy.json).
+    /// Pass "user" to create a global policy (~/.clash/policy.star) or
+    /// "project" to create a repo-scoped policy (.clash/policy.star).
     /// When no scope is given, an interactive prompt lets you choose.
     Init {
         /// Skip setting bypassPermissions in Claude Code settings
@@ -141,7 +141,7 @@ pub enum Commands {
     /// Launch Claude Code with clash managing hooks and sandbox enforcement
     #[command(hide = true)]
     Launch {
-        /// Path to policy file (default: ~/.clash/policy.json)
+        /// Path to policy file (default: ~/.clash/policy.star)
         #[arg(long)]
         policy: Option<String>,
 

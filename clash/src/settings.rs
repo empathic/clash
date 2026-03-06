@@ -37,11 +37,11 @@ fn is_truthy_disable_value(value: &str) -> bool {
 /// Higher-precedence levels override lower ones: Session > Project > User.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PolicyLevel {
-    /// User-level policy: `~/.clash/policy.json`
+    /// User-level policy: `~/.clash/policy.star` (or `.json`)
     User = 0,
-    /// Project-level policy: `<project_root>/.clash/policy.json`
+    /// Project-level policy: `<project_root>/.clash/policy.star` (or `.json`)
     Project = 1,
-    /// Session-level policy: `/tmp/clash-<session_id>/policy.json`
+    /// Session-level policy: `/tmp/clash-<session_id>/policy.star`
     /// Temporary rules that last only for the current Claude Code session.
     Session = 2,
 }
