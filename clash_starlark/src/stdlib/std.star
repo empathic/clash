@@ -11,10 +11,13 @@ def _pattern(value):
 
     - None          → {"any": null}
     - "foo"         → {"literal": "foo"}
+    - ["a", "b"]    → {"or": [{"literal": "a"}, {"literal": "b"}]}
     - regex("...")  → {"regex": "..."}
     """
     if value == None:
         return {"any": None}
+    if type(value) == "list":
+        return {"or": [_pattern(v) for v in value]}
     if type(value) == "struct" and hasattr(value, "_regex"):
         return {"regex": value._regex}
     return {"literal": value}

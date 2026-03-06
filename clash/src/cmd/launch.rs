@@ -12,9 +12,9 @@ pub fn run(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
 
     // Validate that we have a policy if one was specified
     if let Some(ref path) = policy_path {
-        let contents = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read policy file: {}", path))?;
-        crate::policy::compile::compile_policy(&contents)
+        let json = crate::settings::evaluate_star_policy(std::path::Path::new(path))
+            .with_context(|| format!("failed to evaluate policy file: {}", path))?;
+        crate::policy::compile::compile_policy(&json)
             .with_context(|| format!("failed to compile policy file: {}", path))?;
         info!(path, "Using policy file");
     }

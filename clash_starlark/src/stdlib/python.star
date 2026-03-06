@@ -1,4 +1,4 @@
-load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "domains")
+load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "domains", "exe", "regex")
 
 python_sandbox = sandbox(
     default = deny,
@@ -16,3 +16,5 @@ python_sandbox = sandbox(
         }),
     ],
 )
+
+python = exe(regex("python3?")).sandbox(python_sandbox).allow()

@@ -91,9 +91,9 @@ fn load_sandbox_for_profile(profile_name: &str, cwd: &str) -> Result<SandboxPoli
     use crate::settings::ClashSettings;
 
     let path = ClashSettings::policy_file()?;
-    let source = std::fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let tree = crate::policy::compile::compile_policy(&source)
+    let json = crate::settings::evaluate_star_policy(&path)
+        .with_context(|| format!("failed to evaluate {}", path.display()))?;
+    let tree = crate::policy::compile::compile_policy(&json)
         .with_context(|| format!("failed to compile {}", path.display()))?;
 
     tree.build_sandbox_policy(profile_name, cwd).ok_or_else(|| {

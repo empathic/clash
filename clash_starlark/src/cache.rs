@@ -23,9 +23,15 @@ impl StarCache {
         StarCache { cache_dir: dir }
     }
 
-    /// Compute a cache key from the source content and all loaded file contents.
+    /// Compute a cache key from the source content, loaded file contents,
+    /// and the embedded stdlib version.
+    ///
+    /// The stdlib hash ensures the cache is invalidated when the embedded
+    /// stdlib modules change (since they aren't on disk and wouldn't appear
+    /// in `loaded_files`).
     pub fn cache_key(source: &str, loaded_files: &[String]) -> String {
         let mut hasher = Sha256::new();
+        hasher.update(Self::STDLIB_CONTENT.as_bytes());
         hasher.update(source.as_bytes());
         for f in loaded_files {
             if let Ok(contents) = std::fs::read(f) {
@@ -35,6 +41,17 @@ impl StarCache {
         let hash = hasher.finalize();
         format!("{hash:x}")
     }
+
+    /// Embedded stdlib source concatenated at compile time.
+    ///
+    /// Included in the cache key hash so that changes to any `@clash//`
+    /// stdlib module automatically invalidate cached results.
+    const STDLIB_CONTENT: &str = concat!(
+        include_str!("stdlib/std.star"),
+        include_str!("stdlib/rust.star"),
+        include_str!("stdlib/node.star"),
+        include_str!("stdlib/python.star"),
+    );
 
     /// Look up a cached result.
     pub fn get(&self, key: &str) -> Option<String> {

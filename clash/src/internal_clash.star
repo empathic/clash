@@ -13,7 +13,6 @@ def main():
         default = deny,
         rules = [
             home().child(".clash", read = allow),
-
             exe("clash", args = ["bug"]).allow().sandbox(net_sandbox),
             exe("clash", args = ["status"]).allow(),
             exe("clash", args = ["policy", "list"]).allow(),

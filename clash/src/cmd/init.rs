@@ -175,18 +175,11 @@ fn run_init_project() -> Result<()> {
     let clash_dir = project_root.join(".clash");
     let policy_path = clash_dir.join("policy.star");
 
-    // Also check for legacy .json to avoid overwriting an existing project policy.
-    let json_path = clash_dir.join("policy.json");
-    if policy_path.exists() || json_path.exists() {
-        let existing = if policy_path.exists() {
-            &policy_path
-        } else {
-            &json_path
-        };
+    if policy_path.exists() {
         println!(
             "{} Project policy already exists at {}",
             style::dim("·"),
-            existing.display()
+            policy_path.display()
         );
         return Ok(());
     }

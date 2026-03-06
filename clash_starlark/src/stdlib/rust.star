@@ -1,4 +1,4 @@
-load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "domains")
+load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "domains", "exe")
 
 rust_sandbox = sandbox(
     default = deny,
@@ -17,3 +17,6 @@ rust_sandbox = sandbox(
         }),
     ],
 )
+
+
+rust = exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow()

@@ -37,9 +37,9 @@ fn is_truthy_disable_value(value: &str) -> bool {
 /// Higher-precedence levels override lower ones: Session > Project > User.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PolicyLevel {
-    /// User-level policy: `~/.clash/policy.star` (or `.json`)
+    /// User-level policy: `~/.clash/policy.star`
     User = 0,
-    /// Project-level policy: `<project_root>/.clash/policy.star` (or `.json`)
+    /// Project-level policy: `<project_root>/.clash/policy.star`
     Project = 1,
     /// Session-level policy: `/tmp/clash-<session_id>/policy.star`
     /// Temporary rules that last only for the current Claude Code session.
@@ -182,27 +182,23 @@ impl ClashSettings {
 
     /// Returns the user-level policy file path.
     ///
-    /// Respects `CLASH_POLICY_FILE` env var for backward compatibility.
-    /// Prefers `policy.star` over `policy.json` when both exist.
+    /// Respects `CLASH_POLICY_FILE` env var for override.
     pub fn policy_file() -> Result<PathBuf> {
         if let Ok(p) = std::env::var("CLASH_POLICY_FILE") {
             return Ok(PathBuf::from(p));
         }
-        let dir = Self::settings_dir()?;
-        Ok(discover_policy_file(&dir).unwrap_or_else(|| dir.join("policy.star")))
+        Ok(Self::settings_dir()?.join("policy.star"))
     }
 
     /// Returns the policy file path for a specific level.
     ///
     /// For `Session`, reads the active session ID from `~/.clash/active_session`.
-    /// Prefers `policy.star` over `policy.json` when both exist.
     pub fn policy_file_for_level(level: PolicyLevel) -> Result<PathBuf> {
         match level {
             PolicyLevel::User => Self::policy_file(),
             PolicyLevel::Project => {
                 let root = Self::project_root()?;
-                let dir = root.join(".clash");
-                Ok(discover_policy_file(&dir).unwrap_or_else(|| dir.join("policy.star")))
+                Ok(root.join(".clash").join("policy.star"))
             }
             PolicyLevel::Session => {
                 let session_id = Self::active_session_id()?;
@@ -213,7 +209,7 @@ impl ClashSettings {
 
     // Returns the policy file path for a session, given its ID.
     pub fn session_policy_path(session_id: &str) -> PathBuf {
-        crate::audit::session_dir(session_id).join("policy.json")
+        crate::audit::session_dir(session_id).join("policy.star")
     }
 
     /// Path to the active-session marker file.
@@ -382,7 +378,7 @@ impl ClashSettings {
         self.compiled.as_ref()
     }
 
-    /// Load and validate a policy file from an explicit path, then compile it.
+    /// Load and validate a .star policy file from an explicit path, then compile it.
     ///
     /// Returns true if a policy was successfully loaded and compiled.
     #[cfg(test)]
@@ -438,35 +434,11 @@ impl ClashSettings {
             }
         }
 
-        match std::fs::read_to_string(path) {
-            Ok(mut contents) => {
-                if contents.trim().is_empty() {
-                    warn!(path = %path.display(), "policy file is empty — using default (ask for everything)");
-                    self.policy_error = Some(
-                        "policy file is empty. All actions will default to 'ask'. \
-                         Run `clash init --force` to generate a starter policy."
-                            .into(),
-                    );
-                    return false;
-                }
-
-                // Auto-migrate: (env CWD) was renamed to (env PWD).
-                if contents.contains("(env CWD)") {
-                    contents = contents.replace("(env CWD)", "(env PWD)");
-                    if let Err(e) = std::fs::write(path, &contents) {
-                        warn!(path = %path.display(), error = %e, "Failed to auto-migrate CWD→PWD");
-                    } else {
-                        info!(path = %path.display(), "Auto-migrated (env CWD) → (env PWD)");
-                    }
-                }
-
-                // Try to parse notification/audit config from YAML comments or
-                // a separate yaml file. For now, check if there is a companion
-                // policy.yaml for notification/audit config.
+        match evaluate_star_policy(path) {
+            Ok(json_source) => {
                 self.load_notification_audit_config();
-
                 match crate::policy::compile::compile_to_tree(
-                    &contents,
+                    &json_source,
                     &crate::policy::compile::StdEnvResolver,
                 ) {
                     Ok(tree) => {
@@ -483,14 +455,8 @@ impl ClashSettings {
                 }
             }
             Err(e) => {
-                let msg = match e.kind() {
-                    std::io::ErrorKind::PermissionDenied => format!(
-                        "Permission denied reading {}. Check file ownership and permissions.",
-                        path.display()
-                    ),
-                    _ => format!("Failed to read policy file: {}", e),
-                };
-                warn!(path = %path.display(), error = %e, "Failed to read policy file");
+                let msg = format!("Failed to evaluate policy: {}", e);
+                warn!(path = %path.display(), error = %e, "Failed to evaluate policy");
                 self.policy_error = Some(msg);
                 false
             }
@@ -654,70 +620,26 @@ impl ClashSettings {
             }
         }
 
-        // Handle .star files via starlark evaluation
-        if path.extension().and_then(|e| e.to_str()) == Some("star") {
-            match evaluate_star_policy(path) {
-                Ok(json_source) => {
-                    if level == PolicyLevel::User {
-                        self.load_notification_audit_config();
-                    }
-                    let loaded = LoadedPolicy {
-                        level,
-                        path: path.to_path_buf(),
-                        source: json_source.clone(),
-                    };
-                    return Some((json_source, loaded));
-                }
-                Err(e) => {
-                    error!(
-                        path = %path.display(),
-                        level = %level,
-                        error = %e,
-                        "Failed to evaluate starlark policy"
-                    );
-                    self.policy_error =
-                        Some(format!("Failed to evaluate {}: {}", path.display(), e));
-                    return None;
-                }
-            }
-        }
-
-        match std::fs::read_to_string(path) {
-            Ok(mut contents) => {
-                if contents.trim().is_empty() {
-                    return None;
-                }
-
-                // Auto-migrate: (env CWD) was renamed to (env PWD).
-                if contents.contains("(env CWD)") {
-                    contents = contents.replace("(env CWD)", "(env PWD)");
-                    if let Err(e) = std::fs::write(path, &contents) {
-                        warn!(path = %path.display(), error = %e, "Failed to auto-migrate CWD→PWD");
-                    } else {
-                        info!(path = %path.display(), "Auto-migrated (env CWD) → (env PWD)");
-                    }
-                }
-
-                // Load notification config only from user-level policy.yaml
+        match evaluate_star_policy(path) {
+            Ok(json_source) => {
                 if level == PolicyLevel::User {
                     self.load_notification_audit_config();
                 }
-
                 let loaded = LoadedPolicy {
                     level,
                     path: path.to_path_buf(),
-                    source: contents.clone(),
+                    source: json_source.clone(),
                 };
-
-                Some((contents, loaded))
+                Some((json_source, loaded))
             }
             Err(e) => {
-                warn!(
+                error!(
                     path = %path.display(),
                     level = %level,
                     error = %e,
-                    "Failed to read policy file"
+                    "Failed to evaluate starlark policy"
                 );
+                self.policy_error = Some(format!("Failed to evaluate {}: {}", path.display(), e));
                 None
             }
         }
@@ -761,23 +683,8 @@ fn parse_audit_config(yaml_str: &str) -> AuditConfig {
     }
 }
 
-/// Discover the preferred policy file in a directory.
-///
-/// Prefers `policy.star` over `policy.json`.
-fn discover_policy_file(dir: &std::path::Path) -> Option<PathBuf> {
-    let star = dir.join("policy.star");
-    if star.exists() {
-        return Some(star);
-    }
-    let json = dir.join("policy.json");
-    if json.exists() {
-        return Some(json);
-    }
-    None
-}
-
 /// Evaluate a `.star` policy file and return the compiled JSON source.
-fn evaluate_star_policy(path: &std::path::Path) -> Result<String> {
+pub fn evaluate_star_policy(path: &std::path::Path) -> Result<String> {
     let source = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
 
@@ -842,6 +749,8 @@ mod test {
         fn resolve(&self, name: &str) -> anyhow::Result<String> {
             match name {
                 "PWD" => Ok("/tmp".into()),
+                "HOME" => Ok("/tmp/home".into()),
+                "TMPDIR" => Ok("/tmp".into()),
                 other => anyhow::bail!("unknown env var in test: {other}"),
             }
         }
@@ -863,7 +772,7 @@ mod test {
     #[test]
     fn load_missing_file_returns_false() {
         let mut settings = ClashSettings::default();
-        let path = std::path::Path::new("/tmp/clash-test-nonexistent-policy.json");
+        let path = std::path::Path::new("/tmp/clash-test-nonexistent-policy.star");
         let _ = std::fs::remove_file(path);
         let result = settings.load_policy_from_path(path);
         assert!(!result);
@@ -876,7 +785,7 @@ mod test {
     #[test]
     fn load_directory_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.json");
+        let policy_path = dir.path().join("policy.star");
         std::fs::create_dir(&policy_path).unwrap();
 
         let mut settings = ClashSettings::default();
@@ -892,31 +801,15 @@ mod test {
     #[test]
     fn load_empty_file_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.json");
+        let policy_path = dir.path().join("policy.star");
         std::fs::write(&policy_path, "").unwrap();
 
         let mut settings = ClashSettings::default();
         let result = settings.load_policy_from_path(&policy_path);
         assert!(!result);
         assert!(
-            settings.policy_error().unwrap().contains("empty"),
-            "expected empty file error, got: {:?}",
-            settings.policy_error()
-        );
-    }
-
-    #[test]
-    fn load_whitespace_only_file_sets_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.json");
-        std::fs::write(&policy_path, "   \n\n  \t  \n").unwrap();
-
-        let mut settings = ClashSettings::default();
-        let result = settings.load_policy_from_path(&policy_path);
-        assert!(!result);
-        assert!(
-            settings.policy_error().unwrap().contains("empty"),
-            "expected empty file error, got: {:?}",
+            settings.policy_error().is_some(),
+            "expected error for empty file, got: {:?}",
             settings.policy_error()
         );
     }
@@ -924,7 +817,7 @@ mod test {
     #[test]
     fn load_oversized_file_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.json");
+        let policy_path = dir.path().join("policy.star");
         let mut f = std::fs::File::create(&policy_path).unwrap();
         let chunk = vec![b'#'; 8192];
         for _ in 0..(ClashSettings::MAX_POLICY_SIZE / 8192 + 1) {
@@ -944,11 +837,10 @@ mod test {
 
     #[test]
     fn load_valid_policy_succeeds() {
-        // Use a policy without (env PWD) to avoid needing env vars in tests.
-        let simple_policy = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}}}}}]}]}"#;
+        let star_policy = "load(\"@clash//std.star\", \"policy\")\ndef main():\n    return policy(default = allow, rules = [])\n";
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.json");
-        std::fs::write(&policy_path, simple_policy).unwrap();
+        let policy_path = dir.path().join("policy.star");
+        std::fs::write(&policy_path, star_policy).unwrap();
 
         let mut settings = ClashSettings::default();
         let result = settings.load_policy_from_path(&policy_path);
@@ -960,25 +852,22 @@ mod test {
     #[test]
     fn load_malformed_policy_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.json");
-        std::fs::write(&policy_path, r#"{"schema_version": 1, "invalid": true"#).unwrap();
+        let policy_path = dir.path().join("policy.star");
+        std::fs::write(&policy_path, "this is not valid starlark {{{").unwrap();
 
         let mut settings = ClashSettings::default();
         let result = settings.load_policy_from_path(&policy_path);
         assert!(!result);
         assert!(
-            settings
-                .policy_error()
-                .unwrap()
-                .contains("Failed to compile"),
-            "expected compile error, got: {:?}",
+            settings.policy_error().is_some(),
+            "expected error for malformed policy, got: {:?}",
             settings.policy_error()
         );
     }
 
     #[test]
     fn set_policy_source_works() {
-        // Use a policy without (env PWD) to avoid needing env vars in tests.
+        // set_policy_source takes JSON IR (the compiled output of starlark evaluation).
         let simple_policy = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}}}}}]}]}"#;
         let mut settings = ClashSettings::default();
         settings.set_policy_source(simple_policy);
@@ -989,7 +878,7 @@ mod test {
     #[test]
     fn ensure_policy_creates_file_when_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join(".clash").join("policy.json");
+        let policy_path = dir.path().join(".clash").join("policy.star");
 
         let result = ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
         assert!(result.is_some(), "should have created the file");
@@ -1003,22 +892,19 @@ mod test {
     #[test]
     fn ensure_policy_noop_when_exists() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.json");
-        std::fs::write(&policy_path, r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": []}]}"#).unwrap();
+        let policy_path = dir.path().join("policy.star");
+        std::fs::write(
+            &policy_path,
+            "def main():\n    return policy(default = deny, rules = [])\n",
+        )
+        .unwrap();
 
         let result = ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
         assert!(result.is_none(), "should not recreate existing file");
 
         // Verify original content is preserved.
         let contents = std::fs::read_to_string(&policy_path).unwrap();
-        assert!(
-            contents.contains("default_effect"),
-            "original content preserved"
-        );
-        assert!(
-            !contents.contains("cwd-access"),
-            "should not overwrite with default"
-        );
+        assert!(contents.contains("def main"), "original content preserved");
     }
 
     #[test]
@@ -1027,7 +913,7 @@ mod test {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join(".clash").join("policy.json");
+        let policy_path = dir.path().join(".clash").join("policy.star");
 
         ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
         let mode = std::fs::metadata(&policy_path)

@@ -193,7 +193,7 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
     let mut results: Vec<serde_json::Value> = Vec::new();
 
     for (level, path) in &levels {
-        let source = match std::fs::read_to_string(path) {
+        let source = match crate::settings::evaluate_star_policy(path) {
             Ok(s) => s,
             Err(e) => {
                 all_valid = false;
@@ -202,7 +202,7 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
                         "level": level.to_string(),
                         "path": path.display().to_string(),
                         "valid": false,
-                        "error": format!("failed to read: {}", e),
+                        "error": format!("{}", e),
                     }));
                 } else {
                     eprintln!(
@@ -211,7 +211,7 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
                         style::cyan(&format!("[{}]", level)),
                         path.display()
                     );
-                    eprintln!("  {}", style::dim(&format!("failed to read: {}", e)));
+                    eprintln!("  {}", style::dim(&format!("{}", e)));
                 }
                 continue;
             }
@@ -296,8 +296,8 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
 }
 
 fn validate_single_file(path: &std::path::Path, json: bool) -> Result<()> {
-    let source = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read: {}", path.display()))?;
+    let source = crate::settings::evaluate_star_policy(path)
+        .with_context(|| format!("failed to evaluate: {}", path.display()))?;
 
     match crate::policy::compile::compile_policy(&source) {
         Ok(tree) => {

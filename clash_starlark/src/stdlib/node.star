@@ -1,4 +1,4 @@
-load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "domains")
+load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "domains", "exe")
 
 node_sandbox = sandbox(
     default = deny,
@@ -16,3 +16,5 @@ node_sandbox = sandbox(
         }),
     ],
 )
+
+node = exe(["node", "bun", "deno"]).sandbox(node_sandbox).allow()
