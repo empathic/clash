@@ -17,6 +17,7 @@ Clash operates on three capability domains, not individual tools. Tool invocatio
 | `WebFetch` | `net` | domain extracted from `url` |
 | `WebSearch` | `net` | domain = `*` (any) |
 | `Glob`/`Grep` | `fs(read)` | path = `path` or `pattern` |
+| `Skill`, `Agent`, etc. | `tool` | name = tool name |
 | Unknown tools | — | no capability match → default effect |
 
 > **Enforcement scope:** This capability mapping applies to top-level tool calls intercepted by Claude Code hooks. When a Bash command spawns child processes, those child processes are *not* re-evaluated against exec rules — only the top-level command is matched. Filesystem and network restrictions from sandbox policies are enforced at the kernel level and apply to all descendant processes. See [#136](https://github.com/empathic/clash/issues/136) for tracking exec-level enforcement of child processes.
@@ -26,7 +27,10 @@ Clash operates on three capability domains, not individual tools. Tool invocatio
 ## Compilation Pipeline
 
 ```
-S-expression source text
+Starlark source (.star) or JSON
+    │
+    ▼
+JSON IR                         ← clash_starlark (if .star)
     │
     ▼
 Vec<TopLevel> (AST)             ← parse.rs
@@ -37,7 +41,7 @@ Vec<TopLevel> (AST)             ← parse.rs
     │
     ▼
 PolicyTree (IR)                 ← compile.rs, tree.rs
-    │                             (v1 also compiles to flat DecisionTree)
+    │
     ├── default: Effect
     ├── policy_name: String
     ├── root: Node               (tree-shaped decision structure)
@@ -51,56 +55,36 @@ PolicyTree (IR)                 ← compile.rs, tree.rs
 
 ### Compilation Steps
 
-1. **Parse** — s-expression text → AST (`Vec<TopLevel>`)
-2. **Extract version** — read the `(version N)` declaration from the AST (default: 1 if absent)
-3. **Validate version** — verify the declared version is a known version (≤ `CURRENT_VERSION`); reject unknown future versions. Future: check for deprecated features based on the declared version.
-4. **Find default** — extract the `(default effect "name")` declaration
-5. **Build policy map** — index all `(policy "name" ...)` blocks by name
-6. **Flatten** — recursively resolve `(include ...)` into a flat rule list
-7. **Validate sandbox references** — verify each named `:sandbox "name"` points to an existing policy; compile inline `:sandbox (rule ...)` rules immediately
-8. **Group** — split rules by capability domain (exec/fs/net)
-9. **Compile matchers** — convert AST patterns to IR with pre-compiled regexes, resolve `(env NAME)` references
-10. **Sort by specificity** — most specific rules first within each domain
-11. **Detect conflicts** — reject rules with equal specificity but different effects that could match the same request
-12. **Compile sandbox policies** — for each named sandbox reference, compile the referenced policy's rules into standalone rule sets (inline sandbox rules are compiled in step 7)
+0. **Evaluate Starlark** (if `.star`) — run `main()` to produce JSON IR via `clash_starlark`
+1. **Parse** — JSON IR → AST (`Vec<TopLevel>`)
+2. **Find default** — extract the `default_effect` and `use` declarations
+3. **Inject internal policies** — prepend internal policies (clash self-management, interactive tools) to the active policy, namespacing auto-generated sandbox names to prevent collisions
+4. **Build policy map** — index all policy objects by name
+5. **Flatten** — recursively resolve `{ "include": "name" }` into a flat rule list
+6. **Validate sandbox references** — verify each named `"sandbox": { "named": "name" }` points to an existing policy
+7. **Group** — split rules by capability domain (exec/fs/net/tool)
+8. **Compile matchers** — convert AST patterns to IR with pre-compiled regexes, resolve `{ "env": "NAME" }` references
+9. **Compile sandbox policies** — for each named sandbox reference, compile the referenced policy's rules into standalone rule sets
 
 ---
 
-## Specificity Model
+## Rule Ordering
 
-Rules are ranked by containment: if every request matching rule A also matches rule B, then A is more specific than B. Specificity is computed per-domain:
+Within a capability domain, rules use **first-match semantics**: the first rule whose matcher matches the request determines the effect. Rules are evaluated in the order they appear in the policy.
 
-### Exec Rules
+This means **order matters**. Put more specific rules before broader ones:
 
-| Component | Score |
-|-----------|-------|
-| Primary: bin pattern | Literal(3) > Regex(1) > Any(0) |
-| Secondary: argument specificity | Sum of arg pattern scores + arg count |
+```python
+# Correct: deny matches git push first, allow catches everything else
+exe("git", args = ["push"]).deny()
+exe("git").allow()
 
-More args = more specific. Literal args score higher than wildcards.
+# Wrong: allow matches git push first, deny never fires
+exe("git").allow()
+exe("git", args = ["push"]).deny()
+```
 
-### Fs Rules
-
-| Component | Score |
-|-----------|-------|
-| Primary: path filter | Literal(3) > Regex(2) > Subpath(1) > None(0) |
-| Secondary: op pattern | Single(2) > Or(1) > Any(0) |
-
-### Net Rules
-
-| Component | Score |
-|-----------|-------|
-| Primary: domain pattern | Literal(3) > Regex(1) > Any(0) |
-| Secondary | Always 0 |
-
-### Conflict Detection
-
-Two rules **conflict** when:
-1. They have equal specificity
-2. They have different effects
-3. Their matchers may overlap (conservative check: different literals in the same position prove non-overlap)
-
-Conflicts are compile-time errors. This guarantees that specificity ordering is unambiguous.
+There is no automatic sorting or conflict detection — the policy author controls evaluation order directly.
 
 ---
 
@@ -129,14 +113,11 @@ evaluate(tool_name, tool_input, cwd):
 
 ### First-Match Semantics
 
-Within a capability domain, the first matching rule wins. This is safe because:
-- Rules are sorted by specificity (most specific first)
-- Conflicts are rejected at compile time
-- Therefore, the first match is always the most specific applicable rule
+Within a capability domain, the first matching rule wins. Rules are evaluated in the order they appear in the policy — the author controls precedence through ordering.
 
 ### Path Resolution
 
-Relative paths in tool inputs are resolved against the current working directory before matching against path filters. This means `(subpath (env PWD))` correctly matches both absolute paths under CWD and relative paths.
+Relative paths in tool inputs are resolved against the current working directory before matching against path filters. This means `{ "subpath": { "path": { "env": "PWD" } } }` correctly matches both absolute paths under CWD and relative paths.
 
 ---
 
@@ -152,9 +133,9 @@ This enables the `clash explain` command and structured audit logging.
 
 ---
 
-## Constraint Derivation (v3)
+## Constraint Derivation
 
-In v3, runtime constraints (filesystem and network sandbox policies) are derived from surviving `(match ...)` blocks in the decision tree, rather than from explicit `(sandbox ...)` annotations.
+Runtime constraints (filesystem and network sandbox policies) are derived from match blocks in the decision tree.
 
 ### How It Works
 
@@ -182,7 +163,7 @@ All sandbox policies automatically include read/write/create/delete/execute acce
 
 ### Worktree-Aware Path Expansion
 
-The `(subpath :worktree <path>)` path filter supports git worktrees at compile time. When the resolved path is inside a git worktree, the compiler detects this by reading the `.git` file's `gitdir:` pointer and the `commondir` file, then expands the single `subpath` into an `or` filter covering:
+The `{ "subpath": { "path": { "env": "PWD" }, "worktree": true } }` path filter supports git worktrees at compile time. When the resolved path is inside a git worktree, the compiler detects this by reading the `.git` file's `gitdir:` pointer and the `commondir` file, then expands the single `subpath` into an `or` filter covering:
 
 1. The original resolved path
 2. The worktree-specific git directory (e.g., `/path/to/repo/.git/worktrees/my-branch`)
@@ -190,7 +171,7 @@ The `(subpath :worktree <path>)` path filter supports git worktrees at compile t
 
 This ensures that git commands (commit, push, etc.) work correctly inside worktrees, since git stores its data (objects, refs, config) in the main repository's `.git/` directory outside the worktree's own directory tree.
 
-When the path is not inside a worktree, `:worktree` has no effect — the filter compiles to a plain `subpath`. The default policy uses `(subpath :worktree (env PWD))` for CWD access rules.
+When the path is not inside a worktree, `"worktree": true` has no effect — the filter compiles to a plain `subpath`. The default policy uses `"worktree": true` on `env PWD` subpath rules for CWD access rules.
 
 Sandbox enforcement covers filesystem and network access only. Exec-level argument matching (e.g., distinguishing `git push` from `git status`) is not enforced on child processes within the sandbox — only the top-level command is checked against exec rules. See [#136](https://github.com/empathic/clash/issues/136) for the tracking issue.
 
@@ -198,16 +179,14 @@ Sandbox enforcement covers filesystem and network access only. Exec-level argume
 
 ## Deny-Overrides Precedence
 
-The deny-overrides principle applies at two levels:
+The deny-overrides principle applies **across capability domains**: if a request matches rules in multiple domains (exec, fs, net, tool), deny > ask > allow.
 
-1. **Within a domain**: first-match wins (specificity ordering ensures the most specific rule is checked first)
-2. **Across domains**: if a request matches rules in multiple domains, deny > ask > allow
+Within a single domain, **first-match wins** — the policy author controls precedence through rule ordering. To express "deny everything except X", put the allow rule before the deny rule:
 
-A deny rule can never be overridden by an allow rule. To express "deny everything except X", use negation patterns:
-
-```
-(deny  (fs write (not (subpath (env PWD)))))   ; deny writes outside CWD
-(allow (fs write (subpath (env PWD))))          ; allow writes inside CWD
+```python
+# Allow writes under CWD, deny writes everywhere else
+cwd(write = allow)
+# The default=deny handles everything not matched above
 ```
 
 See [ADR-002](./adr/002-deny-overrides.md) for the full rationale.

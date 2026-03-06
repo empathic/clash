@@ -58,7 +58,7 @@ files you specify.
 <div class="cards">
   <div class="card card--green">
     <h3>Rule</h3>
-    <p>An effect paired with a capability matcher. <code>(allow (exec "git" *))</code> lets the agent run any git command. <code>(deny (exec "git" "push" *))</code> blocks pushes. Rules are sorted by specificity — more specific rules always win.</p>
+    <p>An effect paired with a capability matcher. <code>exe("git").allow()</code> lets the agent run any git command. <code>exe("git", args=["push"]).deny()</code> blocks pushes. Rules use first-match semantics — put specific rules before broad ones.</p>
   </div>
   <div class="card card--amber">
     <h3>Domain</h3>
@@ -106,31 +106,54 @@ files you specify.
 
 ## A minimal policy
 
-```lisp
-; ~/.clash/policy.sexpr (user level)
-(default ask "main")
+```python
+# ~/.clash/policy.star (user level)
+load("@clash//std.star", "exe", "policy", "cwd", "domains")
 
-(policy "main"
-  (include "cwd-access")
-
-  ; Dev tools — auto-approve
-  (allow (exec "cargo" *))
-  (allow (exec "git" *))
-
-  ; Guardrails — always block
-  (deny (exec "git" "push" *))
-  (deny (exec "git" "reset" "--hard" *))
-
-  ; Network — allow GitHub
-  (allow (net "github.com")))
-
-; Reusable file-access block
-(policy "cwd-access"
-  (allow (fs read (subpath (env PWD))))
-  (allow (fs (or write create) (subpath (env PWD)))))
+def main():
+    return policy(default = ask, rules = [
+        cwd(follow_worktrees = True, read = allow, write = allow),
+        exe("cargo").allow(),
+        exe("git", args = ["push"]).deny(),
+        exe("git", args = ["reset", "--hard"]).deny(),
+        exe("git").allow(),
+        domains({"github.com": allow}),
+    ])
 ```
 
-Three effects: <span class="badge badge--allow">allow</span> auto-approves, <span class="badge badge--deny">deny</span> blocks, <span class="badge badge--ask">ask</span> prompts you. Deny always wins over allow. More specific rules beat less specific. Edits take effect immediately — no restart needed.
+<details>
+<summary>Compiled JSON IR</summary>
+
+```json
+{
+  "schema_version": 4,
+  "use": "main",
+  "default_effect": "ask",
+  "policies": [
+    {
+      "name": "cwd-access",
+      "body": [
+        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } },
+        { "rule": { "effect": "allow", "fs": { "op": { "or": ["write", "create"] }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } }
+      ]
+    },
+    {
+      "name": "main",
+      "body": [
+        { "include": "cwd-access" },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
+        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "reset" }, { "literal": "--hard" }, { "any": null }] } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
+        { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
+      ]
+    }
+  ]
+}
+```
+</details>
+
+Three effects: <span class="badge badge--allow">allow</span> auto-approves, <span class="badge badge--deny">deny</span> blocks, <span class="badge badge--ask">ask</span> prompts you. First matching rule wins — put specific rules before broad ones. Edits take effect immediately — no restart needed.
 
 </div>
 

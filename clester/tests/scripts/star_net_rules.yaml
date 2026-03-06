@@ -1,0 +1,52 @@
+meta:
+  name: starlark policy — network rules
+  description: Test net capability rules for WebFetch and WebSearch
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "policy", "domains")
+    def main():
+        return policy(default=deny, rules=[
+            domains({"github.com": allow, "api.github.com": allow}),
+        ])
+
+steps:
+  - name: webfetch github.com allowed
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://github.com/anthropics/claude-code"
+    expect:
+      decision: allow
+
+  - name: webfetch api.github.com allowed
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://api.github.com/repos"
+    expect:
+      decision: allow
+
+  - name: webfetch evil.com denied by default
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://evil.com/payload"
+    expect:
+      decision: deny
+
+  - name: webfetch unknown domain denied by default
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://example.com/page"
+    expect:
+      decision: deny
+
+  - name: websearch denied by default
+    hook: pre-tool-use
+    tool_name: WebSearch
+    tool_input:
+      query: "test query"
+    expect:
+      decision: deny

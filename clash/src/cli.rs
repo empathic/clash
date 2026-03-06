@@ -37,47 +37,6 @@ pub enum HooksCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum PolicyCmd {
-    /// Add an allow rule (bare verb like "edit" or s-expr like '(exec "git" *)')
-    Allow {
-        /// S-expr rule body or bare verb (edit, bash, read, web)
-        rule: String,
-        /// Print modified policy to stdout without writing
-        #[arg(long)]
-        dry_run: bool,
-        /// Policy level to modify: "user" or "project"
-        #[arg(long)]
-        scope: Option<String>,
-    },
-    /// Add a deny rule (bare verb like "bash" or s-expr like '(exec "git" "push" *)')
-    Deny {
-        /// S-expr rule body or bare verb (bash, edit, read, web)
-        rule: String,
-        #[arg(long)]
-        dry_run: bool,
-        /// Policy level to modify: "user" or "project"
-        #[arg(long)]
-        scope: Option<String>,
-    },
-    /// Add an ask rule (requires approval before executing)
-    Ask {
-        /// S-expr rule body or bare verb (bash, edit, read, web)
-        rule: String,
-        #[arg(long)]
-        dry_run: bool,
-        /// Policy level to modify: "user" or "project"
-        #[arg(long)]
-        scope: Option<String>,
-    },
-    /// Remove a rule from the policy
-    Remove {
-        /// Rule text to remove (Display form, e.g. '(deny (exec "git" "push" *))')
-        rule: String,
-        #[arg(long)]
-        dry_run: bool,
-        /// Policy level to modify: "user" or "project"
-        #[arg(long)]
-        scope: Option<String>,
-    },
     /// List rules in the active policy
     List {
         #[arg(long)]
@@ -92,24 +51,9 @@ pub enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Transactional policy editor (pipe, interactive, or one-liner)
-    Shell {
-        /// Print resulting policy without writing to disk
-        #[arg(long)]
-        dry_run: bool,
-        /// Policy level to modify: "user", "project", or "session"
-        #[arg(long)]
-        scope: Option<String>,
-        /// Execute a single statement and exit
-        #[arg(short = 'c', long = "command")]
-        command: Option<String>,
-    },
-    /// Upgrade policy syntax to the latest version
-    Upgrade {
-        /// Print upgraded policy to stdout without writing
-        #[arg(long)]
-        dry_run: bool,
-        /// Policy level to upgrade: "user" or "project"
+    /// Open the policy file in $EDITOR
+    Edit {
+        /// Policy scope to edit: "user" or "project" (default: auto-detect)
         #[arg(long)]
         scope: Option<String>,
     },
@@ -145,8 +89,8 @@ pub enum PolicyCmd {
 pub enum Commands {
     /// Initialize a new clash policy with a safe default configuration
     ///
-    /// Pass "user" to create a global policy (~/.clash/policy.sexpr) or
-    /// "project" to create a repo-scoped policy (.clash/policy.sexpr).
+    /// Pass "user" to create a global policy (~/.clash/policy.star) or
+    /// "project" to create a repo-scoped policy (.clash/policy.star).
     /// When no scope is given, an interactive prompt lets you choose.
     Init {
         /// Skip setting bypassPermissions in Claude Code settings
@@ -163,78 +107,7 @@ pub enum Commands {
         json: bool,
     },
 
-    /// Allow a capability (bash, edit, read, web) or s-expr rule
-    Allow {
-        /// Verb or s-expr rule
-        rule: String,
-        #[arg(long)]
-        dry_run: bool,
-        /// Policy level to modify: "user" or "project"
-        #[arg(long)]
-        scope: Option<String>,
-    },
-
-    /// Deny a capability (bash, edit, read, web) or s-expr rule
-    Deny {
-        /// Verb or s-expr rule
-        rule: String,
-        #[arg(long)]
-        dry_run: bool,
-        /// Policy level to modify: "user" or "project"
-        #[arg(long)]
-        scope: Option<String>,
-    },
-
-    /// Require approval for a capability (bash, edit, read, web) or s-expr rule
-    Ask {
-        /// Verb or s-expr rule
-        rule: String,
-        #[arg(long)]
-        dry_run: bool,
-        /// Policy level to modify: "user" or "project"
-        #[arg(long)]
-        scope: Option<String>,
-    },
-
-    /// Amend the policy: add and remove multiple rules in one atomic operation
-    ///
-    /// Each rule is either a full s-expr "(effect (matcher ...))" or a shortcut "effect:verb".
-    /// Supports mixing allow/deny/ask rules and removals in a single command.
-    ///
-    /// Deprecated: prefer `clash policy shell` for a transactional editing experience.
-    Amend {
-        /// Rules to add: "(allow (exec \"git\" *))" or "allow:bash"
-        #[arg(required_unless_present = "remove")]
-        rules: Vec<String>,
-
-        /// Rules to remove (Display form, e.g. '(allow (exec "git" *))')
-        #[arg(long, num_args = 1)]
-        remove: Vec<String>,
-
-        /// Print modified policy without writing
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Policy level to modify: "user", "project", or "session"
-        #[arg(long)]
-        scope: Option<String>,
-    },
-
-    /// Interactive policy editor
-    Edit {
-        /// Print modified policy without writing
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Policy level to modify: "user", "project", or "session"
-        #[arg(long)]
-        scope: Option<String>,
-    },
-
-    /// Full-screen TUI policy tree viewer
-    Tui,
-
-    /// View and edit policy rules
+    /// View and manage policy rules
     #[command(subcommand)]
     Policy(PolicyCmd),
 
@@ -268,7 +141,7 @@ pub enum Commands {
     /// Launch Claude Code with clash managing hooks and sandbox enforcement
     #[command(hide = true)]
     Launch {
-        /// Path to policy file (default: ~/.clash/policy.sexpr)
+        /// Path to policy file (default: ~/.clash/policy.star)
         #[arg(long)]
         policy: Option<String>,
 

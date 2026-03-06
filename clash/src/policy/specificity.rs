@@ -110,14 +110,57 @@ fn pattern_rank(p: &Pattern) -> u8 {
 /// Rank a path filter by specificity.
 fn path_filter_rank(pf: &PathFilter) -> u8 {
     match pf {
-        PathFilter::Subpath(_, _) => 1,
-        PathFilter::Regex(_) => 2,
-        PathFilter::Literal(_) => 3,
+        PathFilter::Subpath { path, worktree } => {
+            // Worktree-following paths are more constrained (they expand to
+            // a known set of peer directories).  CWD (env PWD) is always a
+            // leaf inside HOME (env HOME), so we give it a higher rank.
+            let depth = path_expr_depth(path);
+            if *worktree {
+                // worktree + depth: base 2 so it always beats plain Subpath(1)
+                (2 + depth).min(4)
+            } else {
+                // plain subpath: base 1, bumped by nested join depth
+                (1 + depth).min(4)
+            }
+        }
+        PathFilter::Regex(_) => 5,
+        PathFilter::Literal(_) => 6,
         PathFilter::Or(fs) => {
             let min = fs.iter().map(path_filter_rank).min().unwrap_or(0);
-            min.clamp(1, 2)
+            min.clamp(1, 5)
         }
         PathFilter::Not(_) => 1,
+    }
+}
+
+/// Depth score for a path expression. `Join` paths (e.g. `home / ".ssh"`)
+/// are deeper and more specific than bare `Env` or `Static` paths.
+///
+/// Well-known env vars have a containment-based depth: PWD is always inside
+/// HOME, so it gets a higher score. TMPDIR is system-global and less specific.
+fn path_expr_depth(pe: &PathExpr) -> u8 {
+    match pe {
+        PathExpr::Env(var) => env_var_depth(var),
+        PathExpr::Static(_) => 0,
+        PathExpr::Join(parts) => {
+            // Base depth from the root expression, plus one per additional segment.
+            let base = parts.first().map_or(0, path_expr_depth);
+            base.saturating_add(parts.len().saturating_sub(1) as u8)
+        }
+    }
+}
+
+/// Containment-based depth for well-known path variables.
+///
+/// Higher depth = more specific (contained within broader paths).
+/// PWD (cwd) is always inside HOME, so it ranks higher.
+fn env_var_depth(var: &str) -> u8 {
+    match var {
+        "TMPDIR" => 0,
+        "HOME" => 1,
+        "PWD" => 2,
+        "TRANSCRIPT_DIR" => 3,
+        _ => 0,
     }
 }
 
@@ -175,7 +218,10 @@ mod tests {
         }));
         let b = Specificity::from_matcher(&CapMatcher::Fs(FsMatcher {
             op: OpPattern::Single(FsOp::Write),
-            path: Some(PathFilter::Subpath(PathExpr::Env("PWD".into()), false)),
+            path: Some(PathFilter::Subpath {
+                path: PathExpr::Env("PWD".into()),
+                worktree: false,
+            }),
         }));
         assert!(a > b);
     }
@@ -262,10 +308,10 @@ mod tests {
     fn net_with_path_more_specific_than_without() {
         let with_path = Specificity::from_matcher(&CapMatcher::Net(NetMatcher {
             domain: Pattern::Literal("github.com".into()),
-            path: Some(PathFilter::Subpath(
-                PathExpr::Static("/owner/repo".into()),
-                false,
-            )),
+            path: Some(PathFilter::Subpath {
+                path: PathExpr::Static("/owner/repo".into()),
+                worktree: false,
+            }),
         }));
         let without_path = Specificity::from_matcher(&CapMatcher::Net(NetMatcher {
             domain: Pattern::Literal("github.com".into()),
@@ -282,10 +328,10 @@ mod tests {
         }));
         let subpath = Specificity::from_matcher(&CapMatcher::Net(NetMatcher {
             domain: Pattern::Literal("github.com".into()),
-            path: Some(PathFilter::Subpath(
-                PathExpr::Static("/owner/repo".into()),
-                false,
-            )),
+            path: Some(PathFilter::Subpath {
+                path: PathExpr::Static("/owner/repo".into()),
+                worktree: false,
+            }),
         }));
         assert!(literal > subpath);
     }

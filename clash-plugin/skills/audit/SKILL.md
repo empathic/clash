@@ -8,12 +8,7 @@ Check if the audit log exists:
 test -f ~/.clash/audit.jsonl && echo "exists" || echo "missing"
 ```
 
-If the file is missing, tell the user audit logging is not enabled. They can enable it by adding this to `~/.clash/policy.yaml`:
-
-```yaml
-audit:
-  enabled: true
-```
+If the file is missing, tell the user audit logging is not enabled. Check the clash documentation or run `clash doctor` for instructions on enabling audit logging.
 
 If the file exists, read the last 20 entries:
 

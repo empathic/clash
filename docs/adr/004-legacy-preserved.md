@@ -2,7 +2,7 @@
 
 ## Status
 
-**Superseded** (2026-02). Legacy formats have been removed. v2 s-expression format is the only policy format.
+**Superseded** (2026-02). Legacy formats have been removed. Starlark (.star) compiled to JSON IR is the only policy format.
 
 ## Context
 
@@ -27,12 +27,12 @@ Preserve backward compatibility with all previous formats. At compile time, all 
 
 ## Superseded By
 
-The v2 policy language replaces all previous formats with a single s-expression syntax. The legacy YAML formats, EVN triples, named constraints, profile expressions, and `CompiledProfileRule` IR have been removed.
+The v2 policy language replaces all previous formats with Starlark (.star) files compiled to JSON IR. The legacy YAML formats, EVN triples, named constraints, profile expressions, and `CompiledProfileRule` IR have been removed.
 
 Rationale:
 - Three input formats meant three parsers to maintain and test
 - Legacy formats could not express capability-level rules (exec/fs/net)
 - The unified IR required complex translation layers
-- v2's s-expression format is simpler, has compile-time conflict detection, and round-trips cleanly
+- Starlark/JSON format is simpler, has compile-time conflict detection, and round-trips cleanly
 
-Users migrating from v1 should rewrite their policies in v2 format. See the [Policy Writing Guide](../policy-guide.md) for examples.
+Users migrating from v1 should rewrite their policies in Starlark format. See the [Policy Writing Guide](../policy-guide.md) for examples.

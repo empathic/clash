@@ -368,11 +368,7 @@ mod tests {
     #[test]
     fn test_policy_allow_git_status() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
         );
         let result = check_permission(&bash_input("git status"), &settings)?;
         assert_decision(
@@ -386,12 +382,7 @@ mod tests {
     #[test]
     fn test_policy_deny_git_push() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}]}}}, {"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
         );
         let result = check_permission(&bash_input("git push origin main"), &settings)?;
         assert_decision(
@@ -405,11 +396,7 @@ mod tests {
     #[test]
     fn test_policy_default_deny() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
         );
         // ls doesn't match any rule
         let result = check_permission(&bash_input("ls"), &settings)?;
@@ -423,11 +410,7 @@ mod tests {
     #[test]
     fn test_policy_read_under_cwd() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath "/home/user/project"))))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/home/user/project"}}}}}}]}]}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Read".into(),
@@ -447,11 +430,7 @@ mod tests {
     #[test]
     fn test_policy_read_outside_cwd_denied() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath "/home/user/project"))))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/home/user/project"}}}}}}]}]}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Read".into(),
@@ -483,11 +462,7 @@ mod tests {
     #[test]
     fn test_explanation_contains_matched_rule() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
         );
         let result = check_permission(&bash_input("git status"), &settings)?;
         let ctx = get_additional_context(&result).expect("should have additional_context");
@@ -501,11 +476,7 @@ mod tests {
     #[test]
     fn test_explanation_no_rules_matched() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-(default ask "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "ask", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
         );
         let result = check_permission(&bash_input("ls"), &settings)?;
         let ctx = get_additional_context(&result).expect("should have additional_context");
@@ -559,11 +530,7 @@ mod tests {
     #[test]
     fn test_ask_user_question_allowed_by_blanket_tool_rule() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (tool)))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "tool": {}}}]}]}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "AskUserQuestion".into(),
@@ -584,12 +551,7 @@ mod tests {
     #[test]
     fn test_ask_user_question_denied_by_explicit_deny() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny (tool "AskUserQuestion"))
-  (allow (tool)))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "tool": {"name": {"literal": "AskUserQuestion"}}}}, {"rule": {"effect": "allow", "tool": {}}}]}]}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "AskUserQuestion".into(),
@@ -737,11 +699,7 @@ mod tests {
     #[test]
     fn test_deny_decision_includes_agent_context() -> Result<()> {
         let settings = settings_with_policy(
-            r#"
-(default deny "main")
-(policy "main"
-  (deny (exec *)))
-"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "exec": {}}}]}]}"#,
         );
         let result = check_permission(&bash_input("ls -la"), &settings)?;
         assert_eq!(

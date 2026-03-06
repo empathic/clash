@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
-use dialoguer::Confirm;
-use tracing::{Level, info, instrument, warn};
+use tracing::{Level, error, info, instrument, warn};
 
 use crate::settings::{ClashSettings, DEFAULT_POLICY};
-use crate::shell::ShellSession;
 use crate::style;
 
 /// GitHub repository used to install the clash plugin marketplace.
@@ -66,12 +64,7 @@ fn prompt_scope() -> Result<&'static str> {
     }
 }
 
-/// Initialize or reconfigure the user-level policy at `~/.clash/policy.sexpr`.
-///
-/// - If a sexp policy already exists, offers to reconfigure via the wizard.
-/// - If only a legacy YAML policy exists, migrates it via `claude -p`.
-/// - Otherwise, writes the default policy, installs the plugin, configures
-///   bypassPermissions, and launches the wizard.
+/// Initialize or reconfigure the user-level policy at `~/.clash/policy.star`.
 fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     // Always ensure settings.json records clash as an enabled plugin.
     // The `claude plugin install` command updates Claude Code's internal registry
@@ -81,31 +74,31 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
         warn!(error = %e, "Could not set enabledPlugins in Claude Code settings");
     }
 
-    let sexpr_path = ClashSettings::policy_file()?;
+    let policy_path = ClashSettings::policy_file()?;
 
-    if sexpr_path.exists() && sexpr_path.is_dir() {
+    if policy_path.exists() && policy_path.is_dir() {
         if dialoguer::Confirm::new()
             .with_prompt(format!(
                 "{} is a directory. Remove it and continue onboarding?",
-                sexpr_path.to_string_lossy(),
+                policy_path.to_string_lossy(),
             ))
             .interact()
-            .context("confirm removal of dir at sexpr path")?
+            .context("confirm removal of dir at policy path")?
         {
-            std::fs::remove_dir_all(&sexpr_path)?;
+            std::fs::remove_dir_all(&policy_path)?;
         } else {
             anyhow::bail!(
                 "{} is a directory. Remove it first, then run `clash init user`.",
-                sexpr_path.display()
+                policy_path.display()
             );
         }
     }
 
-    if sexpr_path.exists()
+    if policy_path.exists()
         && !dialoguer::Confirm::new()
             .with_prompt(format!(
                 "A policy already exists at {}. Reconfigure existing policy?",
-                sexpr_path.to_string_lossy()
+                policy_path.to_string_lossy()
             ))
             .interact()
             .unwrap_or_default()
@@ -113,31 +106,15 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
         return Ok(());
     }
 
-    let yaml_path = ClashSettings::legacy_policy_file()?;
-    if yaml_path.exists()
-        && yaml_path.is_file()
-        && Confirm::new()
-            .with_prompt(
-                "An existing policy.yaml was found. Should we attempt to migrate your settings?",
-            )
-            .default(false)
-            .interact()
-            .unwrap_or(false)
-    {
-        migrate_yaml_policy(&yaml_path, &sexpr_path)?;
-        let mut session = ShellSession::new(None, false, true)?;
-        return session.run_interactive();
-    }
-
     // Fresh install — write default policy.
     std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
-    std::fs::write(&sexpr_path, DEFAULT_POLICY)?;
+    std::fs::write(&policy_path, DEFAULT_POLICY)?;
 
     // Install the Claude Code plugin from GitHub.
     let plugin_installed = match install_plugin() {
         Ok(()) => true,
         Err(e) => {
-            warn!(error = %e, "Could not install clash plugin");
+            error!(error = %e, "Could not install clash plugin");
             eprintln!(
                 "{} Could not install the clash plugin: {e}\n  \
                  You can install it manually later:\n    \
@@ -183,12 +160,10 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     println!(
         "{} Clash initialized at {}\n",
         style::green_bold("✓"),
-        sexpr_path.display()
+        policy_path.display()
     );
 
-    // Launch the policy shell so the user can customize immediately.
-    let mut session = ShellSession::new(None, false, true)?;
-    session.run_interactive()
+    Ok(())
 }
 
 /// Initialize a project-level policy in the project root's `.clash/` directory.
@@ -197,7 +172,7 @@ fn run_init_project() -> Result<()> {
         .context("could not find project root — are you inside a git repository?")?;
 
     let clash_dir = project_root.join(".clash");
-    let policy_path = clash_dir.join("policy.sexpr");
+    let policy_path = clash_dir.join("policy.star");
 
     if policy_path.exists() {
         println!(
@@ -211,7 +186,7 @@ fn run_init_project() -> Result<()> {
     std::fs::create_dir_all(&clash_dir)
         .with_context(|| format!("failed to create {}", clash_dir.display()))?;
 
-    let project_policy = "(default deny \"main\")\n(policy \"main\")\n";
+    let project_policy = "def main():\n    return policy(default = deny, rules = [])\n";
     std::fs::write(&policy_path, project_policy)
         .with_context(|| format!("failed to write {}", policy_path.display()))?;
 
@@ -220,78 +195,6 @@ fn run_init_project() -> Result<()> {
         style::green_bold("✓"),
         policy_path.display()
     );
-    println!(
-        "\n{}",
-        style::dim("Add rules with: clash policy allow --scope project <rule>"),
-    );
-    println!("{}", style::dim("View status with: clash status"),);
-    Ok(())
-}
-
-/// Migrate a legacy YAML policy to s-expression format using `claude -p`.
-fn migrate_yaml_policy(yaml_path: &std::path::Path, sexpr_path: &std::path::Path) -> Result<()> {
-    let yaml_content =
-        std::fs::read_to_string(yaml_path).context("failed to read legacy policy.yaml")?;
-
-    let grammar = include_str!("../../docs/policy-grammar.md");
-
-    let prompt = format!(
-        "Convert this YAML clash policy to the s-expression format described in the grammar below.\n\
-         Output ONLY the s-expression policy text. No markdown fences, no explanation.\n\n\
-         ## Grammar\n\n{grammar}\n\n\
-         ## YAML Policy\n\n```yaml\n{yaml_content}\n```"
-    );
-
-    println!(
-        "{} Migrating legacy policy.yaml to s-expression format...",
-        style::cyan("~")
-    );
-
-    let output = std::process::Command::new("claude")
-        .arg("-p")
-        .arg(&prompt)
-        .output()
-        .context("failed to run `claude -p` for policy migration — is claude on PATH?")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!(stderr = %stderr, "claude -p failed during YAML migration");
-        eprintln!("Migration failed — writing default policy instead.");
-        eprintln!(
-            "Your legacy policy.yaml is preserved at {}",
-            yaml_path.display()
-        );
-        std::fs::create_dir_all(sexpr_path.parent().unwrap())?;
-        std::fs::write(sexpr_path, DEFAULT_POLICY)?;
-        return Ok(());
-    }
-
-    let sexpr_content = String::from_utf8_lossy(&output.stdout).trim().to_string();
-
-    // Validate the converted policy compiles.
-    match crate::policy::compile_policy(&sexpr_content) {
-        Ok(_) => {
-            std::fs::create_dir_all(sexpr_path.parent().unwrap())?;
-            std::fs::write(sexpr_path, &sexpr_content)?;
-            println!(
-                "{} Migrated policy written to {}",
-                style::green_bold("✓"),
-                sexpr_path.display()
-            );
-            println!(
-                "  Legacy policy.yaml preserved at {}\n",
-                yaml_path.display()
-            );
-        }
-        Err(e) => {
-            warn!(error = %e, "migrated policy failed validation");
-            eprintln!("Converted policy failed validation: {e}");
-            eprintln!("Writing default policy instead. Your legacy policy.yaml is preserved.");
-            std::fs::create_dir_all(sexpr_path.parent().unwrap())?;
-            std::fs::write(sexpr_path, DEFAULT_POLICY)?;
-        }
-    }
-
     Ok(())
 }
 

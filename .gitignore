@@ -37,3 +37,4 @@ target
 
 # Local-only files
 /local
+.vscode

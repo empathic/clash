@@ -26,9 +26,9 @@ module.exports = function (eleventyConfig) {
       if (lang && Prism.languages[lang]) {
         return `<pre class="language-${lang}"><code class="language-${lang}">${Prism.highlight(str, Prism.languages[lang], lang)}</code></pre>`;
       }
-      // Use lisp for unlabeled fenced blocks that look like s-expressions
-      if (!lang && str.trimStart().startsWith("(")) {
-        return `<pre class="language-lisp"><code class="language-lisp">${Prism.highlight(str, Prism.languages.lisp, "lisp")}</code></pre>`;
+      // Auto-detect JSON for unlabeled fenced blocks
+      if (!lang && str.trimStart().startsWith("{")) {
+        return `<pre class="language-json"><code class="language-json">${Prism.highlight(str, Prism.languages.json, "json")}</code></pre>`;
       }
       return `<pre><code>${md.utils.escapeHtml(str)}</code></pre>`;
     },

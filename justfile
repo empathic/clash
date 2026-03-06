@@ -42,6 +42,7 @@ check:
     cargo fmt
     cargo test
     cargo clippy
+    @just clester
 
 # Run clester end-to-end tests against clash
 clester *ARGS:

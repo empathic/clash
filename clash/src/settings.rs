@@ -4,7 +4,7 @@ use crate::policy::tree::PolicyTree;
 use anyhow::{Context, Result};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
-use tracing::{Level, info, instrument, warn};
+use tracing::{Level, error, info, instrument, warn};
 
 use crate::audit::AuditConfig;
 use crate::notifications::NotificationConfig;
@@ -37,11 +37,11 @@ fn is_truthy_disable_value(value: &str) -> bool {
 /// Higher-precedence levels override lower ones: Session > Project > User.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PolicyLevel {
-    /// User-level policy: `~/.clash/policy.sexpr`
+    /// User-level policy: `~/.clash/policy.star`
     User = 0,
-    /// Project-level policy: `<project_root>/.clash/policy.sexpr`
+    /// Project-level policy: `<project_root>/.clash/policy.star`
     Project = 1,
-    /// Session-level policy: `/tmp/clash-<session_id>/policy.sexpr`
+    /// Session-level policy: `/tmp/clash-<session_id>/policy.star`
     /// Temporary rules that last only for the current Claude Code session.
     Session = 2,
 }
@@ -85,13 +85,13 @@ impl std::str::FromStr for PolicyLevel {
 }
 
 /// Default policy source embedded at compile time.
-pub const DEFAULT_POLICY: &str = include_str!("default_policy.sexpr");
+pub const DEFAULT_POLICY: &str = include_str!("default_policy.star");
 
 /// Internal policies embedded at compile time. Each entry is (name, source).
 /// These are always active unless the user defines a policy with the same name.
 pub const INTERNAL_POLICIES: &[(&str, &str)] = &[
-    ("__internal_clash__", include_str!("internal_clash.sexpr")),
-    ("__internal_claude__", include_str!("internal_claude.sexpr")),
+    ("__internal_clash__", include_str!("internal_clash.star")),
+    ("__internal_claude__", include_str!("internal_claude.star")),
 ];
 
 /// Session-level context from Claude Code hook input.
@@ -182,12 +182,12 @@ impl ClashSettings {
 
     /// Returns the user-level policy file path.
     ///
-    /// Respects `CLASH_POLICY_FILE` env var for backward compatibility.
+    /// Respects `CLASH_POLICY_FILE` env var for override.
     pub fn policy_file() -> Result<PathBuf> {
         if let Ok(p) = std::env::var("CLASH_POLICY_FILE") {
             return Ok(PathBuf::from(p));
         }
-        Self::settings_dir().map(|d| d.join("policy.sexpr"))
+        Ok(Self::settings_dir()?.join("policy.star"))
     }
 
     /// Returns the policy file path for a specific level.
@@ -198,7 +198,7 @@ impl ClashSettings {
             PolicyLevel::User => Self::policy_file(),
             PolicyLevel::Project => {
                 let root = Self::project_root()?;
-                Ok(root.join(".clash").join("policy.sexpr"))
+                Ok(root.join(".clash").join("policy.star"))
             }
             PolicyLevel::Session => {
                 let session_id = Self::active_session_id()?;
@@ -209,7 +209,7 @@ impl ClashSettings {
 
     // Returns the policy file path for a session, given its ID.
     pub fn session_policy_path(session_id: &str) -> PathBuf {
-        crate::audit::session_dir(session_id).join("policy.sexpr")
+        crate::audit::session_dir(session_id).join("policy.star")
     }
 
     /// Path to the active-session marker file.
@@ -340,19 +340,17 @@ impl ClashSettings {
         Ok(Some(path))
     }
 
-    /// Path to a legacy YAML policy file (pre-sexp migration).
-    pub fn legacy_policy_file() -> Result<PathBuf> {
-        Self::settings_dir().map(|d| d.join("policy.yaml"))
-    }
-
     /// Return the policy parse/compile error, if any.
     pub fn policy_error(&self) -> Option<&str> {
         self.policy_error.as_deref()
     }
 
-    /// Set the policy source directly (compile from s-expression text).
+    /// Set the policy source directly (compile from policy source text).
     pub fn set_policy_source(&mut self, source: &str) {
-        match crate::policy::compile_to_tree(source, &crate::policy::compile::StdEnvResolver) {
+        match crate::policy::compile::compile_to_tree(
+            source,
+            &crate::policy::compile::StdEnvResolver,
+        ) {
             Ok(tree) => {
                 self.compiled = Some(tree);
                 self.policy_error = None;
@@ -380,7 +378,7 @@ impl ClashSettings {
         self.compiled.as_ref()
     }
 
-    /// Load and validate a policy file from an explicit path, then compile it.
+    /// Load and validate a .star policy file from an explicit path, then compile it.
     ///
     /// Returns true if a policy was successfully loaded and compiled.
     #[cfg(test)]
@@ -436,35 +434,11 @@ impl ClashSettings {
             }
         }
 
-        match std::fs::read_to_string(path) {
-            Ok(mut contents) => {
-                if contents.trim().is_empty() {
-                    warn!(path = %path.display(), "policy file is empty — using default (ask for everything)");
-                    self.policy_error = Some(
-                        "policy file is empty. All actions will default to 'ask'. \
-                         Run `clash init --force` to generate a starter policy."
-                            .into(),
-                    );
-                    return false;
-                }
-
-                // Auto-migrate: (env CWD) was renamed to (env PWD).
-                if contents.contains("(env CWD)") {
-                    contents = contents.replace("(env CWD)", "(env PWD)");
-                    if let Err(e) = std::fs::write(path, &contents) {
-                        warn!(path = %path.display(), error = %e, "Failed to auto-migrate CWD→PWD");
-                    } else {
-                        info!(path = %path.display(), "Auto-migrated (env CWD) → (env PWD)");
-                    }
-                }
-
-                // Try to parse notification/audit config from YAML comments or
-                // a separate yaml file. For now, check if there is a companion
-                // policy.yaml for notification/audit config.
+        match evaluate_star_policy(path) {
+            Ok(json_source) => {
                 self.load_notification_audit_config();
-
-                match crate::policy::compile_to_tree(
-                    &contents,
+                match crate::policy::compile::compile_to_tree(
+                    &json_source,
                     &crate::policy::compile::StdEnvResolver,
                 ) {
                     Ok(tree) => {
@@ -481,14 +455,8 @@ impl ClashSettings {
                 }
             }
             Err(e) => {
-                let msg = match e.kind() {
-                    std::io::ErrorKind::PermissionDenied => format!(
-                        "Permission denied reading {}. Check file ownership and permissions.",
-                        path.display()
-                    ),
-                    _ => format!("Failed to read policy file: {}", e),
-                };
-                warn!(path = %path.display(), error = %e, "Failed to read policy file");
+                let msg = format!("Failed to evaluate policy: {}", e);
+                warn!(path = %path.display(), error = %e, "Failed to evaluate policy");
                 self.policy_error = Some(msg);
                 false
             }
@@ -581,13 +549,21 @@ impl ClashSettings {
         // Compile (single-level or multi-level) directly to PolicyTree.
         let result = if level_sources.len() == 1 {
             let (_, source) = &level_sources[0];
-            crate::policy::compile_to_tree_with_internals(source, &resolver, INTERNAL_POLICIES)
+            crate::policy::compile::compile_to_tree_with_internals(
+                source,
+                &resolver,
+                INTERNAL_POLICIES,
+            )
         } else {
             let level_refs: Vec<(PolicyLevel, &str)> = level_sources
                 .iter()
                 .map(|(l, s)| (*l, s.as_str()))
                 .collect();
-            crate::policy::compile_multi_level_to_tree(&level_refs, &resolver, INTERNAL_POLICIES)
+            crate::policy::compile::compile_multi_level_to_tree(
+                &level_refs,
+                &resolver,
+                INTERNAL_POLICIES,
+            )
         };
 
         match result {
@@ -644,42 +620,26 @@ impl ClashSettings {
             }
         }
 
-        match std::fs::read_to_string(path) {
-            Ok(mut contents) => {
-                if contents.trim().is_empty() {
-                    return None;
-                }
-
-                // Auto-migrate: (env CWD) was renamed to (env PWD).
-                if contents.contains("(env CWD)") {
-                    contents = contents.replace("(env CWD)", "(env PWD)");
-                    if let Err(e) = std::fs::write(path, &contents) {
-                        warn!(path = %path.display(), error = %e, "Failed to auto-migrate CWD→PWD");
-                    } else {
-                        info!(path = %path.display(), "Auto-migrated (env CWD) → (env PWD)");
-                    }
-                }
-
-                // Load notification config only from user-level policy.yaml
+        match evaluate_star_policy(path) {
+            Ok(json_source) => {
                 if level == PolicyLevel::User {
                     self.load_notification_audit_config();
                 }
-
                 let loaded = LoadedPolicy {
                     level,
                     path: path.to_path_buf(),
-                    source: contents.clone(),
+                    source: json_source.clone(),
                 };
-
-                Some((contents, loaded))
+                Some((json_source, loaded))
             }
             Err(e) => {
-                warn!(
+                error!(
                     path = %path.display(),
                     level = %level,
                     error = %e,
-                    "Failed to read policy file"
+                    "Failed to evaluate starlark policy"
                 );
+                self.policy_error = Some(format!("Failed to evaluate {}: {}", path.display(), e));
                 None
             }
         }
@@ -723,6 +683,37 @@ fn parse_audit_config(yaml_str: &str) -> AuditConfig {
     }
 }
 
+/// Evaluate a `.star` policy file and return the compiled JSON source.
+pub fn evaluate_star_policy(path: &std::path::Path) -> Result<String> {
+    let source = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    let base_dir = path.parent().unwrap_or(std::path::Path::new("."));
+
+    // Check disk cache first
+    let cache = clash_starlark::StarCache::new();
+    let cache_key = clash_starlark::StarCache::cache_key(&source, &[]);
+    if let Some(ref cache) = cache
+        && let Some(cached) = cache.get(&cache_key)
+    {
+        tracing::debug!(path = %path.display(), "starlark cache hit");
+        return Ok(cached);
+    }
+
+    let output = clash_starlark::evaluate(&source, &path.display().to_string(), base_dir)?;
+    // .with_context(|| format!("failed to evaluate {}", path.display()))?;
+
+    // Update cache with full key (including loaded files)
+    let full_key = clash_starlark::StarCache::cache_key(&source, &output.loaded_files);
+    if let Some(ref cache) = cache
+        && let Err(e) = cache.put(&full_key, &output.json)
+    {
+        tracing::warn!(error = %e, "failed to cache starlark output");
+    }
+
+    Ok(output.json)
+}
+
 /// Find the nearest ancestor directory containing the given name.
 ///
 /// If `stop_at` is provided, stops searching before checking that directory.
@@ -758,6 +749,8 @@ mod test {
         fn resolve(&self, name: &str) -> anyhow::Result<String> {
             match name {
                 "PWD" => Ok("/tmp".into()),
+                "HOME" => Ok("/tmp/home".into()),
+                "TMPDIR" => Ok("/tmp".into()),
                 other => anyhow::bail!("unknown env var in test: {other}"),
             }
         }
@@ -765,18 +758,20 @@ mod test {
 
     #[test]
     fn default_policy_compiles() -> anyhow::Result<()> {
-        let tree = crate::policy::compile::compile_policy_with_env(DEFAULT_POLICY, &TestEnv)?;
-        assert!(
-            !tree.fs_rules.is_empty(),
-            "default policy should have fs rules"
-        );
+        let output = clash_starlark::evaluate(
+            DEFAULT_POLICY,
+            "default_policy.star",
+            std::path::Path::new("."),
+        )?;
+        let tree = crate::policy::compile::compile_to_tree(&output.json, &TestEnv)?;
+        let _ = tree;
         Ok(())
     }
 
     #[test]
     fn load_missing_file_returns_false() {
         let mut settings = ClashSettings::default();
-        let path = std::path::Path::new("/tmp/clash-test-nonexistent-policy.sexpr");
+        let path = std::path::Path::new("/tmp/clash-test-nonexistent-policy.star");
         let _ = std::fs::remove_file(path);
         let result = settings.load_policy_from_path(path);
         assert!(!result);
@@ -789,7 +784,7 @@ mod test {
     #[test]
     fn load_directory_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
+        let policy_path = dir.path().join("policy.star");
         std::fs::create_dir(&policy_path).unwrap();
 
         let mut settings = ClashSettings::default();
@@ -805,31 +800,15 @@ mod test {
     #[test]
     fn load_empty_file_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
+        let policy_path = dir.path().join("policy.star");
         std::fs::write(&policy_path, "").unwrap();
 
         let mut settings = ClashSettings::default();
         let result = settings.load_policy_from_path(&policy_path);
         assert!(!result);
         assert!(
-            settings.policy_error().unwrap().contains("empty"),
-            "expected empty file error, got: {:?}",
-            settings.policy_error()
-        );
-    }
-
-    #[test]
-    fn load_whitespace_only_file_sets_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
-        std::fs::write(&policy_path, "   \n\n  \t  \n").unwrap();
-
-        let mut settings = ClashSettings::default();
-        let result = settings.load_policy_from_path(&policy_path);
-        assert!(!result);
-        assert!(
-            settings.policy_error().unwrap().contains("empty"),
-            "expected empty file error, got: {:?}",
+            settings.policy_error().is_some(),
+            "expected error for empty file, got: {:?}",
             settings.policy_error()
         );
     }
@@ -837,7 +816,7 @@ mod test {
     #[test]
     fn load_oversized_file_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
+        let policy_path = dir.path().join("policy.star");
         let mut f = std::fs::File::create(&policy_path).unwrap();
         let chunk = vec![b'#'; 8192];
         for _ in 0..(ClashSettings::MAX_POLICY_SIZE / 8192 + 1) {
@@ -857,15 +836,10 @@ mod test {
 
     #[test]
     fn load_valid_policy_succeeds() {
-        // Use a policy without (env PWD) to avoid needing env vars in tests.
-        let simple_policy = r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath "/tmp"))))
-"#;
+        let star_policy = "load(\"@clash//std.star\", \"policy\")\ndef main():\n    return policy(default = allow, rules = [])\n";
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
-        std::fs::write(&policy_path, simple_policy).unwrap();
+        let policy_path = dir.path().join("policy.star");
+        std::fs::write(&policy_path, star_policy).unwrap();
 
         let mut settings = ClashSettings::default();
         let result = settings.load_policy_from_path(&policy_path);
@@ -877,30 +851,23 @@ mod test {
     #[test]
     fn load_malformed_policy_sets_error() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
-        std::fs::write(&policy_path, "(((invalid policy").unwrap();
+        let policy_path = dir.path().join("policy.star");
+        std::fs::write(&policy_path, "this is not valid starlark {{{").unwrap();
 
         let mut settings = ClashSettings::default();
         let result = settings.load_policy_from_path(&policy_path);
         assert!(!result);
         assert!(
-            settings
-                .policy_error()
-                .unwrap()
-                .contains("Failed to compile"),
-            "expected compile error, got: {:?}",
+            settings.policy_error().is_some(),
+            "expected error for malformed policy, got: {:?}",
             settings.policy_error()
         );
     }
 
     #[test]
     fn set_policy_source_works() {
-        // Use a policy without (env PWD) to avoid needing env vars in tests.
-        let simple_policy = r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath "/tmp"))))
-"#;
+        // set_policy_source takes JSON IR (the compiled output of starlark evaluation).
+        let simple_policy = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}}}}}]}]}"#;
         let mut settings = ClashSettings::default();
         settings.set_policy_source(simple_policy);
         assert!(settings.decision_tree().is_some());
@@ -910,7 +877,7 @@ mod test {
     #[test]
     fn ensure_policy_creates_file_when_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join(".clash").join("policy.sexpr");
+        let policy_path = dir.path().join(".clash").join("policy.star");
 
         let result = ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
         assert!(result.is_some(), "should have created the file");
@@ -924,22 +891,19 @@ mod test {
     #[test]
     fn ensure_policy_noop_when_exists() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join("policy.sexpr");
-        std::fs::write(&policy_path, "(default deny \"main\")\n(policy \"main\")").unwrap();
+        let policy_path = dir.path().join("policy.star");
+        std::fs::write(
+            &policy_path,
+            "def main():\n    return policy(default = deny, rules = [])\n",
+        )
+        .unwrap();
 
         let result = ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
         assert!(result.is_none(), "should not recreate existing file");
 
         // Verify original content is preserved.
         let contents = std::fs::read_to_string(&policy_path).unwrap();
-        assert!(
-            contents.contains("default deny"),
-            "original content preserved"
-        );
-        assert!(
-            !contents.contains("cwd-access"),
-            "should not overwrite with default"
-        );
+        assert!(contents.contains("def main"), "original content preserved");
     }
 
     #[test]
@@ -948,7 +912,7 @@ mod test {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join(".clash").join("policy.sexpr");
+        let policy_path = dir.path().join(".clash").join("policy.star");
 
         ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
         let mode = std::fs::metadata(&policy_path)
@@ -1019,15 +983,17 @@ mod test {
         // Verify TRANSCRIPT_DIR resolves to the actual directory
         assert_eq!(resolver.resolve("TRANSCRIPT_DIR").unwrap(), "/tmp/session");
 
-        // Verify the internal_claude.sexpr compiles with this resolver
-        let source = format!(
-            "(default deny \"main\")\n(policy \"main\")\n{}",
-            include_str!("internal_claude.sexpr")
+        // Verify the internal_claude.star compiles with this resolver
+        let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": []}]}"#;
+        let internal = include_str!("internal_claude.star");
+        let result = crate::policy::compile::compile_to_tree_with_internals(
+            user_source,
+            &resolver,
+            &[("__internal_claude__", internal)],
         );
-        let result = crate::policy::compile::compile_policy_with_env(&source, &resolver);
         assert!(
             result.is_ok(),
-            "internal_claude.sexpr should compile with session resolver: {:?}",
+            "internal_claude.star should compile with session resolver: {:?}",
             result.err()
         );
     }
@@ -1036,14 +1002,16 @@ mod test {
     fn internal_claude_policy_compiles_without_session_context() {
         // Even without hook context, the policy should compile (using sentinel).
         let resolver = SessionEnvResolver { hook_ctx: None };
-        let source = format!(
-            "(default deny \"main\")\n(policy \"main\")\n{}",
-            include_str!("internal_claude.sexpr")
+        let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": []}]}"#;
+        let internal = include_str!("internal_claude.star");
+        let result = crate::policy::compile::compile_to_tree_with_internals(
+            user_source,
+            &resolver,
+            &[("__internal_claude__", internal)],
         );
-        let result = crate::policy::compile::compile_policy_with_env(&source, &resolver);
         assert!(
             result.is_ok(),
-            "internal_claude.sexpr should compile with sentinel: {:?}",
+            "internal_claude.star should compile with sentinel: {:?}",
             result.err()
         );
     }

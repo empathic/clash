@@ -1,241 +1,152 @@
-//! AST-based editing for policy files.
+//! Struct-based editing for policy documents.
 //!
-//! Parses the source → mutates the AST → serializes back via `Display`.
-//! Comments are lost on edit, but the policy stays valid (round-trip proven
-//! by the `round_trip_parse_display_parse` test in `parse`).
+//! All operations mutate a `PolicyDocument` in place. No parsing or
+//! serialization happens here — callers are responsible for loading and
+//! saving the document (typically via `serde_json`).
 
 use anyhow::{Result, bail};
 
 use crate::policy::Effect;
-use crate::policy::ast::{PolicyItem, Rule, TopLevel};
-use crate::policy::parse;
+use crate::policy::ast::{PolicyDef, PolicyDocument, PolicyItem, Rule};
 
-/// Add a rule to the named policy block. Returns modified source.
+/// Add a rule to the named policy block in a document.
 ///
-/// Idempotent: if an identical rule already exists (compared via Display), the
-/// source is returned unchanged.
-pub fn add_rule(source: &str, policy_name: &str, rule: &Rule) -> Result<String> {
-    let mut top_levels = parse::parse(source)?;
-    let body = find_policy_mut(&mut top_levels, policy_name)?;
-
-    let rule_str = rule.to_string();
+/// Idempotent: if an identical rule already exists (compared via JSON
+/// serialization), no change is made.
+pub fn add_rule(doc: &mut PolicyDocument, policy_name: &str, rule: Rule) -> Result<()> {
+    let body = find_policy_mut(doc, policy_name)?;
+    let rule_json = serde_json::to_string(&rule).unwrap_or_default();
     if body.iter().any(|item| match item {
-        PolicyItem::Rule(r) => r.to_string() == rule_str,
+        PolicyItem::Rule(r) => serde_json::to_string(r).unwrap_or_default() == rule_json,
         _ => false,
     }) {
-        return Ok(source.to_string());
+        return Ok(());
     }
-
-    body.push(PolicyItem::Rule(rule.clone()));
-    Ok(serialize_top_levels(&top_levels))
+    body.push(PolicyItem::Rule(rule));
+    Ok(())
 }
 
-/// Remove a rule matching the given Display text. Returns modified source.
-pub fn remove_rule(source: &str, policy_name: &str, rule_text: &str) -> Result<String> {
-    let mut top_levels = parse::parse(source)?;
-    let body = find_policy_mut(&mut top_levels, policy_name)?;
+/// Remove a rule at the given index from the named policy.
+pub fn remove_rule(doc: &mut PolicyDocument, policy_name: &str, index: usize) -> Result<()> {
+    let body = find_policy_mut(doc, policy_name)?;
+    if index >= body.len() {
+        bail!(
+            "rule index {index} out of range (policy has {} items)",
+            body.len()
+        );
+    }
+    body.remove(index);
+    Ok(())
+}
 
+/// Remove a rule matching the given JSON text.
+pub fn remove_rule_by_text(
+    doc: &mut PolicyDocument,
+    policy_name: &str,
+    rule_text: &str,
+) -> Result<()> {
+    let body = find_policy_mut(doc, policy_name)?;
     let before = body.len();
     body.retain(|item| match item {
-        PolicyItem::Rule(r) => r.to_string() != rule_text,
+        PolicyItem::Rule(r) => serde_json::to_string(r).unwrap_or_default() != rule_text,
         _ => true,
     });
-
     if body.len() == before {
-        bail!("rule not found: {}", rule_text);
+        bail!("rule not found: {rule_text}");
     }
-
-    Ok(serialize_top_levels(&top_levels))
+    Ok(())
 }
 
-/// Ensure a `(policy "name" ...)` block exists. If not, insert it (parsed from
-/// `body_source`) before the active policy so it's defined before any reference.
-/// Returns the (possibly modified) source. Idempotent.
-pub fn ensure_policy_block(source: &str, name: &str, body_source: &str) -> Result<String> {
-    let mut top_levels = parse::parse(source)?;
-
-    // Already exists? No-op.
-    if top_levels
-        .iter()
-        .any(|tl| matches!(tl, TopLevel::Policy { name: n, .. } if n == name))
-    {
-        return Ok(source.to_string());
-    }
-
-    // Parse the new block.
-    let new_block = parse::parse(body_source)?;
-    let block = new_block
-        .into_iter()
-        .find(|tl| matches!(tl, TopLevel::Policy { .. }))
-        .ok_or_else(|| anyhow::anyhow!("body_source must contain a (policy ...) block"))?;
-
-    // Insert before the active policy block so the sandbox is defined first.
-    let active = active_policy(source).unwrap_or_else(|_| "main".into());
-    let pos = top_levels
-        .iter()
-        .position(|tl| matches!(tl, TopLevel::Policy { name: n, .. } if *n == active))
-        .unwrap_or(top_levels.len());
-    top_levels.insert(pos, block);
-
-    Ok(serialize_top_levels(&top_levels))
+/// Set the default effect for the document.
+pub fn set_default(doc: &mut PolicyDocument, effect: Effect) {
+    doc.default_effect = Some(effect);
 }
 
-/// Update the default declaration's effect and/or policy name. Returns modified source.
+/// Return the active policy name.
 ///
-/// For v2 policies: sets `(use "name")` and appends/updates a bare effect in the
-/// entry policy body. For v1: uses `(default effect "name")`.
-pub fn set_default(source: &str, effect: Effect, policy: &str) -> Result<String> {
-    let mut top_levels = parse::parse(source)?;
-    let version = super::version::extract_version(&top_levels)?;
-
-    if version >= 2 {
-        // Update or insert (use "name").
-        let mut found_use = false;
-        for tl in &mut top_levels {
-            if let TopLevel::Use(name) = tl {
-                *name = policy.to_string();
-                found_use = true;
-                break;
-            }
-        }
-        if !found_use {
-            let pos = top_levels
-                .iter()
-                .position(|tl| !matches!(tl, TopLevel::Version(_)))
-                .unwrap_or(0);
-            top_levels.insert(pos, TopLevel::Use(policy.to_string()));
-        }
-
-        // Remove any lingering (default ...) — it's deprecated in v2.
-        top_levels.retain(|tl| !matches!(tl, TopLevel::Default { .. }));
-
-        // Update or append bare effect in the entry policy body.
-        for tl in &mut top_levels {
-            if let TopLevel::Policy { name, body } = tl {
-                if *name == policy {
-                    // Remove existing bare effects, then append new one.
-                    body.retain(|item| !matches!(item, PolicyItem::Effect(_)));
-                    body.push(PolicyItem::Effect(effect));
-                    break;
-                }
-            }
-        }
-    } else {
-        let mut found = false;
-        for tl in &mut top_levels {
-            if let TopLevel::Default {
-                effect: e,
-                policy: p,
-            } = tl
-            {
-                *e = effect;
-                *p = policy.to_string();
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            top_levels.insert(
-                0,
-                TopLevel::Default {
-                    effect,
-                    policy: policy.to_string(),
-                },
-            );
-        }
-    }
-    Ok(serialize_top_levels(&top_levels))
+/// Falls back to `"main"` when no explicit `use` declaration is present.
+pub fn active_policy(doc: &PolicyDocument) -> &str {
+    doc.use_policy.as_deref().unwrap_or("main")
 }
 
-/// Return the active policy name from `(use ...)` or `(default ...)`.
+/// Ensure a named policy block exists in the document.
 ///
-/// `(use ...)` takes priority over `(default ...)`.
-pub fn active_policy(source: &str) -> Result<String> {
-    let top_levels = parse::parse(source)?;
-    // (use "name") takes priority.
-    for tl in &top_levels {
-        if let TopLevel::Use(name) = tl {
-            return Ok(name.clone());
-        }
+/// If a policy with the given name already exists this is a no-op.
+/// Otherwise a new empty `PolicyDef` is inserted before the active policy
+/// so that it is defined before any reference.
+pub fn ensure_policy_block(doc: &mut PolicyDocument, name: &str) {
+    if doc.policies.iter().any(|p| p.name == name) {
+        return;
     }
-    // Fall back to (default _ "name").
-    for tl in &top_levels {
-        if let TopLevel::Default { policy, .. } = tl {
-            return Ok(policy.clone());
-        }
-    }
-    bail!("no (use ...) or (default ...) declaration found in policy")
+    let active = doc.use_policy.as_deref().unwrap_or("main");
+    let pos = doc
+        .policies
+        .iter()
+        .position(|p| p.name == active)
+        .unwrap_or(doc.policies.len());
+    doc.policies.insert(
+        pos,
+        PolicyDef {
+            name: name.to_string(),
+            body: vec![],
+        },
+    );
 }
 
 /// Find a rule in the named policy that has the same capability matcher
-/// as `rule` but differs in effect or sandbox. Returns the Display text of
-/// the conflicting rule, or `None` if no conflict exists.
-pub fn find_conflicting_rule(
-    source: &str,
-    policy_name: &str,
-    rule: &Rule,
-) -> Result<Option<String>> {
-    let top_levels = parse::parse(source)?;
-    for tl in &top_levels {
-        if let TopLevel::Policy { name, body } = tl
-            && name == policy_name
-        {
-            for item in body {
+/// as `rule` but differs in effect or sandbox. Returns a clone of the
+/// conflicting rule, or `None` if no conflict exists.
+pub fn find_conflicting_rule(doc: &PolicyDocument, policy_name: &str, rule: &Rule) -> Option<Rule> {
+    for def in &doc.policies {
+        if def.name == policy_name {
+            for item in &def.body {
                 if let PolicyItem::Rule(existing) = item
                     && existing.matcher == rule.matcher
                     && (existing.effect != rule.effect || existing.sandbox != rule.sandbox)
                 {
-                    return Ok(Some(existing.to_string()));
+                    return Some(existing.clone());
                 }
             }
         }
     }
-    Ok(None)
-}
-
-/// Normalize source by parsing and re-serializing. Strips comments and applies
-/// canonical formatting so that subsequent edits diff cleanly against the baseline.
-pub fn normalize(source: &str) -> Result<String> {
-    let top_levels = parse::parse(source)?;
-    Ok(serialize_top_levels(&top_levels))
-}
-
-/// Serialize `Vec<TopLevel>` back to source text.
-///
-/// Also available as `serialize_ast` for external callers.
-pub fn serialize_ast(items: &[TopLevel]) -> String {
-    serialize_top_levels(items)
-}
-
-fn serialize_top_levels(items: &[TopLevel]) -> String {
-    items
-        .iter()
-        .map(|tl| tl.to_string())
-        .collect::<Vec<_>>()
-        .join("\n\n")
-        + "\n"
+    None
 }
 
 /// Find a mutable reference to the body of the named policy.
-fn find_policy_mut<'a>(items: &'a mut [TopLevel], name: &str) -> Result<&'a mut Vec<PolicyItem>> {
-    for item in items.iter_mut() {
-        if let TopLevel::Policy { name: pname, body } = item
-            && pname == name
-        {
-            return Ok(body);
+fn find_policy_mut<'a>(doc: &'a mut PolicyDocument, name: &str) -> Result<&'a mut Vec<PolicyItem>> {
+    for def in &mut doc.policies {
+        if def.name == name {
+            return Ok(&mut def.body);
         }
     }
-    bail!("policy not found: {}", name)
+    bail!("policy not found: {name}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::Effect;
     use crate::policy::ast::*;
 
-    fn default_policy() -> &'static str {
-        crate::settings::DEFAULT_POLICY
+    fn sample_doc() -> PolicyDocument {
+        PolicyDocument {
+            schema_version: 4,
+            use_policy: Some("main".into()),
+            default_effect: Some(Effect::Deny),
+            policies: vec![PolicyDef {
+                name: "main".into(),
+                body: vec![PolicyItem::Rule(Rule {
+                    effect: Effect::Allow,
+                    matcher: CapMatcher::Fs(FsMatcher {
+                        op: OpPattern::Single(FsOp::Read),
+                        path: Some(PathFilter::Subpath {
+                            path: PathExpr::Env("PWD".into()),
+                            worktree: true,
+                        }),
+                    }),
+                    sandbox: None,
+                })],
+            }],
+        }
     }
 
     fn exec_any_rule(effect: Effect) -> Rule {
@@ -263,84 +174,122 @@ mod tests {
     }
 
     #[test]
-    fn active_policy_from_default() {
-        let name = active_policy(default_policy()).unwrap();
-        assert_eq!(name, "main");
+    fn active_policy_returns_use_field() {
+        let doc = sample_doc();
+        assert_eq!(active_policy(&doc), "main");
     }
 
     #[test]
-    fn add_rule_to_default_policy() {
+    fn active_policy_defaults_to_main() {
+        let doc = PolicyDocument {
+            schema_version: 4,
+            use_policy: None,
+            default_effect: None,
+            policies: vec![],
+        };
+        assert_eq!(active_policy(&doc), "main");
+    }
+
+    #[test]
+    fn add_rule_appends() {
+        let mut doc = sample_doc();
         let rule = exec_any_rule(Effect::Allow);
-        let result = add_rule(default_policy(), "main", &rule).unwrap();
-        assert!(
-            result.contains("(allow (exec))"),
-            "expected exec rule in output:\n{result}"
-        );
-        // Should still parse cleanly
-        let ast = parse::parse(&result).unwrap();
-        assert!(ast.len() >= 2);
+        add_rule(&mut doc, "main", rule.clone()).unwrap();
+        assert_eq!(doc.policies[0].body.len(), 2);
+        assert!(matches!(&doc.policies[0].body[1], PolicyItem::Rule(r) if *r == rule));
     }
 
     #[test]
     fn add_rule_idempotent() {
+        let mut doc = sample_doc();
         let rule = exec_any_rule(Effect::Allow);
-        let first = add_rule(default_policy(), "main", &rule).unwrap();
-        let second = add_rule(&first, "main", &rule).unwrap();
-        assert_eq!(first, second, "adding same rule twice should be idempotent");
-    }
-
-    #[test]
-    fn remove_rule_works() {
-        let rule = git_push_deny();
-        let added = add_rule(default_policy(), "main", &rule).unwrap();
-        let rule_text = rule.to_string();
-        let removed = remove_rule(&added, "main", &rule_text).unwrap();
-        assert!(
-            !removed.contains("git"),
-            "rule should be removed:\n{removed}"
-        );
-    }
-
-    #[test]
-    fn remove_rule_not_found() {
-        let err = remove_rule(default_policy(), "main", "(deny (exec))").unwrap_err();
-        assert!(err.to_string().contains("rule not found"));
-    }
-
-    #[test]
-    fn round_trip_preserves_validity() {
-        let rule = git_push_deny();
-        let modified = add_rule(default_policy(), "main", &rule).unwrap();
-        // Re-parse and re-serialize should produce identical output
-        let ast = parse::parse(&modified).unwrap();
-        let reserialized = serialize_top_levels(&ast);
-        let ast2 = parse::parse(&reserialized).unwrap();
-        assert_eq!(ast, ast2);
-    }
-
-    #[test]
-    fn set_default_changes_effect() {
-        let result = set_default(default_policy(), Effect::Allow, "main").unwrap();
-        assert!(result.contains("(default allow \"main\")"));
-    }
-
-    #[test]
-    fn set_default_changes_policy_name() {
-        let result = set_default(default_policy(), Effect::Deny, "sandbox").unwrap();
-        assert!(result.contains("(default deny \"sandbox\")"));
-    }
-
-    #[test]
-    fn set_default_prepends_when_missing() {
-        let source = "(policy \"main\")\n";
-        let result = set_default(source, Effect::Ask, "main").unwrap();
-        assert!(result.starts_with("(default ask \"main\")"));
+        add_rule(&mut doc, "main", rule.clone()).unwrap();
+        let len_after_first = doc.policies[0].body.len();
+        add_rule(&mut doc, "main", rule).unwrap();
+        assert_eq!(doc.policies[0].body.len(), len_after_first);
     }
 
     #[test]
     fn add_rule_policy_not_found() {
-        let rule = exec_any_rule(Effect::Allow);
-        let err = add_rule(default_policy(), "nonexistent", &rule).unwrap_err();
+        let mut doc = sample_doc();
+        let err = add_rule(&mut doc, "nonexistent", exec_any_rule(Effect::Allow)).unwrap_err();
         assert!(err.to_string().contains("policy not found"));
+    }
+
+    #[test]
+    fn remove_rule_by_index() {
+        let mut doc = sample_doc();
+        assert_eq!(doc.policies[0].body.len(), 1);
+        remove_rule(&mut doc, "main", 0).unwrap();
+        assert!(doc.policies[0].body.is_empty());
+    }
+
+    #[test]
+    fn remove_rule_out_of_range() {
+        let mut doc = sample_doc();
+        let err = remove_rule(&mut doc, "main", 99).unwrap_err();
+        assert!(err.to_string().contains("out of range"));
+    }
+
+    #[test]
+    fn remove_rule_by_text_works() {
+        let mut doc = sample_doc();
+        let rule = git_push_deny();
+        add_rule(&mut doc, "main", rule.clone()).unwrap();
+        let rule_json = serde_json::to_string(&rule).unwrap();
+        remove_rule_by_text(&mut doc, "main", &rule_json).unwrap();
+        // Only the original fs rule should remain.
+        assert_eq!(doc.policies[0].body.len(), 1);
+    }
+
+    #[test]
+    fn remove_rule_by_text_not_found() {
+        let mut doc = sample_doc();
+        let err = remove_rule_by_text(&mut doc, "main", "bogus").unwrap_err();
+        assert!(err.to_string().contains("rule not found"));
+    }
+
+    #[test]
+    fn set_default_updates_effect() {
+        let mut doc = sample_doc();
+        assert_eq!(doc.default_effect, Some(Effect::Deny));
+        set_default(&mut doc, Effect::Allow);
+        assert_eq!(doc.default_effect, Some(Effect::Allow));
+    }
+
+    #[test]
+    fn ensure_policy_block_creates_new() {
+        let mut doc = sample_doc();
+        assert_eq!(doc.policies.len(), 1);
+        ensure_policy_block(&mut doc, "sandbox");
+        assert_eq!(doc.policies.len(), 2);
+        // Inserted before "main" (the active policy).
+        assert_eq!(doc.policies[0].name, "sandbox");
+        assert_eq!(doc.policies[1].name, "main");
+    }
+
+    #[test]
+    fn ensure_policy_block_idempotent() {
+        let mut doc = sample_doc();
+        ensure_policy_block(&mut doc, "main");
+        assert_eq!(doc.policies.len(), 1);
+    }
+
+    #[test]
+    fn find_conflicting_rule_detects_conflict() {
+        let mut doc = sample_doc();
+        let allow = exec_any_rule(Effect::Allow);
+        add_rule(&mut doc, "main", allow.clone()).unwrap();
+        let deny = exec_any_rule(Effect::Deny);
+        let conflict = find_conflicting_rule(&doc, "main", &deny);
+        assert!(conflict.is_some());
+        assert_eq!(conflict.unwrap().effect, Effect::Allow);
+    }
+
+    #[test]
+    fn find_conflicting_rule_none_when_no_conflict() {
+        let doc = sample_doc();
+        let rule = exec_any_rule(Effect::Allow);
+        assert!(find_conflicting_rule(&doc, "main", &rule).is_none());
     }
 }

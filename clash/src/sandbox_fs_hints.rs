@@ -875,12 +875,13 @@ mod tests {
     fn test_check_returns_hint_with_sandbox() {
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec *))
-  (allow (fs read (subpath "/tmp"))))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"any": null} } } },
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}} } } }
+  ]}]
+}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Bash".into(),
@@ -933,13 +934,17 @@ mod tests {
     fn test_check_returns_hint_with_explicit_sandbox() {
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
-            r#"
-(default deny "main")
-(policy "restricted"
-  (allow (fs read (subpath "/project"))))
-(policy "main"
-  (allow (exec "fly" *) :sandbox "restricted"))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "restricted", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/project"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "fly"}, "args": [{"any": null}] }, "sandbox": {"named": "restricted"} } }
+    ]}
+  ]
+}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Bash".into(),

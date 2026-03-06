@@ -1,9 +1,0 @@
-(version 1)
-
-(default deny "main")
-
-(policy "main"
-  (allow (net))
-  (allow (exec))
-  (allow (fs (or read write create delete) (subpath :worktree (env PWD))))
-)

@@ -82,6 +82,9 @@ impl ReplayResult {
                     lines.push(format!("  [{}] {} -> {}", m.rule_index, m.description, eff));
                 }
             }
+            if let Some(sandbox) = &self.decision.sandbox {
+                lines.push(format!("{:#?}", sandbox));
+            }
             lines.push(String::new());
         }
 
@@ -195,10 +198,10 @@ impl ReplayResult {
     /// Look up the origin PolicyLevel for a matched rule.
     fn find_origin_level(&self, m: &crate::policy::ir::RuleMatch) -> Option<&PolicyLevel> {
         // v2 tree-native: direct lookup via node_id
-        if let Some(nid) = m.node_id {
-            if let Some(meta) = self.tree.node_meta.get(nid as usize) {
-                return meta.origin_level.as_ref();
-            }
+        if let Some(nid) = m.node_id
+            && let Some(meta) = self.tree.node_meta.get(nid as usize)
+        {
+            return meta.origin_level.as_ref();
         }
         // v1 fallback: search flat rule lists by index + description
         use crate::policy::decision_tree::CompiledRule;
@@ -288,28 +291,22 @@ pub(crate) fn resolve_tool_input(
         return Ok((noun.to_string(), serde_json::json!({})));
     }
 
-    let (tool_name, input_field) = match tool.to_lowercase().as_str() {
-        "bash" => ("Bash", "command"),
-        "read" => ("Read", "file_path"),
-        "write" => ("Write", "file_path"),
-        "edit" => ("Edit", "file_path"),
-        _ => {
-            let field = match tool {
-                "Bash" => "command",
-                "Read" | "Write" | "Edit" | "NotebookEdit" => "file_path",
-                "Glob" | "Grep" => "pattern",
-                "WebFetch" => "url",
-                "WebSearch" => "query",
-                _ => "command",
-            };
-            return Ok((tool.to_string(), serde_json::json!({ field: noun })));
-        }
+    let tool_name = match tool.to_lowercase().as_str() {
+        "bash" => "Bash",
+        "read" => "Read",
+        "write" => "Write",
+        "edit" => "Edit",
+        _ => tool,
     };
 
-    Ok((
-        tool_name.to_string(),
-        serde_json::json!({ input_field: noun }),
-    ))
+    // If the input is already a JSON object, use it directly (e.g. from audit log).
+    // Otherwise, wrap the plain string in the expected field.
+    let tool_input = serde_json::from_str::<serde_json::Value>(noun)
+        .ok()
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| build_tool_input(tool_name, noun));
+
+    Ok((tool_name.to_string(), tool_input))
 }
 
 /// Build a minimal tool_input JSON from tool name and noun.
@@ -377,6 +374,15 @@ mod tests {
         let (name, input) = resolve_tool_input("tool", Some("CustomTool")).unwrap();
         assert_eq!(name, "CustomTool");
         assert_eq!(input, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_resolve_tool_input_json_passthrough() {
+        let json_input = r#"{"command":"ls -lha","description":"List files"}"#;
+        let (name, input) = resolve_tool_input("Bash", Some(json_input)).unwrap();
+        assert_eq!(name, "Bash");
+        assert_eq!(input["command"], "ls -lha");
+        assert_eq!(input["description"], "List files");
     }
 
     #[test]

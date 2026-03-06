@@ -150,18 +150,14 @@ fn check_policy_parsing() -> CheckResult {
     let mut errors = Vec::new();
 
     for (level, path) in &levels {
-        match std::fs::read_to_string(path) {
-            Ok(source) => {
-                if source.trim().is_empty() {
-                    errors.push(format!("{}: file is empty", level));
-                    continue;
-                }
-                if let Err(e) = crate::policy::compile_policy(&source) {
+        match crate::settings::evaluate_star_policy(path) {
+            Ok(json) => {
+                if let Err(e) = crate::policy::compile::compile_policy(&json) {
                     errors.push(format!("{}: {}", level, e));
                 }
             }
             Err(e) => {
-                errors.push(format!("{}: cannot read — {}", level, e));
+                errors.push(format!("{}: {}", level, e));
             }
         }
     }

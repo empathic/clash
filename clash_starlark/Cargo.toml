@@ -1,0 +1,22 @@
+[package]
+name = "clash_starlark"
+version = "0.3.6"
+edition = "2024"
+description = "Starlark policy evaluator for Clash — compiles .star files to JSON policy"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[dependencies]
+starlark = { workspace = true }
+allocative = "0.3"
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+anyhow = { workspace = true }
+dirs = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

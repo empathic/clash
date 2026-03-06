@@ -38,8 +38,8 @@ clash init [SCOPE] [OPTIONS]
 
 **What it does:**
 
-- **`clash init user`** — Creates `~/.clash/policy.sexpr` with a safe default policy, installs the Claude Code plugin, configures Claude Code so clash is the sole permission handler (`bypassPermissions: true` and `permissions.defaultMode: "bypassPermissions"`), installs the clash status line, and drops into the policy shell.
-- **`clash init project`** — Creates `.clash/policy.sexpr` in the current repository root with a minimal deny-all policy.
+- **`clash init user`** — Creates `~/.clash/policy.star` with a safe default policy, installs the Claude Code plugin, configures Claude Code so clash is the sole permission handler (`bypassPermissions: true` and `permissions.defaultMode: "bypassPermissions"`), and installs the clash status line.
+- **`clash init project`** — Creates `.clash/policy.star` in the current repository root with a minimal deny-all policy.
 
 Only one scope is initialized per invocation. When no scope is given, clash explains both options and asks you to choose.
 
@@ -57,132 +57,6 @@ clash init project
 
 # User-level init without touching Claude Code settings
 clash init user --no-bypass
-```
-
----
-
-## clash edit
-
-Interactive policy editor. Opens the policy shell for transactional editing with tab completion, inline help, and rule testing.
-
-```
-clash edit
-```
-
-Equivalent to `clash policy shell` — opens an interactive REPL where you can add, remove, and test rules. Type `help` for available commands, and `apply` to save changes.
-
-For a visual tree-based editor, see [`clash tui`](#clash-tui).
-
-**Examples:**
-
-```bash
-# Open the interactive policy editor
-clash edit
-```
-
----
-
-## clash tui
-
-Full-screen terminal UI for viewing and editing policy rules across all active levels (user, project, session).
-
-```
-clash tui
-```
-
-**Layout:**
-
-The screen is divided into four regions:
-
-1. **Header bar** — shows loaded policy levels, a `[modified]` indicator when there are unsaved changes, and a position counter (e.g. `3/12`)
-2. **Tree view** — hierarchical display of rules grouped by domain (Exec, Fs, Net, Tool), then by matcher components (binary, args, paths, etc.), with leaf nodes showing the effect (auto allow / auto deny / ask) and source level
-3. **Description pane** — contextual details for the selected node: human-readable rule explanation, source policy, s-expression, breadcrumb trail, and status messages
-4. **Key hints bar** — context-sensitive shortcut hints; replaced by the search bar during search mode
-
-**Keyboard shortcuts:**
-
-*Navigation*
-
-| Key | Action |
-|-----|--------|
-| `j` / `Down` | Move cursor down |
-| `k` / `Up` | Move cursor up |
-| `h` / `Left` | Collapse node or go to parent |
-| `l` / `Right` / `Enter` | Expand node or enter children |
-| `Space` | Toggle expand/collapse |
-| `g` | Jump to top |
-| `G` | Jump to bottom |
-| `PgUp` / `PgDn` | Page up/down |
-
-*Editing*
-
-| Key | Action |
-|-----|--------|
-| `e` | Edit node value inline (see below) |
-| `E` | Edit full rule as s-expression |
-| `Tab` | Cycle effect on a leaf node; on a branch, change all descendant effects |
-| `a` | Add a new rule (guided form) |
-| `d` | Delete rule at cursor (with confirmation) |
-| `w` | Save all changes (shows diff for review) |
-| `u` | Undo last edit |
-| `Ctrl+r` | Redo |
-
-*Folding*
-
-| Key | Action |
-|-----|--------|
-| `z` | Fold/unfold immediate children |
-| `Z` | Fold/unfold entire subtree |
-| `[` | Collapse all nodes |
-| `]` | Expand all nodes |
-
-*Search*
-
-| Key | Action |
-|-----|--------|
-| `/` | Start fuzzy search |
-| `n` | Jump to next match |
-| `N` | Jump to previous match |
-| `Esc` | Clear search (or quit if no search active) |
-
-*General*
-
-| Key | Action |
-|-----|--------|
-| `?` | Toggle help overlay |
-| `q` | Quit (prompts if unsaved changes) |
-
-**Review Changes overlay (`w` key):**
-
-When you press `w` to save, a diff overlay appears showing the full policy file with additions (`+`) and removals (`-`), along with the policy level and file path. The hint bar is pinned at the bottom of the overlay so it's always visible regardless of scroll position.
-
-| Key | Action |
-|-----|--------|
-| `j` / `Down` | Scroll down |
-| `k` / `Up` | Scroll up |
-| `PgDn` / `Ctrl+d` | Scroll down 10 lines |
-| `PgUp` / `Ctrl+u` | Scroll up 10 lines |
-| `g` | Jump to top |
-| `G` | Jump to bottom |
-| `y` | Confirm and save |
-| `n` / `Esc` | Cancel |
-
-**Inline node editing (`e` key):**
-
-The behavior of `e` depends on the selected node type:
-
-| Node type | Edit mode |
-|-----------|-----------|
-| Binary, Arg, HasArg, NetDomain, ToolName | Text input — type a new value, Enter to confirm |
-| PathNode | Text input — edit the path filter s-expression |
-| FsOp | Selector — cycle through read/write/create/delete/`*` with Tab or arrow keys |
-| Leaf / SandboxLeaf | Effect cycle — same as Tab |
-| Domain, PolicyBlock, HasMarker, SandboxName | Not editable |
-
-**Example:**
-
-```bash
-clash tui
 ```
 
 ---
@@ -246,152 +120,108 @@ clash doctor
 
 ---
 
-## clash policy shell
+## clash policy
 
-Transactional policy editor. Accumulates changes in memory and applies them atomically. Works as a pipe-friendly protocol (for Claude via stdin), an interactive REPL (for humans), or a one-liner (via `-c`).
+View and validate the compiled policy.
 
-```
-clash policy shell [OPTIONS]
-```
+### clash policy show
 
-**Options:**
-
-| Flag | Description |
-|------|-------------|
-| `--dry-run` | Print resulting policy without writing to disk |
-| `--scope <LEVEL>` | Policy level to modify: `user`, `project`, or `session` |
-| `-c`, `--command <STMT>` | Execute a single statement and exit |
-
-**Command language:**
-
-| Command | Syntax | Description |
-|---------|--------|-------------|
-| `add` | `add [<policy>] <rule>` | Add a rule to current (or named) policy block |
-| `remove` | `remove [<policy>] <rule>` | Remove a rule by its Display form |
-| `create` | `create <policy>` | Create a new empty policy block |
-| `default` | `default <effect> [<policy>]` | Change the default declaration |
-| `use` | `use <policy>` | Switch current policy context |
-| `show` | `show` | Display current policy with pending changes |
-| `rules` | `rules [<policy>]` | List rules in a policy block |
-| `test` | `test <tool> <args...>` | Test if a tool invocation would be allowed/denied |
-| `diff` | `diff` | Show pending changes as a unified diff |
-| `apply` | `apply` | Write changes to disk and exit |
-| `abort` | `abort` | Discard changes and exit |
-| `help` | `help [<command>]` | Show available commands |
-
-Rules can be full s-expressions `(allow (exec "git" *))` or shortcuts `allow:bash`.
-
-**Input mode detection:**
-
-- `-c` flag: parse and execute single statement, apply, exit
-- stdin is not a TTY (pipe mode): read all lines, apply atomically at end
-- stdin is a TTY: interactive REPL with line editing, tab completion, and history
-
-**Examples:**
-
-```bash
-# One-liner: add a rule
-clash policy shell --scope project -c 'add (allow (exec "git" *))'
-
-# One-liner with shortcut
-clash policy shell --scope project -c 'add allow:bash'
-
-# Pipe mode: multiple changes atomically
-clash policy shell --scope project <<EOF
-add (allow (exec "cargo" *))
-add (deny (exec "git" "push" :has "--force"))
-remove (deny (exec "npm" *))
-EOF
-
-# Dry-run to preview
-clash policy shell --scope project --dry-run -c 'add (allow (exec "cargo" *))'
-
-# Interactive REPL
-clash policy shell --scope project
-```
-
----
-
-## clash amend
-
-> **Deprecated:** prefer `clash policy shell` for a transactional editing experience.
-
-Amend the policy: add and remove multiple rules in one atomic operation. Unlike `clash allow` / `clash deny` which handle one rule at a time, `clash amend` supports mixed effects and combined add/remove operations.
+Show the compiled decision tree: default effect, policy name, and all rules grouped by capability domain.
 
 ```
-clash amend [OPTIONS] [RULES]...
-```
-
-**Arguments:**
-
-| Arg | Description |
-|-----|-------------|
-| `[RULES]...` | Rules to add, each as `(effect (matcher ...))` or `effect:verb` |
-
-**Options:**
-
-| Flag | Description |
-|------|-------------|
-| `--remove <RULE>` | Remove a rule (repeatable). Rule text in Display form |
-| `--dry-run` | Print modified policy without writing to disk |
-| `--scope <LEVEL>` | Policy level to modify: `user`, `project`, or `session` |
-
-Each rule includes its effect, so you can mix allow/deny/ask in one command:
-
-**Examples:**
-
-```bash
-# Add multiple rules with mixed effects
-clash amend '(allow (exec "git" *))' '(deny (exec "git" "push" :has "--force"))' --scope project
-
-# Bare verb shortcuts (effect:verb format)
-clash amend allow:bash deny:web --scope session
-
-# Add and remove atomically
-clash amend '(allow (exec "npm" *))' --remove '(deny (exec "npm" *))' --scope project
-
-# Preview changes without applying
-clash amend --dry-run '(allow (exec "git" *))' '(deny (exec "git" "push" :has "--force"))'
-
-# Session-scoped rules (temporary, current session only)
-clash amend allow:bash allow:edit --scope session
-```
-
-Removals are applied before additions, so you can atomically replace rules. The entire operation is validated before writing — if any rule fails to parse or the resulting policy is invalid, no changes are made.
-
----
-
-## clash launch
-
-Launch Claude Code with clash managing hooks and sandbox enforcement.
-
-```
-clash launch [OPTIONS] [ARGS]...
+clash policy show [OPTIONS]
 ```
 
 **Options:**
 
 | Flag | Description |
 |------|-------------|
-| `--policy <POLICY>` | Path to policy file (default: `~/.clash/policy.sexpr`) |
-
-**Arguments:**
-
-| Arg | Description |
-|-----|-------------|
-| `[ARGS]...` | Arguments passed through to Claude Code |
+| `--json` | Output as JSON |
 
 **Examples:**
 
 ```bash
-# Launch with default policy
-clash launch
+clash policy show
+clash policy show --json
+```
 
-# Launch with a custom policy
-clash launch --policy ./project.policy
+### clash policy list
 
-# Pass arguments to Claude Code
-clash launch -- --model sonnet
+List all active rules with level tags showing which policy layer each rule comes from.
+
+```
+clash policy list [OPTIONS]
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output as JSON |
+
+**Examples:**
+
+```bash
+clash policy list
+clash policy list --json
+```
+
+### clash policy validate
+
+Validate policy files and report errors. Checks that each policy file parses and compiles successfully, reporting the policy name, default effect, and rule count on success, or detailed error messages with hints on failure.
+
+```
+clash policy validate [OPTIONS]
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--file <PATH>` | Path to a specific policy file to validate (default: all active levels) |
+| `--json` | Output as JSON |
+
+When no `--file` is given, validates all active policy levels (user, project) and reports results for each. Exits with code 0 if all files are valid, code 1 if any have errors.
+
+**Examples:**
+
+```bash
+# Validate all active policy levels
+clash policy validate
+
+# Validate a specific file
+clash policy validate --file ~/.clash/policy.star
+
+# JSON output for scripting
+clash policy validate --json
+```
+
+### clash policy schema
+
+Print the JSON schema for the policy file format.
+
+```
+clash policy schema
+```
+
+**Examples:**
+
+```bash
+clash policy schema
+```
+
+### clash policy explain
+
+Explain which policy rule would match a given tool invocation, reading hook input from stdin as JSON.
+
+```
+clash policy explain
+```
+
+**Examples:**
+
+```bash
+echo '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | clash policy explain
 ```
 
 ---
@@ -443,95 +273,37 @@ echo '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | clash policy e
 
 ---
 
-## clash policy
+## clash launch
 
-View the compiled policy.
-
-### clash policy show
-
-Show the compiled decision tree: default effect, policy name, and all rules grouped by capability domain.
+Launch Claude Code with clash managing hooks and sandbox enforcement.
 
 ```
-clash policy show [OPTIONS]
+clash launch [OPTIONS] [ARGS]...
 ```
 
 **Options:**
 
 | Flag | Description |
 |------|-------------|
-| `--json` | Output as JSON |
+| `--policy <POLICY>` | Path to policy file (default: `~/.clash/policy.star`) |
+
+**Arguments:**
+
+| Arg | Description |
+|-----|-------------|
+| `[ARGS]...` | Arguments passed through to Claude Code |
 
 **Examples:**
 
 ```bash
-clash policy show
-clash policy show --json
-```
+# Launch with default policy
+clash launch
 
-### clash policy validate
+# Launch with a custom policy
+clash launch --policy ./project.policy
 
-Validate policy files and report errors. Checks that each policy file parses and compiles successfully, reporting the policy name, default effect, and rule count on success, or detailed error messages with hints on failure.
-
-```
-clash policy validate [OPTIONS]
-```
-
-**Options:**
-
-| Flag | Description |
-|------|-------------|
-| `--file <PATH>` | Path to a specific policy file to validate (default: all active levels) |
-| `--json` | Output as JSON |
-
-When no `--file` is given, validates all active policy levels (user, project) and reports results for each. Exits with code 0 if all files are valid, code 1 if any have errors.
-
-**Examples:**
-
-```bash
-# Validate all active policy levels
-clash policy validate
-
-# Validate a specific file
-clash policy validate --file ~/.clash/policy.sexpr
-
-# JSON output for scripting
-clash policy validate --json
-```
-
-### clash policy upgrade
-
-Upgrade policy syntax to the latest version. Applies auto-fixes for deprecated features and adds or updates the `(version N)` declaration.
-
-```
-clash policy upgrade [OPTIONS]
-```
-
-**Options:**
-
-| Flag | Description |
-|------|-------------|
-| `--dry-run` | Print upgraded policy without writing to disk |
-| `--scope <LEVEL>` | Policy level to upgrade: `user` or `project` |
-
-When no `--scope` is given, upgrades all active policy levels. The command:
-
-1. Parses the existing policy file
-2. Checks for deprecated features based on the declared version
-3. Applies auto-fix migrations where available
-4. Adds or updates the `(version N)` declaration to the latest version
-5. Writes the upgraded policy back to disk (unless `--dry-run`)
-
-**Examples:**
-
-```bash
-# Preview what would change
-clash policy upgrade --dry-run
-
-# Upgrade user-level policy
-clash policy upgrade --scope user
-
-# Upgrade project-level policy
-clash policy upgrade --scope project
+# Pass arguments to Claude Code
+clash launch -- --model sonnet
 ```
 
 ---
@@ -703,12 +475,10 @@ clash bug "Sandbox blocks cargo build in target directory"
 
 # Detailed report with diagnostics
 clash bug "Policy not matching git commands" \
-  -d "The rule (allow (exec git *)) does not match git status" \
+  -d "The rule on git does not match git status" \
   --include-config \
   --include-logs
 ```
-
----
 
 ---
 
@@ -775,6 +545,4 @@ After step 1, Claude Code reverts to its built-in permission model immediately. 
 ## See Also
 
 - [Policy Writing Guide](./policy-guide.md) — how to write policy rules
-- [Policy Grammar](./policy-grammar.md) — formal EBNF grammar
 - [Policy Semantics](./policy-semantics.md) — evaluation algorithm
-- [`clash tui`](#clash-tui) — full-screen visual policy editor

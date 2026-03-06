@@ -38,15 +38,17 @@ pub struct ClashConfig {
     #[serde(default)]
     pub policy_raw: Option<String>,
 
-    /// Raw s-expression string written to ~/.clash/policy.sexpr (v2 format).
-    /// When present, this is the v2 policy engine input.
+    /// Starlark policy string written to ~/.clash/policy.star.
+    /// When present, this is the primary policy engine input.
     #[serde(default)]
-    pub policy_sexpr: Option<String>,
+    #[serde(alias = "policy_sexpr")]
+    pub policy_star: Option<String>,
 
-    /// Raw s-expression string written to <project>/.clash/policy.sexpr (project-level).
-    /// When present alongside `policy_sexpr`, enables multi-level policy testing.
+    /// Starlark policy string written to <project>/.clash/policy.star (project-level).
+    /// When present alongside `policy_star`, enables multi-level policy testing.
     #[serde(default)]
-    pub project_policy_sexpr: Option<String>,
+    #[serde(alias = "project_policy_sexpr")]
+    pub project_policy_star: Option<String>,
 }
 
 /// Policy document specification for ~/.clash/policy.yaml.
@@ -469,10 +471,10 @@ meta:
   name: command step test
 
 clash:
-  policy_sexpr: |
-    (default deny "main")
-    (policy "main"
-      (allow (exec "git" *)))
+  policy_star: |
+    load("@clash//std.star", "exe", "policy")
+    def main():
+        return policy(default=deny, rules=[exe("git").allow()])
 
 steps:
   - name: add allow rule

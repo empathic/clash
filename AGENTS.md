@@ -21,6 +21,7 @@
 * `clash` is an installed binary on the user's PATH. ALWAYS run it directly as `clash` (e.g., `clash status`, `clash policy list`).
 * NEVER use `cargo run --bin clash` to run clash. That is for building/testing the crate, not for invoking the tool.
 * Skills reference `clash` commands — execute them exactly as written.
+* Available CLI commands: `clash init`, `clash status`, `clash policy list`, `clash policy validate`, `clash policy show`, `clash explain`, `clash doctor`, `clash update`, `clash launch`, `clash sandbox`.
 
 ## Development
 
@@ -42,19 +43,14 @@
 
 ## Policy Model
 
-* Clash uses a capability-based policy language with s-expression syntax
+* Clash uses a capability-based policy language with Starlark (.star) as the primary format, compiled to JSON IR
 * Three capability domains: `exec` (commands), `fs` (filesystem), `net` (network)
-* Policy source: `clash/src/policy/v2/` — parse, compile, eval, IR
-* Rules are `(effect (capability ...))` forms, e.g. `(deny (exec "git" "push" *))`
+* Policy source: `clash/src/policy/` — parse, compile, eval, IR
+* Rules are JSON objects with an `effect` and a capability matcher, e.g. `{ "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }`
 * The policy speaks in capabilities, not Claude Code tool names — the eval layer maps tools to capabilities
-* See `docs/policy-grammar.md` for the formal grammar
-
-## Backwards Compatibility
-
-* All backwards-incompatible changes to the policy language MUST bump the version number in `clash/src/policy/version.rs` (`CURRENT_VERSION`)
-* Each version bump MUST include deprecation entries in `all_deprecations()` describing what changed
-* Auto-fix functions SHOULD be provided when possible so `clash policy upgrade` can migrate users automatically
-* The `(version N)` declaration in policy files allows clash to detect outdated syntax and guide users to upgrade
+* Policy files use `.json` or `.star` extension (`.star` preferred when both exist)
+* The `clash-starlark` crate evaluates `.star` files → JSON using Starlark (a Python-like config language)
+* Starlark policies define a `main()` function that returns a policy value
 
 ## Site
 
@@ -66,6 +62,7 @@
 ## Layout
 
 - *clash* Clash binary + library
+* *clash-starlark* Starlark policy evaluator — compiles `.star` files to JSON policy format
 * *clash-plugin* Claude plugin refered to by the .claude-plugin definitions
 * *clash_notify* Helper crate for extended notifications outside of the terminal
 * *claude_settings* Helper crate for interacting with a user's ".claude" settings directories

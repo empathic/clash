@@ -34,13 +34,13 @@ Clash blocks **all actions** when the policy fails to compile, rather than silen
 
 ## Can I share policies across a team?
 
-Yes. Use a **project-level** policy at `<repo>/.clash/policy.sexpr` and commit it to version control. Team members get shared rules automatically. Individual developers can override with user-level or session-level policies.
+Yes. Use a **project-level** policy at `<repo>/.clash/policy.star` and commit it to version control. Team members get shared rules automatically. Individual developers can override with user-level or session-level policies.
 
 ---
 
 ## How does the kernel sandbox work?
 
-When an exec rule includes a `:sandbox` annotation, Clash generates OS-level restrictions:
+When an exec rule includes a sandbox (via `.sandbox(sb)` in Starlark, or the `"sandbox"` field in JSON IR), Clash generates OS-level restrictions:
 
 - **Linux:** Landlock LSM constrains filesystem access; seccomp + proxy handles network filtering.
 - **macOS:** Seatbelt profiles restrict filesystem and network access at the kernel level.
@@ -51,7 +51,7 @@ Sandbox restrictions are inherited by all child processes and cannot be bypassed
 
 ## Do exec rules apply to subprocesses?
 
-No. Exec rules match only the **top-level command** the agent invokes. If an allowed command like `make deploy` internally calls `git push`, the `(deny (exec "git" "push" *))` rule does not fire. However, **sandbox restrictions** on filesystem and network access *are* enforced on all child processes at the kernel level.
+No. Exec rules match only the **top-level command** the agent invokes. If an allowed command like `make deploy` internally calls `git push`, the deny rule for `git push` does not fire. However, **sandbox restrictions** on filesystem and network access *are* enforced on all child processes at the kernel level.
 
 ---
 

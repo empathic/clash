@@ -1,0 +1,63 @@
+meta:
+  name: starlark policy — env var prefix handling in Bash commands
+  description: >
+    Test that environment variable prefixes on Bash commands are correctly
+    stripped when evaluating exec policy rules.
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "exe", "policy")
+    def main():
+        return policy(default=deny, rules=[
+            exe("cargo").allow(),
+            exe("git", args=["push"]).deny(),
+        ])
+
+steps:
+  - name: plain cargo build allowed
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: cargo build
+    expect:
+      decision: allow
+
+  - name: git push denied
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git push origin main
+    expect:
+      decision: deny
+
+  - name: single env var prefix allows cargo check
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: SOME_ENV=foo cargo check
+    expect:
+      decision: allow
+
+  - name: multiple env var prefixes allow cargo build
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: A=1 B=2 cargo build
+    expect:
+      decision: allow
+
+  - name: env utility prefix allows cargo test
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: env RUST_BACKTRACE=1 cargo test
+    expect:
+      decision: allow
+
+  - name: env var prefix on git push still denied
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: GIT_SSH=ssh git push origin main
+    expect:
+      decision: deny

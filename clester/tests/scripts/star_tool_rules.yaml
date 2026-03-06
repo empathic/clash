@@ -1,0 +1,71 @@
+meta:
+  name: starlark policy — tool rules
+  description: Test tool() rules for allowing/denying specific tools
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "tool", "policy")
+    def main():
+        return policy(default=deny, rules=[
+            tool(["Read", "Glob", "Grep"]).allow(),
+            tool("WebSearch").deny(),
+            tool("Skill").allow(),
+        ])
+
+steps:
+  - name: Read tool allowed
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/test.txt
+    expect:
+      decision: allow
+
+  - name: Glob tool allowed
+    hook: pre-tool-use
+    tool_name: Glob
+    tool_input:
+      pattern: "*.txt"
+    expect:
+      decision: allow
+
+  - name: Grep tool allowed
+    hook: pre-tool-use
+    tool_name: Grep
+    tool_input:
+      pattern: "hello"
+    expect:
+      decision: allow
+
+  - name: WebSearch tool denied
+    hook: pre-tool-use
+    tool_name: WebSearch
+    tool_input:
+      query: "test"
+    expect:
+      decision: deny
+
+  - name: Skill tool allowed
+    hook: pre-tool-use
+    tool_name: Skill
+    tool_input:
+      skill: "commit"
+    expect:
+      decision: allow
+
+  - name: Write tool denied by default
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/test.txt
+      content: hello
+    expect:
+      decision: deny
+
+  - name: Bash denied by default
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: echo hello
+    expect:
+      decision: deny

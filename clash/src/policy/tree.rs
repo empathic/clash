@@ -1,8 +1,6 @@
 //! Tree-shaped policy IR.
 //!
-//! Replaces the flat `DecisionTree` for evaluation. Old flat syntax compiles
-//! to degenerate linear trees via `from_decision_tree()`. v2/v3 structured
-//! syntax compiles to When/Match/Leaf trees via `compile_tree_ast()`.
+//! Policies compile to When/Match/Leaf trees via `compile_tree_ast()`.
 //!
 //! **Constraint derivation**: Match blocks on `ctx.http.*` / `ctx.fs.*` that
 //! survive tree shaking carry a pre-compiled `SandboxPolicy`. When the
@@ -246,6 +244,8 @@ pub struct QueryContext {
     pub mcp_server: Option<String>,
     pub mcp_tool: Option<String>,
     pub cwd: String,
+    /// True when the primary query is a Tool capability query (not exec/fs/net).
+    pub is_tool_query: bool,
     /// Raw tool input JSON — used for nullable `ctx.tool.args.<field>?` accessors.
     pub tool_input: serde_json::Value,
 }
@@ -291,15 +291,7 @@ impl Predicate {
             Predicate::Fs(_) => ctx.fs_op.is_some(),
             Predicate::Net(_) => ctx.net_domain.is_some(),
             Predicate::Mcp(_) => ctx.mcp_server.is_some(),
-            // Tool predicates are relevant only when no other domain matched,
-            // matching the old `_ =>` fallthrough in tool_to_queries.
-            Predicate::Tool(_) => {
-                ctx.bin.is_none()
-                    && ctx.fs_op.is_none()
-                    && ctx.net_domain.is_none()
-                    && ctx.agent_name.is_none()
-                    && ctx.mcp_server.is_none()
-            }
+            Predicate::Tool(_) => ctx.is_tool_query,
             Predicate::Agent(_) => ctx.agent_name.is_some(),
             Predicate::True => true,
         }
@@ -364,6 +356,7 @@ impl QueryContext {
             mcp_server: None,
             mcp_tool: None,
             cwd: cwd.to_string(),
+            is_tool_query: false,
             tool_input: tool_input.clone(),
         };
 
@@ -386,7 +379,30 @@ impl QueryContext {
                     ctx.mcp_tool = Some(tool.clone());
                 }
                 CapQuery::Tool { .. } => {
-                    // tool_name is already set from the parameter
+                    ctx.is_tool_query = true;
+                    // tool_name is already set from the parameter.
+                    // For file-backed tools, extract fs context from tool_input
+                    // so sandbox fs rules can be evaluated.
+                    let fs_op = match tool_name {
+                        "Read" | "Glob" | "Grep" => Some(FsOp::Read),
+                        "Write" | "Edit" | "NotebookEdit" => Some(FsOp::Write),
+                        _ => None,
+                    };
+                    if let Some(op) = fs_op {
+                        ctx.fs_op = Some(op);
+                        let path_str = match tool_name {
+                            "Glob" | "Grep" => tool_input
+                                .get("path")
+                                .and_then(|v| v.as_str())
+                                .or_else(|| tool_input.get("pattern").and_then(|v| v.as_str()))
+                                .unwrap_or(""),
+                            _ => tool_input
+                                .get("file_path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(""),
+                        };
+                        ctx.fs_path = Some(crate::policy::eval::resolve_path(path_str, cwd));
+                    }
                 }
                 CapQuery::Agent { name } => {
                     ctx.agent_name = Some(name.clone());
@@ -398,54 +414,7 @@ impl QueryContext {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Bridge: DecisionTree -> PolicyTree
-// ---------------------------------------------------------------------------
-
 impl PolicyTree {
-    /// Convert a flat `DecisionTree` into a tree-shaped `PolicyTree`.
-    ///
-    /// Old flat rules compile to a degenerate tree:
-    /// ```text
-    /// DenyOverrides [
-    ///     Sequence [When+Leaf, When+Leaf, ...],  // exec
-    ///     Sequence [When+Leaf, When+Leaf, ...],  // fs
-    ///     Sequence [When+Leaf, When+Leaf, ...],  // net
-    ///     Sequence [When+Leaf, When+Leaf, ...],  // tool
-    /// ]
-    /// ```
-    pub fn from_decision_tree(dt: DecisionTree) -> Self {
-        let mut ids = IdAllocator::new();
-
-        let exec_seq = domain_to_sequence(&dt.exec_rules, &mut ids);
-        let fs_seq = domain_to_sequence(&dt.fs_rules, &mut ids);
-        let net_seq = domain_to_sequence(&dt.net_rules, &mut ids);
-        let tool_seq = domain_to_sequence(&dt.tool_rules, &mut ids);
-
-        let root_id = ids.alloc(NodeMeta {
-            description: "root deny-overrides".into(),
-            ..Default::default()
-        });
-
-        let root = Node::DenyOverrides {
-            id: root_id,
-            children: vec![exec_seq, fs_seq, net_seq, tool_seq],
-        };
-
-        Self {
-            version: dt.version,
-            default: dt.default,
-            policy_name: dt.policy_name,
-            root,
-            node_meta: ids.node_meta,
-            exec_rules: dt.exec_rules,
-            fs_rules: dt.fs_rules,
-            net_rules: dt.net_rules,
-            tool_rules: dt.tool_rules,
-            sandbox_policies: dt.sandbox_policies,
-        }
-    }
-
     /// Merge multiple `PolicyTree`s into a single tree with a `DenyOverrides` root.
     ///
     /// Trees should be ordered highest-precedence first. Node IDs are renumbered
@@ -470,7 +439,7 @@ impl PolicyTree {
         let mut all_tool = Vec::new();
         let mut all_sandbox: HashMap<String, Vec<CompiledRule>> = HashMap::new();
 
-        for mut tree in trees {
+        for (level_idx, mut tree) in trees.into_iter().enumerate() {
             let offset = combined_meta.len() as NodeId;
             if offset > 0 {
                 renumber_node(&mut tree.root, offset);
@@ -478,15 +447,56 @@ impl PolicyTree {
                     m.id += offset;
                 }
             }
+
+            // Namespace auto-generated sandbox names (e.g. __sandbox_0) by
+            // prefixing with the level index to prevent collisions across
+            // policy levels that independently generate the same names.
+            let prefix = format!("__L{level_idx}_");
+            let renames: Vec<(String, String)> = tree
+                .sandbox_policies
+                .keys()
+                .filter(|k| k.starts_with("__sandbox_"))
+                .map(|k| (k.clone(), format!("{prefix}{k}")))
+                .collect();
+
+            if !renames.is_empty() {
+                for (old, new) in &renames {
+                    if let Some(rules) = tree.sandbox_policies.remove(old) {
+                        tree.sandbox_policies.insert(new.clone(), rules);
+                    }
+                }
+                // Update references in node_meta.
+                for m in &mut tree.node_meta {
+                    if let Some(ref sb) = m.sandbox_name {
+                        if let Some((old, new)) = renames.iter().find(|(o, _)| o == sb) {
+                            m.sandbox_name = Some(new.clone());
+                            let _ = old; // suppress unused warning
+                        }
+                    }
+                }
+                // Update references in flat rule lists.
+                let rename_in_rules = |rules: &mut [CompiledRule]| {
+                    for r in rules.iter_mut() {
+                        if let Some(ref sb) = r.sandbox {
+                            if let Some((_, new)) = renames.iter().find(|(o, _)| o == sb) {
+                                r.sandbox = Some(new.clone());
+                            }
+                        }
+                    }
+                };
+                rename_in_rules(&mut tree.exec_rules);
+                rename_in_rules(&mut tree.fs_rules);
+                rename_in_rules(&mut tree.net_rules);
+                rename_in_rules(&mut tree.tool_rules);
+            }
+
             children.push(tree.root);
             combined_meta.extend(tree.node_meta);
             all_exec.extend(tree.exec_rules);
             all_fs.extend(tree.fs_rules);
             all_net.extend(tree.net_rules);
             all_tool.extend(tree.tool_rules);
-            for (name, rules) in tree.sandbox_policies {
-                all_sandbox.entry(name).or_insert(rules);
-            }
+            all_sandbox.extend(tree.sandbox_policies);
         }
 
         // Add root DenyOverrides node.
@@ -553,71 +563,9 @@ fn renumber_node(node: &mut Node, offset: NodeId) {
     }
 }
 
-/// Convert a domain's flat rule list into a `Sequence` of `When { Leaf }` nodes.
-fn domain_to_sequence(rules: &[CompiledRule], ids: &mut IdAllocator) -> Node {
-    let mut children = Vec::with_capacity(rules.len());
-
-    for (idx, rule) in rules.iter().enumerate() {
-        let predicate = compiled_rule_to_predicate(rule);
-
-        // Leaf node (holds the effect)
-        let leaf_id = ids.alloc(NodeMeta {
-            description: rule.source.to_string(),
-            origin_policy: rule.origin_policy.clone(),
-            origin_level: rule.origin_level,
-            source_rule: Some(rule.source.clone()),
-            rule_index: Some(idx),
-            ..Default::default()
-        });
-        let leaf = Node::Leaf {
-            id: leaf_id,
-            effect: rule.effect,
-        };
-
-        // When node wrapping the leaf
-        let when_id = ids.alloc(NodeMeta {
-            description: rule.source.to_string(),
-            origin_policy: rule.origin_policy.clone(),
-            origin_level: rule.origin_level,
-            source_rule: Some(rule.source.clone()),
-            rule_index: Some(idx),
-            sandbox_name: rule.sandbox.clone(),
-            ..Default::default()
-        });
-        let when = Node::When {
-            id: when_id,
-            predicate,
-            body: Box::new(leaf),
-        };
-
-        children.push(when);
-    }
-
-    let seq_id = ids.alloc(NodeMeta {
-        description: format!("domain sequence ({} rules)", rules.len()),
-        ..Default::default()
-    });
-
-    Node::Sequence {
-        id: seq_id,
-        children,
-    }
-}
-
-/// Extract a `Predicate` from a `CompiledRule`'s matcher.
-fn compiled_rule_to_predicate(rule: &CompiledRule) -> Predicate {
-    match &rule.matcher {
-        CompiledMatcher::Exec(e) => Predicate::Command(e.clone()),
-        CompiledMatcher::Fs(f) => Predicate::Fs(f.clone()),
-        CompiledMatcher::Net(n) => Predicate::Net(n.clone()),
-        CompiledMatcher::Tool(t) => Predicate::Tool(t.clone()),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tree evaluation
 // ---------------------------------------------------------------------------
-
 impl PolicyTree {
     /// Evaluate a tool request against this policy tree.
     ///
@@ -707,16 +655,15 @@ impl PolicyTree {
         };
 
         // Build sandbox policy if allowed.
-        let sandbox = if effect == Effect::Allow {
-            match sandbox_out {
-                Some(SandboxOut::Named(name)) => self
-                    .build_sandbox_policy(&name, cwd)
-                    .or_else(|| self.build_implicit_sandbox()),
-                Some(SandboxOut::Compiled(policy)) => Some(policy),
-                None => self.build_implicit_sandbox(),
-            }
-        } else {
-            None
+        let sandbox = match sandbox_out {
+            Some(SandboxOut::Named(name)) => self
+                .build_sandbox_policy(&name, cwd)
+                .or_else(|| self.build_implicit_sandbox()),
+            Some(SandboxOut::Compiled(policy)) => Some(policy),
+            None => match effect {
+                Effect::Allow => self.build_implicit_sandbox(),
+                _ => None,
+            },
         };
 
         PolicyDecision {
@@ -729,6 +676,24 @@ impl PolicyTree {
             },
             sandbox,
         }
+    }
+
+    /// Evaluate a sandbox's filesystem rules against a file operation.
+    ///
+    /// Used when a tool rule with a sandbox matches a file-backed tool (Read,
+    /// Write, etc.). Returns the sandbox's decision for the specific fs op+path.
+    fn eval_sandbox_fs(&self, sandbox_name: &str, op: FsOp, path: &str) -> Effect {
+        if let Some(rules) = self.sandbox_policies.get(sandbox_name) {
+            for rule in rules {
+                if let CompiledMatcher::Fs(ref fs) = rule.matcher
+                    && fs.matches(op, path)
+                {
+                    return rule.effect;
+                }
+            }
+        }
+        // No sandbox rule matched — sandbox default is deny.
+        Effect::Deny
     }
 
     /// Recursively evaluate a node, collecting matches/skips into the trace.
@@ -765,7 +730,6 @@ impl PolicyTree {
                     )
                 }
             }
-
             Node::Sequence { children, .. } => {
                 for child in children {
                     if let Some(eff) = self.eval_node(child, ctx, matched, skipped, sandbox_out) {
@@ -802,12 +766,24 @@ impl PolicyTree {
                     // For flat-bridge When+Leaf nodes, record the match at
                     // the When level and return the Leaf effect directly.
                     if let Some(idx) = meta.rule_index {
-                        let effect = match body.as_ref() {
+                        let mut effect = match body.as_ref() {
                             Node::Leaf { effect, .. } => *effect,
                             _ => {
                                 return self.eval_node(body, ctx, matched, skipped, sandbox_out);
                             }
                         };
+
+                        // For tool rules with a sandbox: if the context has
+                        // fs info (file-backed tools like Read/Write/Edit),
+                        // evaluate the sandbox's fs rules to refine the effect.
+                        if matches!(predicate, Predicate::Tool(_))
+                            && effect == Effect::Allow
+                            && let Some(ref sb_name) = meta.sandbox_name
+                            && let Some(fs_op) = ctx.fs_op
+                            && let Some(ref fs_path) = ctx.fs_path
+                        {
+                            effect = self.eval_sandbox_fs(sb_name, fs_op, fs_path);
+                        }
 
                         let mut description = meta.description.clone();
                         if let Some(ref sb) = meta.sandbox_name {
@@ -829,16 +805,16 @@ impl PolicyTree {
                         // don't record matches, but Sandbox nodes do).
                         let pre_len = matched.len();
                         let result = self.eval_node(body, ctx, matched, skipped, sandbox_out);
-                        if let Some(effect) = result {
-                            if matched.len() == pre_len {
-                                matched.push(RuleMatch {
-                                    rule_index: 0,
-                                    description: meta.description.clone(),
-                                    effect,
-                                    has_active_constraints: sandbox_out.is_some(),
-                                    node_id: Some(*id),
-                                });
-                            }
+                        if let Some(effect) = result
+                            && matched.len() == pre_len
+                        {
+                            matched.push(RuleMatch {
+                                rule_index: 0,
+                                description: meta.description.clone(),
+                                effect,
+                                has_active_constraints: sandbox_out.is_some(),
+                                node_id: Some(*id),
+                            });
                         }
                         result
                     }
@@ -880,16 +856,16 @@ impl PolicyTree {
                             let result =
                                 self.eval_node(&arm.body, ctx, matched, skipped, sandbox_out);
                             // Record a match if the body didn't already.
-                            if let Some(effect) = result {
-                                if matched.len() == pre_len {
-                                    matched.push(RuleMatch {
-                                        rule_index: 0,
-                                        description: meta.description.clone(),
-                                        effect,
-                                        has_active_constraints: sandbox_out.is_some(),
-                                        node_id: Some(*id),
-                                    });
-                                }
+                            if let Some(effect) = result
+                                && matched.len() == pre_len
+                            {
+                                matched.push(RuleMatch {
+                                    rule_index: 0,
+                                    description: meta.description.clone(),
+                                    effect,
+                                    has_active_constraints: sandbox_out.is_some(),
+                                    node_id: Some(*id),
+                                });
                             }
                             return result;
                         }
@@ -939,11 +915,10 @@ fn observable_is_relevant(observable: &Observable, ctx: &QueryContext) -> bool {
         | Observable::ToolName
         | Observable::ToolArgs
         | Observable::ToolArgField(_) => {
-            ctx.bin.is_none()
-                && ctx.fs_op.is_none()
-                && ctx.net_domain.is_none()
-                && ctx.agent_name.is_none()
-                && ctx.mcp_server.is_none()
+            // Tool observables are relevant when the query isn't a
+            // command or MCP invocation. File-backed tools (Read, etc.)
+            // now route through tool rules with fs context for sandbox.
+            ctx.bin.is_none() && ctx.mcp_server.is_none()
         }
         Observable::Agent | Observable::AgentName => ctx.agent_name.is_some(),
         Observable::Mcp | Observable::McpServer | Observable::McpTool => ctx.mcp_server.is_some(),
@@ -1031,11 +1006,9 @@ fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec
             }
         }
         Observable::ToolName => {
-            if ctx.bin.is_none()
-                && ctx.fs_op.is_none()
-                && ctx.net_domain.is_none()
-                && ctx.mcp_server.is_none()
-            {
+            // Tool name is always available — file-backed tools (Read, Write,
+            // etc.) now route through tool rules with sandbox fs constraints.
+            if ctx.bin.is_none() && ctx.mcp_server.is_none() {
                 Some(vec![ctx.tool_name.clone()])
             } else {
                 None
@@ -1220,7 +1193,7 @@ mod tests {
     use serde_json::json;
 
     use crate::policy::Effect;
-    use crate::policy::compile::{EnvResolver, compile_policy_with_env};
+    use crate::policy::compile::{EnvResolver, compile_to_tree};
     use crate::policy::sandbox_types::NetworkPolicy;
 
     use super::*;
@@ -1249,292 +1222,135 @@ mod tests {
 
     fn compile_tree(source: &str) -> PolicyTree {
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
-        let dt = compile_policy_with_env(source, &env).unwrap();
-        PolicyTree::from_decision_tree(dt)
+        compile_to_tree(source, &env).unwrap()
     }
 
-    // -- Parallel evaluation: old DecisionTree vs new PolicyTree --------
-
-    fn assert_same_decision(
-        source: &str,
-        tool_name: &str,
-        tool_input: serde_json::Value,
-        cwd: &str,
-    ) {
-        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
-        let dt = compile_policy_with_env(source, &env).unwrap();
-        let pt = PolicyTree::from_decision_tree(dt.clone());
-
-        let old = dt.evaluate(tool_name, &tool_input, cwd);
-        let new = pt.evaluate(tool_name, &tool_input, cwd);
-
-        assert_eq!(old.effect, new.effect, "effect mismatch for {tool_name}");
-        assert_eq!(old.reason, new.reason, "reason mismatch for {tool_name}");
-        assert_eq!(
-            old.trace.matched_rules.len(),
-            new.trace.matched_rules.len(),
-            "matched_rules count mismatch for {tool_name}"
-        );
-        assert_eq!(
-            old.trace.skipped_rules.len(),
-            new.trace.skipped_rules.len(),
-            "skipped_rules count mismatch for {tool_name}"
-        );
-        assert_eq!(
-            old.trace.final_resolution, new.trace.final_resolution,
-            "final_resolution mismatch for {tool_name}"
-        );
-        assert_eq!(
-            old.sandbox.is_some(),
-            new.sandbox.is_some(),
-            "sandbox presence mismatch for {tool_name}"
-        );
-
-        for (i, (om, nm)) in old
-            .trace
-            .matched_rules
-            .iter()
-            .zip(new.trace.matched_rules.iter())
-            .enumerate()
-        {
-            assert_eq!(om.rule_index, nm.rule_index, "matched[{i}].rule_index");
-            assert_eq!(om.description, nm.description, "matched[{i}].description");
-            assert_eq!(om.effect, nm.effect, "matched[{i}].effect");
-        }
-        for (i, (os, ns)) in old
-            .trace
-            .skipped_rules
-            .iter()
-            .zip(new.trace.skipped_rules.iter())
-            .enumerate()
-        {
-            assert_eq!(os.rule_index, ns.rule_index, "skipped[{i}].rule_index");
-            assert_eq!(os.description, ns.description, "skipped[{i}].description");
-            assert_eq!(os.reason, ns.reason, "skipped[{i}].reason");
-        }
-    }
+    const GIT_POLICY: &str = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}]}}}, {"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
 
     #[test]
-    fn parallel_bash_deny() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#;
-        assert_same_decision(
-            source,
+    fn bash_deny() {
+        let tree = compile_tree(GIT_POLICY);
+        let decision = tree.evaluate(
             "Bash",
-            json!({"command": "git push origin main"}),
+            &json!({"command": "git push origin main"}),
             "/home/user/project",
         );
+        assert_eq!(decision.effect, Effect::Deny);
     }
 
     #[test]
-    fn parallel_bash_allow() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#;
-        assert_same_decision(
-            source,
+    fn bash_allow() {
+        let tree = compile_tree(GIT_POLICY);
+        let decision = tree.evaluate(
             "Bash",
-            json!({"command": "git status"}),
+            &json!({"command": "git status"}),
             "/home/user/project",
         );
+        assert_eq!(decision.effect, Effect::Allow);
     }
 
     #[test]
-    fn parallel_read_allowed() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath (env PWD)))))
-"#;
-        assert_same_decision(
-            source,
+    fn read_tool_allowed() {
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "tool": {"name": {"literal": "Read"}}}}]}]}"#;
+        let tree = compile_tree(source);
+        let decision = tree.evaluate(
             "Read",
-            json!({"file_path": "/home/user/project/src/main.rs"}),
+            &json!({"file_path": "/home/user/project/src/main.rs"}),
             "/home/user/project",
         );
+        assert_eq!(decision.effect, Effect::Allow);
     }
 
     #[test]
-    fn parallel_read_denied() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (fs read (subpath (env PWD)))))
-"#;
-        assert_same_decision(
-            source,
+    fn read_no_tool_rule_denied() {
+        let tree = compile_tree(GIT_POLICY);
+        let decision = tree.evaluate(
             "Read",
-            json!({"file_path": "/etc/passwd"}),
+            &json!({"file_path": "/etc/passwd"}),
             "/home/user/project",
         );
+        assert_eq!(decision.effect, Effect::Deny);
     }
 
+    const NET_POLICY: &str = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "net": {"domain": {"or": [{"literal": "github.com"}, {"literal": "crates.io"}]}}}}, {"rule": {"effect": "deny", "net": {"domain": {"regex": ".*\\.evil\\.com"}}}}]}]}"#;
+
     #[test]
-    fn parallel_webfetch_allow() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (net (or "github.com" "crates.io")))
-  (deny  (net /.*\.evil\.com/)))
-"#;
-        assert_same_decision(
-            source,
+    fn webfetch_allow() {
+        let tree = compile_tree(NET_POLICY);
+        let decision = tree.evaluate(
             "WebFetch",
-            json!({"url": "https://github.com/foo/bar"}),
+            &json!({"url": "https://github.com/foo/bar"}),
             "/home/user/project",
         );
+        assert_eq!(decision.effect, Effect::Allow);
     }
 
     #[test]
-    fn parallel_webfetch_deny() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (net (or "github.com" "crates.io")))
-  (deny  (net /.*\.evil\.com/)))
-"#;
-        assert_same_decision(
-            source,
+    fn webfetch_deny() {
+        let tree = compile_tree(NET_POLICY);
+        let decision = tree.evaluate(
             "WebFetch",
-            json!({"url": "https://malware.evil.com/payload"}),
+            &json!({"url": "https://malware.evil.com/payload"}),
             "/home/user/project",
         );
+        assert_eq!(decision.effect, Effect::Deny);
     }
 
     #[test]
-    fn parallel_unknown_tool_default() {
-        let source = r#"
-(default ask "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
-        assert_same_decision(
-            source,
+    fn unknown_tool_default() {
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "ask", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
+        let tree = compile_tree(source);
+        let decision = tree.evaluate(
             "SomeUnknownTool",
-            json!({"foo": "bar"}),
+            &json!({"foo": "bar"}),
             "/home/user/project",
         );
+        assert_eq!(decision.effect, Effect::Ask);
     }
 
     #[test]
-    fn parallel_tool_rule() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (tool)))
-"#;
-        assert_same_decision(
-            source,
+    fn tool_rule_wildcard() {
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "tool": {}}}]}]}"#;
+        let tree = compile_tree(source);
+        let decision = tree.evaluate(
             "AskUserQuestion",
-            json!({"questions": []}),
+            &json!({"questions": []}),
             "/home/user/project",
         );
+        assert_eq!(decision.effect, Effect::Allow);
     }
 
     #[test]
-    fn parallel_full_pipeline() {
-        let source = r#"
-(default deny "main")
-
-(policy "cwd-access"
-  (allow (fs read (subpath (env PWD)))))
-
-(policy "main"
-  (include "cwd-access")
-
-  (deny  (exec "git" "push" *))
-  (deny  (exec "git" "reset" *))
-  (ask   (exec "git" "commit" *))
-  (allow (exec "git" *))
-
-  (allow (fs (or read write) (subpath (env PWD))))
-  (deny  (fs write ".env"))
-
-  (allow (net (or "github.com" "crates.io")))
-  (deny  (net /.*\.evil\.com/)))
-"#;
-        let cwd = "/home/user/project";
-        assert_same_decision(
-            source,
+    fn sandbox_exec() {
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "cargo-env", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}]}, {"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "cargo"}, "args": [{"any": null}]}, "sandbox": {"named": "cargo-env"}}}]}]}"#;
+        let tree = compile_tree(source);
+        let decision = tree.evaluate(
             "Bash",
-            json!({"command": "git push origin main"}),
-            cwd,
+            &json!({"command": "cargo build"}),
+            "/home/user/project",
         );
-        assert_same_decision(source, "Bash", json!({"command": "git status"}), cwd);
-        assert_same_decision(source, "Bash", json!({"command": "git commit -m fix"}), cwd);
-        assert_same_decision(
-            source,
-            "Read",
-            json!({"file_path": "/home/user/project/Cargo.toml"}),
-            cwd,
-        );
-        assert_same_decision(source, "Read", json!({"file_path": "/etc/shadow"}), cwd);
-        assert_same_decision(
-            source,
-            "WebFetch",
-            json!({"url": "https://github.com/foo"}),
-            cwd,
-        );
-        assert_same_decision(
-            source,
-            "WebFetch",
-            json!({"url": "https://x.evil.com/bad"}),
-            cwd,
-        );
-        assert_same_decision(source, "MagicTool", json!({}), cwd);
+        assert_eq!(decision.effect, Effect::Allow);
+        assert!(decision.sandbox.is_some());
     }
 
     #[test]
-    fn parallel_sandbox_exec() {
-        let source = r#"
-(default deny "main")
-(policy "cargo-env"
-  (allow (fs read (subpath (env PWD)))))
-(policy "main"
-  (allow (exec "cargo" *) :sandbox "cargo-env"))
-"#;
-        assert_same_decision(
-            source,
+    fn env_prefix_bash() {
+        let tree = compile_tree(GIT_POLICY);
+        let decision = tree.evaluate(
             "Bash",
-            json!({"command": "cargo build"}),
+            &json!({"command": "GIT_SSH_COMMAND=ssh git push origin main"}),
             "/home/user/project",
         );
-    }
-
-    #[test]
-    fn parallel_env_prefix() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (deny  (exec "git" "push" *))
-  (allow (exec "git" *)))
-"#;
-        assert_same_decision(
-            source,
-            "Bash",
-            json!({"command": "GIT_SSH_COMMAND=ssh git push origin main"}),
-            "/home/user/project",
-        );
+        assert_eq!(decision.effect, Effect::Deny);
     }
 
     // -- Tree-specific tests -----------------------------------------------
 
     #[test]
     fn sequence_first_wins() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *))
-  (deny  (exec "git" "status")))
-"#;
-        // "deny git status" is more specific -> sorted first -> deny wins
+        // In v2, sequence order = evaluation order (first match wins).
+        // Place the more-specific deny first so it wins over the broad allow.
+        let source = r#"{"schema_version": 4, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "status"}]}}}, {"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
         let tree = compile_tree(source);
         let decision = tree.evaluate(
             "Bash",
@@ -1546,11 +1362,7 @@ mod tests {
 
     #[test]
     fn when_skip_no_match() {
-        let source = r#"
-(default ask "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#;
+        let source = r#"{"schema_version": 4, "default_effect": "ask", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
         let tree = compile_tree(source);
         let decision = tree.evaluate("Bash", &json!({"command": "ls"}), "/home/user/project");
         assert_eq!(decision.effect, Effect::Ask);
@@ -1558,42 +1370,8 @@ mod tests {
     }
 
     #[test]
-    fn from_decision_tree_preserves_metadata() {
-        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
-        let dt = compile_policy_with_env(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))
-"#,
-            &env,
-        )
-        .unwrap();
-        let pt = PolicyTree::from_decision_tree(dt);
-
-        assert_eq!(pt.version, 1);
-        assert_eq!(pt.default, Effect::Deny);
-        assert_eq!(pt.policy_name, "main");
-        assert_eq!(pt.exec_rules.len(), 1);
-
-        let when_metas: Vec<_> = pt
-            .node_meta
-            .iter()
-            .filter(|m| m.rule_index.is_some())
-            .collect();
-        assert!(!when_metas.is_empty());
-        assert!(when_metas[0].description.contains("exec"));
-    }
-
-    #[test]
     fn implicit_sandbox_from_tree() {
-        let source = r#"
-(default deny "main")
-(policy "main"
-  (allow (exec))
-  (allow (fs (or write create) (subpath (env PWD))))
-  (allow (net)))
-"#;
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {}}}, {"rule": {"effect": "allow", "fs": {"op": {"or": ["write", "create"]}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}, {"rule": {"effect": "allow", "net": {}}}]}]}"#;
         let tree = compile_tree(source);
         let sandbox = tree
             .build_implicit_sandbox()
@@ -1605,60 +1383,28 @@ mod tests {
     // Nullable accessor eval tests (ctx.tool.args.<field>?)
     // -----------------------------------------------------------------------
 
-    fn compile_v2_tree(source: &str) -> PolicyTree {
-        let env = TestEnv::new(&[("PWD", "/home/user/project")]);
-        crate::policy::compile::compile_to_tree(source, &env).unwrap()
-    }
-
     #[test]
     fn nullable_accessor_present_field_matches() {
         // Use "Skill" — a tool that doesn't map to fs/net/exec capabilities,
         // so tool-level observables (ctx.tool.args.*) are relevant.
-        let source = r#"
-(version 2)
-(use "main")
-(policy "main"
-  (when (tool "Skill")
-    (match ctx.tool.args.name?
-      "deploy" :allow
-      * :deny))
-  :deny)
-"#;
-        let tree = compile_v2_tree(source);
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "tool", "pattern": {"single": {"literal": "Skill"}}, "body": [{"match": {"observable": "ctx.tool.args.name?", "arms": [{"pattern": {"single": {"literal": "deploy"}}, "effect": "allow"}, {"pattern": {"single": {"any": null}}, "effect": "deny"}]}}]}}]}]}"#;
+        let tree = compile_tree(source);
         let decision = tree.evaluate("Skill", &json!({"name": "deploy"}), "/home/user/project");
         assert_eq!(decision.effect, Effect::Allow);
     }
 
     #[test]
     fn nullable_accessor_present_field_no_match_falls_to_wildcard() {
-        let source = r#"
-(version 2)
-(use "main")
-(policy "main"
-  (when (tool "Skill")
-    (match ctx.tool.args.name?
-      "deploy" :allow
-      * :deny))
-  :deny)
-"#;
-        let tree = compile_v2_tree(source);
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "tool", "pattern": {"single": {"literal": "Skill"}}, "body": [{"match": {"observable": "ctx.tool.args.name?", "arms": [{"pattern": {"single": {"literal": "deploy"}}, "effect": "allow"}, {"pattern": {"single": {"any": null}}, "effect": "deny"}]}}]}}]}]}"#;
+        let tree = compile_tree(source);
         let decision = tree.evaluate("Skill", &json!({"name": "rollback"}), "/home/user/project");
         assert_eq!(decision.effect, Effect::Deny);
     }
 
     #[test]
     fn nullable_accessor_absent_field_short_circuits_to_default() {
-        let source = r#"
-(version 2)
-(use "main")
-(policy "main"
-  (when (tool "Skill")
-    (match ctx.tool.args.name?
-      "deploy" :allow
-      * :allow))
-  :deny)
-"#;
-        let tree = compile_v2_tree(source);
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "tool", "pattern": {"single": {"literal": "Skill"}}, "body": [{"match": {"observable": "ctx.tool.args.name?", "arms": [{"pattern": {"single": {"literal": "deploy"}}, "effect": "allow"}, {"pattern": {"single": {"any": null}}, "effect": "allow"}]}}]}}]}]}"#;
+        let tree = compile_tree(source);
         // tool_input has no "name" field → match short-circuits → default :deny
         let decision = tree.evaluate(
             "Skill",
@@ -1670,18 +1416,92 @@ mod tests {
 
     #[test]
     fn nullable_accessor_null_field_treated_as_absent() {
-        let source = r#"
-(version 2)
-(use "main")
-(policy "main"
-  (when (tool "Skill")
-    (match ctx.tool.args.name?
-      * :allow))
-  :deny)
-"#;
-        let tree = compile_v2_tree(source);
+        let source = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"when": {"observable": "tool", "pattern": {"single": {"literal": "Skill"}}, "body": [{"match": {"observable": "ctx.tool.args.name?", "arms": [{"pattern": {"single": {"any": null}}, "effect": "allow"}]}}]}}]}]}"#;
+        let tree = compile_tree(source);
         // null value → treated as absent → short-circuit → default :deny
         let decision = tree.evaluate("Skill", &json!({"name": null}), "/home/user/project");
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    // -- Sandbox fs evaluation for file-backed tools --------------------------
+
+    #[test]
+    fn tool_sandbox_allows_read_under_cwd() {
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "cwd-fs", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "tool": { "name": {"or": [{"literal": "Read"}, {"literal": "Glob"}, {"literal": "Grep"}]} }, "sandbox": {"named": "cwd-fs"} } }
+    ]}
+  ]
+}"#;
+        let tree = compile_tree(source);
+
+        // Read inside cwd → allow (sandbox fs rule matches)
+        let decision = tree.evaluate(
+            "Read",
+            &json!({"file_path": "/home/user/project/src/main.rs"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn tool_sandbox_denies_read_outside_cwd() {
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "cwd-fs", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "tool": { "name": {"literal": "Read"} }, "sandbox": {"named": "cwd-fs"} } }
+    ]}
+  ]
+}"#;
+        let tree = compile_tree(source);
+
+        // Read outside cwd → deny (tool rule matches but sandbox fs denies)
+        let decision = tree.evaluate(
+            "Read",
+            &json!({"file_path": "/etc/passwd"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn tool_sandbox_write_in_cwd() {
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "rw-fs", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"or": ["read", "write"]}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "tool": { "name": {"or": [{"literal": "Write"}, {"literal": "Edit"}]} }, "sandbox": {"named": "rw-fs"} } }
+    ]}
+  ]
+}"#;
+        let tree = compile_tree(source);
+
+        // Write inside cwd → allow
+        let decision = tree.evaluate(
+            "Write",
+            &json!({"file_path": "/home/user/project/out.txt"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+
+        // Write outside cwd → deny
+        let decision = tree.evaluate(
+            "Write",
+            &json!({"file_path": "/tmp/evil.sh"}),
+            "/home/user/project",
+        );
         assert_eq!(decision.effect, Effect::Deny);
     }
 }

@@ -1,0 +1,63 @@
+meta:
+  name: starlark policy — basic exec rules
+  description: Test allow/deny exec rules using the Starlark policy DSL
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "exe", "tool", "policy")
+    def main():
+        return policy(default=deny, rules=[
+            exe("git", args=["push"]).deny(),
+            exe("git").allow(),
+            tool("Read").allow(),
+        ])
+
+steps:
+  - name: git status allowed by exec rule
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: git diff allowed by exec rule
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "git diff --cached"
+    expect:
+      decision: allow
+
+  - name: git push denied by specific deny
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git push origin main
+    expect:
+      decision: deny
+
+  - name: read tool allowed by tool rule
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/somefile.txt
+    expect:
+      decision: allow
+
+  - name: curl denied by default deny
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "curl https://example.com"
+    expect:
+      decision: deny
+
+  - name: write denied by default deny
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/output.txt
+      content: hello
+    expect:
+      decision: deny

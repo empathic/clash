@@ -38,69 +38,14 @@ clash init [SCOPE] [OPTIONS]
 
 **What it does:**
 
-- **`clash init user`** — Creates `~/.clash/policy.sexpr` with a safe default policy, installs the Claude Code plugin, configures Claude Code so clash is the sole permission handler, installs the status line, and drops into the policy shell.
-- **`clash init project`** — Creates `.clash/policy.sexpr` in the current repo root with a minimal deny-all policy.
+- **`clash init user`** — Creates `~/.clash/policy.star` with a safe default policy, installs the Claude Code plugin, configures Claude Code so clash is the sole permission handler, and installs the status line.
+- **`clash init project`** — Creates `.clash/policy.star` in the current repo root with a minimal deny-all policy.
 
 ```bash
 clash init              # interactive — prompts you to choose
 clash init user         # set up your global policy
 clash init project      # create a repo-specific policy
 ```
-
----
-
-## clash edit
-
-Interactive policy editor. Opens the policy shell for transactional editing with tab completion, inline help, and rule testing.
-
-```bash
-clash edit
-```
-
-Equivalent to `clash policy shell`. Type `help` for available commands, `apply` to save.
-
----
-
-## clash tui
-
-Full-screen terminal UI for viewing and editing policy rules across all active levels.
-
-```bash
-clash tui
-```
-
-**Layout:** Header bar (loaded levels, modified indicator, position counter), tree view (rules grouped by domain), description pane (contextual details), key hints bar.
-
-### Navigation
-
-| Key | Action |
-|---|---|
-| `j` / `Down` | Move cursor down |
-| `k` / `Up` | Move cursor up |
-| `h` / `Left` | Collapse node or go to parent |
-| `l` / `Right` / `Enter` | Expand node or enter children |
-| `Space` | Toggle expand/collapse |
-| `g` / `G` | Jump to top / bottom |
-
-### Editing
-
-| Key | Action |
-|---|---|
-| `e` | Edit node value inline |
-| `E` | Edit full rule as s-expression |
-| `Tab` | Cycle effect |
-| `a` | Add a new rule (guided form) |
-| `d` | Delete rule at cursor |
-| `w` | Save all changes (shows diff) |
-| `u` / `Ctrl+r` | Undo / redo |
-
-### Search
-
-| Key | Action |
-|---|---|
-| `/` | Start fuzzy search |
-| `n` / `N` | Next / previous match |
-| `Esc` | Clear search or quit |
 
 ---
 
@@ -152,20 +97,6 @@ clash explain --json bash rm -rf /
 
 ---
 
-## clash allow / deny / ask
-
-Shortcut commands to quickly add a rule:
-
-```bash
-clash allow bash                             # allow command execution
-clash allow edit                             # allow file editing in project
-clash allow web                              # allow web access
-clash deny '(exec "rm" *)'                   # deny rm commands
-clash ask bash                               # require approval for bash
-```
-
----
-
 ## clash policy
 
 ### clash policy show
@@ -184,60 +115,12 @@ Validate policy files and report errors.
 clash policy validate [--file <PATH>] [--json]
 ```
 
-### clash policy upgrade
-
-Upgrade policy syntax to the latest version.
-
-```bash
-clash policy upgrade [--dry-run] [--scope <LEVEL>]
-```
-
 ### clash policy list
 
 List all rules with level tags.
 
 ```bash
 clash policy list
-```
-
-### clash policy remove
-
-Remove a specific rule.
-
-```bash
-clash policy remove '(deny (exec "rm" *))'
-```
-
----
-
-## clash policy shell
-
-Transactional policy editor. Accumulates changes in memory and applies them atomically.
-
-```bash
-clash policy shell [OPTIONS]
-```
-
-| Flag | Description |
-|---|---|
-| `--dry-run` | Print resulting policy without writing |
-| `--scope <LEVEL>` | Policy level: `user`, `project`, or `session` |
-| `-c <STMT>` | Execute a single statement and exit |
-
-**Commands:** `add`, `remove`, `create`, `default`, `use`, `show`, `rules`, `test`, `diff`, `apply`, `abort`, `help`
-
-```bash
-# One-liner
-clash policy shell --scope project -c 'add (allow (exec "git" *))'
-
-# Pipe mode
-clash policy shell --scope project <<EOF
-add (allow (exec "cargo" *))
-add (deny (exec "git" "push" :has "--force"))
-EOF
-
-# Interactive REPL
-clash policy shell --scope project
 ```
 
 ---

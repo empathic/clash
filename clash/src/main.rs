@@ -5,7 +5,6 @@ use tracing::{debug_span, error, info};
 use clash::cli::{Cli, Commands};
 use clash::cmd;
 use clash::hooks::exit_code;
-use clash::policy::Effect;
 use clash::sandbox_cmd::run_sandbox;
 use clash::tracing_init::init_tracing;
 
@@ -18,32 +17,6 @@ fn main() -> Result<()> {
         let resp = match cli.command {
             Commands::Init { no_bypass, scope } => cmd::init::run(no_bypass, scope),
             Commands::Status { json } => cmd::status::run(json, cli.verbose),
-            Commands::Allow {
-                rule,
-                dry_run,
-                scope,
-            } => cmd::policy::handle_allow_deny(Effect::Allow, &rule, dry_run, scope.as_deref()),
-            Commands::Deny {
-                rule,
-                dry_run,
-                scope,
-            } => cmd::policy::handle_allow_deny(Effect::Deny, &rule, dry_run, scope.as_deref()),
-            Commands::Ask {
-                rule,
-                dry_run,
-                scope,
-            } => cmd::policy::handle_allow_deny(Effect::Ask, &rule, dry_run, scope.as_deref()),
-            Commands::Amend {
-                rules,
-                remove,
-                dry_run,
-                scope,
-            } => cmd::policy::handle_amend(rules, remove, dry_run, scope.as_deref()),
-            Commands::Edit { dry_run, scope } => {
-                clash::shell::ShellSession::new(scope.as_deref(), dry_run, true)
-                    .and_then(|mut s| s.run_interactive())
-            }
-            Commands::Tui => clash::tui::run(),
             Commands::ShowCommands { json, all } => cmd::commands::run(json, all),
             Commands::Explain { json, tool, args } => {
                 let input = if args.is_empty() {

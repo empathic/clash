@@ -76,7 +76,7 @@ pub struct ApprovalAdvice {
     pub noun: String,
     /// The tool name that was approved.
     pub tool_name: String,
-    /// The suggested allow rule as an s-expression string.
+    /// The suggested allow rule as a JSON string.
     pub suggested_rule: String,
     /// The full CLI command to add this as a session rule.
     pub cli_command: String,
@@ -232,7 +232,10 @@ fn suggest_fs_read_rule(tool_input: &serde_json::Value, cwd: &str) -> Option<Rul
         effect: Effect::Allow,
         matcher: CapMatcher::Fs(FsMatcher {
             op: OpPattern::Single(FsOp::Read),
-            path: Some(PathFilter::Subpath(PathExpr::Static(parent), false)),
+            path: Some(PathFilter::Subpath {
+                path: PathExpr::Static(parent),
+                worktree: false,
+            }),
         }),
         sandbox: None,
     })
@@ -254,7 +257,10 @@ fn suggest_fs_write_rule(tool_input: &serde_json::Value, cwd: &str) -> Option<Ru
         effect: Effect::Allow,
         matcher: CapMatcher::Fs(FsMatcher {
             op: OpPattern::Or(vec![FsOp::Read, FsOp::Write, FsOp::Create]),
-            path: Some(PathFilter::Subpath(PathExpr::Static(parent), false)),
+            path: Some(PathFilter::Subpath {
+                path: PathExpr::Static(parent),
+                worktree: false,
+            }),
         }),
         sandbox: None,
     })
@@ -308,7 +314,7 @@ mod tests {
         let s = rule.to_string();
         assert!(s.contains("exec"), "expected exec rule, got: {s}");
         assert!(s.contains("\"git\""), "expected git binary, got: {s}");
-        assert!(s.contains("*"), "expected wildcard args, got: {s}");
+        assert!(s.contains("\"any\""), "expected wildcard args, got: {s}");
     }
 
     #[test]
@@ -378,7 +384,10 @@ mod tests {
         let s = rule.to_string();
         assert!(s.contains("net"), "expected net rule, got: {s}");
         // WebSearch allows any domain
-        assert!(!s.contains('"'), "websearch should use wildcard, got: {s}");
+        assert!(
+            s.contains("\"any\""),
+            "websearch should use wildcard, got: {s}"
+        );
     }
 
     #[test]
@@ -445,7 +454,7 @@ mod tests {
         );
 
         // Session policy file should NOT exist (we no longer write automatically).
-        let policy_path = session_dir.join("policy.sexpr");
+        let policy_path = session_dir.join("policy.star");
         assert!(
             !policy_path.exists(),
             "session policy should NOT be created automatically"

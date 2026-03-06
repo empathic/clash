@@ -292,12 +292,13 @@ mod tests {
         // When a Bash command fails with network errors, we should hint.
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec *))
-  (allow (fs read (subpath "/tmp"))))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [{ "name": "main", "body": [
+    { "rule": { "effect": "allow", "exec": { "bin": {"any": null} } } },
+    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}} } } }
+  ]}]
+}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Bash".into(),
@@ -320,13 +321,17 @@ mod tests {
         // Explicit sandbox with no (net allow) → network defaults to Deny
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
-            r#"
-(default deny "main")
-(policy "restricted"
-  (allow (fs read (subpath "/tmp"))))
-(policy "main"
-  (allow (exec "curl" *) :sandbox "restricted"))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "restricted", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "curl"}, "args": [{"any": null}] }, "sandbox": {"named": "restricted"} } }
+    ]}
+  ]
+}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Bash".into(),
@@ -373,14 +378,18 @@ mod tests {
         // Domain-specific net rules deny sandbox network → hint should fire
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
-            r#"
-(default deny "main")
-(policy "with-net"
-  (allow (fs read (subpath "/tmp")))
-  (allow (net "example.com")))
-(policy "main"
-  (allow (exec "curl" *) :sandbox "with-net"))
-"#,
+            r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "with-net", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}} } } },
+      { "rule": { "effect": "allow", "net": { "domain": {"literal": "example.com"} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "curl"}, "args": [{"any": null}] }, "sandbox": {"named": "with-net"} } }
+    ]}
+  ]
+}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Bash".into(),
