@@ -21,11 +21,11 @@ Use these slash commands to manage clash policies during a session:
 
 ### Policy Basics
 
-Policies use JSON format with three effects and four capability domains:
+Policies are written in Starlark (`.star` files) and compiled to JSON IR. Three effects and four capability domains:
 
 **Effects:** `allow` (permit silently), `deny` (block), `ask` (prompt user)
 **Domains:** `exec` (commands), `fs` (filesystem), `net` (network), `tool` (agent tools)
-**Precedence:** deny always wins over allow; more specific rules beat less specific ones
+**Precedence:** first-match within a domain (order matters — put specific rules before broad ones); deny-overrides across domains
 
 ### Policy File Structure
 
@@ -55,9 +55,9 @@ Policies use JSON format with three effects and four capability domains:
 ```
 
 **Policy layers** (higher shadows lower): Session > Project > User
-- User: `~/.clash/policy.json`
-- Project: `<project>/.clash/policy.json`
-- Session: created via `clash policy validate --scope session`
+- User: `~/.clash/policy.star`
+- Project: `<project>/.clash/policy.star`
+- Session: temporary overrides for the current session
 
 ### Rule Syntax Quick Reference
 
@@ -101,9 +101,9 @@ Always run clash as an installed binary (`clash`), never via `cargo run`.
 - `clash policy validate` — validate all active policy files
 - `clash policy validate --file ~/.clash/policy.json` — validate a specific file
 
-**Modifying (edit the JSON policy file directly, then validate):**
-- Open `~/.clash/policy.json` in your editor, add or remove rules, then run `clash policy validate` to confirm it is valid
-- Session-scoped rules can be added via `clash policy validate --scope session`
+**Modifying (edit the Starlark policy file directly, then validate):**
+- Open `~/.clash/policy.star` in your editor, add or remove rules, then run `clash policy validate` to confirm it is valid
+- Use `/clash:edit` to interactively update the policy
 
 ### Tool-to-Capability Mapping
 
@@ -208,8 +208,8 @@ To fully uninstall clash, direct the user to the [README](https://github.com/emp
 
 ### Important Behaviors
 
-- Deny rules ALWAYS take precedence over allow rules, regardless of specificity
-- When the user asks to allow something currently denied, they must remove the deny rule first
+- Rules use first-match semantics — the first matching rule wins, so order matters
+- When the user asks to allow something currently denied, they must either remove the deny rule or reorder rules so the allow comes first
 - Always validate the policy file after making changes with `clash policy validate`
 - Summarize command output in plain English — never paste raw terminal output to the user
 - Exec rules (e.g., a deny rule on `git push`) apply only to the **top-level command** Claude invokes via Bash. They do NOT catch commands run by child processes. If a user asks whether an exec deny rule prevents a subprocess from running a command, explain this limitation honestly

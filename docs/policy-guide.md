@@ -14,8 +14,8 @@ load("@clash//std.star", "exe", "policy", "cwd", "domains")
 
 def main():
     return policy(default = deny, rules = [
-        exe("git").allow(),
         exe("git", args = ["push"]).deny(),
+        exe("git").allow(),
         cwd(read = allow, write = allow),
         domains({"github.com": allow}),
     ])
@@ -37,8 +37,8 @@ The Starlark policy above compiles to the following JSON intermediate representa
     {
       "name": "main",
       "body": [
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
         { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
         { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
         { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
       ]
@@ -104,22 +104,20 @@ The net domain maps to:
 - `WebFetch` -> `net` with the URL's domain
 - `WebSearch` -> `net` with wildcard domain
 
+### Tool -- Agent Tools
+
+```python
+tool("WebSearch").deny()
+tool(["Read", "Glob", "Grep"]).allow()
+```
+
+The tool domain matches agent tools by name. Use this for tools that don't map to exec/fs/net capabilities (e.g., `Skill`, `Agent`, `AskUserQuestion`) or when you want to control a tool directly rather than through its capability.
+
 ---
 
 ## Precedence
 
-Rules are sorted by **specificity** at compile time (most specific first). Within a capability domain, the first matching rule wins.
-
-### Specificity Ranking
-
-More specific patterns take precedence:
-
-```
-Literal > Regex > Wildcard
-More args > Fewer args
-Single op > Or > Any
-Literal path > Regex path > Subpath > No path
-```
+Rules use **first-match semantics**: within a capability domain, the first matching rule wins. Order matters — put more specific rules before broader ones.
 
 ### Example
 
@@ -128,11 +126,9 @@ exe("git", args = ["push"]).deny()
 exe("git").allow()
 ```
 
-`git push origin main` matches the deny rule first (more specific). `git status` skips the deny (doesn't match "push") and matches the allow.
+`git push origin main` matches the deny rule first (it's listed first and matches). `git status` skips the deny (doesn't match "push") and matches the allow.
 
-### Conflict Detection
-
-If two rules have the same specificity but different effects and could match the same request, the compiler rejects the policy with a conflict error. This prevents ambiguous orderings.
+If the rules were reversed, `git push` would match `exe("git").allow()` first and be allowed — the deny would never fire.
 
 ### Cross-Domain Resolution
 
@@ -296,11 +292,14 @@ path(env = "CARGO_HOME", read = allow)
 ### Tools
 
 ```python
-# Allow all tools
-tool().allow()
-
 # Deny specific tool
 tool("WebSearch").deny()
+
+# Allow multiple tools
+tool(["Read", "Glob", "Grep"]).allow()
+
+# Allow a single tool with sandbox
+tool("Read").sandbox(my_sandbox).allow()
 ```
 
 ---

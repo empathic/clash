@@ -58,7 +58,7 @@ files you specify.
 <div class="cards">
   <div class="card card--green">
     <h3>Rule</h3>
-    <p>An effect paired with a capability matcher. <code>exe("git").allow()</code> lets the agent run any git command. <code>exe("git", args=["push"]).deny()</code> blocks pushes. Rules are sorted by specificity — more specific rules always win.</p>
+    <p>An effect paired with a capability matcher. <code>exe("git").allow()</code> lets the agent run any git command. <code>exe("git", args=["push"]).deny()</code> blocks pushes. Rules use first-match semantics — put specific rules before broad ones.</p>
   </div>
   <div class="card card--amber">
     <h3>Domain</h3>
@@ -114,9 +114,9 @@ def main():
     return policy(default = ask, rules = [
         cwd(follow_worktrees = True, read = allow, write = allow),
         exe("cargo").allow(),
-        exe("git").allow(),
         exe("git", args = ["push"]).deny(),
         exe("git", args = ["reset", "--hard"]).deny(),
+        exe("git").allow(),
         domains({"github.com": allow}),
     ])
 ```
@@ -142,9 +142,9 @@ def main():
       "body": [
         { "include": "cwd-access" },
         { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } } } },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
         { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
         { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "reset" }, { "literal": "--hard" }, { "any": null }] } } },
+        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
         { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
       ]
     }
@@ -153,7 +153,7 @@ def main():
 ```
 </details>
 
-Three effects: <span class="badge badge--allow">allow</span> auto-approves, <span class="badge badge--deny">deny</span> blocks, <span class="badge badge--ask">ask</span> prompts you. Deny always wins over allow. More specific rules beat less specific. Edits take effect immediately — no restart needed.
+Three effects: <span class="badge badge--allow">allow</span> auto-approves, <span class="badge badge--deny">deny</span> blocks, <span class="badge badge--ask">ask</span> prompts you. First matching rule wins — put specific rules before broad ones. Edits take effect immediately — no restart needed.
 
 </div>
 

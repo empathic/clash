@@ -32,7 +32,7 @@ exe("git", args = ["commit"]).ask()
 ```
 </details>
 
-**Deny always wins.** When multiple rules match, deny beats ask beats allow. More specific rules take precedence over less specific rules.
+**First match wins.** Within a capability domain, rules are evaluated in order — the first matching rule determines the effect. Put specific rules (like denies) before broad ones (like allows).
 
 ---
 
@@ -102,6 +102,15 @@ domains({"github.com": allow, "crates.io": allow})
 </details>
 
 The net domain maps to: `WebFetch` → `net` with the URL's domain, `WebSearch` → `net` with wildcard domain.
+
+### Tool — agent tools
+
+```python
+tool("WebSearch").deny()
+tool(["Read", "Glob", "Grep"]).allow()
+```
+
+The tool domain matches agent tools by name. Use this for tools that don't map to exec/fs/net capabilities (e.g., `Skill`, `Agent`) or when you want to control a tool directly.
 
 ---
 
@@ -195,25 +204,20 @@ When working in a git worktree, git operations write to the backing repository's
 
 ## Precedence
 
-Rules are sorted by **specificity** at compile time. The first matching rule wins.
-
-```
-Literal > Glob > Regex > Wildcard
-More args > Fewer args
-Single op > Or > Any
-Literal path > Regex path > Subpath > No path
-```
+Rules use **first-match semantics**: the first matching rule wins. Order matters — put specific rules before broad ones.
 
 Example:
 
-```json
-{ "rule": { "effect": "deny",  "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
-{ "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
+```python
+exe("git", args = ["push"]).deny()
+exe("git").allow()
 ```
 
-`git push origin main` matches the deny first. `git status` skips the deny and matches the allow.
+`git push origin main` matches the deny first (listed first, matches). `git status` skips the deny (doesn't match "push") and matches the allow.
 
-If two rules have the same specificity but different effects, the compiler rejects the policy with a conflict error.
+If the rules were reversed, `git push` would match the allow first and the deny would never fire.
+
+When a request matches rules in multiple capability domains, deny-overrides applies across domains: deny > ask > allow.
 
 ---
 
