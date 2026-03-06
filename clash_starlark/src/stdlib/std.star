@@ -308,6 +308,20 @@ def domain(name, effect):
 # Sandbox builder
 # ---------------------------------------------------------------------------
 
+def _make_sandbox(default, body):
+    """Create a sandbox struct with merge support."""
+    def _merge(other):
+        """Merge two sandboxes. Bodies are concatenated; strictest default wins."""
+        merged_default = deny if (default == deny or other._default == deny) else default
+        return _make_sandbox(merged_default, body + other._body)
+
+    return struct(
+        _default = default,
+        _body = body,
+        _is_sandbox = True,
+        merge = _merge,
+    )
+
 def sandbox(default = "deny", fs = None, net = None):
     """Build a sandbox definition.
 
@@ -318,6 +332,11 @@ def sandbox(default = "deny", fs = None, net = None):
             net=allow,
         )
         sandbox(default=deny, net=[domains({"github.com": allow})])
+
+    Sandboxes can be merged:
+        a = sandbox(fs=[cwd(read=allow)])
+        b = sandbox(fs=[home().child(".ssh", read=allow)])
+        combined = a.merge(b)
     """
     body = []
 
@@ -343,21 +362,24 @@ def sandbox(default = "deny", fs = None, net = None):
         else:
             fail("sandbox net= must be an effect string or a list of domain entries")
 
-    return {"default": default, "body": body}
+    return _make_sandbox(default, body)
 
 # ---------------------------------------------------------------------------
 # Policy wrapper
 # ---------------------------------------------------------------------------
 
 def policy(default = "deny", rules = None):
-    """Build a policy. Flattens path entries and nested lists.
+    """Build a policy. Flattens nested lists.
+
+    Filesystem path entries (cwd, home, etc.) must be inside a sandbox()
+    attached to a tool() or exe() rule — bare path entries are not allowed.
 
     Usage:
+        fs_access = sandbox(fs=[cwd(read=allow, write=allow)])
         policy(default=deny, rules=[
-            cwd(read=allow, write=allow),
-            home().child(".ssh", read=allow),
+            tool(["Read", "Glob", "Grep"]).sandbox(fs_access).allow(),
+            tool(["Write", "Edit"]).sandbox(fs_access).allow(),
             exe("git").allow(),
-            tool().allow(),
         ])
     """
     if rules == None:
@@ -365,9 +387,12 @@ def policy(default = "deny", rules = None):
 
     flat = []
     for item in rules:
-        if hasattr(item, "_rules"):
-            # Path entry — expand its rules
-            flat.extend(item._rules)
+        if hasattr(item, "_is_path"):
+            fail(
+                "bare path entries (cwd, home, etc.) are not allowed in policy rules. " +
+                "Wrap them in a sandbox() and attach to a tool() or exe() rule. " +
+                "Example: tool(['Read']).sandbox(sandbox(fs=[cwd(read=allow)])).allow()"
+            )
         elif type(item) == "list":
             flat.extend(item)
         else:

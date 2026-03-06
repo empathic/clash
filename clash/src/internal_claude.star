@@ -1,8 +1,13 @@
-load("@clash//std.star", "tool", "policy", "home", "path")
+load("@clash//std.star", "tool", "policy", "sandbox", "home", "path")
+
+_claude_fs = sandbox(fs = [
+    home().child(".claude", read = allow, write = allow),
+    path(env = "TRANSCRIPT_DIR", read = allow),
+])
 
 def main():
     return policy(default = deny, rules = [
-        home().child(".claude", read = allow, write = allow),
-        path(env = "TRANSCRIPT_DIR", read = allow),
-        tool(["Read", "Write", "Edit", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "Skill", "ToolSearch", "EnterWorktree", "NotebookEdit", "TaskCreate", "TaskGet", "TaskList", "TaskOutput", "TaskStop", "TaskUpdate"]).allow(),
+        tool(["Read", "Glob", "Grep"]).sandbox(_claude_fs).allow(),
+        tool(["Write", "Edit", "NotebookEdit"]).sandbox(_claude_fs).allow(),
+        tool(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "Skill", "ToolSearch", "EnterWorktree", "TaskCreate", "TaskGet", "TaskList", "TaskOutput", "TaskStop", "TaskUpdate"]).allow(),
     ])

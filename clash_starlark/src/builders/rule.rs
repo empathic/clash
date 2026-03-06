@@ -62,8 +62,21 @@ fn rule_methods(builder: &mut starlark::environment::MethodsBuilder) {
     fn sandbox<'v>(
         this: &RuleValue,
         #[starlark(require = pos)] sb: Value<'v>,
+        heap: &'v Heap,
     ) -> anyhow::Result<RuleValue> {
-        let json = starlark_to_json(sb)?;
+        // Handle sandbox struct (from sandbox() builder) with _default/_body attrs,
+        // or fall back to plain dict conversion.
+        let json = if sb.get_type() == "struct"
+            && let Ok(Some(default)) = sb.get_attr("_default", heap)
+            && let Ok(Some(body)) = sb.get_attr("_body", heap)
+        {
+            serde_json::json!({
+                "default": starlark_to_json(default)?,
+                "body": starlark_to_json(body)?,
+            })
+        } else {
+            starlark_to_json(sb)?
+        };
         Ok(RuleValue {
             json: this.json.clone(),
             sandbox: Some(json),

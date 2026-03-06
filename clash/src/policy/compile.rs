@@ -2564,24 +2564,26 @@ mod tests {
   ]}]
 }"#;
         let internal = r#"
-load("@clash//std.star", "policy", "path")
+load("@clash//std.star", "tool", "policy", "sandbox", "path")
+
+_test_fs = sandbox(fs = [path("/test", read = allow)])
 
 def main():
     return policy(default = deny, rules = [
-        path("/test", read = allow),
+        tool(["Read"]).sandbox(_test_fs).allow(),
     ])
 "#;
         let env = TestEnv::new(&[]);
         let tree =
             compile_policy_with_internals(user_source, &env, &[("__internal_test__", internal)])
                 .unwrap();
-        // User rule + internal rule.
+        // User rule (exec) + internal rule (tool).
         assert_eq!(tree.exec_rules.len(), 1);
-        assert_eq!(tree.fs_rules.len(), 1);
+        assert_eq!(tree.tool_rules.len(), 1);
         // Check provenance.
         assert_eq!(tree.exec_rules[0].origin_policy.as_deref(), Some("main"));
         assert_eq!(
-            tree.fs_rules[0].origin_policy.as_deref(),
+            tree.tool_rules[0].origin_policy.as_deref(),
             Some("__internal_test__")
         );
     }
@@ -2916,11 +2918,13 @@ def main():
   ]}]
 }"#;
         let internal = r#"
-load("@clash//std.star", "policy", "path")
+load("@clash//std.star", "tool", "policy", "sandbox", "path")
+
+_test_fs = sandbox(fs = [path("/internal", read = allow)])
 
 def main():
     return policy(default = deny, rules = [
-        path("/internal", read = allow),
+        tool(["Read"]).sandbox(_test_fs).allow(),
     ])
 "#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
@@ -2935,14 +2939,14 @@ def main():
         .unwrap();
         // exec rules from both levels.
         assert_eq!(tree.exec_rules.len(), 2);
-        // Internal fs rule injected once.
-        assert_eq!(tree.fs_rules.len(), 1);
+        // Internal tool rule injected once.
+        assert_eq!(tree.tool_rules.len(), 1);
         assert_eq!(
-            tree.fs_rules[0].origin_policy.as_deref(),
+            tree.tool_rules[0].origin_policy.as_deref(),
             Some("__internal_test__")
         );
         // Internal rules have no origin_level.
-        assert_eq!(tree.fs_rules[0].origin_level, None);
+        assert_eq!(tree.tool_rules[0].origin_level, None);
     }
 
     #[test]

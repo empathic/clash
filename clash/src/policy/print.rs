@@ -165,11 +165,13 @@ mod tests {
 
         let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
         let internal = r#"
-load("@clash//std.star", "policy", "path")
+load("@clash//std.star", "tool", "policy", "sandbox", "path")
+
+_test_fs = sandbox(fs = [path("/test", read = allow)])
 
 def main():
     return policy(default = deny, rules = [
-        path("/test", read = allow),
+        tool(["Read"]).sandbox(_test_fs).allow(),
     ])
 "#;
         let env = TestEnv(HashMap::new());
