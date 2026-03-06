@@ -2,27 +2,29 @@
 name: audit
 description: View recent clash permission decisions from the audit log
 ---
-Check if the audit log exists:
+Use `clash debug log` to view recent permission decisions:
 
 ```bash
-test -f ~/.clash/audit.jsonl && echo "exists" || echo "missing"
+clash debug log
 ```
 
-If the file is missing, tell the user audit logging is not enabled. Check the clash documentation or run `clash doctor` for instructions on enabling audit logging.
-
-If the file exists, read the last 20 entries:
+The command supports filtering options:
 
 ```bash
-tail -20 ~/.clash/audit.jsonl
+clash debug log --since 5m            # entries from the last 5 minutes
+clash debug log --effect deny          # only denied actions
+clash debug log --tool Bash            # only Bash tool invocations
+clash debug log --limit 10             # show at most 10 entries
+clash debug log --session "abc"        # entries from sessions matching "abc"
+clash debug log --json                 # machine-readable output
 ```
 
-Parse the JSON Lines output and present a readable summary table. For each entry:
+Parse the output and present a readable summary. For each entry:
 
-1. **Timestamp** — convert the Unix timestamp (e.g. `1706123456.789`) to a human-readable local time
+1. **Timestamp** — when the decision was made
 2. **Decision** — show `ALLOW`, `DENY`, or `ASK`
-3. **Tool** — the `tool_name` value
-4. **Input** — the `tool_input_summary` (truncated to keep the table readable)
-5. **Reason** — show `reason` if present
-6. **Rules** — show matched/skipped rule counts if nonzero
+3. **Tool** — the tool name
+4. **Input** — what was invoked (truncated to keep output readable)
+5. **Reason** — the matched rule or reason for the decision
 
-If the user asks to filter by tool name, decision type, or time range, use `grep` or `jq` on `~/.clash/audit.jsonl` to narrow results before presenting them.
+If the user asks to filter by tool name, decision type, or time range, use the appropriate flags on `clash debug log`.

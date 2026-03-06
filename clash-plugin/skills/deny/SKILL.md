@@ -9,7 +9,6 @@ Help the user add a **deny** rule to their clash policy by editing the `.star` p
 1. **Determine the rule** from the conversation context. Consider what the user wants to block:
    - Exec: `exe("git", args = ["push"]).deny()` — block git push
    - Exec broad: `exe("sudo").deny()` — block sudo commands
-   - Fs: deny writes under home by not granting write access
    - Net: `domains({"evil.com": deny})` — block network access to a domain
    - If unsure, ask the user what they want to deny.
 

@@ -49,15 +49,22 @@ Policies are written in Starlark (`.star` files), a Python-like configuration la
 load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home", "domains")
 
 def main():
-    return policy(default = deny, rules = [
+    fs_access = sandbox(fs=[
         cwd(follow_worktrees = True, read = allow, write = allow),
+        home().child(".ssh", read = allow),
+    ])
+
+    return policy(default = deny, rules = [
+        tool(["Read", "Glob", "Grep"]).sandbox(fs_access).allow(),
+        tool(["Write", "Edit"]).sandbox(fs_access).allow(),
         exe("git").allow(),
         exe("git", args = ["push"]).deny(),
-        home().child(".ssh", read = allow),
         tool().allow(),
         domains({"github.com": allow}),
     ])
 ```
+
+Note: Filesystem path entries (`cwd`, `home`, `tempdir`, `path`) cannot appear directly in the `rules = [...]` list. They must be wrapped in a `sandbox()` and attached to a `tool()` or `exe()` rule.
 
 ### Rule Syntax Quick Reference
 
@@ -67,9 +74,8 @@ def main():
 | Deny a subcommand | `exe("git", args = ["push"]).deny()` |
 | Ask for confirmation | `exe("git", args = ["commit"]).ask()` |
 | Multiple binaries | `exe(["cargo", "rustc"]).allow()` |
-| Filesystem (cwd) | `cwd(read = allow, write = allow)` |
-| Filesystem (home subdir) | `home().child(".ssh", read = allow)` |
-| Worktree-aware cwd | `cwd(follow_worktrees = True, read = allow, write = allow)` |
+| Filesystem (via sandbox) | `tool(["Read"]).sandbox(sandbox(fs=[cwd(read = allow)])).allow()` |
+| Home subdir (via sandbox) | `exe("ssh").sandbox(sandbox(fs=[home().child(".ssh", read = allow)])).allow()` |
 | Network domains | `domains({"github.com": allow})` |
 | Tool access | `tool().allow()` |
 | Sandbox on exec | `exe("cargo").sandbox(sb).allow()` |

@@ -8,13 +8,13 @@ Ask the user what tool use they want to test, or use what they already described
 - "Test `git push` to origin main"
 - "What if I write to `~/.ssh/config`?"
 
-Run each test through clash explain using the simple CLI syntax:
+Run each test through clash explain using the top-level command:
 
 ```bash
-clash policy explain bash "rm -rf /" --json
-clash policy explain read "/etc/passwd" --json
-clash policy explain bash "git push origin main" --json
-clash policy explain write "~/.ssh/config" --json
+clash explain bash "rm -rf /" --json
+clash explain read "/etc/passwd" --json
+clash explain bash "git push origin main" --json
+clash explain write "~/.ssh/config" --json
 ```
 
 Parse the JSON output and present results clearly with visual indicators:

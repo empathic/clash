@@ -41,22 +41,28 @@ Read the policy file, then insert the appropriate rule into the `rules = [...]` 
   ```python
   exe("git", args = ["push"]).deny()
   ```
-- Allow filesystem reads under cwd:
-  ```python
-  cwd(read = allow)
-  ```
-- Allow filesystem read/write/create under cwd:
-  ```python
-  cwd(follow_worktrees = True, read = allow, write = allow)
-  ```
 - Allow network access to a domain:
   ```python
   domains({"github.com": allow})
   ```
-- Access to a subdirectory of home:
+- Allow filesystem reads under cwd (via sandbox on a tool/exe rule):
   ```python
-  home().child(".ssh", read = allow)
+  fs_sandbox = sandbox(fs=[cwd(read = allow)])
+  tool(["Read", "Glob", "Grep"]).sandbox(fs_sandbox).allow()
   ```
+- Allow filesystem read/write/create under cwd:
+  ```python
+  fs_sandbox = sandbox(fs=[cwd(follow_worktrees = True, read = allow, write = allow)])
+  tool(["Read", "Glob", "Grep"]).sandbox(fs_sandbox).allow()
+  tool(["Write", "Edit"]).sandbox(fs_sandbox).allow()
+  ```
+- Access to a subdirectory of home (via sandbox):
+  ```python
+  ssh_sandbox = sandbox(fs=[home().child(".ssh", read = allow)])
+  exe("ssh").sandbox(ssh_sandbox).allow()
+  ```
+
+**Important:** Filesystem path entries (`cwd`, `home`, `tempdir`, `path`) cannot appear directly in the `rules = [...]` list. They must be wrapped in a `sandbox()` and attached to a `tool()` or `exe()` rule.
 
 Make sure any new builders are added to the `load()` statement at the top of the file.
 
