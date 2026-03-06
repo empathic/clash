@@ -1,3 +1,5 @@
+load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "domains")
+
 python_sandbox = sandbox(
     default = deny,
     fs = [

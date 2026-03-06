@@ -10,26 +10,19 @@ use allocative::Allocative;
 use serde_json::Value as JsonValue;
 use starlark::starlark_simple_value;
 use starlark::values::dict::DictRef;
+use starlark::values::dict::Dict;
 use starlark::values::list::ListRef;
 use starlark::values::{
-    NoSerialize, ProvidesStaticType, StarlarkValue, Trace, Value, starlark_value,
+    Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace, Value, starlark_value,
 };
 
-use super::sandbox::SandboxValue;
-
 /// A rule produced by a Starlark builder — wraps the JSON representation.
-///
-/// Created by calling `rule(dict)` from Starlark. The dict should be in the
-/// exact JSON shape expected by the policy compiler, e.g.:
-/// ```json
-/// {"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}}}}
-/// ```
 #[derive(Debug, Clone, ProvidesStaticType, NoSerialize, Allocative)]
 pub struct RuleValue {
     #[allocative(skip)]
     pub json: JsonValue,
     #[allocative(skip)]
-    pub sandbox: Option<SandboxValue>,
+    pub sandbox: Option<JsonValue>,
 }
 
 unsafe impl Trace<'_> for RuleValue {
@@ -51,18 +44,60 @@ impl<'v> StarlarkValue<'v> for RuleValue {
             starlark::environment::MethodsStatic::new();
         RES.methods(rule_methods)
     }
+
+    fn dir_attr(&self) -> Vec<String> {
+        vec!["json".to_string()]
+    }
+
+    fn get_attr(&self, attribute: &str, heap: &'v Heap) -> Option<Value<'v>> {
+        match attribute {
+            "json" => json_to_starlark(&self.json, heap).ok(),
+            _ => None,
+        }
+    }
 }
 
 #[starlark::starlark_module]
 fn rule_methods(builder: &mut starlark::environment::MethodsBuilder) {
-    fn sandbox(
+    fn sandbox<'v>(
         this: &RuleValue,
-        #[starlark(require = pos)] sb: &SandboxValue,
+        #[starlark(require = pos)] sb: Value<'v>,
     ) -> anyhow::Result<RuleValue> {
+        let json = starlark_to_json(sb)?;
         Ok(RuleValue {
             json: this.json.clone(),
-            sandbox: Some(sb.clone()),
+            sandbox: Some(json),
         })
+    }
+}
+
+/// Convert a serde_json::Value back to a Starlark Value.
+fn json_to_starlark<'v>(json: &JsonValue, heap: &'v Heap) -> anyhow::Result<Value<'v>> {
+    match json {
+        JsonValue::Null => Ok(Value::new_none()),
+        JsonValue::Bool(b) => Ok(Value::new_bool(*b)),
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(heap.alloc(i as i32))
+            } else if let Some(f) = n.as_f64() {
+                Ok(heap.alloc(f))
+            } else {
+                anyhow::bail!("unsupported JSON number: {n}")
+            }
+        }
+        JsonValue::String(s) => Ok(heap.alloc_str(s).to_value()),
+        JsonValue::Array(arr) => {
+            let items: Result<Vec<_>, _> = arr.iter().map(|v| json_to_starlark(v, heap)).collect();
+            Ok(heap.alloc(items?))
+        }
+        JsonValue::Object(map) => {
+            let dict = Dict::new(
+                map.iter()
+                    .map(|(k, v)| Ok((heap.alloc_str(k).to_value().get_hashed().unwrap(), json_to_starlark(v, heap)?)))
+                    .collect::<anyhow::Result<_>>()?,
+            );
+            Ok(heap.alloc(dict))
+        }
     }
 }
 

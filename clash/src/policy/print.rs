@@ -165,6 +165,8 @@ mod tests {
 
         let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
         let internal = r#"
+load("@clash//std.star", "policy", "path")
+
 def main():
     return policy(default = deny, rules = [
         path("/test", read = allow),

@@ -2693,6 +2693,8 @@ mod tests {
   ]}]
 }"#;
         let internal = r#"
+load("@clash//std.star", "policy", "path")
+
 def main():
     return policy(default = deny, rules = [
         path("/test", read = allow),
@@ -2728,6 +2730,8 @@ def main():
   ]
 }"#;
         let internal = r#"
+load("@clash//std.star", "policy", "path")
+
 def main():
     return policy(default = deny, rules = [
         path("/test", read = allow),
@@ -3041,6 +3045,8 @@ def main():
   ]}]
 }"#;
         let internal = r#"
+load("@clash//std.star", "policy", "path")
+
 def main():
     return policy(default = deny, rules = [
         path("/internal", read = allow),
@@ -3442,7 +3448,7 @@ def main():
         let internals: &[(&str, &str)] = &[(
             "__test_internal__",
             r#"
-load("@clash//std.star", "exe")
+load("@clash//std.star", "exe", "policy")
 
 def main():
     return policy(default = deny, rules = [exe("git").allow()])

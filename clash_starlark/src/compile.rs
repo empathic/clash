@@ -6,8 +6,7 @@
 use serde_json::{Value as JsonValue, json};
 use starlark::values::{Value, ValueLike};
 
-use crate::builders::base::{BasePolicyValue, Binding};
-use crate::builders::sandbox::SandboxValue;
+use crate::builders::base::BasePolicyValue;
 
 /// Compile a Starlark `main()` return value to a PolicyDocument JSON string.
 pub fn compile_to_json(value: Value) -> anyhow::Result<String> {
@@ -23,7 +22,7 @@ pub fn compile_to_json(value: Value) -> anyhow::Result<String> {
 }
 
 fn compile_base_policy(base: &BasePolicyValue) -> anyhow::Result<JsonValue> {
-    let mut sandbox_defs: Vec<(String, &SandboxValue)> = Vec::new();
+    let mut sandbox_defs: Vec<(String, JsonValue)> = Vec::new();
     let mut sandbox_counter = 0;
     let mut main_body: Vec<JsonValue> = Vec::new();
 
@@ -43,28 +42,21 @@ fn compile_base_policy(base: &BasePolicyValue) -> anyhow::Result<JsonValue> {
         }
     }
 
-    // Process bindings
-    for binding in &base.bindings {
-        match binding {
-            Binding::Rule(rule) => {
-                let mut rule_json = rule.json.clone();
+    // Process rules
+    for rule in &base.rules {
+        let mut rule_json = rule.json.clone();
 
-                if let Some(ref sb) = rule.sandbox {
-                    let name = format!("__sandbox_{}", sandbox_counter);
-                    sandbox_counter += 1;
-                    sandbox_defs.push((name.clone(), sb));
-                    // Inject sandbox reference into the rule
-                    if let Some(inner) = rule_json.get_mut("rule").and_then(|r| r.as_object_mut()) {
-                        inner.insert("sandbox".into(), json!({"named": name}));
-                    }
-                }
-
-                main_body.push(rule_json);
-            }
-            Binding::Path(path) => {
-                main_body.extend(path.to_rules_json());
+        if let Some(ref sb) = rule.sandbox {
+            let name = format!("__sandbox_{}", sandbox_counter);
+            sandbox_counter += 1;
+            sandbox_defs.push((name.clone(), sb.clone()));
+            // Inject sandbox reference into the rule
+            if let Some(inner) = rule_json.get_mut("rule").and_then(|r| r.as_object_mut()) {
+                inner.insert("sandbox".into(), json!({"named": name}));
             }
         }
+
+        main_body.push(rule_json);
     }
 
     // Build the output document
@@ -81,9 +73,13 @@ fn compile_base_policy(base: &BasePolicyValue) -> anyhow::Result<JsonValue> {
         }
     }
 
-    // Emit new sandbox defs
-    for (name, sandbox) in &sandbox_defs {
-        let body = sandbox.to_policy_body_json();
+    // Emit new sandbox defs (from Starlark-built sandboxes)
+    for (name, sb_json) in &sandbox_defs {
+        let body = sb_json
+            .get("body")
+            .and_then(|b| b.as_array())
+            .cloned()
+            .unwrap_or_default();
         policies.push(json!({
             "name": name,
             "body": body

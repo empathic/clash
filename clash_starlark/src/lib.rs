@@ -82,10 +82,13 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    // Most tests load everything they need from std.star.
+    // Rust globals still available without load: allow, deny, ask, rule, _policy, import_json
+
     #[test]
     fn test_simple_policy() {
         let source = r#"
-load("@clash//std.star", "tool")
+load("@clash//std.star", "tool", "policy")
 
 def main():
     return policy(default = deny, rules = [tool().allow()])
@@ -100,7 +103,7 @@ def main():
     #[test]
     fn test_sandbox_policy() {
         let source = r#"
-load("@clash//std.star", "exe", "tool")
+load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(
@@ -121,7 +124,6 @@ def main():
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
         let policies = doc["policies"].as_array().unwrap();
-        // Should have a sandbox policy + main
         assert!(policies.len() >= 2);
     }
 
@@ -136,7 +138,7 @@ def main():
     #[test]
     fn test_tool_bindings() {
         let source = r#"
-load("@clash//std.star", "tool")
+load("@clash//std.star", "tool", "policy")
 
 def main():
     return policy(
@@ -156,20 +158,19 @@ def main():
     #[test]
     fn test_match_multi_exe() {
         let source = r#"
-load("@clash//std.star", "match_exes")
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(default = deny, fs = [cwd(read = allow)])
     return policy(
         default = deny,
         rules = [
-            match_exes(["rustc", "cargo", "cargo-clippy"]).allow().sandbox(box),
+            exe(["rustc", "cargo", "cargo-clippy"]).sandbox(box).allow(),
         ],
     )
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        // Check that the exec rule has an "or" pattern
         let main_pol = doc["policies"].as_array().unwrap().last().unwrap();
         let rule = &main_pol["body"][0]["rule"];
         assert!(rule["exec"]["bin"]["or"].is_array());
@@ -178,7 +179,7 @@ def main():
     #[test]
     fn test_extend_pattern() {
         let source = r#"
-load("@clash//std.star", "exe", "tool")
+load("@clash//std.star", "exe", "tool", "policy")
 
 def main():
     base = policy(default = deny, rules = [tool().allow()])
@@ -188,13 +189,13 @@ def main():
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
         let main_body = doc["policies"][0]["body"].as_array().unwrap();
-        assert_eq!(main_body.len(), 2); // tool().allow() + exe
+        assert_eq!(main_body.len(), 2);
     }
 
     #[test]
     fn test_domains_net() {
         let source = r#"
-load("@clash//std.star", "exe")
+load("@clash//std.star", "exe", "policy", "sandbox", "domains")
 
 def main():
     box = sandbox(
@@ -207,7 +208,6 @@ def main():
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        // Should have a sandbox with net rules
         let sandbox_pol = &doc["policies"][0];
         let body = sandbox_pol["body"].as_array().unwrap();
         let net_rules: Vec<_> = body
@@ -220,7 +220,7 @@ def main():
     #[test]
     fn test_home_child() {
         let source = r#"
-load("@clash//std.star", "exe")
+load("@clash//std.star", "exe", "policy", "sandbox", "home")
 
 def main():
     box = sandbox(
@@ -233,7 +233,6 @@ def main():
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        // The sandbox should have an fs rule with a join path
         let sandbox_pol = &doc["policies"][0];
         let body = sandbox_pol["body"].as_array().unwrap();
         assert!(!body.is_empty());
@@ -274,14 +273,13 @@ def main():
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
         let main_body = doc["policies"].as_array().unwrap().last().unwrap();
         let body = main_body["body"].as_array().unwrap();
-        // Should have tool rule from base + exe rule from extend
         assert_eq!(body.len(), 2);
     }
 
     #[test]
     fn test_wildcard_domain() {
         let source = r#"
-load("@clash//std.star", "exe")
+load("@clash//std.star", "exe", "policy", "sandbox", "domains")
 
 def main():
     box = sandbox(
@@ -295,14 +293,13 @@ def main():
         let sandbox_pol = &doc["policies"][0];
         let body = sandbox_pol["body"].as_array().unwrap();
         let net_rule = &body[0]["rule"]["net"]["domain"];
-        // Wildcard should be compiled to a regex
         assert!(net_rule["regex"].is_string());
     }
 
     #[test]
     fn test_cwd_worktree() {
         let source = r#"
-load("@clash//std.star", "exe")
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(
@@ -315,7 +312,6 @@ def main():
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
         let sandbox_pol = &doc["policies"][0];
         let body = sandbox_pol["body"].as_array().unwrap();
-        // Check worktree flag is set
         let fs_rule = &body[0]["rule"]["fs"]["path"]["subpath"];
         assert_eq!(fs_rule["worktree"], true);
     }
@@ -323,7 +319,7 @@ def main():
     #[test]
     fn test_tempdir_path() {
         let source = r#"
-load("@clash//std.star", "exe")
+load("@clash//std.star", "exe", "policy", "sandbox", "tempdir")
 
 def main():
     box = sandbox(
@@ -337,7 +333,6 @@ def main():
         let sandbox_pol = &doc["policies"][0];
         let body = sandbox_pol["body"].as_array().unwrap();
         assert!(!body.is_empty());
-        // Should reference TMPDIR env
         let path = &body[0]["rule"]["fs"]["path"]["subpath"]["path"];
         assert_eq!(path["env"], "TMPDIR");
     }
@@ -345,7 +340,7 @@ def main():
     #[test]
     fn test_path_static() {
         let source = r#"
-load("@clash//std.star", "exe")
+load("@clash//std.star", "exe", "policy", "sandbox", "path")
 
 def main():
     box = sandbox(
@@ -364,7 +359,7 @@ def main():
     #[test]
     fn test_path_env() {
         let source = r#"
-load("@clash//std.star", "exe")
+load("@clash//std.star", "exe", "policy", "sandbox", "path")
 
 def main():
     box = sandbox(
@@ -383,15 +378,15 @@ def main():
 
     #[test]
     fn test_invalid_effect_errors() {
+        // _policy is the raw Rust function (no std.star wrapper)
         let source = r#"
 def main():
-    return policy(default = "invalid", rules = [])
+    return _policy(default = "invalid", rules = [])
 "#;
-        // "invalid" is not an effect constant, it's a raw string
         let _result = evaluate(source, "test.star", &PathBuf::from("."));
         // Test with a path builder that validates effects
         let source2 = r#"
-load("@clash//std.star", "exe")
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(default = deny, fs = [cwd(read = "invalid")])
@@ -405,20 +400,19 @@ def main():
     fn test_stdlib_load() {
         let source = r#"
 load("@clash//rust.star", "rust_sandbox")
-load("@clash//std.star", "match_exes")
+load("@clash//std.star", "exe", "policy")
 
 def main():
     return policy(
         default = deny,
         rules = [
-            match_exes(["rustc", "cargo"]).allow().sandbox(rust_sandbox),
+            exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow(),
         ],
     )
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
         assert_eq!(doc["schema_version"], 4);
-        // Should have sandbox + main policies
         assert!(doc["policies"].as_array().unwrap().len() >= 2);
     }
 
@@ -429,7 +423,7 @@ def main():
             let source = format!(
                 r#"
 load("@clash//{module}", "{sandbox_name}")
-load("@clash//std.star", "exe")
+load("@clash//std.star", "exe", "policy")
 
 def main():
     return policy(
@@ -464,6 +458,8 @@ def main():
         std::fs::write(
             &helper_path,
             r#"
+load("@clash//std.star", "sandbox", "cwd")
+
 my_sandbox = sandbox(default = deny, fs = [cwd(read = allow)])
 "#,
         )
@@ -471,7 +467,7 @@ my_sandbox = sandbox(default = deny, fs = [cwd(read = allow)])
 
         let source = r#"
 load("helpers.star", "my_sandbox")
-load("@clash//std.star", "exe")
+load("@clash//std.star", "exe", "policy")
 
 def main():
     return policy(default = deny, rules = [exe("test").allow().sandbox(my_sandbox)])
@@ -479,7 +475,6 @@ def main():
         let result = evaluate(source, "policy.star", dir.path()).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
         assert_eq!(doc["schema_version"], 4);
-        // loaded_files should include helpers.star
         assert!(!result.loaded_files.is_empty());
     }
 
@@ -487,7 +482,7 @@ def main():
     fn test_full_example_from_plan() {
         let source = r#"
 load("@clash//rust.star", "rust_sandbox")
-load("@clash//std.star", "exe", "tool", "match_exes")
+load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home")
 
 def main():
     gitbox = sandbox(
@@ -506,8 +501,8 @@ def main():
     )
 
     base = policy(default = deny, rules = [])
-    base = base.extend(exe("git").allow().sandbox(gitbox))
-    base = base.extend(match_exes(["rustc", "cargo"]).allow().sandbox(rust_sandbox))
+    base = base.extend(exe("git").sandbox(gitbox).allow())
+    base = base.extend(exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow())
     base = base.extend(tool().allow())
     return base
 "#;
@@ -519,14 +514,12 @@ def main():
         assert_eq!(doc["default_effect"], "deny");
 
         let policies = doc["policies"].as_array().unwrap();
-        // Should have: gitbox sandbox, rust sandbox, main
         assert!(
             policies.len() >= 3,
             "expected >= 3 policies, got {}",
             policies.len()
         );
 
-        // Main policy should have 3 rules: exe(git), match(rustc/cargo), tool().allow()
         let main_pol = policies.last().unwrap();
         assert_eq!(main_pol["name"], "main");
         let main_body = main_pol["body"].as_array().unwrap();
@@ -536,7 +529,7 @@ def main():
     #[test]
     fn test_exe_regex_pattern() {
         let source = r#"
-load("@clash//std.star", "exe", "regex")
+load("@clash//std.star", "exe", "regex", "policy")
 
 def main():
     return policy(default = deny, rules = [
@@ -552,7 +545,7 @@ def main():
     #[test]
     fn test_exe_any_pattern() {
         let source = r#"
-load("@clash//std.star", "exe")
+load("@clash//std.star", "exe", "policy")
 
 def main():
     return policy(default = deny, rules = [
@@ -568,7 +561,7 @@ def main():
     #[test]
     fn test_tool_regex_pattern() {
         let source = r#"
-load("@clash//std.star", "tool", "regex")
+load("@clash//std.star", "tool", "regex", "policy")
 
 def main():
     return policy(default = deny, rules = [
@@ -585,11 +578,11 @@ def main():
     #[test]
     fn test_match_exes_with_regex() {
         let source = r#"
-load("@clash//std.star", "match_exes", "regex")
+load("@clash//std.star", "exe", "regex", "policy")
 
 def main():
     return policy(default = deny, rules = [
-        match_exes(["git", regex("gh.*")]).allow(),
+        exe(["git", regex("gh.*")]).allow(),
     ])
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();

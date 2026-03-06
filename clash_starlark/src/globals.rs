@@ -1,14 +1,14 @@
-//! Pre-loaded Starlark globals: effect constants and DSL builder functions.
+//! Pre-loaded Starlark globals: minimal Rust primitives.
+//!
+//! Most DSL functions live in `@clash//std.star`. Only things that require
+//! Rust (typed wrappers, JSON bridge, eval context) stay here.
 
 use starlark::environment::{GlobalsBuilder, LibraryExtension};
 use starlark::starlark_module;
-use starlark::values::{Heap, Value};
+use starlark::values::Value;
 
 use crate::builders::base::BasePolicyValue;
-use crate::builders::net::NetValue;
-use crate::builders::path::PathValue;
 use crate::builders::rule::{RuleValue, starlark_to_json};
-use crate::builders::sandbox::SandboxValue;
 
 /// Build the globals environment with all Clash DSL functions and constants.
 pub fn clash_globals() -> starlark::environment::Globals {
@@ -35,67 +35,7 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
-    // -- Sandbox builder --
-
-    fn sandbox<'v>(
-        #[starlark(require = named)] default: Option<&str>,
-        #[starlark(require = named)] fs: Option<Value<'v>>,
-        #[starlark(require = named)] net: Option<Value<'v>>,
-        heap: &'v Heap,
-    ) -> anyhow::Result<SandboxValue> {
-        SandboxValue::new(default, fs, net, heap)
-    }
-
-    // -- Path builders --
-
-    fn cwd(
-        #[starlark(require = named, default = false)] follow_worktrees: bool,
-        #[starlark(require = named)] read: Option<&str>,
-        #[starlark(require = named)] write: Option<&str>,
-        #[starlark(require = named)] execute: Option<&str>,
-        #[starlark(require = named, default = false)] allow_all: bool,
-    ) -> anyhow::Result<PathValue> {
-        PathValue::cwd(follow_worktrees, read, write, execute, allow_all)
-    }
-
-    fn home() -> anyhow::Result<PathValue> {
-        Ok(PathValue::home())
-    }
-
-    fn tempdir(
-        #[starlark(require = named, default = false)] allow_all: bool,
-        #[starlark(require = named)] read: Option<&str>,
-        #[starlark(require = named)] write: Option<&str>,
-        #[starlark(require = named)] execute: Option<&str>,
-    ) -> anyhow::Result<PathValue> {
-        PathValue::tempdir(allow_all, read, write, execute)
-    }
-
-    fn path(
-        #[starlark(require = pos)] path_str: Option<&str>,
-        #[starlark(require = named)] env: Option<&str>,
-        #[starlark(require = named)] read: Option<&str>,
-        #[starlark(require = named)] write: Option<&str>,
-        #[starlark(require = named)] execute: Option<&str>,
-        #[starlark(require = named, default = false)] allow_all: bool,
-    ) -> anyhow::Result<PathValue> {
-        PathValue::arbitrary(path_str, env, read, write, execute, allow_all)
-    }
-
-    // -- Network builders --
-
-    fn domains<'v>(#[starlark(require = pos)] mapping: Value<'v>) -> anyhow::Result<NetValue> {
-        NetValue::from_domains_dict(mapping)
-    }
-
-    fn domain(
-        #[starlark(require = pos)] name: &str,
-        #[starlark(require = pos)] effect: &str,
-    ) -> anyhow::Result<NetValue> {
-        NetValue::single_domain(name, effect)
-    }
-
-    // -- Base policy --
+    // -- Base policy (must stay in Rust — return type for compile_to_json) --
 
     fn import_json<'v>(
         #[starlark(require = pos)] filename: &str,
@@ -104,7 +44,9 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         crate::import_json::import_json_impl(filename, eval)
     }
 
-    fn policy<'v>(
+    /// Internal policy constructor. Starlark `policy()` in std.star wraps this
+    /// to flatten path entries and nested lists before passing rules through.
+    fn _policy<'v>(
         #[starlark(require = named)] default: Option<&str>,
         #[starlark(require = named)] rules: Option<Value<'v>>,
     ) -> anyhow::Result<BasePolicyValue> {

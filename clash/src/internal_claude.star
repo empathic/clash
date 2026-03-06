@@ -1,4 +1,4 @@
-load("@clash//std.star", "tool")
+load("@clash//std.star", "tool", "policy", "home", "path")
 
 def main():
     return policy(default = deny, rules = [

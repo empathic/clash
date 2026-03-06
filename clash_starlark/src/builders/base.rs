@@ -10,20 +10,12 @@ use starlark::values::{
     NoSerialize, ProvidesStaticType, StarlarkValue, Trace, Value, ValueLike, starlark_value,
 };
 
-use super::path::PathValue;
 use super::rule::RuleValue;
 use super::unpack_effect_or_default;
 
-/// Binding — a rule or path binding to extend a base policy with.
-#[derive(Debug, Clone)]
-pub enum Binding {
-    Rule(RuleValue),
-    Path(PathValue),
-}
-
 /// A base policy value — the return type of `main()`.
 ///
-/// Created by `import_json()` or `policy()`, extended via `.extend()`.
+/// Created by `import_json()` or `_policy()`, extended via `.extend()`.
 #[derive(Debug, Clone, ProvidesStaticType, NoSerialize, Allocative)]
 pub struct BasePolicyValue {
     /// The base JSON document (parsed from import_json), if any.
@@ -31,9 +23,9 @@ pub struct BasePolicyValue {
     pub base_doc: Option<JsonValue>,
     /// Default effect for unmatched requests.
     pub default_effect: String,
-    /// Additional bindings added via .extend().
+    /// Rule bindings.
     #[allocative(skip)]
-    pub bindings: Vec<Binding>,
+    pub rules: Vec<RuleValue>,
 }
 
 unsafe impl Trace<'_> for BasePolicyValue {
@@ -42,7 +34,7 @@ unsafe impl Trace<'_> for BasePolicyValue {
 
 impl Display for BasePolicyValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "BasePolicy(bindings={})", self.bindings.len())
+        write!(f, "BasePolicy(rules={})", self.rules.len())
     }
 }
 
@@ -66,12 +58,10 @@ fn base_policy_methods(builder: &mut starlark::environment::MethodsBuilder) {
         let mut result = this.clone();
 
         if let Some(rule) = binding.downcast_ref::<RuleValue>() {
-            result.bindings.push(Binding::Rule(rule.clone()));
-        } else if let Some(path) = binding.downcast_ref::<PathValue>() {
-            result.bindings.push(Binding::Path(path.clone()));
+            result.rules.push(rule.clone());
         } else {
             anyhow::bail!(
-                ".extend() expects a rule() or path value, got {}",
+                ".extend() expects a rule value, got {}",
                 binding.get_type()
             );
         }
@@ -91,7 +81,7 @@ impl BasePolicyValue {
         BasePolicyValue {
             base_doc: Some(doc),
             default_effect,
-            bindings: vec![],
+            rules: vec![],
         }
     }
 
@@ -101,19 +91,17 @@ impl BasePolicyValue {
         rules: Option<Value<'v>>,
     ) -> anyhow::Result<Self> {
         let default_effect = unpack_effect_or_default(default, "deny");
-        let mut bindings = Vec::new();
+        let mut rule_vec = Vec::new();
 
         if let Some(rules_val) = rules {
             let list = ListRef::from_value(rules_val)
                 .ok_or_else(|| anyhow::anyhow!("rules= must be a list"))?;
             for item in list.iter() {
                 if let Some(rule) = item.downcast_ref::<RuleValue>() {
-                    bindings.push(Binding::Rule(rule.clone()));
-                } else if let Some(path) = item.downcast_ref::<PathValue>() {
-                    bindings.push(Binding::Path(path.clone()));
+                    rule_vec.push(rule.clone());
                 } else {
                     anyhow::bail!(
-                        "policy rules list items must be rule() or path values, got {}",
+                        "policy rules must be rule values, got {}",
                         item.get_type()
                     );
                 }
@@ -123,7 +111,7 @@ impl BasePolicyValue {
         Ok(BasePolicyValue {
             base_doc: None,
             default_effect,
-            bindings,
+            rules: rule_vec,
         })
     }
 }
