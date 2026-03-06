@@ -55,30 +55,9 @@ impl EnvResolver for StdEnvResolver {
     }
 }
 
-/// Compile a JSON policy source string into a decision tree, injecting internal policies.
-pub fn compile_policy(source: &str) -> Result<DecisionTree> {
-    let doc: PolicyDocument =
-        serde_json::from_str(source).map_err(|e| anyhow::anyhow!("invalid policy JSON: {e}"))?;
-    compile_document(&doc, &StdEnvResolver, crate::settings::INTERNAL_POLICIES)
-}
-
-/// Compile a PolicyDocument with internal policies, returning a flat DecisionTree.
-pub fn compile_document(
-    doc: &PolicyDocument,
-    env: &dyn EnvResolver,
-    internals: &[(&str, &str)],
-) -> Result<DecisionTree> {
-    let mut doc = doc.clone();
-    inject_internal_policies(&mut doc, internals)?;
-    compile_document_ast(&doc, env)
-}
-
-/// Compile a PolicyDocument with a custom env resolver (no internal policies).
-pub fn compile_document_with_env(
-    doc: &PolicyDocument,
-    env: &dyn EnvResolver,
-) -> Result<DecisionTree> {
-    compile_document_ast(doc, env)
+/// Compile a JSON policy source string into a `PolicyTree`, injecting internal policies.
+pub fn compile_policy(source: &str) -> Result<PolicyTree> {
+    compile_to_tree_with_internals(source, &StdEnvResolver, crate::settings::INTERNAL_POLICIES)
 }
 
 /// Compile a PolicyDocument directly to a `PolicyTree`.
@@ -94,21 +73,17 @@ pub fn compile_to_tree(source: &str, env: &dyn EnvResolver) -> Result<PolicyTree
 }
 
 /// Compile a JSON source string with a custom env resolver (no internal policies).
-pub fn compile_policy_with_env(source: &str, env: &dyn EnvResolver) -> Result<DecisionTree> {
-    let doc: PolicyDocument =
-        serde_json::from_str(source).map_err(|e| anyhow::anyhow!("invalid policy JSON: {e}"))?;
-    compile_document_ast(&doc, env)
+pub fn compile_to_tree_with_env(source: &str, env: &dyn EnvResolver) -> Result<PolicyTree> {
+    compile_to_tree(source, env)
 }
 
-/// Compile a JSON source string with internal policies, returning a DecisionTree.
+/// Compile a JSON source string with internal policies, returning a `PolicyTree`.
 pub fn compile_policy_with_internals(
     source: &str,
     env: &dyn EnvResolver,
     internals: &[(&str, &str)],
-) -> Result<DecisionTree> {
-    let doc: PolicyDocument =
-        serde_json::from_str(source).map_err(|e| anyhow::anyhow!("invalid policy JSON: {e}"))?;
-    compile_document(&doc, env, internals)
+) -> Result<PolicyTree> {
+    compile_to_tree_with_internals(source, env, internals)
 }
 
 /// Compile a PolicyDocument directly into a PolicyTree.
@@ -346,10 +321,12 @@ fn compile_policy_item_to_node(
                 effect: rule.effect,
             };
 
+            let rule_idx = exec_rules.len() + fs_rules.len() + net_rules.len() + tool_rules.len();
             let when_id = ids.alloc(NodeMeta {
                 description: format!("{:?}", rule),
                 origin_policy: Some(origin.to_string()),
                 sandbox_name: sandbox_key,
+                rule_index: Some(rule_idx),
                 ..Default::default()
             });
             Ok(Some(Node::When {
@@ -1188,8 +1165,18 @@ pub fn compile_multi_level_with_internals(
     for (level, source) in levels {
         let doc: PolicyDocument = serde_json::from_str(source)
             .map_err(|e| anyhow::anyhow!("{} policy: invalid JSON: {}", level.name(), e))?;
-        let tree = compile_document_with_env(&doc, env)
+        let ptree = compile_document_to_tree(&doc, env)
             .map_err(|e| anyhow::anyhow!("{} policy: {}", level.name(), e))?;
+        let tree = DecisionTree {
+            version: ptree.version,
+            default: ptree.default,
+            policy_name: ptree.policy_name,
+            exec_rules: ptree.exec_rules,
+            fs_rules: ptree.fs_rules,
+            net_rules: ptree.net_rules,
+            tool_rules: ptree.tool_rules,
+            sandbox_policies: ptree.sandbox_policies,
+        };
         level_trees.push((*level, tree));
     }
 
@@ -1469,205 +1456,6 @@ pub fn compile_multi_level_to_tree(
     level_trees.reverse();
 
     Ok(PolicyTree::merge_levels(level_trees))
-}
-
-/// Compile a PolicyDocument into a flat decision tree.
-fn compile_document_ast(doc: &PolicyDocument, env: &dyn EnvResolver) -> Result<DecisionTree> {
-    let version = doc.schema_version;
-
-    let active_policy = doc.use_policy.as_deref().unwrap_or("main");
-    let default_effect = doc.default_effect.unwrap_or(Effect::Deny);
-
-    // Build a map of policy name → body.
-    let mut policies: HashMap<&str, &[PolicyItem]> = HashMap::new();
-    for def in &doc.policies {
-        policies.insert(def.name.as_str(), def.body.as_slice());
-    }
-
-    // Flatten the active policy, resolving includes.
-    let mut rules: Vec<(Rule, String)> = Vec::new();
-    let mut visited = Vec::new();
-    flatten_policy(active_policy, &policies, &mut rules, &mut visited)?;
-
-    // Group rules by capability domain and compile.
-    let mut exec_rules = Vec::new();
-    let mut fs_rules = Vec::new();
-    let mut net_rules = Vec::new();
-    let mut tool_rules = Vec::new();
-    let mut sandbox_policies = HashMap::new();
-    let mut inline_counter = 0usize;
-
-    for (rule, origin) in &rules {
-        // Resolve sandbox reference to a key name.
-        let sandbox_key = match &rule.sandbox {
-            Some(SandboxRef::Named(name)) => {
-                if !policies.contains_key(name.as_str()) {
-                    bail!(
-                        "sandbox reference \"{}\" not found: no (policy \"{}\") defined",
-                        name,
-                        name
-                    );
-                }
-                Some(name.clone())
-            }
-            Some(SandboxRef::Inline(inline_rules)) => {
-                let key = format!("__inline_sandbox_{inline_counter}__");
-                inline_counter += 1;
-                let mut compiled_sandbox_rules = Vec::new();
-                for r in inline_rules {
-                    let specificity = Specificity::from_matcher(&r.matcher);
-                    let compiled_matcher = compile_matcher(&r.matcher, env)?;
-                    compiled_sandbox_rules.push(CompiledRule {
-                        effect: r.effect,
-                        matcher: compiled_matcher,
-                        source: r.clone(),
-                        specificity,
-                        sandbox: None,
-                        origin_policy: None,
-                        origin_level: None,
-                    });
-                }
-                sandbox_policies.insert(key.clone(), compiled_sandbox_rules);
-                Some(key)
-            }
-            None => None,
-        };
-
-        let specificity = Specificity::from_matcher(&rule.matcher);
-        let compiled_matcher = compile_matcher(&rule.matcher, env)?;
-        let compiled = CompiledRule {
-            effect: rule.effect,
-            matcher: compiled_matcher,
-            source: rule.clone(),
-            specificity,
-            sandbox: sandbox_key,
-            origin_policy: Some(origin.clone()),
-            origin_level: None,
-        };
-        match &rule.matcher {
-            CapMatcher::Exec(_) => exec_rules.push(compiled),
-            CapMatcher::Fs(_) => fs_rules.push(compiled),
-            CapMatcher::Net(_) => net_rules.push(compiled),
-            CapMatcher::Tool(_) => tool_rules.push(compiled),
-        }
-    }
-
-    // Compile named sandbox policies: for each named sandbox reference,
-    // compile the referenced policy's rules into a standalone rule set.
-    // (Inline sandbox policies were already compiled above.)
-    let sandbox_names: Vec<String> = exec_rules
-        .iter()
-        .chain(tool_rules.iter())
-        .filter_map(|r| r.sandbox.clone())
-        .collect();
-    for sandbox_name in &sandbox_names {
-        if sandbox_policies.contains_key(sandbox_name) {
-            continue;
-        }
-        if let Some(body) = policies.get(sandbox_name.as_str()) {
-            let mut sandbox_rules = Vec::new();
-            for item in *body {
-                if let PolicyItem::Rule(rule) = item {
-                    let specificity = Specificity::from_matcher(&rule.matcher);
-                    let compiled_matcher = compile_matcher(&rule.matcher, env)?;
-                    sandbox_rules.push(CompiledRule {
-                        effect: rule.effect,
-                        matcher: compiled_matcher,
-                        source: rule.clone(),
-                        specificity,
-                        sandbox: None,
-                        origin_policy: None,
-                        origin_level: None,
-                    });
-                }
-            }
-            sandbox_policies.insert(sandbox_name.clone(), sandbox_rules);
-        }
-    }
-
-    // Sort by specificity (most specific first).
-    let sort_fn = |a: &CompiledRule, b: &CompiledRule| {
-        b.specificity
-            .partial_cmp(&a.specificity)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    };
-    exec_rules.sort_by(sort_fn);
-    fs_rules.sort_by(sort_fn);
-    net_rules.sort_by(sort_fn);
-    tool_rules.sort_by(sort_fn);
-
-    // Detect conflicts: same specificity, different effects.
-    detect_conflicts(&exec_rules, "exec")?;
-    detect_conflicts(&fs_rules, "fs")?;
-    detect_conflicts(&net_rules, "net")?;
-    detect_conflicts(&tool_rules, "tool")?;
-
-    Ok(DecisionTree {
-        version,
-        default: default_effect,
-        policy_name: active_policy.to_string(),
-        exec_rules,
-        fs_rules,
-        net_rules,
-        tool_rules,
-        sandbox_policies,
-    })
-}
-
-/// Recursively flatten a policy, resolving `(include ...)` references.
-/// Each rule is tagged with the name of the policy it originated from.
-fn flatten_policy(
-    name: &str,
-    policies: &HashMap<&str, &[PolicyItem]>,
-    rules: &mut Vec<(Rule, String)>,
-    visited: &mut Vec<String>,
-) -> Result<()> {
-    if visited.contains(&name.to_string()) {
-        bail!("circular include detected: {name}");
-    }
-    visited.push(name.to_string());
-
-    let body = policies
-        .get(name)
-        .ok_or_else(|| anyhow::anyhow!("policy not found: {name}"))?;
-
-    for item in *body {
-        match item {
-            PolicyItem::Include(target) => {
-                flatten_policy(target, policies, rules, visited)?;
-            }
-            PolicyItem::Rule(rule) => {
-                rules.push((rule.clone(), name.to_string()));
-            }
-            // v2 items are handled by compile_document_tree_ast, not flat compilation.
-            PolicyItem::When { .. } | PolicyItem::Match(_) | PolicyItem::Effect(_) => {}
-        }
-    }
-
-    visited.pop();
-    Ok(())
-}
-
-/// Detect conflicting rules: same specificity, overlapping matchers, different effects.
-fn detect_conflicts(rules: &[CompiledRule], domain: &str) -> Result<()> {
-    for i in 0..rules.len() {
-        for j in (i + 1)..rules.len() {
-            if rules[i].specificity == rules[j].specificity
-                && rules[i].effect != rules[j].effect
-                && matchers_may_overlap(&rules[i].source.matcher, &rules[j].source.matcher)
-            {
-                bail!(
-                    "conflicting {domain} rules with equal specificity: \
-                     {} ({}) vs {} ({})",
-                    rules[i].source,
-                    rules[i].effect,
-                    rules[j].source,
-                    rules[j].effect,
-                );
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Conservative overlap check: returns `false` only when we can prove two
@@ -2254,7 +2042,7 @@ mod tests {
   ]
 }"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         assert_eq!(tree.default, Effect::Deny);
         assert_eq!(tree.policy_name, "main");
         assert_eq!(tree.exec_rules.len(), 2);
@@ -2286,7 +2074,7 @@ mod tests {
   ]
 }"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 1);
         assert_eq!(tree.fs_rules.len(), 1);
     }
@@ -2303,7 +2091,7 @@ mod tests {
   ]
 }"#;
         let env = TestEnv::new(&[]);
-        let err = compile_policy_with_env(source, &env).unwrap_err();
+        let err = compile_to_tree(source, &env).unwrap_err();
         assert!(err.to_string().contains("circular include"));
     }
 
@@ -2323,10 +2111,11 @@ mod tests {
     }
   ]
 }"#;
-        // Same matcher, different effects = conflict.
+        // In the tree compiler, conflicting rules are handled by evaluation
+        // order (deny-overrides). Both rules compile successfully.
         let env = TestEnv::new(&[]);
-        let err = compile_policy_with_env(source, &env).unwrap_err();
-        assert!(err.to_string().contains("conflicting exec rules"));
+        let tree = compile_to_tree(source, &env).unwrap();
+        assert_eq!(tree.exec_rules.len(), 2);
     }
 
     #[test]
@@ -2346,7 +2135,7 @@ mod tests {
   ]
 }"#;
         let env = TestEnv::new(&[]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 2);
     }
 
@@ -2360,7 +2149,7 @@ mod tests {
   ]}]
 }"#;
         let env = TestEnv::new(&[]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 2);
     }
 
@@ -2374,7 +2163,7 @@ mod tests {
   ]}]
 }"#;
         let env = TestEnv::new(&[]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 2);
         assert_eq!(tree.exec_rules[0].effect, Effect::Deny);
     }
@@ -2388,7 +2177,7 @@ mod tests {
   ]}]
 }"#;
         let env = TestEnv::new(&[("HOME", "/home/user")]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         assert_eq!(tree.fs_rules.len(), 1);
         match &tree.fs_rules[0].matcher {
             CompiledMatcher::Fs(f) => match &f.path {
@@ -2408,7 +2197,7 @@ mod tests {
   ]}]
 }"#;
         let env = TestEnv::new(&[("HOME", "/home/user")]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         assert_eq!(tree.fs_rules.len(), 1);
         match &tree.fs_rules[0].matcher {
             CompiledMatcher::Fs(f) => match &f.path {
@@ -2428,7 +2217,7 @@ mod tests {
   ]}]
 }"#;
         let env = TestEnv::new(&[]);
-        let err = compile_policy_with_env(source, &env).unwrap_err();
+        let err = compile_to_tree(source, &env).unwrap_err();
         assert!(err.to_string().contains("not set: NONEXISTENT"));
     }
 
@@ -2441,7 +2230,7 @@ mod tests {
   ]}]
 }"#;
         let env = TestEnv::new(&[]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         assert_eq!(tree.net_rules.len(), 1);
         match &tree.net_rules[0].matcher {
             CompiledMatcher::Net(n) => {
@@ -2462,7 +2251,7 @@ mod tests {
   ]}]
 }"#;
         let env = TestEnv::new(&[]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         let regenerated = tree.to_source();
         assert!(regenerated.contains(r#"(default deny "main")"#));
         assert!(regenerated.contains(r#""effect":"deny""#));
@@ -2486,7 +2275,7 @@ mod tests {
   ]
 }"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 1);
         assert_eq!(tree.exec_rules[0].sandbox, Some("cargo-env".into()));
         assert!(tree.sandbox_policies.contains_key("cargo-env"));
@@ -2502,7 +2291,7 @@ mod tests {
   ]}]
 }"#;
         let env = TestEnv::new(&[]);
-        let err = compile_policy_with_env(source, &env).unwrap_err();
+        let err = compile_to_tree(source, &env).unwrap_err();
         assert!(
             err.to_string()
                 .contains("sandbox reference \"nonexistent\" not found"),
@@ -2520,7 +2309,7 @@ mod tests {
   ]}]
 }"#;
         let env = TestEnv::new(&[]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         assert_eq!(tree.exec_rules.len(), 1);
         // Inline sandbox should be stored under a synthetic key.
         let sandbox_key = tree.exec_rules[0]
@@ -2528,7 +2317,7 @@ mod tests {
             .as_ref()
             .expect("should have sandbox key");
         assert!(
-            sandbox_key.starts_with("__inline_sandbox_"),
+            sandbox_key.starts_with("__v2_inline_sandbox_"),
             "expected synthetic key, got: {sandbox_key}"
         );
         // The sandbox policy should contain one net rule.
@@ -2547,7 +2336,7 @@ mod tests {
   ]}]
 }"#;
         let env = TestEnv::new(&[]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         let sandbox_key = tree.exec_rules[0]
             .sandbox
             .as_ref()
@@ -2650,7 +2439,7 @@ def main():
   ]
 }"#;
         let env = TestEnv::new(&[]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
         assert_eq!(tree.fs_rules[0].origin_policy.as_deref(), Some("shared"));
         assert_eq!(tree.exec_rules[0].origin_policy.as_deref(), Some("main"));
         assert_eq!(tree.exec_rules[1].origin_policy.as_deref(), Some("main"));
@@ -2668,7 +2457,7 @@ def main():
       { "include": "cwd-access" },
       { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } },
       { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "reset"}, {"any": null}] } } },
-      { "rule": { "effect": "ask",   "exec": { "bin": {"literal": "git"}, "args": [{"literal": "commit"}, {"any": null}] } } },
+      { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "commit"}, {"any": null}] } } },
       { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
       { "rule": { "effect": "allow", "fs": { "op": {"or": ["read", "write"]}, "path": {"subpath": {"path": {"env": "PWD"}}} } } },
       { "rule": { "effect": "deny",  "fs": { "op": {"single": "write"}, "path": {"literal": ".env"} } } },
@@ -2678,7 +2467,7 @@ def main():
   ]
 }"#;
         let env = TestEnv::new(&[("PWD", "/home/user/project")]);
-        let tree = compile_policy_with_env(source, &env).unwrap();
+        let tree = compile_to_tree(source, &env).unwrap();
 
         assert_eq!(tree.default, Effect::Deny);
         assert_eq!(tree.exec_rules.len(), 4);

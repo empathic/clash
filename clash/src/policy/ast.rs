@@ -667,27 +667,6 @@ pub(crate) mod strategies {
             sandbox: None,
         })
     }
-
-    /// Generate an arbitrary Rule that may have an inline sandbox.
-    pub fn arb_rule_with_sandbox() -> impl Strategy<Value = Rule> {
-        (
-            arb_effect(),
-            arb_exec_matcher(),
-            proptest::option::of(prop::collection::vec(
-                (arb_effect(), arb_cap_matcher()).prop_map(|(effect, matcher)| Rule {
-                    effect,
-                    matcher,
-                    sandbox: None,
-                }),
-                1..=3,
-            )),
-        )
-            .prop_map(|(effect, exec, sandbox_rules)| Rule {
-                effect,
-                matcher: CapMatcher::Exec(exec),
-                sandbox: sandbox_rules.map(SandboxRef::Inline),
-            })
-    }
 }
 
 #[cfg(test)]

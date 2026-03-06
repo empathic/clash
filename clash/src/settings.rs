@@ -763,8 +763,7 @@ mod test {
             "default_policy.star",
             std::path::Path::new("."),
         )?;
-        let tree = crate::policy::compile::compile_policy_with_env(&output.json, &TestEnv)?;
-        // Default policy is deny-all with no rules; just verify it compiles.
+        let tree = crate::policy::compile::compile_to_tree(&output.json, &TestEnv)?;
         let _ = tree;
         Ok(())
     }
@@ -987,7 +986,7 @@ mod test {
         // Verify the internal_claude.star compiles with this resolver
         let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": []}]}"#;
         let internal = include_str!("internal_claude.star");
-        let result = crate::policy::compile::compile_policy_with_internals(
+        let result = crate::policy::compile::compile_to_tree_with_internals(
             user_source,
             &resolver,
             &[("__internal_claude__", internal)],
@@ -1005,7 +1004,7 @@ mod test {
         let resolver = SessionEnvResolver { hook_ctx: None };
         let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": []}]}"#;
         let internal = include_str!("internal_claude.star");
-        let result = crate::policy::compile::compile_policy_with_internals(
+        let result = crate::policy::compile::compile_to_tree_with_internals(
             user_source,
             &resolver,
             &[("__internal_claude__", internal)],

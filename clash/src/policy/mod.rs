@@ -20,9 +20,8 @@ pub mod tree;
 
 pub use ast::PolicyDocument;
 pub use compile::{
-    AllShadows, ShadowInfo, compile_document, compile_document_to_tree,
-    compile_document_to_tree_with_internals, compile_multi_level_to_tree, detect_all_shadows,
-    detect_all_shadows_from_rules,
+    AllShadows, ShadowInfo, compile_document_to_tree, compile_document_to_tree_with_internals,
+    compile_multi_level_to_tree, detect_all_shadows, detect_all_shadows_from_rules,
 };
 pub use decision_tree::DecisionTree;
 pub use error::{CompileError, PolicyError, PolicyParseError};
