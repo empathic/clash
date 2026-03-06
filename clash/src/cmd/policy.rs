@@ -217,7 +217,11 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
             }
         };
 
-        match crate::policy::compile::compile_policy(&source) {
+        match crate::policy::compile::compile_to_tree_with_internals(
+            &source,
+            &crate::policy::compile::StdEnvResolver,
+            crate::settings::INTERNAL_POLICIES,
+        ) {
             Ok(tree) => {
                 let rule_count = tree.exec_rules.len()
                     + tree.fs_rules.len()
@@ -299,7 +303,11 @@ fn validate_single_file(path: &std::path::Path, json: bool) -> Result<()> {
     let source = crate::settings::evaluate_star_policy(path)
         .with_context(|| format!("failed to evaluate: {}", path.display()))?;
 
-    match crate::policy::compile::compile_policy(&source) {
+    match crate::policy::compile::compile_to_tree_with_internals(
+        &source,
+        &crate::policy::compile::StdEnvResolver,
+        crate::settings::INTERNAL_POLICIES,
+    ) {
         Ok(tree) => {
             let rule_count = tree.exec_rules.len()
                 + tree.fs_rules.len()

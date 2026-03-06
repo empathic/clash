@@ -245,8 +245,8 @@ fn validate_ask_contexts(node: &Node, has_valid_invocation: bool, meta: &[NodeMe
                 .is_some_and(|p| p.starts_with("__internal_"));
             if !has_valid_invocation && !is_internal {
                 bail!(
-                    ":ask may only appear inside a (when (tool ...) ...), \
-                     (when (mcp ...) ...), or (when (agent ...) ...) guard"
+                    "ask effect can only be used with tool(), mcp(), or agent() rules, \
+                     not with exec(), fs(), or net() rules"
                 );
             }
         }
@@ -2093,10 +2093,7 @@ fn resolve_path_expr(expr: &PathExpr, env: &dyn EnvResolver) -> Result<String> {
             let mut result = String::new();
             for part in parts {
                 let segment = resolve_path_expr(part, env)?;
-                if !result.is_empty()
-                    && !result.ends_with('/')
-                    && !segment.starts_with('/')
-                {
+                if !result.is_empty() && !result.ends_with('/') && !segment.starts_with('/') {
                     result.push('/');
                 }
                 result.push_str(&segment);
@@ -3709,7 +3706,7 @@ def main():
 }"#;
         let err = compile_to_tree(source, &env).unwrap_err();
         assert!(
-            err.to_string().contains(":ask may only appear inside"),
+            err.to_string().contains("ask effect can only be used with"),
             "unexpected error: {err}"
         );
     }
@@ -3725,7 +3722,7 @@ def main():
 }"#;
         let err = compile_to_tree(source, &env).unwrap_err();
         assert!(
-            err.to_string().contains(":ask may only appear inside"),
+            err.to_string().contains("ask effect can only be used with"),
             "unexpected error: {err}"
         );
     }
@@ -3773,7 +3770,7 @@ def main():
 }"#;
         let err = compile_to_tree(source, &env).unwrap_err();
         assert!(
-            err.to_string().contains(":ask may only appear inside"),
+            err.to_string().contains("ask effect can only be used with"),
             "unexpected error: {err}"
         );
     }
