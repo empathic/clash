@@ -1,12 +1,12 @@
 meta:
-  name: v2 sexpr policy — default deny blocks all
+  name: starlark policy — default deny blocks all
   description: With default deny everything not explicitly allowed is blocked
 
 clash:
-  policy_sexpr: |
-    (default deny "main")
-    (policy "main"
-      (allow (exec "git" *)))
+  policy_star: |
+    load("@clash//std.star", "exe", "policy")
+    def main():
+        return policy(default=deny, rules=[exe("git").allow()])
 
 steps:
   - name: git allowed

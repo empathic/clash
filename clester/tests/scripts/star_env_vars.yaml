@@ -1,20 +1,20 @@
 meta:
-  name: v2 policy env vars — prefix handling in Bash commands
+  name: starlark policy — env var prefix handling in Bash commands
   description: >
     Test that environment variable prefixes on Bash commands are correctly
-    stripped when evaluating exec policy rules. Commands like
-    `SOME_ENV=foo cargo check` should match the `cargo` allow rule.
+    stripped when evaluating exec policy rules.
 
 clash:
-  policy_sexpr: |
-    (default deny "main")
-    (policy "main"
-      (allow (exec "cargo" *))
-      (deny (exec "git" "push" *)))
+  policy_star: |
+    load("@clash//std.star", "exe", "policy")
+    def main():
+        return policy(default=deny, rules=[
+            exe("cargo").allow(),
+            exe("git", args=["push"]).deny(),
+        ])
 
 steps:
-  # Baseline: plain cargo allowed, git push denied
-  - name: plain cargo build allowed (backward compat)
+  - name: plain cargo build allowed
     hook: pre-tool-use
     tool_name: Bash
     tool_input:
@@ -22,7 +22,7 @@ steps:
     expect:
       decision: allow
 
-  - name: git push denied (baseline)
+  - name: git push denied
     hook: pre-tool-use
     tool_name: Bash
     tool_input:
@@ -30,7 +30,6 @@ steps:
     expect:
       decision: deny
 
-  # Test 1: single env var prefix — the core bug fix
   - name: single env var prefix allows cargo check
     hook: pre-tool-use
     tool_name: Bash
@@ -39,7 +38,6 @@ steps:
     expect:
       decision: allow
 
-  # Test 2: multiple env var prefixes
   - name: multiple env var prefixes allow cargo build
     hook: pre-tool-use
     tool_name: Bash
@@ -48,7 +46,6 @@ steps:
     expect:
       decision: allow
 
-  # Test 3: env utility prefix
   - name: env utility prefix allows cargo test
     hook: pre-tool-use
     tool_name: Bash
@@ -57,7 +54,6 @@ steps:
     expect:
       decision: allow
 
-  # Test 4: env var prefix on a denied command still denied
   - name: env var prefix on git push still denied
     hook: pre-tool-use
     tool_name: Bash

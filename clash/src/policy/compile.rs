@@ -1354,6 +1354,68 @@ fn eval_internal_star(name: &str, star_source: &str) -> Result<PolicyDocument> {
 /// 1. Checks which internal policy names the user already defined (override)
 /// 2. For non-overridden ones, evaluates embedded `.star` source, appends PolicyDef items
 /// 3. Prepends `Include("__internal_X__")` to the active policy body
+/// Rename auto-generated sandbox names (e.g. `__sandbox_0`) in an internal
+/// policy document to avoid collisions with user-defined sandbox names.
+fn namespace_sandbox_names(doc: &mut PolicyDocument, prefix: &str) {
+    // Collect all auto-generated sandbox names.
+    let sandbox_names: Vec<String> = doc
+        .policies
+        .iter()
+        .filter(|p| p.name.starts_with("__sandbox_"))
+        .map(|p| p.name.clone())
+        .collect();
+
+    if sandbox_names.is_empty() {
+        return;
+    }
+
+    let renames: std::collections::HashMap<String, String> = sandbox_names
+        .into_iter()
+        .map(|old| {
+            let new = format!("__{prefix}_{}", old.trim_start_matches("__"));
+            (old, new)
+        })
+        .collect();
+
+    // Rename policy definitions and all references.
+    for def in &mut doc.policies {
+        if let Some(new_name) = renames.get(&def.name) {
+            def.name = new_name.clone();
+        }
+        rename_sandbox_refs_in_body(&mut def.body, &renames);
+    }
+}
+
+/// Recursively rename sandbox references in a policy body.
+fn rename_sandbox_refs_in_body(
+    body: &mut [PolicyItem],
+    renames: &std::collections::HashMap<String, String>,
+) {
+    for item in body.iter_mut() {
+        match item {
+            PolicyItem::Rule(rule) => {
+                if let Some(SandboxRef::Named(ref mut name)) = rule.sandbox {
+                    if let Some(new_name) = renames.get(name.as_str()) {
+                        *name = new_name.clone();
+                    }
+                }
+            }
+            PolicyItem::Include(name) => {
+                if let Some(new_name) = renames.get(name.as_str()) {
+                    *name = new_name.clone();
+                }
+            }
+            PolicyItem::When { body, .. } => {
+                rename_sandbox_refs_in_body(body, renames);
+            }
+            PolicyItem::Match(_) => {
+                // Match arms have pattern+effect only, no sandbox refs.
+            }
+            PolicyItem::Effect(_) => {}
+        }
+    }
+}
+
 fn inject_internal_policies(doc: &mut PolicyDocument, internals: &[(&str, &str)]) -> Result<()> {
     // Collect user-defined policy names.
     let user_policies: std::collections::HashSet<String> =
@@ -1367,9 +1429,20 @@ fn inject_internal_policies(doc: &mut PolicyDocument, internals: &[(&str, &str)]
         if user_policies.contains(*name) {
             continue;
         }
-        let int_doc: PolicyDocument = eval_internal_star(name, int_source)?;
+        let mut int_doc: PolicyDocument = eval_internal_star(name, int_source)?;
+        // Namespace auto-generated sandbox names to avoid collisions with user sandboxes.
+        namespace_sandbox_names(&mut int_doc, name);
+        // Only include the entry-point policy at the top level;
+        // sub-policies (e.g. sandbox definitions) are added to the document
+        // but NOT included — they are referenced by name from their parent rules.
+        let entry = int_doc
+            .use_policy
+            .clone()
+            .unwrap_or_else(|| "main".to_string());
         for def in int_doc.policies {
-            internal_includes.push(def.name.clone());
+            if def.name == entry {
+                internal_includes.push(def.name.clone());
+            }
             doc.policies.push(def);
         }
     }

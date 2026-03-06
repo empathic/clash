@@ -1,14 +1,14 @@
 meta:
-  name: v2 sexpr policy — network rules
+  name: starlark policy — network rules
   description: Test net capability rules for WebFetch and WebSearch
 
 clash:
-  policy_sexpr: |
-    (default deny "main")
-    (policy "main"
-      (allow (net "github.com"))
-      (allow (net "api.github.com"))
-      (deny (net "evil.com")))
+  policy_star: |
+    load("@clash//std.star", "policy", "domains")
+    def main():
+        return policy(default=deny, rules=[
+            domains({"github.com": allow, "api.github.com": allow}),
+        ])
 
 steps:
   - name: webfetch github.com allowed
@@ -27,7 +27,7 @@ steps:
     expect:
       decision: allow
 
-  - name: webfetch evil.com denied
+  - name: webfetch evil.com denied by default
     hook: pre-tool-use
     tool_name: WebFetch
     tool_input:

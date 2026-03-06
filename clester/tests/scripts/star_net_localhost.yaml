@@ -1,12 +1,14 @@
 meta:
-  name: v2 sexpr policy — localhost-only network rules
+  name: starlark policy — localhost-only network rules
   description: Test that localhost-only net rules allow local and deny external
 
 clash:
-  policy_sexpr: |
-    (default deny "main")
-    (policy "main"
-      (allow (net "localhost")))
+  policy_star: |
+    load("@clash//std.star", "policy", "domains")
+    def main():
+        return policy(default=deny, rules=[
+            domains({"localhost": allow}),
+        ])
 
 steps:
   - name: webfetch localhost allowed

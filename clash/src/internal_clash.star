@@ -1,4 +1,4 @@
-load("@clash//std.star", "exe", "tool", "policy", "sandbox", "home")
+load("@clash//std.star", "exe", "tool", "policy", "sandbox", "home", "path" )
 
 def main():
     _clash_fs = sandbox(
@@ -19,7 +19,6 @@ def main():
     return policy(
         default = deny,
         rules = [
-            tool(["Read", "Glob", "Grep"]).sandbox(_clash_fs).allow(),
             exe("clash", args = ["bug"]).sandbox(_clash_net).allow(),
             exe("clash", args = ["status"]).allow(),
             exe("clash", args = ["policy", "list"]).allow(),

@@ -76,6 +76,7 @@ pub fn run_step(clash_bin: &Path, env: &TestEnvironment, step: &Step) -> Result<
         // Prevent any system-level clash config from leaking in
         .env_remove("CLASH_CONFIG")
         .env_remove("CLASH_POLICY_FILE")
+        .env_remove("CLASH_DISABLE")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -126,6 +127,7 @@ pub fn run_command(clash_bin: &Path, env: &TestEnvironment, command: &str) -> Re
         .current_dir(&env.project_dir)
         .env_remove("CLASH_CONFIG")
         .env_remove("CLASH_POLICY_FILE")
+        .env_remove("CLASH_DISABLE")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

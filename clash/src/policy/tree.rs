@@ -439,7 +439,7 @@ impl PolicyTree {
         let mut all_tool = Vec::new();
         let mut all_sandbox: HashMap<String, Vec<CompiledRule>> = HashMap::new();
 
-        for mut tree in trees {
+        for (level_idx, mut tree) in trees.into_iter().enumerate() {
             let offset = combined_meta.len() as NodeId;
             if offset > 0 {
                 renumber_node(&mut tree.root, offset);
@@ -447,15 +447,56 @@ impl PolicyTree {
                     m.id += offset;
                 }
             }
+
+            // Namespace auto-generated sandbox names (e.g. __sandbox_0) by
+            // prefixing with the level index to prevent collisions across
+            // policy levels that independently generate the same names.
+            let prefix = format!("__L{level_idx}_");
+            let renames: Vec<(String, String)> = tree
+                .sandbox_policies
+                .keys()
+                .filter(|k| k.starts_with("__sandbox_"))
+                .map(|k| (k.clone(), format!("{prefix}{k}")))
+                .collect();
+
+            if !renames.is_empty() {
+                for (old, new) in &renames {
+                    if let Some(rules) = tree.sandbox_policies.remove(old) {
+                        tree.sandbox_policies.insert(new.clone(), rules);
+                    }
+                }
+                // Update references in node_meta.
+                for m in &mut tree.node_meta {
+                    if let Some(ref sb) = m.sandbox_name {
+                        if let Some((old, new)) = renames.iter().find(|(o, _)| o == sb) {
+                            m.sandbox_name = Some(new.clone());
+                            let _ = old; // suppress unused warning
+                        }
+                    }
+                }
+                // Update references in flat rule lists.
+                let rename_in_rules = |rules: &mut [CompiledRule]| {
+                    for r in rules.iter_mut() {
+                        if let Some(ref sb) = r.sandbox {
+                            if let Some((_, new)) = renames.iter().find(|(o, _)| o == sb) {
+                                r.sandbox = Some(new.clone());
+                            }
+                        }
+                    }
+                };
+                rename_in_rules(&mut tree.exec_rules);
+                rename_in_rules(&mut tree.fs_rules);
+                rename_in_rules(&mut tree.net_rules);
+                rename_in_rules(&mut tree.tool_rules);
+            }
+
             children.push(tree.root);
             combined_meta.extend(tree.node_meta);
             all_exec.extend(tree.exec_rules);
             all_fs.extend(tree.fs_rules);
             all_net.extend(tree.net_rules);
             all_tool.extend(tree.tool_rules);
-            for (name, rules) in tree.sandbox_policies {
-                all_sandbox.entry(name).or_insert(rules);
-            }
+            all_sandbox.extend(tree.sandbox_policies);
         }
 
         // Add root DenyOverrides node.
@@ -614,16 +655,15 @@ impl PolicyTree {
         };
 
         // Build sandbox policy if allowed.
-        let sandbox = if effect == Effect::Allow {
-            match sandbox_out {
-                Some(SandboxOut::Named(name)) => self
-                    .build_sandbox_policy(&name, cwd)
-                    .or_else(|| self.build_implicit_sandbox()),
-                Some(SandboxOut::Compiled(policy)) => Some(policy),
-                None => self.build_implicit_sandbox(),
-            }
-        } else {
-            None
+        let sandbox = match sandbox_out {
+            Some(SandboxOut::Named(name)) => self
+                .build_sandbox_policy(&name, cwd)
+                .or_else(|| self.build_implicit_sandbox()),
+            Some(SandboxOut::Compiled(policy)) => Some(policy),
+            None => match effect {
+                Effect::Allow => self.build_implicit_sandbox(),
+                _ => None,
+            },
         };
 
         PolicyDecision {

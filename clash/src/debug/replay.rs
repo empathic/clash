@@ -82,6 +82,9 @@ impl ReplayResult {
                     lines.push(format!("  [{}] {} -> {}", m.rule_index, m.description, eff));
                 }
             }
+            if let Some(sandbox) = &self.decision.sandbox {
+                lines.push(format!("{:#?}", sandbox));
+            }
             lines.push(String::new());
         }
 
