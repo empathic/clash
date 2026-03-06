@@ -1557,6 +1557,7 @@ fn compile_document_ast(doc: &PolicyDocument, env: &dyn EnvResolver) -> Result<D
     // (Inline sandbox policies were already compiled above.)
     let sandbox_names: Vec<String> = exec_rules
         .iter()
+        .chain(tool_rules.iter())
         .filter_map(|r| r.sandbox.clone())
         .collect();
     for sandbox_name in &sandbox_names {

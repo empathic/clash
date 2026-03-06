@@ -1609,4 +1609,86 @@ mod tests {
         let decision = tree.evaluate("Skill", &json!({"name": null}), "/home/user/project");
         assert_eq!(decision.effect, Effect::Deny);
     }
+
+    // -- Sandbox fs evaluation for file-backed tools --------------------------
+
+    #[test]
+    fn tool_sandbox_allows_read_under_cwd() {
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "cwd-fs", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "tool": { "name": {"or": [{"literal": "Read"}, {"literal": "Glob"}, {"literal": "Grep"}]} }, "sandbox": {"named": "cwd-fs"} } }
+    ]}
+  ]
+}"#;
+        let tree = compile_tree(source);
+
+        // Read inside cwd → allow (sandbox fs rule matches)
+        let decision = tree.evaluate(
+            "Read",
+            &json!({"file_path": "/home/user/project/src/main.rs"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+    }
+
+    #[test]
+    fn tool_sandbox_denies_read_outside_cwd() {
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "cwd-fs", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "tool": { "name": {"literal": "Read"} }, "sandbox": {"named": "cwd-fs"} } }
+    ]}
+  ]
+}"#;
+        let tree = compile_tree(source);
+
+        // Read outside cwd → deny (tool rule matches but sandbox fs denies)
+        let decision = tree.evaluate(
+            "Read",
+            &json!({"file_path": "/etc/passwd"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
+
+    #[test]
+    fn tool_sandbox_write_in_cwd() {
+        let source = r#"{
+  "schema_version": 4, "use": "main", "default_effect": "deny",
+  "policies": [
+    { "name": "rw-fs", "body": [
+      { "rule": { "effect": "allow", "fs": { "op": {"or": ["read", "write"]}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
+    ]},
+    { "name": "main", "body": [
+      { "rule": { "effect": "allow", "tool": { "name": {"or": [{"literal": "Write"}, {"literal": "Edit"}]} }, "sandbox": {"named": "rw-fs"} } }
+    ]}
+  ]
+}"#;
+        let tree = compile_tree(source);
+
+        // Write inside cwd → allow
+        let decision = tree.evaluate(
+            "Write",
+            &json!({"file_path": "/home/user/project/out.txt"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Allow);
+
+        // Write outside cwd → deny
+        let decision = tree.evaluate(
+            "Write",
+            &json!({"file_path": "/tmp/evil.sh"}),
+            "/home/user/project",
+        );
+        assert_eq!(decision.effect, Effect::Deny);
+    }
 }
