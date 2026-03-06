@@ -2092,7 +2092,14 @@ fn resolve_path_expr(expr: &PathExpr, env: &dyn EnvResolver) -> Result<String> {
         PathExpr::Join(parts) => {
             let mut result = String::new();
             for part in parts {
-                result.push_str(&resolve_path_expr(part, env)?);
+                let segment = resolve_path_expr(part, env)?;
+                if !result.is_empty()
+                    && !result.ends_with('/')
+                    && !segment.starts_with('/')
+                {
+                    result.push('/');
+                }
+                result.push_str(&segment);
             }
             Ok(result)
         }
