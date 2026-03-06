@@ -16,17 +16,24 @@ Help the user modify their clash policy by editing the `.star` policy file direc
 Policies are `.star` files defining a `main()` function that returns a `policy()` value. Rules go in the `rules = [...]` list:
 
 ```python
-load("@clash//std.star", "exe", "policy", "cwd", "home", "domains")
+load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home", "domains")
 
 def main():
-    return policy(default = deny, rules = [
-        exe("git").allow(),
-        exe("git", args = ["push"]).deny(),
+    fs_access = sandbox(fs=[
         cwd(follow_worktrees = True, read = allow, write = allow),
         home().child(".ssh", read = allow),
+    ])
+
+    return policy(default = deny, rules = [
+        tool(["Read", "Glob", "Grep"]).sandbox(fs_access).allow(),
+        tool(["Write", "Edit"]).sandbox(fs_access).allow(),
+        exe("git").allow(),
+        exe("git", args = ["push"]).deny(),
         domains({"github.com": allow}),
     ])
 ```
+
+**Important:** Filesystem path entries (`cwd`, `home`, `tempdir`, `path`) cannot appear directly in the `rules = [...]` list. They must be wrapped in a `sandbox()` and attached to a `tool()` or `exe()` rule.
 
 ## Steps
 
@@ -46,9 +53,10 @@ def main():
      ```python
      exe("git", args = ["push"]).deny()
      ```
-   - Allow reads under cwd:
+   - Allow filesystem access under cwd (via sandbox):
      ```python
-     cwd(follow_worktrees = True, read = allow)
+     fs_sandbox = sandbox(fs=[cwd(follow_worktrees = True, read = allow)])
+     tool(["Read", "Glob", "Grep"]).sandbox(fs_sandbox).allow()
      ```
    - Allow network access to a domain:
      ```python

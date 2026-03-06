@@ -20,7 +20,7 @@ Help the user file a bug report for clash. Gather a clear description of the pro
 3. **Preview the command.** Show the user the exact command that will be run before executing it:
 
    ```bash
-   clash bug "title here" --description "description here" --include-config --include-logs
+   clash bug --title "title here" --description "description here" --include-config --include-logs
    ```
 
    Get confirmation before proceeding.

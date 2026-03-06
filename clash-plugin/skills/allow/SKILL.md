@@ -37,13 +37,16 @@ Help the user add an **allow** rule to their clash policy by editing the `.star`
      ```python
      exe(["cargo", "rustc"]).allow()
      ```
-   - Filesystem read/write under cwd:
+   - Filesystem access under cwd (via sandbox on a tool rule):
      ```python
-     cwd(follow_worktrees = True, read = allow, write = allow)
+     fs_sandbox = sandbox(fs=[cwd(follow_worktrees = True, read = allow, write = allow)])
+     tool(["Read", "Glob", "Grep"]).sandbox(fs_sandbox).allow()
+     tool(["Write", "Edit"]).sandbox(fs_sandbox).allow()
      ```
-   - Filesystem access under a specific path:
+   - Filesystem access under a specific path (via sandbox):
      ```python
-     home().child(".ssh", read = allow)
+     ssh_sandbox = sandbox(fs=[home().child(".ssh", read = allow)])
+     exe("ssh").sandbox(ssh_sandbox).allow()
      ```
    - Network access to a domain:
      ```python
@@ -53,6 +56,8 @@ Help the user add an **allow** rule to their clash policy by editing the `.star`
      ```python
      tool().allow()
      ```
+
+   **Important:** Filesystem path entries (`cwd`, `home`, `tempdir`, `path`) cannot appear directly in the `rules = [...]` list. They must be wrapped in a `sandbox()` and attached to a `tool()` or `exe()` rule.
 
    Make sure any new builders used are added to the `load()` statement at the top of the file, e.g.:
    ```python

@@ -17,10 +17,10 @@ Run the init command:
 clash init
 ```
 
-If clash is already configured, `init` will interactively ask whether to reconfigure from scratch or update the existing configuration.
+The user can choose `user` (global) or `project` (repo-scoped). If clash is already configured, `init` will create alongside the existing configuration.
 
 ## Explain what was created
 
 After initialization, run `clash status` and summarize briefly what Claude can and cannot do.
 
-Suggest they run `clash edit` in their terminal for interactive configuration, or use `/clash:edit` to customize individual rules.
+Suggest they run `clash policy edit` to open their policy in $EDITOR, or use `/clash:edit` to customize individual rules.
