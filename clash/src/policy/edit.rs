@@ -100,12 +100,11 @@ pub fn find_conflicting_rule(doc: &PolicyDocument, policy_name: &str, rule: &Rul
     for def in &doc.policies {
         if def.name == policy_name {
             for item in &def.body {
-                if let PolicyItem::Rule(existing) = item {
-                    if existing.matcher == rule.matcher
-                        && (existing.effect != rule.effect || existing.sandbox != rule.sandbox)
-                    {
-                        return Some(existing.clone());
-                    }
+                if let PolicyItem::Rule(existing) = item
+                    && existing.matcher == rule.matcher
+                    && (existing.effect != rule.effect || existing.sandbox != rule.sandbox)
+                {
+                    return Some(existing.clone());
                 }
             }
         }

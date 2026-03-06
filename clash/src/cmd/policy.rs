@@ -369,7 +369,9 @@ fn handle_edit(scope: Option<String>) -> Result<()> {
     let level = match scope.as_deref() {
         Some("user") => PolicyLevel::User,
         Some("project") => PolicyLevel::Project,
-        Some(other) => anyhow::bail!("unknown scope: \"{other}\" (expected \"user\" or \"project\")"),
+        Some(other) => {
+            anyhow::bail!("unknown scope: \"{other}\" (expected \"user\" or \"project\")")
+        }
         None => ClashSettings::default_scope(),
     };
     let path = ClashSettings::policy_file_for_level(level)?;

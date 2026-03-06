@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use tracing::{debug, instrument, trace};
+use tracing::{debug, trace};
 
 use crate::policy::Effect;
 use crate::policy::ast::FsOp;
@@ -829,16 +829,16 @@ impl PolicyTree {
                         // don't record matches, but Sandbox nodes do).
                         let pre_len = matched.len();
                         let result = self.eval_node(body, ctx, matched, skipped, sandbox_out);
-                        if let Some(effect) = result {
-                            if matched.len() == pre_len {
-                                matched.push(RuleMatch {
-                                    rule_index: 0,
-                                    description: meta.description.clone(),
-                                    effect,
-                                    has_active_constraints: sandbox_out.is_some(),
-                                    node_id: Some(*id),
-                                });
-                            }
+                        if let Some(effect) = result
+                            && matched.len() == pre_len
+                        {
+                            matched.push(RuleMatch {
+                                rule_index: 0,
+                                description: meta.description.clone(),
+                                effect,
+                                has_active_constraints: sandbox_out.is_some(),
+                                node_id: Some(*id),
+                            });
                         }
                         result
                     }
@@ -880,16 +880,16 @@ impl PolicyTree {
                             let result =
                                 self.eval_node(&arm.body, ctx, matched, skipped, sandbox_out);
                             // Record a match if the body didn't already.
-                            if let Some(effect) = result {
-                                if matched.len() == pre_len {
-                                    matched.push(RuleMatch {
-                                        rule_index: 0,
-                                        description: meta.description.clone(),
-                                        effect,
-                                        has_active_constraints: sandbox_out.is_some(),
-                                        node_id: Some(*id),
-                                    });
-                                }
+                            if let Some(effect) = result
+                                && matched.len() == pre_len
+                            {
+                                matched.push(RuleMatch {
+                                    rule_index: 0,
+                                    description: meta.description.clone(),
+                                    effect,
+                                    has_active_constraints: sandbox_out.is_some(),
+                                    node_id: Some(*id),
+                                });
                             }
                             return result;
                         }

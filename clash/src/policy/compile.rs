@@ -431,116 +431,6 @@ fn compile_policy_item_to_node(
     }
 }
 
-/// Compile sandbox items (flat rules + match blocks) into a SandboxPolicy.
-fn compile_sandbox_items(items: &[SandboxItem], env: &dyn EnvResolver) -> Result<SandboxPolicy> {
-    let mut sandbox_rules: Vec<SandboxRule> = Vec::new();
-    let mut network = NetworkPolicy::Deny;
-
-    for item in items {
-        match item {
-            SandboxItem::Rule(rule) => {
-                // Same as v1 sandbox_from_rules logic.
-                let effect = match rule.effect {
-                    Effect::Allow => RuleEffect::Allow,
-                    Effect::Deny => RuleEffect::Deny,
-                    Effect::Ask => {
-                        bail!(":ask is not allowed in sandbox rules")
-                    }
-                };
-                compile_sandbox_rule_to_policy(
-                    &rule.matcher,
-                    effect,
-                    env,
-                    &mut sandbox_rules,
-                    &mut network,
-                )?;
-            }
-            SandboxItem::Match(block) => {
-                compile_match_to_sandbox(block, env, &mut sandbox_rules, &mut network)?;
-            }
-        }
-    }
-
-    // Add temp directory rules (reuse common logic).
-    for path in DecisionTree::temp_directory_paths() {
-        sandbox_rules.push(SandboxRule {
-            effect: RuleEffect::Allow,
-            caps: Cap::all(),
-            path,
-            path_match: PathMatch::Subpath,
-        });
-    }
-
-    Ok(SandboxPolicy {
-        default: Cap::READ | Cap::EXECUTE,
-        rules: sandbox_rules,
-        network,
-    })
-}
-
-/// Compile a capability matcher into sandbox rules/network policy.
-fn compile_sandbox_rule_to_policy(
-    matcher: &CapMatcher,
-    effect: RuleEffect,
-    env: &dyn EnvResolver,
-    sandbox_rules: &mut Vec<SandboxRule>,
-    network: &mut NetworkPolicy,
-) -> Result<()> {
-    match matcher {
-        CapMatcher::Fs(m) => {
-            let caps = op_pattern_to_sandbox_caps(&m.op);
-            match &m.path {
-                Some(pf) => {
-                    let compiled_pf = compile_path_filter(pf, env)?;
-                    path_filter_to_sandbox_rules_compiled(
-                        &compiled_pf,
-                        effect,
-                        caps,
-                        sandbox_rules,
-                    );
-                }
-                None => {
-                    sandbox_rules.push(SandboxRule {
-                        effect,
-                        caps,
-                        path: "/".to_string(),
-                        path_match: PathMatch::Subpath,
-                    });
-                }
-            }
-        }
-        CapMatcher::Net(m) => {
-            if effect == RuleEffect::Allow {
-                let compiled_domain = compile_pattern(&m.domain)?;
-                match &compiled_domain {
-                    CompiledPattern::Any => {
-                        *network = NetworkPolicy::Allow;
-                    }
-                    _ => {
-                        if *network != NetworkPolicy::Allow {
-                            let mut domains = match network {
-                                NetworkPolicy::AllowDomains(d) => d.clone(),
-                                _ => Vec::new(),
-                            };
-                            DecisionTree::extract_domains_from_pattern(
-                                &compiled_domain,
-                                &mut domains,
-                            );
-                            if !domains.is_empty() {
-                                *network = NetworkPolicy::AllowDomains(domains);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        CapMatcher::Exec(_) | CapMatcher::Tool(_) => {
-            // Sandbox restricts fs/net only.
-        }
-    }
-    Ok(())
-}
-
 /// Compile a match block inside a sandbox into SandboxPolicy components.
 fn compile_match_to_sandbox(
     block: &MatchBlock,
@@ -776,29 +666,6 @@ fn action_pattern_to_caps_from_pat(pat: &Pattern) -> Result<Cap> {
     }
 }
 
-/// Convert an OpPattern to sandbox Cap.
-fn op_pattern_to_sandbox_caps(op: &OpPattern) -> Cap {
-    match op {
-        OpPattern::Any => Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE,
-        OpPattern::Single(FsOp::Read) => Cap::READ,
-        OpPattern::Single(FsOp::Write) => Cap::WRITE | Cap::CREATE,
-        OpPattern::Single(FsOp::Create) => Cap::CREATE,
-        OpPattern::Single(FsOp::Delete) => Cap::DELETE,
-        OpPattern::Or(ops) => {
-            let mut caps = Cap::empty();
-            for op in ops {
-                caps |= match op {
-                    FsOp::Read => Cap::READ,
-                    FsOp::Write => Cap::WRITE | Cap::CREATE,
-                    FsOp::Create => Cap::CREATE,
-                    FsOp::Delete => Cap::DELETE,
-                };
-            }
-            caps
-        }
-    }
-}
-
 /// Convert a CompiledPathFilter into SandboxRules.
 fn path_filter_to_sandbox_rules_compiled(
     pf: &CompiledPathFilter,
@@ -859,26 +726,26 @@ fn resolve_sandbox_ref(
                 );
             }
             // Compile the named sandbox policy if not already done.
-            if !sandbox_policies.contains_key(name) {
-                if let Some(body) = policies.get(name.as_str()) {
-                    let mut rules = Vec::new();
-                    for item in *body {
-                        if let PolicyItem::Rule(rule) = item {
-                            let sp = Specificity::from_matcher(&rule.matcher);
-                            let cm = compile_matcher(&rule.matcher, env)?;
-                            rules.push(CompiledRule {
-                                effect: rule.effect,
-                                matcher: cm,
-                                source: rule.clone(),
-                                specificity: sp,
-                                sandbox: None,
-                                origin_policy: None,
-                                origin_level: None,
-                            });
-                        }
+            if !sandbox_policies.contains_key(name)
+                && let Some(body) = policies.get(name.as_str())
+            {
+                let mut rules = Vec::new();
+                for item in *body {
+                    if let PolicyItem::Rule(rule) = item {
+                        let sp = Specificity::from_matcher(&rule.matcher);
+                        let cm = compile_matcher(&rule.matcher, env)?;
+                        rules.push(CompiledRule {
+                            effect: rule.effect,
+                            matcher: cm,
+                            source: rule.clone(),
+                            specificity: sp,
+                            sandbox: None,
+                            origin_policy: None,
+                            origin_level: None,
+                        });
                     }
-                    sandbox_policies.insert(name.clone(), rules);
                 }
+                sandbox_policies.insert(name.clone(), rules);
             }
             Ok(Some(name.clone()))
         }
@@ -1214,7 +1081,7 @@ fn is_constraint_observable(obs: &Observable) -> bool {
             | Observable::FsAction
             | Observable::FsPath
             | Observable::FsExists
-    ) || matches!(obs, Observable::Tuple(elems) if elems.iter().any(|e| is_constraint_observable(e)))
+    ) || matches!(obs, Observable::Tuple(elems) if elems.iter().any(is_constraint_observable))
 }
 
 /// Compile an AST Observable to an IR Observable.

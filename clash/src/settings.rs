@@ -344,11 +344,6 @@ impl ClashSettings {
         Ok(Some(path))
     }
 
-    /// Path to a legacy YAML policy file (pre-sexp migration).
-    pub fn legacy_policy_file() -> Result<PathBuf> {
-        Self::settings_dir().map(|d| d.join("policy.yaml"))
-    }
-
     /// Return the policy parse/compile error, if any.
     pub fn policy_error(&self) -> Option<&str> {
         self.policy_error.as_deref()

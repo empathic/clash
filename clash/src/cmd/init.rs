@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
-use dialoguer::Confirm;
-use tracing::{Level, info, instrument, warn};
+use tracing::{Level, error, info, instrument, warn};
 
 use crate::settings::{ClashSettings, DEFAULT_POLICY};
 use crate::style;
@@ -66,11 +65,6 @@ fn prompt_scope() -> Result<&'static str> {
 }
 
 /// Initialize or reconfigure the user-level policy at `~/.clash/policy.star`.
-///
-/// - If a policy already exists, offers to reconfigure via the wizard.
-/// - If only a legacy YAML policy exists, migrates it via `claude -p`.
-/// - Otherwise, writes the default policy, installs the plugin, configures
-///   bypassPermissions, and launches the wizard.
 fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     // Always ensure settings.json records clash as an enabled plugin.
     // The `claude plugin install` command updates Claude Code's internal registry
@@ -112,21 +106,6 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
         return Ok(());
     }
 
-    let yaml_path = ClashSettings::legacy_policy_file()?;
-    if yaml_path.exists()
-        && yaml_path.is_file()
-        && Confirm::new()
-            .with_prompt(
-                "An existing policy.yaml was found. Should we attempt to migrate your settings?",
-            )
-            .default(false)
-            .interact()
-            .unwrap_or(false)
-    {
-        migrate_yaml_policy(&yaml_path, &policy_path)?;
-        return super::policy::open_in_editor(&policy_path);
-    }
-
     // Fresh install — write default policy.
     std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
     std::fs::write(&policy_path, DEFAULT_POLICY)?;
@@ -135,7 +114,7 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     let plugin_installed = match install_plugin() {
         Ok(()) => true,
         Err(e) => {
-            warn!(error = %e, "Could not install clash plugin");
+            error!(error = %e, "Could not install clash plugin");
             eprintln!(
                 "{} Could not install the clash plugin: {e}\n  \
                  You can install it manually later:\n    \
@@ -224,20 +203,6 @@ fn run_init_project() -> Result<()> {
         style::green_bold("✓"),
         policy_path.display()
     );
-
-    // Open the policy file in $EDITOR so the user can customize immediately.
-    super::policy::open_in_editor(&policy_path)
-}
-
-/// Migrate a legacy YAML policy by writing the default Starlark policy.
-///
-/// Legacy YAML/s-expr migration is no longer supported. We preserve the old
-/// file and write the default policy instead.
-fn migrate_yaml_policy(_yaml_path: &std::path::Path, policy_path: &std::path::Path) -> Result<()> {
-    eprintln!("Legacy YAML/s-expr policy migration is no longer supported.");
-    eprintln!("Writing default policy instead.");
-    std::fs::create_dir_all(policy_path.parent().unwrap())?;
-    std::fs::write(policy_path, DEFAULT_POLICY)?;
     Ok(())
 }
 

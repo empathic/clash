@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use tracing::{debug, info, trace};
+use tracing::{debug, trace};
 
 use crate::policy::ast::FsOp;
 use crate::policy::decision_tree::{CompiledMatcher, CompiledRule, DecisionTree};

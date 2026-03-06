@@ -9,8 +9,8 @@ use std::fmt::{self, Display};
 use allocative::Allocative;
 use serde_json::Value as JsonValue;
 use starlark::starlark_simple_value;
-use starlark::values::dict::DictRef;
 use starlark::values::dict::Dict;
+use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 use starlark::values::{
     Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace, Value, starlark_value,
@@ -93,7 +93,12 @@ fn json_to_starlark<'v>(json: &JsonValue, heap: &'v Heap) -> anyhow::Result<Valu
         JsonValue::Object(map) => {
             let dict = Dict::new(
                 map.iter()
-                    .map(|(k, v)| Ok((heap.alloc_str(k).to_value().get_hashed().unwrap(), json_to_starlark(v, heap)?)))
+                    .map(|(k, v)| {
+                        Ok((
+                            heap.alloc_str(k).to_value().get_hashed().unwrap(),
+                            json_to_starlark(v, heap)?,
+                        ))
+                    })
                     .collect::<anyhow::Result<_>>()?,
             );
             Ok(heap.alloc(dict))
@@ -122,9 +127,9 @@ pub fn starlark_to_json(value: Value) -> anyhow::Result<JsonValue> {
     if let Some(dict) = DictRef::from_value(value) {
         let mut map = serde_json::Map::new();
         for (k, v) in dict.iter() {
-            let key = k
-                .unpack_str()
-                .ok_or_else(|| anyhow::anyhow!("dict keys must be strings, got {}", k.get_type()))?;
+            let key = k.unpack_str().ok_or_else(|| {
+                anyhow::anyhow!("dict keys must be strings, got {}", k.get_type())
+            })?;
             map.insert(key.to_string(), starlark_to_json(v)?);
         }
         return Ok(JsonValue::Object(map));

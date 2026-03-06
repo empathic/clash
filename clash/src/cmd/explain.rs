@@ -97,10 +97,10 @@ pub fn run(json_output: bool, tool: Option<String>, input_arg: Option<String>) -
     // each list at that index for a matching description.
     let find_origin_level = |m: &crate::policy::ir::RuleMatch| -> Option<&PolicyLevel> {
         // v2 tree-native: direct lookup via node_id
-        if let Some(nid) = m.node_id {
-            if let Some(meta) = tree.node_meta.get(nid as usize) {
-                return meta.origin_level.as_ref();
-            }
+        if let Some(nid) = m.node_id
+            && let Some(meta) = tree.node_meta.get(nid as usize)
+        {
+            return meta.origin_level.as_ref();
         }
         // v1 fallback: search flat rule lists by index + description
         let rule_lists: &[&[crate::policy::decision_tree::CompiledRule]] = &[

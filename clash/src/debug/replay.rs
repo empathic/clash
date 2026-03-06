@@ -195,10 +195,10 @@ impl ReplayResult {
     /// Look up the origin PolicyLevel for a matched rule.
     fn find_origin_level(&self, m: &crate::policy::ir::RuleMatch) -> Option<&PolicyLevel> {
         // v2 tree-native: direct lookup via node_id
-        if let Some(nid) = m.node_id {
-            if let Some(meta) = self.tree.node_meta.get(nid as usize) {
-                return meta.origin_level.as_ref();
-            }
+        if let Some(nid) = m.node_id
+            && let Some(meta) = self.tree.node_meta.get(nid as usize)
+        {
+            return meta.origin_level.as_ref();
         }
         // v1 fallback: search flat rule lists by index + description
         use crate::policy::decision_tree::CompiledRule;

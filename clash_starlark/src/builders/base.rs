@@ -60,10 +60,7 @@ fn base_policy_methods(builder: &mut starlark::environment::MethodsBuilder) {
         if let Some(rule) = binding.downcast_ref::<RuleValue>() {
             result.rules.push(rule.clone());
         } else {
-            anyhow::bail!(
-                ".extend() expects a rule value, got {}",
-                binding.get_type()
-            );
+            anyhow::bail!(".extend() expects a rule value, got {}", binding.get_type());
         }
 
         Ok(result)
@@ -100,10 +97,7 @@ impl BasePolicyValue {
                 if let Some(rule) = item.downcast_ref::<RuleValue>() {
                     rule_vec.push(rule.clone());
                 } else {
-                    anyhow::bail!(
-                        "policy rules must be rule values, got {}",
-                        item.get_type()
-                    );
+                    anyhow::bail!("policy rules must be rule values, got {}", item.get_type());
                 }
             }
         }
