@@ -38,12 +38,12 @@ pub struct ClashConfig {
     #[serde(default)]
     pub policy_raw: Option<String>,
 
-    /// Raw s-expression string written to ~/.clash/policy.sexpr (v2 format).
-    /// When present, this is the v2 policy engine input.
+    /// Starlark policy string written to ~/.clash/policy.star.
+    /// When present, this is the primary policy engine input.
     #[serde(default)]
     pub policy_sexpr: Option<String>,
 
-    /// Raw s-expression string written to <project>/.clash/policy.sexpr (project-level).
+    /// Starlark policy string written to <project>/.clash/policy.star (project-level).
     /// When present alongside `policy_sexpr`, enables multi-level policy testing.
     #[serde(default)]
     pub project_policy_sexpr: Option<String>,

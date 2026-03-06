@@ -76,7 +76,7 @@ pub struct ApprovalAdvice {
     pub noun: String,
     /// The tool name that was approved.
     pub tool_name: String,
-    /// The suggested allow rule as an s-expression string.
+    /// The suggested allow rule as a JSON string.
     pub suggested_rule: String,
     /// The full CLI command to add this as a session rule.
     pub cli_command: String,
@@ -454,7 +454,7 @@ mod tests {
         );
 
         // Session policy file should NOT exist (we no longer write automatically).
-        let policy_path = session_dir.join("policy.sexpr");
+        let policy_path = session_dir.join("policy.star");
         assert!(
             !policy_path.exists(),
             "session policy should NOT be created automatically"

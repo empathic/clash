@@ -58,7 +58,7 @@ files you specify.
 <div class="cards">
   <div class="card card--green">
     <h3>Rule</h3>
-    <p>An effect paired with a capability matcher. <code>{ "effect": "allow", "exec": { "bin": { "literal": "git" } } }</code> lets the agent run any git command. <code>{ "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } }</code> blocks pushes. Rules are sorted by specificity — more specific rules always win.</p>
+    <p>An effect paired with a capability matcher. <code>exe("git").allow()</code> lets the agent run any git command. <code>exe("git", args=["push"]).deny()</code> blocks pushes. Rules are sorted by specificity — more specific rules always win.</p>
   </div>
   <div class="card card--amber">
     <h3>Domain</h3>
@@ -106,8 +106,25 @@ files you specify.
 
 ## A minimal policy
 
+```python
+# ~/.clash/policy.star (user level)
+load("@clash//std.star", "exe", "policy", "cwd", "domains")
+
+def main():
+    return policy(default = ask, rules = [
+        cwd(follow_worktrees = True, read = allow, write = allow),
+        exe("cargo").allow(),
+        exe("git").allow(),
+        exe("git", args = ["push"]).deny(),
+        exe("git", args = ["reset", "--hard"]).deny(),
+        domains({"github.com": allow}),
+    ])
+```
+
+<details>
+<summary>Compiled JSON IR</summary>
+
 ```json
-// ~/.clash/policy.json (user level)
 {
   "schema_version": 4,
   "use": "main",
@@ -134,6 +151,7 @@ files you specify.
   ]
 }
 ```
+</details>
 
 Three effects: <span class="badge badge--allow">allow</span> auto-approves, <span class="badge badge--deny">deny</span> blocks, <span class="badge badge--ask">ask</span> prompts you. Deny always wins over allow. More specific rules beat less specific. Edits take effect immediately — no restart needed.
 

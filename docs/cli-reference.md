@@ -38,8 +38,8 @@ clash init [SCOPE] [OPTIONS]
 
 **What it does:**
 
-- **`clash init user`** — Creates `~/.clash/policy.json` with a safe default policy, installs the Claude Code plugin, configures Claude Code so clash is the sole permission handler (`bypassPermissions: true` and `permissions.defaultMode: "bypassPermissions"`), and installs the clash status line.
-- **`clash init project`** — Creates `.clash/policy.json` in the current repository root with a minimal deny-all policy.
+- **`clash init user`** — Creates `~/.clash/policy.star` with a safe default policy, installs the Claude Code plugin, configures Claude Code so clash is the sole permission handler (`bypassPermissions: true` and `permissions.defaultMode: "bypassPermissions"`), and installs the clash status line.
+- **`clash init project`** — Creates `.clash/policy.star` in the current repository root with a minimal deny-all policy.
 
 Only one scope is initialized per invocation. When no scope is given, clash explains both options and asks you to choose.
 
@@ -190,7 +190,7 @@ When no `--file` is given, validates all active policy levels (user, project) an
 clash policy validate
 
 # Validate a specific file
-clash policy validate --file ~/.clash/policy.json
+clash policy validate --file ~/.clash/policy.star
 
 # JSON output for scripting
 clash policy validate --json
@@ -285,7 +285,7 @@ clash launch [OPTIONS] [ARGS]...
 
 | Flag | Description |
 |------|-------------|
-| `--policy <POLICY>` | Path to policy file (default: `~/.clash/policy.json`) |
+| `--policy <POLICY>` | Path to policy file (default: `~/.clash/policy.star`) |
 
 **Arguments:**
 
@@ -545,5 +545,4 @@ After step 1, Claude Code reverts to its built-in permission model immediately. 
 ## See Also
 
 - [Policy Writing Guide](./policy-guide.md) — how to write policy rules
-- [Policy Grammar](./policy-grammar.md) — formal EBNF grammar
 - [Policy Semantics](./policy-semantics.md) — evaluation algorithm

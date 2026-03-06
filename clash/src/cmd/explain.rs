@@ -82,7 +82,7 @@ pub fn run(json_output: bool, tool: Option<String>, input_arg: Option<String>) -
                 );
             } else {
                 eprintln!("No compiled policy available.");
-                eprintln!("Create ~/.clash/policy.sexpr or run `clash init`.");
+                eprintln!("Create ~/.clash/policy.star or run `clash init`.");
             }
             return Ok(());
         }

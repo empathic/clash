@@ -1,7 +1,7 @@
 //! Transactional policy editor — line-oriented protocol for pipe/interactive use.
 //!
-//! **Deprecated**: The policy shell relied on s-expression parsing which has been
-//! removed. Policies are now authored as JSON. This module is retained as a stub
+//! **Deprecated**: The policy shell relied on a legacy parsing format which has been
+//! removed. Policies are now authored as Starlark (.star) files compiled to JSON. This module is retained as a stub
 //! so that callers (`cmd::init`, `cmd::policy`, `main.rs`) still compile; every
 //! entry point returns an error directing users to edit the JSON file directly.
 

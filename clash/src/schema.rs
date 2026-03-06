@@ -1,6 +1,6 @@
 //! Self-describing schema for the policy format.
 //!
-//! Provides a structured representation of the s-expression policy
+//! Provides a structured representation of the Starlark/JSON policy
 //! language and companion YAML configuration. Used by `clash policy schema`
 //! to make the CLI self-documenting.
 
@@ -40,7 +40,7 @@ pub struct SchemaSection {
     pub fields: Vec<SchemaField>,
 }
 
-/// Description of the s-expression rule syntax.
+/// Description of the JSON rule syntax.
 #[derive(Debug, Clone, Serialize)]
 pub struct RuleSyntax {
     /// Format string showing rule structure.
@@ -79,7 +79,7 @@ pub fn policy_schema() -> PolicySchema {
 fn policy_section() -> SchemaSection {
     SchemaSection {
         key: "policy",
-        description: "S-expression policy file (policy.sexpr) — defines rules using (effect (capability ...)) forms",
+        description: "Starlark policy file (policy.star) — defines rules compiled to JSON IR",
         fields: vec![
             SchemaField {
                 key: "(default effect \"policy-name\")",

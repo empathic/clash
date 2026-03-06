@@ -38,8 +38,8 @@ clash init [SCOPE] [OPTIONS]
 
 **What it does:**
 
-- **`clash init user`** — Creates `~/.clash/policy.json` with a safe default policy, installs the Claude Code plugin, configures Claude Code so clash is the sole permission handler, and installs the status line.
-- **`clash init project`** — Creates `.clash/policy.json` in the current repo root with a minimal deny-all policy.
+- **`clash init user`** — Creates `~/.clash/policy.star` with a safe default policy, installs the Claude Code plugin, configures Claude Code so clash is the sole permission handler, and installs the status line.
+- **`clash init project`** — Creates `.clash/policy.star` in the current repo root with a minimal deny-all policy.
 
 ```bash
 clash init              # interactive — prompts you to choose

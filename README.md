@@ -107,6 +107,8 @@ Clash supports three policy levels, each automatically included and evaluated in
 
 ```python
 # ~/.clash/policy.star
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
+
 def main():
     cwd_access = sandbox(
         default = deny,
@@ -115,8 +117,8 @@ def main():
     return policy(
         default = ask,
         rules = [
-            exe("cargo", sandbox = cwd_access),
-            exe("git", sandbox = cwd_access),
+            exe("cargo").sandbox(cwd_access).allow(),
+            exe("git").sandbox(cwd_access).allow(),
         ],
     )
 ```
@@ -163,13 +165,14 @@ Starlark replaces JSON's named policy blocks and `include` with standard `load()
 
 ```python
 load("@clash//rust.star", "rust_sandbox")
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 
 def main():
     return policy(
         default = deny,
         rules = [
-            match(exe = ["rustc", "cargo"], sandbox = rust_sandbox),
-            exe("git", sandbox = sandbox(default = deny, fs = [cwd(read = allow)])),
+            exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow(),
+            exe("git").sandbox(sandbox(default = deny, fs = [cwd(read = allow)])).allow(),
         ],
     )
 ```
@@ -181,6 +184,8 @@ The `@clash//` prefix loads from the built-in standard library, which includes s
 Exec rules can carry sandbox constraints that clash compiles into OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS):
 
 ```python
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "path", "tempdir")
+
 def main():
     cargo_box = sandbox(
         default = deny,
@@ -191,7 +196,7 @@ def main():
         ],
         net = allow,
     )
-    return policy(default = deny, rules = [exe("cargo", sandbox = cargo_box)])
+    return policy(default = deny, rules = [exe("cargo").sandbox(cargo_box).allow()])
 ```
 
 Even if a command is allowed by policy, the sandbox ensures it can only access the paths you specify.

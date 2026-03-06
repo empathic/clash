@@ -38,7 +38,76 @@ The plugin registers four hook types via `hooks/hooks.json`:
 | **PermissionRequest** | Responds to permission prompts on behalf of the user |
 | **Notification** | Handles notification events (permission prompts, idle detection, etc.) |
 
-Policy rules are read from `~/.clash/policy.json`. See the [Policy Writing Guide](../docs/policy-guide.md) for syntax.
+## Policy Basics
+
+Policies are written in Starlark (`.star` files), a Python-like configuration language. The `.star` file defines a `main()` function that returns a policy. Policy files are read from `~/.clash/policy.star` (user-level) or `<project>/.clash/policy.star` (project-level). JSON (`.json`) is also supported as raw IR.
+
+### Policy File Structure
+
+```python
+# ~/.clash/policy.star
+load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home", "domains")
+
+def main():
+    return policy(default = deny, rules = [
+        cwd(follow_worktrees = True, read = allow, write = allow),
+        exe("git").allow(),
+        exe("git", args = ["push"]).deny(),
+        home().child(".ssh", read = allow),
+        tool().allow(),
+        domains({"github.com": allow}),
+    ])
+```
+
+### Rule Syntax Quick Reference
+
+| Pattern | Starlark |
+|---------|----------|
+| Allow a binary | `exe("git").allow()` |
+| Deny a subcommand | `exe("git", args = ["push"]).deny()` |
+| Ask for confirmation | `exe("git", args = ["commit"]).ask()` |
+| Multiple binaries | `exe(["cargo", "rustc"]).allow()` |
+| Filesystem (cwd) | `cwd(read = allow, write = allow)` |
+| Filesystem (home subdir) | `home().child(".ssh", read = allow)` |
+| Worktree-aware cwd | `cwd(follow_worktrees = True, read = allow, write = allow)` |
+| Network domains | `domains({"github.com": allow})` |
+| Tool access | `tool().allow()` |
+| Sandbox on exec | `exe("cargo").sandbox(sb).allow()` |
+
+### Sandbox Definition
+
+```python
+sb = sandbox(
+    default = deny,
+    fs = [cwd(follow_worktrees = True, read = allow, write = allow)],
+    net = allow,
+)
+exe("cargo").sandbox(sb).allow()
+```
+
+Note: `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
+
+### Policy File Paths
+
+- User-level: `~/.clash/policy.star`
+- Project-level: `<project>/.clash/policy.star`
+- Session-scoped rules can be added via `/clash:allow` or `/clash:deny` skills during a session
+
+### Fixing Sandbox Errors
+
+If a command fails because of sandbox restrictions, update the policy's sandbox definition to grant the needed access:
+
+```python
+# If cargo needs network access, add net = allow to its sandbox
+cargo_env = sandbox(
+    default = deny,
+    fs = [cwd(follow_worktrees = True, read = allow, write = allow)],
+    net = allow,
+)
+exe("cargo").sandbox(cargo_env).allow()
+```
+
+See the [Policy Writing Guide](../docs/policy-guide.md) for full syntax.
 
 ## Skills
 

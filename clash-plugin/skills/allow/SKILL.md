@@ -2,7 +2,7 @@
 name: allow
 description: Add an allow rule to the clash policy
 ---
-Help the user add an **allow** rule to their clash policy by editing the JSON policy file directly.
+Help the user add an **allow** rule to their clash policy by editing the `.star` policy file directly.
 
 ## Steps
 
@@ -12,46 +12,52 @@ Help the user add an **allow** rule to their clash policy by editing the JSON po
    - If unsure, ask the user what they want to allow.
 
 2. **Find the policy file** to edit:
-   - Project-level: `<project>/.clash/policy.json`
-   - User-level: `~/.clash/policy.json`
+   - Project-level: `<project>/.clash/policy.star` (or `policy.json`)
+   - User-level: `~/.clash/policy.star` (or `policy.json`)
    - Prefer the project-level file if it exists; fall back to user-level.
+   - Prefer `.star` files over `.json` files.
 
 3. **Read the current policy file** to understand the existing structure.
 
 4. **Confirm with the user** before making any changes:
-   - Show the exact rule that will be added (as a JSON snippet)
+   - Show the exact rule that will be added (as a Starlark snippet)
    - Explain what the rule means in plain English
 
-5. **Edit the JSON policy file** to add the rule into the appropriate policy body. Common rule patterns:
+5. **Edit the policy file** to add the rule into the `rules = [...]` list in the `main()` function. Common rule patterns:
 
    - Exec (all git commands):
-     ```json
-     { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
+     ```python
+     exe("git").allow()
      ```
    - Exec with subcommand (git push):
-     ```json
-     { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
+     ```python
+     exe("git", args = ["push"]).allow()
      ```
-   - Filesystem read under cwd:
-     ```json
-     { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } }
+   - Multiple binaries:
+     ```python
+     exe(["cargo", "rustc"]).allow()
      ```
-   - Filesystem read/write/create under cwd:
-     ```json
-     { "rule": { "effect": "allow", "fs": { "op": { "or": ["read", "write", "create"] }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } }
+   - Filesystem read/write under cwd:
+     ```python
+     cwd(follow_worktrees = True, read = allow, write = allow)
      ```
    - Filesystem access under a specific path:
-     ```json
-     { "rule": { "effect": "allow", "fs": { "path": { "subpath": { "path": { "literal": "/tmp" } } } } } }
+     ```python
+     home().child(".ssh", read = allow)
      ```
    - Network access to a domain:
-     ```json
-     { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
+     ```python
+     domains({"github.com": allow})
      ```
    - Allow all tool use:
-     ```json
-     { "rule": { "effect": "allow", "tool": {} } }
+     ```python
+     tool().allow()
      ```
+
+   Make sure any new builders used are added to the `load()` statement at the top of the file, e.g.:
+   ```python
+   load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home", "domains")
+   ```
 
 6. **Validate the change** with:
    ```bash
@@ -63,7 +69,7 @@ Help the user add an **allow** rule to their clash policy by editing the JSON po
 
 ## Safety guidelines
 
-- Always show the user the exact JSON change before applying it
+- Always show the user the exact change before applying it
 - Never suggest rules that override intentional deny rules without explicit user consent
 - Never add a broad match-all allow rule without explaining the security implications and getting explicit user consent
 - If the user asks to allow something that is currently denied by an explicit deny rule, warn them that deny rules take precedence and they may need to remove the deny rule first

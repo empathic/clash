@@ -6,21 +6,31 @@ permalink: /policy/
 ---
 
 <h1 class="page-title">Policy Language</h1>
-<p class="page-desc">Everything you need to write clash policies. See also the <a href="/policy/grammar/">formal grammar</a>.</p>
+<p class="page-desc">Everything you need to write clash policies. Policies are written in Starlark (<code>.star</code> files) and compiled to JSON IR.</p>
 
 ## Effects
 
-Every rule starts with an effect:
+Every rule ends with an effect:
 
 - <span class="badge badge--allow">allow</span> — auto-approve the action
 - <span class="badge badge--deny">deny</span> — block the action
 - <span class="badge badge--ask">ask</span> — prompt the user for confirmation
+
+```python
+exe("git").allow()
+exe("git", args = ["push"]).deny()
+exe("git", args = ["commit"]).ask()
+```
+
+<details>
+<summary>JSON IR</summary>
 
 ```json
 { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
 { "rule": { "effect": "deny",  "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
 { "rule": { "effect": "ask",   "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "commit" }, { "any": null }] } } }
 ```
+</details>
 
 **Deny always wins.** When multiple rules match, deny beats ask beats allow. More specific rules take precedence over less specific rules.
 
@@ -32,33 +42,64 @@ Clash controls three capability domains. Rules target capabilities, not tool nam
 
 ### Exec — shell commands
 
+```python
+exe("git").allow()
+exe("git", args = ["push"]).deny()
+exe("cargo", args = ["test"]).allow()
+exe(["cargo", "rustc"]).allow()  # multiple binaries
+```
+
+<details>
+<summary>JSON IR</summary>
+
 ```json
 { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
 { "rule": { "effect": "deny",  "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
 { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" }, "args": [{ "literal": "test" }, { "any": null }] } } }
 ```
+</details>
 
-The `bin` field matches the binary name. The `args` array matches positional arguments. More arguments = more specific.
+The `exe()` builder matches binary names. The `args` parameter matches positional arguments. More arguments = more specific.
 
 **Scope:** Exec rules evaluate the top-level command the agent invokes. They do not apply to child processes spawned by that command. Sandbox restrictions on filesystem and network access *are* enforced on all child processes at the kernel level.
 
 ### Fs — file operations
+
+```python
+cwd(read = allow)                          # read under working directory
+cwd(read = allow, write = allow)           # read + write under cwd
+cwd(follow_worktrees = True, read = allow) # git worktree-aware
+home().child(".ssh", read = allow)          # read under ~/.ssh
+```
+
+<details>
+<summary>JSON IR</summary>
 
 ```json
 { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
 { "rule": { "effect": "allow", "fs": { "op": { "or": ["read", "write"] }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
 { "rule": { "effect": "deny",  "fs": { "op": { "single": "write" }, "path": { "static": ".env" } } } }
 ```
+</details>
 
 The fs domain maps to agent tools: `Read` / `Glob` / `Grep` → `fs read`, `Write` / `Edit` → `fs write`.
 
 ### Net — network access
+
+```python
+domains({"github.com": allow})
+domains({"github.com": allow, "crates.io": allow})
+```
+
+<details>
+<summary>JSON IR</summary>
 
 ```json
 { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
 { "rule": { "effect": "allow", "net": { "domain": { "or": [{ "literal": "github.com" }, { "literal": "crates.io" }] } } } }
 { "rule": { "effect": "deny",  "net": { "domain": { "regex": ".*\\.evil\\.com" } } } }
 ```
+</details>
 
 The net domain maps to: `WebFetch` → `net` with the URL's domain, `WebSearch` → `net` with wildcard domain.
 
@@ -178,7 +219,35 @@ If two rules have the same specificity but different effects, the compiler rejec
 
 ## Policy composition
 
-Break policies into reusable pieces with `{ "include": "policy-name" }`:
+In Starlark, break policies into reusable pieces using `load()` to import from other `.star` files:
+
+```python
+# ~/.clash/safe_git.star
+load("@clash//std.star", "exe")
+
+safe_git_rules = [
+    exe("git", args = ["push"]).deny(),
+    exe("git", args = ["reset"]).deny(),
+    exe("git", args = ["commit"]).ask(),
+    exe("git").allow(),
+]
+```
+
+```python
+# ~/.clash/policy.star
+load("@clash//std.star", "exe", "policy", "cwd", "domains")
+load("safe_git.star", "safe_git_rules")
+
+def main():
+    return policy(default = deny, rules = [
+        cwd(follow_worktrees = True, read = allow, write = allow),
+        *safe_git_rules,
+        domains({"github.com": allow, "crates.io": allow}),
+    ])
+```
+
+<details>
+<summary>JSON IR (include-based composition)</summary>
 
 ```json
 {
@@ -213,8 +282,9 @@ Break policies into reusable pieces with `{ "include": "policy-name" }`:
   ]
 }
 ```
+</details>
 
-Include inlines the referenced policy's rules. Circular includes are rejected at compile time.
+Starlark `load()` imports values from other `.star` files. In JSON IR, `{ "include": "name" }` inlines a referenced policy's rules. Circular references are rejected at compile time.
 
 ---
 
@@ -222,9 +292,28 @@ Include inlines the referenced policy's rules. Circular includes are rejected at
 
 Allowed exec rules can carry a sandbox that constrains what the spawned process can access at the kernel level (Landlock on Linux, Seatbelt on macOS).
 
-### Named sandbox
+### Defining a sandbox
 
-For reuse across multiple exec rules, define a sandbox policy and reference it by name:
+In Starlark, use the `sandbox()` builder and attach it to exec rules with `.sandbox()`:
+
+```python
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
+
+def main():
+    cargo_env = sandbox(
+        default = deny,
+        fs = [cwd(read = allow, write = allow)],
+        net = allow,
+    )
+    return policy(default = deny, rules = [
+        exe("cargo").sandbox(cargo_env).allow(),
+    ])
+```
+
+Note that `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
+
+<details>
+<summary>JSON IR</summary>
 
 ```json
 {
@@ -249,6 +338,7 @@ For reuse across multiple exec rules, define a sandbox policy and reference it b
   ]
 }
 ```
+</details>
 
 ### What sandboxes enforce
 
@@ -256,10 +346,10 @@ Sandbox restrictions on **filesystem and network access** are inherited by all c
 
 ### Sandbox network modes
 
-- `{ "rule": { "effect": "allow", "net": { "domain": "*" } } }` in a sandbox policy — allows all network access
-- `{ "rule": { "effect": "allow", "net": { "domain": { "literal": "localhost" } } } }` — localhost-only, enforced at the kernel level
-- `{ "rule": { "effect": "allow", "net": { "domain": { "literal": "domain.com" } } } }` — domain-filtered via local HTTP proxy
-- No net rule — denies all network access
+- `net = allow` in a sandbox — allows all network access
+- `net = [domains({"localhost": allow})]` — localhost-only, enforced at the kernel level
+- `net = [domains({"domain.com": allow})]` — domain-filtered via local HTTP proxy
+- `net = deny` or omitted — denies all network access
 
 ---
 
@@ -267,114 +357,71 @@ Sandbox restrictions on **filesystem and network access** are inherited by all c
 
 ### Conservative (untrusted projects)
 
-```json
-{
-  "schema_version": 4,
-  "use": "main",
-  "default_effect": "deny",
-  "policies": [
-    {
-      "name": "main",
-      "body": [
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
-        { "rule": { "effect": "ask",   "exec": {} } }
-      ]
-    }
-  ]
-}
+```python
+load("@clash//std.star", "policy", "cwd")
+
+def main():
+    return policy(default = deny, rules = [
+        cwd(read = allow),
+    ])
 ```
 
 ### Developer-friendly
 
-```json
-{
-  "schema_version": 4,
-  "use": "main",
-  "default_effect": "ask",
-  "policies": [
-    {
-      "name": "cwd-access",
-      "body": [
-        { "rule": { "effect": "allow", "fs": { "op": { "or": ["read", "write"] }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
-      ]
-    },
-    {
-      "name": "main",
-      "body": [
-        { "include": "cwd-access" },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } } } },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "npm" } } } },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "status" }] } } },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "diff" }, { "any": null }] } } },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "log" }, { "any": null }] } } },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "add" }, { "any": null }] } } },
-        { "rule": { "effect": "ask",   "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "commit" }, { "any": null }] } } },
-        { "rule": { "effect": "deny",  "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
-        { "rule": { "effect": "deny",  "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "reset" }, { "any": null }] } } },
-        { "rule": { "effect": "deny",  "exec": { "bin": { "literal": "sudo" } } } },
-        { "rule": { "effect": "deny",  "exec": { "bin": { "literal": "rm" }, "args": [{ "literal": "-rf" }, { "any": null }] } } },
-        { "rule": { "effect": "allow", "net": { "domain": { "or": [{ "literal": "github.com" }, { "literal": "crates.io" }, { "literal": "npmjs.com" }] } } } }
-      ]
-    }
-  ]
-}
+```python
+load("@clash//std.star", "exe", "policy", "cwd", "domains")
+
+def main():
+    return policy(default = ask, rules = [
+        cwd(follow_worktrees = True, read = allow, write = allow),
+        exe(["cargo", "npm"]).allow(),
+        exe("git", args = ["status"]).allow(),
+        exe("git", args = ["diff"]).allow(),
+        exe("git", args = ["log"]).allow(),
+        exe("git", args = ["add"]).allow(),
+        exe("git", args = ["commit"]).ask(),
+        exe("git", args = ["push"]).deny(),
+        exe("git", args = ["reset"]).deny(),
+        exe("sudo").deny(),
+        exe("rm", args = ["-rf"]).deny(),
+        domains({"github.com": allow, "crates.io": allow, "npmjs.com": allow}),
+    ])
 ```
 
 ### Full trust with guardrails
 
-```json
-{
-  "schema_version": 4,
-  "use": "main",
-  "default_effect": "allow",
-  "policies": [
-    {
-      "name": "main",
-      "body": [
-        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "literal": "--force" }, { "any": null }] } } },
-        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "reset" }, { "literal": "--hard" }, { "any": null }] } } },
-        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "rm" }, "args": [{ "literal": "-rf" }, { "regex": "/.*" }] } } },
-        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "sudo" } } } },
-        { "rule": { "effect": "deny", "fs": { "op": { "single": "write" }, "path": { "static": ".env" } } } },
-        { "rule": { "effect": "ask",  "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
-      ]
-    }
-  ]
-}
+```python
+load("@clash//std.star", "exe", "policy")
+
+def main():
+    return policy(default = allow, rules = [
+        exe("git", args = ["push", "--force"]).deny(),
+        exe("git", args = ["reset", "--hard"]).deny(),
+        exe("rm", args = ["-rf"]).deny(),
+        exe("sudo").deny(),
+        exe("git", args = ["push"]).ask(),
+    ])
 ```
 
 ### Sandboxed build tools
 
-```json
-{
-  "schema_version": 4,
-  "use": "main",
-  "default_effect": "deny",
-  "policies": [
-    {
-      "name": "cargo-env",
-      "body": [
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "write" }, "path": { "subpath": { "path": { "static": "./target" } } } } } },
-        { "rule": { "effect": "allow", "net": { "domain": "*" } } }
-      ]
-    },
-    {
-      "name": "npm-env",
-      "body": [
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "write" }, "path": { "subpath": { "path": { "static": "./node_modules" } } } } } },
-        { "rule": { "effect": "allow", "net": { "domain": { "literal": "registry.npmjs.org" } } } }
-      ]
-    },
-    {
-      "name": "main",
-      "body": [
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } }, "sandbox": { "named": "cargo-env" } } },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "npm" } },   "sandbox": { "named": "npm-env" } } },
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
-      ]
-    }
-  ]
-}
+```python
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "domains")
+
+def main():
+    cargo_env = sandbox(
+        default = deny,
+        fs = [cwd(read = allow, write = allow)],
+        net = allow,
+    )
+    npm_env = sandbox(
+        default = deny,
+        fs = [cwd(read = allow, write = allow)],
+        net = [domains({"registry.npmjs.org": allow})],
+    )
+    return policy(default = deny, rules = [
+        exe("cargo").sandbox(cargo_env).allow(),
+        exe("npm").sandbox(npm_env).allow(),
+        cwd(read = allow),
+    ])
 ```

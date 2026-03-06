@@ -1,6 +1,6 @@
 //! Tab-completion, prompt, and hinting for the interactive policy shell.
 //!
-//! Provides a context-aware [`ShellCompleter`] that walks the s-expression
+//! Provides a context-aware [`ShellCompleter`] that walks the legacy
 //! grammar tree to determine what completions are valid at the cursor position.
 //! The completer tracks paren depth and the keyword that opened each nesting
 //! level to offer domain-specific candidates (exec args vs fs ops vs patterns).
@@ -100,7 +100,7 @@ const TEST_TOOLS: &[(&str, &str)] = &[
 ];
 
 // ---------------------------------------------------------------------------
-// S-expression context analysis
+// Legacy context analysis (deprecated s-expression format)
 // ---------------------------------------------------------------------------
 
 /// What the completer should offer at a given cursor position.
@@ -141,8 +141,8 @@ enum SexprContext {
     None,
 }
 
-/// Analyze the s-expression text (the part after the shell verb) to determine
-/// what the cursor is positioned to receive.
+/// Analyze the rule text (the part after the shell verb) to determine
+/// what the cursor is positioned to receive (legacy format).
 fn analyze_sexpr(text: &str) -> SexprContext {
     // We walk the text tracking a stack of (keyword, arg_count) for each open paren.
     // When we reach the end, the stack tells us where we are.
@@ -474,7 +474,7 @@ impl ShellCompleter {
         }
     }
 
-    /// Completions for `add`/`remove` — s-expression builder.
+    /// Completions for `add`/`remove` — rule builder.
     fn complete_add_remove(&self, rest: &str, pos: usize) -> Vec<Suggestion> {
         // If nothing typed yet, or first non-paren word could be a policy name
         if rest.is_empty() {
@@ -523,7 +523,7 @@ impl ShellCompleter {
         self.complete_sexpr_context(rest, pos)
     }
 
-    /// Complete inside an s-expression using grammar-aware context analysis.
+    /// Complete inside a rule expression using grammar-aware context analysis.
     fn complete_sexpr_context(&self, sexpr: &str, pos: usize) -> Vec<Suggestion> {
         let ctx = analyze_sexpr(sexpr);
         self.suggestions_for_context(ctx, pos)

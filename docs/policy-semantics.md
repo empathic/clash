@@ -26,7 +26,10 @@ Clash operates on three capability domains, not individual tools. Tool invocatio
 ## Compilation Pipeline
 
 ```
-JSON source text
+Starlark source (.star) or JSON
+    │
+    ▼
+JSON IR                         ← clash_starlark (if .star)
     │
     ▼
 Vec<TopLevel> (AST)             ← parse.rs
@@ -51,10 +54,9 @@ PolicyTree (IR)                 ← compile.rs, tree.rs
 
 ### Compilation Steps
 
-1. **Parse** — JSON text → AST (`Vec<TopLevel>`)
-2. **Extract version** — read the `schema_version` field from the AST
-3. **Validate version** — verify the declared version is a known version (≤ `CURRENT_VERSION`); reject unknown future versions.
-4. **Find default** — extract the `default_effect` and `use` declarations
+0. **Evaluate Starlark** (if `.star`) — run `main()` to produce JSON IR via `clash_starlark`
+1. **Parse** — JSON IR → AST (`Vec<TopLevel>`)
+2. **Find default** — extract the `default_effect` and `use` declarations
 5. **Build policy map** — index all policy objects by name
 6. **Flatten** — recursively resolve `{ "include": "name" }` into a flat rule list
 7. **Validate sandbox references** — verify each named `"sandbox": { "named": "name" }` points to an existing policy
@@ -152,9 +154,9 @@ This enables the `clash explain` command and structured audit logging.
 
 ---
 
-## Constraint Derivation (v3)
+## Constraint Derivation
 
-In v3, runtime constraints (filesystem and network sandbox policies) are derived from surviving `(match ...)` blocks in the decision tree, rather than from explicit `(sandbox ...)` annotations.
+Runtime constraints (filesystem and network sandbox policies) are derived from match blocks in the decision tree.
 
 ### How It Works
 

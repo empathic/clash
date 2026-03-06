@@ -43,20 +43,14 @@
 
 ## Policy Model
 
-* Clash uses a capability-based policy language with JSON format
+* Clash uses a capability-based policy language with Starlark (.star) as the primary format, compiled to JSON IR
 * Three capability domains: `exec` (commands), `fs` (filesystem), `net` (network)
-* Policy source: `clash/src/policy/v2/` — parse, compile, eval, IR
+* Policy source: `clash/src/policy/` — parse, compile, eval, IR
 * Rules are JSON objects with an `effect` and a capability matcher, e.g. `{ "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }`
 * The policy speaks in capabilities, not Claude Code tool names — the eval layer maps tools to capabilities
 * Policy files use `.json` or `.star` extension (`.star` preferred when both exist)
 * The `clash-starlark` crate evaluates `.star` files → JSON using Starlark (a Python-like config language)
 * Starlark policies define a `main()` function that returns a policy value
-
-## Backwards Compatibility
-
-* All backwards-incompatible changes to the policy language MUST bump the version number in `clash/src/policy/version.rs` (`CURRENT_VERSION`)
-* Each version bump MUST include deprecation entries in `all_deprecations()` describing what changed
-* The `schema_version` field in policy files allows clash to detect outdated syntax and guide users to upgrade
 
 ## Site
 

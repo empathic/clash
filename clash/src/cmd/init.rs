@@ -65,9 +65,9 @@ fn prompt_scope() -> Result<&'static str> {
     }
 }
 
-/// Initialize or reconfigure the user-level policy at `~/.clash/policy.sexpr`.
+/// Initialize or reconfigure the user-level policy at `~/.clash/policy.star`.
 ///
-/// - If a sexp policy already exists, offers to reconfigure via the wizard.
+/// - If a policy already exists, offers to reconfigure via the wizard.
 /// - If only a legacy YAML policy exists, migrates it via `claude -p`.
 /// - Otherwise, writes the default policy, installs the plugin, configures
 ///   bypassPermissions, and launches the wizard.
@@ -80,31 +80,31 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
         warn!(error = %e, "Could not set enabledPlugins in Claude Code settings");
     }
 
-    let sexpr_path = ClashSettings::policy_file()?;
+    let policy_path = ClashSettings::policy_file()?;
 
-    if sexpr_path.exists() && sexpr_path.is_dir() {
+    if policy_path.exists() && policy_path.is_dir() {
         if dialoguer::Confirm::new()
             .with_prompt(format!(
                 "{} is a directory. Remove it and continue onboarding?",
-                sexpr_path.to_string_lossy(),
+                policy_path.to_string_lossy(),
             ))
             .interact()
-            .context("confirm removal of dir at sexpr path")?
+            .context("confirm removal of dir at policy path")?
         {
-            std::fs::remove_dir_all(&sexpr_path)?;
+            std::fs::remove_dir_all(&policy_path)?;
         } else {
             anyhow::bail!(
                 "{} is a directory. Remove it first, then run `clash init user`.",
-                sexpr_path.display()
+                policy_path.display()
             );
         }
     }
 
-    if sexpr_path.exists()
+    if policy_path.exists()
         && !dialoguer::Confirm::new()
             .with_prompt(format!(
                 "A policy already exists at {}. Reconfigure existing policy?",
-                sexpr_path.to_string_lossy()
+                policy_path.to_string_lossy()
             ))
             .interact()
             .unwrap_or_default()
@@ -123,13 +123,13 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
             .interact()
             .unwrap_or(false)
     {
-        migrate_yaml_policy(&yaml_path, &sexpr_path)?;
-        return super::policy::open_in_editor(&sexpr_path);
+        migrate_yaml_policy(&yaml_path, &policy_path)?;
+        return super::policy::open_in_editor(&policy_path);
     }
 
     // Fresh install — write default policy.
     std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
-    std::fs::write(&sexpr_path, DEFAULT_POLICY)?;
+    std::fs::write(&policy_path, DEFAULT_POLICY)?;
 
     // Install the Claude Code plugin from GitHub.
     let plugin_installed = match install_plugin() {
@@ -181,11 +181,11 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     println!(
         "{} Clash initialized at {}\n",
         style::green_bold("✓"),
-        sexpr_path.display()
+        policy_path.display()
     );
 
     // Open the policy file in $EDITOR so the user can customize immediately.
-    super::policy::open_in_editor(&sexpr_path)
+    super::policy::open_in_editor(&policy_path)
 }
 
 /// Initialize a project-level policy in the project root's `.clash/` directory.

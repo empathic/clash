@@ -32,7 +32,7 @@ This maps directly to tool invocations: *who* is calling *what tool* on *what re
 
 ## Superseded By
 
-The v2 policy language replaces EVN triples with **capability-based rules** using s-expression syntax. Instead of (entity, verb, noun) mapping to tools, v2 uses three capability domains:
+The v2 policy language replaces EVN triples with **capability-based rules** using Starlark/JSON syntax. Instead of (entity, verb, noun) mapping to tools, v2 uses three capability domains:
 
 - **exec** — command execution (binary + arguments)
 - **fs** — filesystem operations (read/write/create/delete + path)

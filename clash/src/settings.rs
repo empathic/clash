@@ -354,7 +354,7 @@ impl ClashSettings {
         self.policy_error.as_deref()
     }
 
-    /// Set the policy source directly (compile from s-expression text).
+    /// Set the policy source directly (compile from policy source text).
     pub fn set_policy_source(&mut self, source: &str) {
         match crate::policy::compile::compile_to_tree(
             source,

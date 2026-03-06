@@ -22,42 +22,49 @@ If the user has already stated what they want to change, proceed. Otherwise, ask
 
 ## Policy file location
 
-The JSON policy file to edit:
+The policy file to edit:
 
-- Project-level: `<project>/.clash/policy.json` — persists across sessions, project-specific
-- User-level: `~/.clash/policy.json` — applies everywhere
+- Project-level: `<project>/.clash/policy.star` (or `policy.json`) — persists across sessions, project-specific
+- User-level: `~/.clash/policy.star` (or `policy.json`) — applies everywhere
 - Prefer the project-level file if it exists; fall back to user-level.
+- Prefer `.star` files over `.json` files.
 
 ## Adding a rule
 
-Read the policy file, then insert the appropriate rule into the policy's `body` array. Common rule patterns:
+Read the policy file, then insert the appropriate rule into the `rules = [...]` list in the `main()` function. Common rule patterns:
 
 - Allow all git commands:
-  ```json
-  { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
+  ```python
+  exe("git").allow()
   ```
 - Deny git push:
-  ```json
-  { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
+  ```python
+  exe("git", args = ["push"]).deny()
   ```
 - Allow filesystem reads under cwd:
-  ```json
-  { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } }
+  ```python
+  cwd(read = allow)
   ```
 - Allow filesystem read/write/create under cwd:
-  ```json
-  { "rule": { "effect": "allow", "fs": { "op": { "or": ["read", "write", "create"] }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } }
+  ```python
+  cwd(follow_worktrees = True, read = allow, write = allow)
   ```
 - Allow network access to a domain:
-  ```json
-  { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
+  ```python
+  domains({"github.com": allow})
+  ```
+- Access to a subdirectory of home:
+  ```python
+  home().child(".ssh", read = allow)
   ```
 
-Show the user the exact JSON change before applying it. After confirmation, edit the file.
+Make sure any new builders are added to the `load()` statement at the top of the file.
+
+Show the user the exact change before applying it. After confirmation, edit the file.
 
 ## Removing a rule
 
-Read the policy file, identify the rule entry to remove, show it to the user, then delete that entry from the `body` array after confirmation.
+Read the policy file, identify the rule entry to remove from the `rules = [...]` list, show it to the user, then delete that entry after confirmation.
 
 ## Validating changes
 
