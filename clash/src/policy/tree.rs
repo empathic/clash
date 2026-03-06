@@ -246,6 +246,8 @@ pub struct QueryContext {
     pub mcp_server: Option<String>,
     pub mcp_tool: Option<String>,
     pub cwd: String,
+    /// True when the primary query is a Tool capability query (not exec/fs/net).
+    pub is_tool_query: bool,
     /// Raw tool input JSON — used for nullable `ctx.tool.args.<field>?` accessors.
     pub tool_input: serde_json::Value,
 }
@@ -291,15 +293,7 @@ impl Predicate {
             Predicate::Fs(_) => ctx.fs_op.is_some(),
             Predicate::Net(_) => ctx.net_domain.is_some(),
             Predicate::Mcp(_) => ctx.mcp_server.is_some(),
-            // Tool predicates are relevant only when no other domain matched,
-            // matching the old `_ =>` fallthrough in tool_to_queries.
-            Predicate::Tool(_) => {
-                ctx.bin.is_none()
-                    && ctx.fs_op.is_none()
-                    && ctx.net_domain.is_none()
-                    && ctx.agent_name.is_none()
-                    && ctx.mcp_server.is_none()
-            }
+            Predicate::Tool(_) => ctx.is_tool_query,
             Predicate::Agent(_) => ctx.agent_name.is_some(),
             Predicate::True => true,
         }
@@ -352,7 +346,6 @@ impl QueryContext {
         cwd: &str,
         tool_input: &serde_json::Value,
     ) -> Self {
-        println!("{tool_input}");
         let mut ctx = Self {
             tool_name: tool_name.to_string(),
             bin: None,
@@ -365,6 +358,7 @@ impl QueryContext {
             mcp_server: None,
             mcp_tool: None,
             cwd: cwd.to_string(),
+            is_tool_query: false,
             tool_input: tool_input.clone(),
         };
 
@@ -387,7 +381,31 @@ impl QueryContext {
                     ctx.mcp_tool = Some(tool.clone());
                 }
                 CapQuery::Tool { .. } => {
-                    // tool_name is already set from the parameter
+                    ctx.is_tool_query = true;
+                    // tool_name is already set from the parameter.
+                    // For file-backed tools, extract fs context from tool_input
+                    // so sandbox fs rules can be evaluated.
+                    let fs_op = match tool_name {
+                        "Read" | "Glob" | "Grep" => Some(FsOp::Read),
+                        "Write" | "Edit" | "NotebookEdit" => Some(FsOp::Write),
+                        _ => None,
+                    };
+                    if let Some(op) = fs_op {
+                        ctx.fs_op = Some(op);
+                        let path_str = match tool_name {
+                            "Glob" | "Grep" => tool_input
+                                .get("path")
+                                .and_then(|v| v.as_str())
+                                .or_else(|| tool_input.get("pattern").and_then(|v| v.as_str()))
+                                .unwrap_or(""),
+                            _ => tool_input
+                                .get("file_path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(""),
+                        };
+                        ctx.fs_path =
+                            Some(crate::policy::eval::resolve_path(path_str, cwd));
+                    }
                 }
                 CapQuery::Agent { name } => {
                     ctx.agent_name = Some(name.clone());
@@ -732,6 +750,24 @@ impl PolicyTree {
         }
     }
 
+    /// Evaluate a sandbox's filesystem rules against a file operation.
+    ///
+    /// Used when a tool rule with a sandbox matches a file-backed tool (Read,
+    /// Write, etc.). Returns the sandbox's decision for the specific fs op+path.
+    fn eval_sandbox_fs(&self, sandbox_name: &str, op: FsOp, path: &str) -> Effect {
+        if let Some(rules) = self.sandbox_policies.get(sandbox_name) {
+            for rule in rules {
+                if let CompiledMatcher::Fs(ref fs) = rule.matcher {
+                    if fs.matches(op, path) {
+                        return rule.effect;
+                    }
+                }
+            }
+        }
+        // No sandbox rule matched — sandbox default is deny.
+        Effect::Deny
+    }
+
     /// Recursively evaluate a node, collecting matches/skips into the trace.
     ///
     /// Returns `Some(effect)` when a verdict is reached, `None` to skip.
@@ -802,12 +838,24 @@ impl PolicyTree {
                     // For flat-bridge When+Leaf nodes, record the match at
                     // the When level and return the Leaf effect directly.
                     if let Some(idx) = meta.rule_index {
-                        let effect = match body.as_ref() {
+                        let mut effect = match body.as_ref() {
                             Node::Leaf { effect, .. } => *effect,
                             _ => {
                                 return self.eval_node(body, ctx, matched, skipped, sandbox_out);
                             }
                         };
+
+                        // For tool rules with a sandbox: if the context has
+                        // fs info (file-backed tools like Read/Write/Edit),
+                        // evaluate the sandbox's fs rules to refine the effect.
+                        if matches!(predicate, Predicate::Tool(_))
+                            && effect == Effect::Allow
+                            && let Some(ref sb_name) = meta.sandbox_name
+                            && let Some(fs_op) = ctx.fs_op
+                            && let Some(ref fs_path) = ctx.fs_path
+                        {
+                            effect = self.eval_sandbox_fs(sb_name, fs_op, fs_path);
+                        }
 
                         let mut description = meta.description.clone();
                         if let Some(ref sb) = meta.sandbox_name {
@@ -939,11 +987,10 @@ fn observable_is_relevant(observable: &Observable, ctx: &QueryContext) -> bool {
         | Observable::ToolName
         | Observable::ToolArgs
         | Observable::ToolArgField(_) => {
-            ctx.bin.is_none()
-                && ctx.fs_op.is_none()
-                && ctx.net_domain.is_none()
-                && ctx.agent_name.is_none()
-                && ctx.mcp_server.is_none()
+            // Tool observables are relevant when the query isn't a
+            // command or MCP invocation. File-backed tools (Read, etc.)
+            // now route through tool rules with fs context for sandbox.
+            ctx.bin.is_none() && ctx.mcp_server.is_none()
         }
         Observable::Agent | Observable::AgentName => ctx.agent_name.is_some(),
         Observable::Mcp | Observable::McpServer | Observable::McpTool => ctx.mcp_server.is_some(),
@@ -1031,11 +1078,9 @@ fn resolve_observable(observable: &Observable, ctx: &QueryContext) -> Option<Vec
             }
         }
         Observable::ToolName => {
-            if ctx.bin.is_none()
-                && ctx.fs_op.is_none()
-                && ctx.net_domain.is_none()
-                && ctx.mcp_server.is_none()
-            {
+            // Tool name is always available — file-backed tools (Read, Write,
+            // etc.) now route through tool rules with sandbox fs constraints.
+            if ctx.bin.is_none() && ctx.mcp_server.is_none() {
                 Some(vec![ctx.tool_name.clone()])
             } else {
                 None
@@ -1336,12 +1381,12 @@ mod tests {
         );
     }
 
-    const FS_READ_PWD: &str = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}]}]}"#;
+    const TOOL_READ_POLICY: &str = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "tool": {"name": {"literal": "Read"}}}}]}]}"#;
 
     #[test]
     fn parallel_read_allowed() {
         assert_same_decision(
-            FS_READ_PWD,
+            TOOL_READ_POLICY,
             "Read",
             json!({"file_path": "/home/user/project/src/main.rs"}),
             "/home/user/project",
@@ -1350,8 +1395,10 @@ mod tests {
 
     #[test]
     fn parallel_read_denied() {
+        // Without a Read tool rule, Read falls to default deny.
+        let no_read = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
         assert_same_decision(
-            FS_READ_PWD,
+            no_read,
             "Read",
             json!({"file_path": "/etc/passwd"}),
             "/home/user/project",
@@ -1404,7 +1451,7 @@ mod tests {
 
     #[test]
     fn parallel_full_pipeline() {
-        let source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "cwd-access", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}]}, {"name": "main", "includes": ["cwd-access"], "body": [{"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}]}}}, {"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "reset"}, {"any": null}]}}}, {"rule": {"effect": "ask", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "commit"}, {"any": null}]}}}, {"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}, {"rule": {"effect": "allow", "fs": {"op": {"or": ["read", "write"]}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}, {"rule": {"effect": "deny", "fs": {"op": {"single": "write"}, "path": {"literal": ".env"}}}}, {"rule": {"effect": "allow", "net": {"domain": {"or": [{"literal": "github.com"}, {"literal": "crates.io"}]}}}}, {"rule": {"effect": "deny", "net": {"domain": {"regex": ".*\\.evil\\.com"}}}}]}]}"#;
+        let source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}]}}}, {"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "reset"}, {"any": null}]}}}, {"rule": {"effect": "ask", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "commit"}, {"any": null}]}}}, {"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}, {"rule": {"effect": "allow", "tool": {"name": {"or": [{"literal": "Read"}, {"literal": "Write"}, {"literal": "Edit"}]}}}}, {"rule": {"effect": "allow", "net": {"domain": {"or": [{"literal": "github.com"}, {"literal": "crates.io"}]}}}}, {"rule": {"effect": "deny", "net": {"domain": {"regex": ".*\\.evil\\.com"}}}}]}]}"#;
         let cwd = "/home/user/project";
         assert_same_decision(
             source,
@@ -1420,7 +1467,6 @@ mod tests {
             json!({"file_path": "/home/user/project/Cargo.toml"}),
             cwd,
         );
-        assert_same_decision(source, "Read", json!({"file_path": "/etc/shadow"}), cwd);
         assert_same_decision(
             source,
             "WebFetch",

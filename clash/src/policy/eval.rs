@@ -45,7 +45,7 @@ pub enum CapQuery {
 pub fn tool_to_queries(
     tool_name: &str,
     tool_input: &serde_json::Value,
-    cwd: &str,
+    _cwd: &str,
 ) -> Vec<CapQuery> {
     match tool_name {
         "Bash" => {
@@ -57,34 +57,9 @@ pub fn tool_to_queries(
             let (bin, args) = parse_bash_bin_args(&parts);
             vec![CapQuery::Exec { bin, args }]
         }
-        "Read" => {
-            let path = tool_input
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            vec![CapQuery::Fs {
-                op: FsOp::Read,
-                path: resolve_path(path, cwd),
-            }]
-        }
-        "Write" => {
-            let path = tool_input
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            vec![CapQuery::Fs {
-                op: FsOp::Write,
-                path: resolve_path(path, cwd),
-            }]
-        }
-        "Edit" => {
-            let path = tool_input
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            vec![CapQuery::Fs {
-                op: FsOp::Write,
-                path: resolve_path(path, cwd),
+        "Read" | "Write" | "Edit" | "NotebookEdit" => {
+            vec![CapQuery::Tool {
+                name: tool_name.to_string(),
             }]
         }
         "WebFetch" => {
@@ -101,15 +76,8 @@ pub fn tool_to_queries(
             }]
         }
         "Glob" | "Grep" => {
-            // Use the `path` field, falling back to `pattern` for Glob.
-            let path = tool_input
-                .get("path")
-                .and_then(|v| v.as_str())
-                .or_else(|| tool_input.get("pattern").and_then(|v| v.as_str()))
-                .unwrap_or("");
-            vec![CapQuery::Fs {
-                op: FsOp::Read,
-                path: resolve_path(path, cwd),
+            vec![CapQuery::Tool {
+                name: tool_name.to_string(),
             }]
         }
         "Agent" => {
@@ -565,8 +533,8 @@ mod tests {
     /// Common JSON policy: deny git push, allow git *
     const GIT_POLICY: &str = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}]}}}, {"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#;
 
-    /// Common JSON policy: allow fs read under PWD
-    const FS_READ_PWD: &str = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}]}]}"#;
+    /// Common JSON policy: allow Read/Glob/Grep tools (file-backed tools produce Tool queries)
+    const TOOL_READ_POLICY: &str = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "tool": {"name": {"or": [{"literal": "Read"}, {"literal": "Glob"}, {"literal": "Grep"}]}}}}]}]}"#;
 
     /// Common JSON policy: net with or + regex
     const NET_POLICY: &str = r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "net": {"domain": {"or": [{"literal": "github.com"}, {"literal": "crates.io"}]}}}}, {"rule": {"effect": "deny", "net": {"domain": {"regex": ".*\\.evil\\.com"}}}}]}]}"#;
@@ -596,8 +564,8 @@ mod tests {
     }
 
     #[test]
-    fn read_under_cwd_allowed() {
-        let tree = compile(FS_READ_PWD);
+    fn read_tool_allowed() {
+        let tree = compile(TOOL_READ_POLICY);
 
         let decision = tree.evaluate(
             "Read",
@@ -608,8 +576,9 @@ mod tests {
     }
 
     #[test]
-    fn read_outside_cwd_default_deny() {
-        let tree = compile(FS_READ_PWD);
+    fn read_no_tool_rule_default_deny() {
+        // Without a tool rule for Read, it falls through to default deny.
+        let tree = compile(GIT_POLICY);
 
         let decision = tree.evaluate(
             "Read",
@@ -671,9 +640,9 @@ mod tests {
     }
 
     #[test]
-    fn write_tool_maps_to_fs_write() {
+    fn write_tool_matches_tool_rule() {
         let tree = compile(
-            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "write"}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}]}]}"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "tool": {"name": {"literal": "Write"}}}}]}]}"#,
         );
 
         let decision = tree.evaluate(
@@ -685,9 +654,9 @@ mod tests {
     }
 
     #[test]
-    fn edit_tool_maps_to_fs_write() {
+    fn edit_tool_matches_tool_rule() {
         let tree = compile(
-            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "write"}, "path": {"subpath": {"path": {"env": "PWD"}}}}}}]}]}"#,
+            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "tool": {"name": {"literal": "Edit"}}}}]}]}"#,
         );
 
         let decision = tree.evaluate(
@@ -699,9 +668,11 @@ mod tests {
     }
 
     #[test]
-    fn relative_path_resolved_against_cwd() {
-        let tree = compile(FS_READ_PWD);
+    fn read_tool_relative_path_allowed() {
+        let tree = compile(TOOL_READ_POLICY);
 
+        // Read tool now produces CapQuery::Tool, so path doesn't matter
+        // for the flat evaluator — sandbox checking is done in PolicyTree.
         let decision = tree.evaluate(
             "Read",
             &json!({"file_path": "src/main.rs"}),
@@ -716,17 +687,12 @@ mod tests {
             r#"{
   "schema_version": 4, "use": "main", "default_effect": "deny",
   "policies": [
-    { "name": "cwd-access", "body": [
-      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"env": "PWD"}}} } } }
-    ]},
     { "name": "main", "body": [
-      { "include": "cwd-access" },
       { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}] } } },
       { "rule": { "effect": "deny",  "exec": { "bin": {"literal": "git"}, "args": [{"literal": "reset"}, {"any": null}] } } },
       { "rule": { "effect": "ask",   "exec": { "bin": {"literal": "git"}, "args": [{"literal": "commit"}, {"any": null}] } } },
       { "rule": { "effect": "allow", "exec": { "bin": {"literal": "git"}, "args": [{"any": null}] } } },
-      { "rule": { "effect": "allow", "fs": { "op": {"or": ["read", "write"]}, "path": {"subpath": {"path": {"env": "PWD"}}} } } },
-      { "rule": { "effect": "deny",  "fs": { "op": {"single": "write"}, "path": {"literal": ".env"} } } },
+      { "rule": { "effect": "allow", "tool": { "name": {"or": [{"literal": "Read"}, {"literal": "Write"}, {"literal": "Edit"}]} } } },
       { "rule": { "effect": "allow", "net": { "domain": {"or": [{"literal": "github.com"}, {"literal": "crates.io"}]} } } },
       { "rule": { "effect": "deny",  "net": { "domain": {"regex": ".*\\.evil\\.com"} } } }
     ]}
@@ -764,7 +730,7 @@ mod tests {
             .effect,
             Effect::Ask
         );
-        // Read in PWD → allow
+        // Read → allow (tool rule matches by name)
         assert_eq!(
             tree.evaluate(
                 "Read",
@@ -773,16 +739,6 @@ mod tests {
             )
             .effect,
             Effect::Allow
-        );
-        // Read outside PWD → deny
-        assert_eq!(
-            tree.evaluate(
-                "Read",
-                &json!({"file_path": "/etc/shadow"}),
-                "/home/user/project"
-            )
-            .effect,
-            Effect::Deny
         );
         // WebFetch github.com → allow
         assert_eq!(

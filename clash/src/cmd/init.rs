@@ -163,8 +163,7 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
         policy_path.display()
     );
 
-    // Open the policy file in $EDITOR so the user can customize immediately.
-    super::policy::open_in_editor(&policy_path)
+    Ok(())
 }
 
 /// Initialize a project-level policy in the project root's `.clash/` directory.
