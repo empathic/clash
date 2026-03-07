@@ -152,7 +152,7 @@ fn check_policy_parsing() -> CheckResult {
     for (level, path) in &levels {
         match crate::settings::evaluate_star_policy(path) {
             Ok(json) => {
-                if let Err(e) = crate::policy::compile::compile_policy(&json) {
+                if let Err(e) = crate::policy::compile::compile_to_tree(&json) {
                     errors.push(format!("{}: {}", level, e));
                 }
             }

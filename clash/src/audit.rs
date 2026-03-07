@@ -413,91 +413,18 @@ fn parent_dir_suggestion(path: &str) -> String {
 
 /// Generate the narrowest possible allow rule for a denied tool invocation.
 ///
-/// Returns a `clash allow '(...)'` command with exact arguments matching
-/// the denied capability. Errors if the tool produces no capability queries.
+/// Returns a `clash allow '...'` command string. Uses the v5 match-tree
+/// suggestion format (e.g. `exe("git")`, `tool("Read")`).
 fn deny_hint(tool_name: &str, tool_input: &serde_json::Value, cwd: &str) -> Result<String, String> {
-    use crate::policy::eval::{CapQuery, tool_to_queries};
-
-    let queries = tool_to_queries(tool_name, tool_input, cwd);
-    let query = queries
-        .first()
-        .ok_or_else(|| format!("tool_to_queries returned no queries for {tool_name}"))?;
-
-    let rule = match query {
-        CapQuery::Exec { bin, args } => {
-            if args.is_empty() {
-                format!("(exec \"{}\")", bin)
-            } else {
-                let quoted_args: Vec<String> = args.iter().map(|a| format!("\"{}\"", a)).collect();
-                format!("(exec \"{}\" {})", bin, quoted_args.join(" "))
-            }
-        }
-        CapQuery::Fs { op, path } => {
-            format!("(fs {} \"{}\")", op, path)
-        }
-        CapQuery::Net { domain, path } => match path {
-            Some(p) => format!("(net \"{}\" (subpath \"{}\"))", domain, p),
-            None => format!("(net \"{}\")", domain),
-        },
-        CapQuery::Mcp { server, tool } => {
-            format!(
-                "(mcp \"{}\" \"{}\") ; server={}, tool={}",
-                server, tool, server, tool
-            )
-        }
-        CapQuery::Tool { name } => {
-            format!("(tool \"{}\")", name)
-        }
-        CapQuery::Agent { name } => {
-            format!("(agent \"{}\")", name)
-        }
-    };
-
+    let rule = crate::session_policy::suggest_rule_description(tool_name, tool_input, cwd)
+        .ok_or_else(|| format!("cannot generate hint for {tool_name}"))?;
     Ok(format!("clash allow '{}'", rule))
 }
 
 /// Concise, human-readable summary of a tool invocation for display.
-fn tool_input_summary(tool_name: &str, input: &serde_json::Value, cwd: &str) -> String {
-    use crate::policy::eval::{CapQuery, tool_to_queries};
-
-    let queries = tool_to_queries(tool_name, input, cwd);
-    let summary = match queries.first() {
-        Some(CapQuery::Exec { bin, args }) => {
-            if args.is_empty() {
-                bin.clone()
-            } else {
-                format!("{} {}", bin, args.join(" "))
-            }
-        }
-        Some(CapQuery::Fs { path, .. }) => shorten_path(path),
-        Some(CapQuery::Net { domain, path }) => match path {
-            Some(p) => format!("{domain}{p}"),
-            None => domain.clone(),
-        },
-        Some(CapQuery::Mcp { server, tool }) => format!("{server}/{tool}"),
-        Some(CapQuery::Tool { name }) => name.clone(),
-        Some(CapQuery::Agent { name }) => format!("agent:{name}"),
-        None => String::new(),
-    };
-
-    truncate_str(&summary, 60)
-}
-
-/// Shorten a file path to just the last two components.
-fn shorten_path(path: &str) -> String {
-    let p = std::path::Path::new(path);
-    let components: Vec<_> = p.components().rev().take(2).collect();
-    if components.len() == 2 {
-        format!(
-            "{}/{}",
-            components[1].as_os_str().to_string_lossy(),
-            components[0].as_os_str().to_string_lossy()
-        )
-    } else {
-        p.file_name()
-            .map(|f| f.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string())
-    }
+fn tool_input_summary(tool_name: &str, input: &serde_json::Value, _cwd: &str) -> String {
+    let noun = crate::permissions::extract_noun(tool_name, input);
+    truncate_str(&noun, 60)
 }
 
 /// Truncate a string to `max` chars, appending "..." if needed.

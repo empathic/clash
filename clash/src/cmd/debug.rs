@@ -65,12 +65,24 @@ pub enum DebugCmd {
 
     /// Show sandbox enforcement details for a command
     Sandbox {
-        /// Tool type: bash, read, write, edit (or full name)
-        tool: String,
+        /// Tool type or audit log hash (e.g., bash, read, or a hex id from `clash debug log`)
+        tool: Option<String>,
 
         /// The command, file path, or noun to inspect (remaining args joined)
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
+
+        /// Inspect the last logged command
+        #[arg(long)]
+        last: bool,
+
+        /// Actually execute the command under sandbox enforcement
+        #[arg(long, short = 'x')]
+        exec: bool,
+
+        /// Only consider entries from sessions matching this substring (for --last)
+        #[arg(long)]
+        session: Option<String>,
 
         /// Output as JSON
         #[arg(long)]
@@ -96,7 +108,14 @@ pub fn run(cmd: DebugCmd) -> Result<()> {
             session,
             json,
         } => run_replay(tool, args, last, session, json),
-        DebugCmd::Sandbox { tool, args, json } => run_sandbox(tool, args, json),
+        DebugCmd::Sandbox {
+            tool,
+            args,
+            last,
+            exec,
+            session,
+            json,
+        } => run_sandbox(tool, args, last, exec, session, json),
     }
 }
 
@@ -193,16 +212,67 @@ fn run_replay(
 }
 
 #[instrument(level = Level::TRACE)]
-fn run_sandbox(tool: String, args: Vec<String>, json: bool) -> Result<()> {
+fn run_sandbox(
+    tool: Option<String>,
+    args: Vec<String>,
+    last: bool,
+    exec: bool,
+    session: Option<String>,
+    json: bool,
+) -> Result<()> {
     use crate::debug::sandbox;
 
-    let input = if args.is_empty() {
-        None
+    // Resolve the audit log entry when using --last or a hash reference.
+    let resolved_entry = if last {
+        let mut entries = crate::debug::log::read_all_session_logs()?;
+        if let Some(filter) = session.as_deref() {
+            entries.retain(|e| e.session_id.contains(filter));
+        }
+        Some(
+            entries
+                .pop()
+                .ok_or_else(|| anyhow::anyhow!("no audit log entries found"))?,
+        )
+    } else if let Some(ref tool) = tool {
+        if args.is_empty() && tool.len() <= 7 && tool.chars().all(|c| c.is_ascii_hexdigit()) {
+            Some(crate::debug::log::find_by_hash(tool)?)
+        } else {
+            None
+        }
     } else {
-        Some(args.join(" "))
+        None
     };
 
-    let report = sandbox::inspect(&tool, input.as_deref())?;
+    // --exec: actually run the command under sandbox enforcement.
+    if exec {
+        let entry = resolved_entry.ok_or_else(|| {
+            anyhow::anyhow!(
+                "--exec requires an audit log reference\n\
+                 usage: clash debug sandbox --exec <id>\n\
+                 usage: clash debug sandbox --exec --last"
+            )
+        })?;
+        return sandbox::exec_entry(&entry);
+    }
+
+    // Inspect mode (default).
+    let report = if let Some(entry) = resolved_entry {
+        sandbox::inspect(&entry.tool_name, Some(&entry.tool_input_summary))?
+    } else {
+        let tool = tool.ok_or_else(|| {
+            anyhow::anyhow!(
+                "specify a tool to inspect, e.g.: clash debug sandbox bash \"git push\"\n\
+                 or pass an id from `clash debug log`: clash debug sandbox <id>\n\
+                 or use --last to inspect the most recent logged command"
+            )
+        })?;
+        let input = if args.is_empty() {
+            None
+        } else {
+            Some(args.join(" "))
+        };
+        sandbox::inspect(&tool, input.as_deref())?
+    };
 
     if json {
         println!("{}", report.format_json()?);

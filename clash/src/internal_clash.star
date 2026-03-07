@@ -1,4 +1,4 @@
-load("@clash//std.star", "exe", "tool", "policy", "sandbox", "home", "path" )
+load("@clash//std.star", "exe", "policy", "sandbox", "home", "path")
 
 def main():
     _clash_fs = sandbox(

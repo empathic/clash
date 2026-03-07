@@ -7,5 +7,5 @@ _claude_fs = sandbox(fs = [
 
 def main():
     return policy(default = deny, rules = [
-        tool(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "Skill", "ToolSearch", "EnterWorktree", "TaskCreate", "TaskGet", "TaskList", "TaskOutput", "TaskStop", "TaskUpdate"]).allow(),
+        tool(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "Skill", "ToolSearch", "EnterWorktree", "TaskCreate", "TaskGet", "TaskList", "TaskOutput", "TaskStop", "TaskUpdate", "ToolSearch"]).allow(),
     ])

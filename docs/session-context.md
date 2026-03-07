@@ -31,25 +31,21 @@ Policies are written in Starlark (`.star` files) and compiled to JSON IR. Three 
 
 ```json
 {
-  "schema_version": 4,
-  "use": "main",
+  "schema_version": 5,
   "default_effect": "deny",
-  "policies": [
-    {
-      "name": "helpers",
-      "body": [
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
-      ]
-    },
-    {
-      "name": "main",
-      "body": [
-        { "include": "helpers" },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
-        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
-        { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
-      ]
-    }
+  "sandboxes": {},
+  "tree": [
+    { "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } },
+        "children": [
+          { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } },
+              "children": [
+                { "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "push" } },
+                    "children": [{ "decision": "deny" }] } },
+                { "decision": { "allow": null } }
+              ] } }
+        ] } },
+    { "condition": { "observe": "tool_name", "pattern": "wildcard",
+        "children": [{ "decision": { "allow": null } }] } }
   ]
 }
 ```
@@ -61,32 +57,32 @@ Policies are written in Starlark (`.star` files) and compiled to JSON IR. Three 
 
 ### Rule Syntax Quick Reference
 
-**Exec (commands):**
+The v5 match tree uses condition nodes (observe + pattern + children) and decision leaves. Capability domains (exec/fs/net) are Starlark compile-time sugar — the IR uses observables and patterns directly.
+
+**Exec (commands) — compiled from `exe("git")`:**
 ```json
-{ "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
-{ "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
-{ "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" }, "args": [{ "literal": "test" }, { "any": null }] } } }
+{ "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } },
+    "children": [
+      { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } },
+          "children": [{ "decision": { "allow": null } }] } }
+    ] } }
 ```
 
-**Fs (filesystem):**
+**Nested args — compiled from `exe("git", args=["push"]).deny()`:**
 ```json
-{ "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
-{ "rule": { "effect": "allow", "fs": { "op": { "or": ["read", "write"] }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
-{ "rule": { "effect": "deny", "fs": { "op": { "single": "write" }, "path": { "literal": ".env" } } } }
-```
-
-**Net (network):**
-```json
-{ "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
-{ "rule": { "effect": "allow", "net": { "domain": { "or": [{ "literal": "github.com" }, { "literal": "crates.io" }] } } } }
+{ "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } },
+    "children": [
+      { "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "push" } },
+          "children": [{ "decision": "deny" }] } }
+    ] } }
 ```
 
 **Patterns:**
-- `{ "any": null }` or `"*"` — wildcard (matches anything)
-- `{ "literal": "value" }` — exact match
-- `{ "glob": "pattern" }` — glob pattern
+- `"wildcard"` — matches anything
+- `{ "literal": { "literal": "value" } }` — exact match
 - `{ "regex": "pattern" }` — regex pattern
-- `{ "or": [...] }` — match any of the listed patterns
+- `{ "any_of": [...] }` — match any of the listed patterns
+- `{ "not": <pattern> }` — negated match
 
 ### CLI Commands for Policy Management
 
@@ -146,15 +142,13 @@ the sandbox will block it and you'll see errors like:
 **When you see these errors:** Tell the user that the clash sandbox is likely blocking network access.
 Suggest one of these fixes:
 
-1. Add a net allow rule to the sandbox policy in their JSON policy file:
-   ```json
-   {
-     "name": "my-sandbox",
-     "body": [
-       { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
-       { "rule": { "effect": "allow", "net": { "domain": "*" } } }
-     ]
-   }
+1. Add network access to the sandbox in the policy's `sandboxes` section, or use `net = allow` in the Starlark `sandbox()` builder:
+   ```python
+   cargo_env = sandbox(
+       default = deny,
+       fs = [cwd(read = allow)],
+       net = allow,
+   )
    ```
 2. Add `"worktree": true` to subpath rules if working in a git worktree
 3. Use `/clash:edit` to interactively update the policy
@@ -178,15 +172,15 @@ directories), the sandbox will block it and you'll see errors like:
 **When you see these errors:** Tell the user that the clash sandbox is likely blocking filesystem access.
 Suggest adding the blocked paths to their policy:
 
-1. Add filesystem access for the needed directory in the relevant sandbox policy:
-   ```json
-   {
-     "name": "my-sandbox",
-     "body": [
-       { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
-       { "rule": { "effect": "allow", "fs": { "op": { "or": ["read", "write", "create"] }, "path": { "subpath": { "path": { "static": "/Users/user/.fly" } } } } } }
-     ]
-   }
+1. Add filesystem access for the needed directory in the sandbox, or use Starlark `path()` in the `sandbox()` builder:
+   ```python
+   my_env = sandbox(
+       default = deny,
+       fs = [
+           cwd(read = allow, write = allow),
+           path("/Users/user/.fly", read = allow, write = allow),
+       ],
+   )
    ```
 2. Use `/clash:edit` to interactively update the policy
 

@@ -12,10 +12,7 @@ documentation.workspace = true
 starlark = { workspace = true }
 allocative = "0.3"
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 anyhow = { workspace = true }
-dirs = { workspace = true }
-tracing = { workspace = true }
 regex = { workspace = true }
 
 [dev-dependencies]

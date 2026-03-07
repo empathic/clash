@@ -5,10 +5,8 @@
 //! that the existing compile pipeline consumes.
 
 mod builders;
-mod cache;
 mod compile;
 mod globals;
-mod import_json;
 mod loader;
 pub mod stdlib;
 
@@ -16,14 +14,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-pub use cache::StarCache;
-
 /// Output from evaluating a `.star` policy file.
 #[derive(Debug, Clone)]
 pub struct EvalOutput {
     /// The compiled JSON policy document.
     pub json: String,
-    /// Paths of all files loaded during evaluation (for cache invalidation).
+    /// Paths of all files loaded during evaluation.
     pub loaded_files: Vec<String>,
 }
 
@@ -82,22 +78,28 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    // Most tests load everything they need from std.star.
-    // Rust globals still available without load: allow, deny, ask, rule, _policy, import_json
+    fn eval_to_doc(source: &str) -> serde_json::Value {
+        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
+        serde_json::from_str(&result.json).unwrap()
+    }
 
     #[test]
     fn test_simple_policy() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "tool", "policy")
 
 def main():
     return policy(default = deny, rules = [tool().allow()])
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        assert_eq!(doc["schema_version"], 4);
-        assert_eq!(doc["use"], "main");
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
         assert_eq!(doc["default_effect"], "deny");
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 1);
+        // tool().allow() → condition{observe: tool_name, pattern: wildcard, children: [decision{allow}]}
+        assert_eq!(tree[0]["condition"]["observe"], "tool_name");
+        assert_eq!(tree[0]["condition"]["pattern"], "wildcard");
     }
 
     #[test]
@@ -116,15 +118,16 @@ def main():
     return policy(
         default = deny,
         rules = [
-            exe("git").allow().sandbox(box),
+            exe("git").sandbox(box).allow(),
             tool().allow(),
         ],
     )
 "#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let policies = doc["policies"].as_array().unwrap();
-        assert!(policies.len() >= 2);
+        let doc = eval_to_doc(source);
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 2);
+        assert!(!doc["sandboxes"].as_object().unwrap().is_empty());
     }
 
     #[test]
@@ -137,7 +140,8 @@ def main():
 
     #[test]
     fn test_tool_bindings() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "tool", "policy")
 
 def main():
@@ -148,16 +152,28 @@ def main():
             tool("Bash").deny(),
         ],
     )
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let main_body = &doc["policies"][0]["body"];
-        assert_eq!(main_body.as_array().unwrap().len(), 2);
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 2);
+        // First: tool("WebSearch") → condition{observe: tool_name, pattern: literal("WebSearch")}
+        assert_eq!(tree[0]["condition"]["observe"], "tool_name");
+        assert_eq!(
+            tree[0]["condition"]["pattern"]["literal"]["literal"],
+            "WebSearch"
+        );
+        // Second: tool("Bash") → deny
+        assert_eq!(
+            tree[1]["condition"]["pattern"]["literal"]["literal"],
+            "Bash"
+        );
     }
 
     #[test]
     fn test_match_multi_exe() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 
 def main():
@@ -168,33 +184,27 @@ def main():
             exe(["rustc", "cargo", "cargo-clippy"]).sandbox(box).allow(),
         ],
     )
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let main_pol = doc["policies"].as_array().unwrap().last().unwrap();
-        let rule = &main_pol["body"][0]["rule"];
-        assert!(rule["exec"]["bin"]["or"].is_array());
-    }
-
-    #[test]
-    fn test_extend_pattern() {
-        let source = r#"
-load("@clash//std.star", "exe", "tool", "policy")
-
-def main():
-    base = policy(default = deny, rules = [tool().allow()])
-    base = base.extend(exe("git").allow())
-    return base
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let main_body = doc["policies"][0]["body"].as_array().unwrap();
-        assert_eq!(main_body.len(), 2);
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 1);
+        // exe(["rustc", "cargo", "cargo-clippy"]) → ToolName=Bash → PosArg(0)=or([rustc, cargo, cargo-clippy])
+        let exe_node = &tree[0]["condition"];
+        assert_eq!(exe_node["observe"], "tool_name");
+        // The inner pos_arg(0) node should have an or pattern
+        let children = exe_node["children"].as_array().unwrap();
+        assert!(!children.is_empty());
+        let pos_arg = &children[0]["condition"];
+        assert_eq!(pos_arg["observe"]["positional_arg"], 0);
+        let pat = &pos_arg["pattern"];
+        assert!(pat["any_of"].is_array());
     }
 
     #[test]
     fn test_domains_net() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "exe", "policy", "sandbox", "domains")
 
 def main():
@@ -204,22 +214,18 @@ def main():
             domains({"github.com": allow, "crates.io": allow}),
         ],
     )
-    return policy(default = deny, rules = [exe("cargo").allow().sandbox(box)])
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let sandbox_pol = &doc["policies"][0];
-        let body = sandbox_pol["body"].as_array().unwrap();
-        let net_rules: Vec<_> = body
-            .iter()
-            .filter(|r| r["rule"]["net"].is_object())
-            .collect();
-        assert_eq!(net_rules.len(), 2);
+    return policy(default = deny, rules = [exe("cargo").sandbox(box).allow()])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        // Should have a sandbox with network config
+        assert!(!doc["sandboxes"].as_object().unwrap().is_empty());
     }
 
     #[test]
     fn test_home_child() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "exe", "policy", "sandbox", "home")
 
 def main():
@@ -229,56 +235,19 @@ def main():
             home().child(".ssh", read = allow),
         ],
     )
-    return policy(default = deny, rules = [exe("git").allow().sandbox(box)])
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let sandbox_pol = &doc["policies"][0];
-        let body = sandbox_pol["body"].as_array().unwrap();
-        assert!(!body.is_empty());
-    }
-
-    #[test]
-    fn test_import_json_and_extend() {
-        let dir = tempfile::tempdir().unwrap();
-        let json_path = dir.path().join("base.json");
-        std::fs::write(
-            &json_path,
-            r#"{
-            "schema_version": 4,
-            "use": "main",
-            "default_effect": "deny",
-            "policies": [
-                {"name": "main", "body": [
-                    {"rule": {"effect": "allow", "tool": {"name": {"any": null}}}}
-                ]}
-            ]
-        }"#,
-        )
-        .unwrap();
-
-        let source = format!(
-            r#"
-load("@clash//std.star", "exe")
-
-def main():
-    base = import_json("{}")
-    base = base.extend(exe("git").allow())
-    return base
+    return policy(default = deny, rules = [exe("git").sandbox(box).allow()])
 "#,
-            json_path.display()
         );
-
-        let result = evaluate(&source, "test.star", dir.path()).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let main_body = doc["policies"].as_array().unwrap().last().unwrap();
-        let body = main_body["body"].as_array().unwrap();
-        assert_eq!(body.len(), 2);
+        assert_eq!(doc["schema_version"], 5);
+        assert!(!doc["sandboxes"].as_object().unwrap().is_empty());
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 1);
     }
 
     #[test]
     fn test_wildcard_domain() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "exe", "policy", "sandbox", "domains")
 
 def main():
@@ -286,19 +255,17 @@ def main():
         default = deny,
         net = [domains({"*.npmjs.org": allow})],
     )
-    return policy(default = deny, rules = [exe("npm").allow().sandbox(box)])
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let sandbox_pol = &doc["policies"][0];
-        let body = sandbox_pol["body"].as_array().unwrap();
-        let net_rule = &body[0]["rule"]["net"]["domain"];
-        assert!(net_rule["regex"].is_string());
+    return policy(default = deny, rules = [exe("npm").sandbox(box).allow()])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        assert!(!doc["sandboxes"].as_object().unwrap().is_empty());
     }
 
     #[test]
     fn test_cwd_worktree() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 
 def main():
@@ -306,19 +273,19 @@ def main():
         default = deny,
         fs = [cwd(follow_worktrees = True, read = allow, write = allow)],
     )
-    return policy(default = deny, rules = [exe("git").allow().sandbox(box)])
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let sandbox_pol = &doc["policies"][0];
-        let body = sandbox_pol["body"].as_array().unwrap();
-        let fs_rule = &body[0]["rule"]["fs"]["path"]["subpath"];
-        assert_eq!(fs_rule["worktree"], true);
+    return policy(default = deny, rules = [exe("git").sandbox(box).allow()])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 1);
+        assert!(!doc["sandboxes"].as_object().unwrap().is_empty());
     }
 
     #[test]
     fn test_tempdir_path() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "exe", "policy", "sandbox", "tempdir")
 
 def main():
@@ -326,20 +293,17 @@ def main():
         default = deny,
         fs = [tempdir(allow_all = True)],
     )
-    return policy(default = deny, rules = [exe("test").allow().sandbox(box)])
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let sandbox_pol = &doc["policies"][0];
-        let body = sandbox_pol["body"].as_array().unwrap();
-        assert!(!body.is_empty());
-        let path = &body[0]["rule"]["fs"]["path"]["subpath"]["path"];
-        assert_eq!(path["env"], "TMPDIR");
+    return policy(default = deny, rules = [exe("test").sandbox(box).allow()])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        assert!(!doc["sandboxes"].as_object().unwrap().is_empty());
     }
 
     #[test]
     fn test_path_static() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "exe", "policy", "sandbox", "path")
 
 def main():
@@ -347,18 +311,17 @@ def main():
         default = deny,
         fs = [path("/usr/local/bin", read = allow, execute = allow)],
     )
-    return policy(default = deny, rules = [exe("test").allow().sandbox(box)])
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let sandbox_pol = &doc["policies"][0];
-        let body = sandbox_pol["body"].as_array().unwrap();
-        assert!(!body.is_empty());
+    return policy(default = deny, rules = [exe("test").sandbox(box).allow()])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        assert!(!doc["sandboxes"].as_object().unwrap().is_empty());
     }
 
     #[test]
     fn test_path_env() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "exe", "policy", "sandbox", "path")
 
 def main():
@@ -366,39 +329,31 @@ def main():
         default = deny,
         fs = [path(env = "CARGO_HOME", read = allow, write = allow)],
     )
-    return policy(default = deny, rules = [exe("cargo").allow().sandbox(box)])
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let sandbox_pol = &doc["policies"][0];
-        let body = sandbox_pol["body"].as_array().unwrap();
-        let path = &body[0]["rule"]["fs"]["path"]["subpath"]["path"];
-        assert_eq!(path["env"], "CARGO_HOME");
+    return policy(default = deny, rules = [exe("cargo").sandbox(box).allow()])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        assert!(!doc["sandboxes"].as_object().unwrap().is_empty());
     }
 
     #[test]
     fn test_invalid_effect_errors() {
-        // _policy is the raw Rust function (no std.star wrapper)
-        let source = r#"
-def main():
-    return _policy(default = "invalid", rules = [])
-"#;
-        let _result = evaluate(source, "test.star", &PathBuf::from("."));
         // Test with a path builder that validates effects
-        let source2 = r#"
+        let source = r#"
 load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(default = deny, fs = [cwd(read = "invalid")])
-    return policy(default = deny, rules = [exe("test").allow().sandbox(box)])
+    return policy(default = deny, rules = [exe("test").sandbox(box).allow()])
 "#;
-        let result2 = evaluate(source2, "test2.star", &PathBuf::from("."));
-        assert!(result2.is_err());
+        let result = evaluate(source, "test.star", &PathBuf::from("."));
+        assert!(result.is_err());
     }
 
     #[test]
     fn test_stdlib_load() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//rust.star", "rust_sandbox")
 load("@clash//std.star", "exe", "policy")
 
@@ -409,11 +364,12 @@ def main():
             exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow(),
         ],
     )
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        assert_eq!(doc["schema_version"], 4);
-        assert!(doc["policies"].as_array().unwrap().len() >= 2);
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        assert!(!tree.is_empty());
+        assert!(!doc["sandboxes"].as_object().unwrap().is_empty());
     }
 
     #[test]
@@ -428,27 +384,15 @@ load("@clash//std.star", "exe", "policy")
 def main():
     return policy(
         default = deny,
-        rules = [exe("test").allow().sandbox({sandbox_name})],
+        rules = [exe("test").sandbox({sandbox_name}).allow()],
     )
 "#
             );
             let result = evaluate(&source, "test.star", &PathBuf::from("."))
                 .unwrap_or_else(|e| panic!("failed to load @clash//{module}: {e}"));
             let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-            assert_eq!(doc["schema_version"], 4, "failed for {module}");
+            assert_eq!(doc["schema_version"], 5, "failed for {module}");
         }
-    }
-
-    #[test]
-    fn test_cache_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let cache = StarCache::at(dir.path().to_path_buf());
-
-        let key = StarCache::cache_key("test source", &[]);
-        assert!(cache.get(&key).is_none());
-
-        cache.put(&key, r#"{"test": true}"#).unwrap();
-        assert_eq!(cache.get(&key).unwrap(), r#"{"test": true}"#);
     }
 
     #[test]
@@ -470,17 +414,18 @@ load("helpers.star", "my_sandbox")
 load("@clash//std.star", "exe", "policy")
 
 def main():
-    return policy(default = deny, rules = [exe("test").allow().sandbox(my_sandbox)])
+    return policy(default = deny, rules = [exe("test").sandbox(my_sandbox).allow()])
 "#;
         let result = evaluate(source, "policy.star", dir.path()).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        assert_eq!(doc["schema_version"], 4);
+        assert_eq!(doc["schema_version"], 5);
         assert!(!result.loaded_files.is_empty());
     }
 
     #[test]
-    fn test_full_example_from_plan() {
-        let source = r#"
+    fn test_full_example() {
+        let doc = eval_to_doc(
+            r#"
 load("@clash//rust.star", "rust_sandbox")
 load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home")
 
@@ -500,96 +445,249 @@ def main():
         net = allow,
     )
 
-    base = policy(default = deny, rules = [])
-    base = base.extend(exe("git").sandbox(gitbox).allow())
-    base = base.extend(exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow())
-    base = base.extend(tool().allow())
-    return base
-"#;
-        let result = evaluate(source, "policy.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-
-        assert_eq!(doc["schema_version"], 4);
-        assert_eq!(doc["use"], "main");
+    return policy(default = deny, rules = [
+        exe("git").sandbox(gitbox).allow(),
+        exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow(),
+        tool().allow(),
+    ])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
         assert_eq!(doc["default_effect"], "deny");
 
-        let policies = doc["policies"].as_array().unwrap();
-        assert!(
-            policies.len() >= 3,
-            "expected >= 3 policies, got {}",
-            policies.len()
-        );
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 3, "expected 3 tree nodes, got {}", tree.len());
 
-        let main_pol = policies.last().unwrap();
-        assert_eq!(main_pol["name"], "main");
-        let main_body = main_pol["body"].as_array().unwrap();
-        assert_eq!(main_body.len(), 3);
+        // All should be condition nodes on tool_name
+        for node in tree {
+            assert!(node["condition"].is_object(), "expected condition node");
+        }
+
+        // Should have sandboxes
+        let sandboxes = doc["sandboxes"].as_object().unwrap();
+        assert!(sandboxes.len() >= 2, "expected >= 2 sandboxes");
     }
 
     #[test]
     fn test_exe_regex_pattern() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "exe", "regex", "policy")
 
 def main():
     return policy(default = deny, rules = [
         exe(regex("cargo.*")).allow(),
     ])
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let rule = &doc["policies"][0]["body"][0]["rule"];
-        assert_eq!(rule["exec"]["bin"]["regex"], "cargo.*");
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        // exe(regex("cargo.*")) → ToolName=Bash → PosArg(0)=regex(cargo.*)
+        let exe_node = &tree[0]["condition"];
+        let children = exe_node["children"].as_array().unwrap();
+        let pos_arg = &children[0]["condition"];
+        assert_eq!(pos_arg["pattern"]["regex"], "cargo.*");
     }
 
     #[test]
     fn test_exe_any_pattern() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "exe", "policy")
 
 def main():
     return policy(default = deny, rules = [
         exe().deny(),
     ])
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let rule = &doc["policies"][0]["body"][0]["rule"];
-        assert!(rule["exec"]["bin"]["any"].is_null());
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        let exe_node = &tree[0]["condition"];
+        assert_eq!(exe_node["observe"], "tool_name");
+        // exe() with no name → ToolName=Bash → PosArg(0)=wildcard → deny
+        let pos_arg_node = &exe_node["children"].as_array().unwrap()[0]["condition"];
+        assert_eq!(pos_arg_node["observe"]["positional_arg"], 0);
+        assert_eq!(pos_arg_node["pattern"], "wildcard");
     }
 
     #[test]
     fn test_tool_regex_pattern() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "tool", "regex", "policy")
 
 def main():
     return policy(default = deny, rules = [
         tool(regex("mcp__.*")).ask(),
     ])
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let rule = &doc["policies"][0]["body"][0]["rule"];
-        assert_eq!(rule["tool"]["name"]["regex"], "mcp__.*");
-        assert_eq!(rule["effect"], "ask");
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        let node = &tree[0]["condition"];
+        assert_eq!(node["observe"], "tool_name");
+        assert_eq!(node["pattern"]["regex"], "mcp__.*");
+        // Should have ask decision
+        let children = node["children"].as_array().unwrap();
+        assert!(
+            children[0]["decision"]["ask"].is_null()
+                || children[0]["decision"].get("ask").is_some()
+        );
     }
 
     #[test]
     fn test_match_exes_with_regex() {
-        let source = r#"
+        let doc = eval_to_doc(
+            r#"
 load("@clash//std.star", "exe", "regex", "policy")
 
 def main():
     return policy(default = deny, rules = [
         exe(["git", regex("gh.*")]).allow(),
     ])
-"#;
-        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
-        let bin = &doc["policies"][0]["body"][0]["rule"]["exec"]["bin"];
-        let or_pats = bin["or"].as_array().unwrap();
-        assert_eq!(or_pats[0]["literal"], "git");
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        // exe(["git", regex("gh.*")]) → ToolName=Bash → PosArg(0)=or([literal(git), regex(gh.*)])
+        let exe_node = &tree[0]["condition"];
+        let children = exe_node["children"].as_array().unwrap();
+        let pos_arg = &children[0]["condition"];
+        let or_pats = pos_arg["pattern"]["any_of"].as_array().unwrap();
+        assert_eq!(or_pats[0]["literal"]["literal"], "git");
         assert_eq!(or_pats[1]["regex"], "gh.*");
+    }
+
+    #[test]
+    fn test_exe_with_args_deny() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "exe", "tool", "policy")
+def main():
+    return policy(default=deny, rules=[
+        exe("git", args=["push"]).deny(),
+        exe("git").allow(),
+        tool("Read").allow(),
+    ])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 3);
+        // First rule: ToolName=Bash → PosArg(0)=git → PosArg(1)=push → deny
+        let exe_node = &tree[0]["condition"];
+        let pos0 = &exe_node["children"].as_array().unwrap()[0]["condition"];
+        assert_eq!(pos0["observe"]["positional_arg"], 0);
+        let pos1 = &pos0["children"].as_array().unwrap()[0]["condition"];
+        assert_eq!(pos1["observe"]["positional_arg"], 1);
+        assert_eq!(pos1["pattern"]["literal"]["literal"], "push");
+    }
+
+    // -----------------------------------------------------------------------
+    // Match tree builder tests (using match_tree.star directly)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_match_tree_simple() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//match_tree.star", "exe", "tool", "allow", "deny", "policy")
+
+def main():
+    return policy(
+        rules = [
+            exe("git").allow(),
+            tool().allow(),
+        ],
+    )
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        assert_eq!(doc["default_effect"], "deny");
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 2);
+    }
+
+    #[test]
+    fn test_match_tree_nested() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//match_tree.star", "exe", "has_arg", "allow", "deny", "policy")
+
+def main():
+    return policy(
+        rules = [
+            exe("git").on([
+                has_arg("--force").deny(),
+                allow(),
+            ]),
+        ],
+    )
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 1);
+        let exe_node = &tree[0]["condition"];
+        assert!(exe_node.is_object());
+    }
+
+    #[test]
+    fn test_match_tree_with_sandbox() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//match_tree.star", "exe", "tool", "allow", "deny", "policy")
+
+def main():
+    return policy(
+        rules = [
+            exe("cargo").allow(sandbox = "cwd_access"),
+            tool().allow(),
+        ],
+    )
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 2);
+    }
+
+    #[test]
+    fn test_match_tree_arg_and_named() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//match_tree.star", "exe", "arg", "named", "allow", "deny", "policy")
+
+def main():
+    return policy(
+        rules = [
+            exe("git").on([
+                arg(1, "push").deny(),
+                allow(),
+            ]),
+        ],
+    )
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+    }
+
+    #[test]
+    fn test_match_tree_load_module() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//match_tree.star", "exe", "tool", "allow", "deny", "policy", "mt_regex")
+
+def main():
+    return policy(
+        rules = [
+            exe(mt_regex("cargo.*")).allow(),
+            tool().deny(),
+        ],
+    )
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
     }
 }

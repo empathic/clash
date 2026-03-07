@@ -71,7 +71,7 @@ pub fn check_for_sandbox_network_hint(
     // Re-evaluate the policy to check if this command would run under
     // a sandbox with NetworkPolicy::Deny
     let tree = settings.policy_tree()?;
-    let decision = tree.evaluate(&input.tool_name, &input.tool_input, &input.cwd);
+    let decision = tree.evaluate(&input.tool_name, &input.tool_input);
 
     let network_policy = decision.sandbox.as_ref().map(|s| &s.network);
 
@@ -288,17 +288,16 @@ mod tests {
 
     #[test]
     fn test_check_returns_hint_with_implicit_sandbox() {
-        // Any policy with fs rules creates an implicit sandbox with NetworkPolicy::Deny.
-        // When a Bash command fails with network errors, we should hint.
+        // V5: allow Bash with a sandbox that denies network
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
-            r#"{
-  "schema_version": 4, "use": "main", "default_effect": "deny",
-  "policies": [{ "name": "main", "body": [
-    { "rule": { "effect": "allow", "exec": { "bin": {"any": null} } } },
-    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}} } } }
-  ]}]
-}"#,
+            r#"{"schema_version":5,"default_effect":"deny",
+  "sandboxes":{"restricted":{"default":"read + execute","rules":[],"network":"deny"}},
+  "tree":[
+    {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
+      {"decision":{"allow":"restricted"}}
+    ]}}
+  ]}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Bash".into(),
@@ -318,20 +317,18 @@ mod tests {
 
     #[test]
     fn test_check_returns_hint_with_explicit_sandbox_network_deny() {
-        // Explicit sandbox with no (net allow) → network defaults to Deny
+        // Explicit sandbox with network=deny
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
-            r#"{
-  "schema_version": 4, "use": "main", "default_effect": "deny",
-  "policies": [
-    { "name": "restricted", "body": [
-      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}} } } }
-    ]},
-    { "name": "main", "body": [
-      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "curl"}, "args": [{"any": null}] }, "sandbox": {"named": "restricted"} } }
-    ]}
-  ]
-}"#,
+            r#"{"schema_version":5,"default_effect":"deny",
+  "sandboxes":{"restricted":{"default":"read + execute","rules":[],"network":"deny"}},
+  "tree":[
+    {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
+      {"condition":{"observe":{"positional_arg":0},"pattern":{"literal":{"literal":"curl"}},"children":[
+        {"decision":{"allow":"restricted"}}
+      ]}}
+    ]}}
+  ]}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Bash".into(),
@@ -351,17 +348,18 @@ mod tests {
 
     #[test]
     fn test_check_returns_none_with_sandbox_network_allow() {
-        // Explicit sandbox with wildcard (net) → network errors aren't from sandbox
+        // Sandbox with network=allow → network errors aren't from sandbox
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
-            r#"
-(default deny "main")
-(policy "with-net"
-  (allow (fs read (subpath "/tmp")))
-  (allow (net)))
-(policy "main"
-  (allow (exec "curl" *) :sandbox "with-net"))
-"#,
+            r#"{"schema_version":5,"default_effect":"deny",
+  "sandboxes":{"with-net":{"default":"read + execute","rules":[],"network":"allow"}},
+  "tree":[
+    {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
+      {"condition":{"observe":{"positional_arg":0},"pattern":{"literal":{"literal":"curl"}},"children":[
+        {"decision":{"allow":"with-net"}}
+      ]}}
+    ]}}
+  ]}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Bash".into(),
@@ -375,21 +373,18 @@ mod tests {
 
     #[test]
     fn test_check_returns_hint_with_domain_specific_net_rule() {
-        // Domain-specific net rules deny sandbox network → hint should fire
+        // Domain-specific net allow → NetworkPolicy::AllowDomains → hint fires
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
-            r#"{
-  "schema_version": 4, "use": "main", "default_effect": "deny",
-  "policies": [
-    { "name": "with-net", "body": [
-      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}} } } },
-      { "rule": { "effect": "allow", "net": { "domain": {"literal": "example.com"} } } }
-    ]},
-    { "name": "main", "body": [
-      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "curl"}, "args": [{"any": null}] }, "sandbox": {"named": "with-net"} } }
-    ]}
-  ]
-}"#,
+            r#"{"schema_version":5,"default_effect":"deny",
+  "sandboxes":{"with-net":{"default":"read + execute","rules":[],"network":{"allow_domains":["example.com"]}}},
+  "tree":[
+    {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
+      {"condition":{"observe":{"positional_arg":0},"pattern":{"literal":{"literal":"curl"}},"children":[
+        {"decision":{"allow":"with-net"}}
+      ]}}
+    ]}}
+  ]}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Bash".into(),

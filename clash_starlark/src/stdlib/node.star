@@ -1,6 +1,7 @@
 load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "domains", "exe")
 
 node_sandbox = sandbox(
+    name = "node_dev",
     default = deny,
     fs = [
         cwd(read = allow, write = allow, execute = allow),

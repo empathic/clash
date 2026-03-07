@@ -30,41 +30,31 @@ Clash operates on three capability domains, not individual tools. Tool invocatio
 Starlark source (.star) or JSON
     │
     ▼
-JSON IR                         ← clash_starlark (if .star)
+JSON IR (schema v5)              ← clash_starlark (if .star)
     │
     ▼
-Vec<TopLevel> (AST)             ← parse.rs
+CompiledPolicy (match tree)      ← compile.rs, match_tree.rs
     │
-    ├── Version { number }
-    ├── Use { policy_name }
-    └── Policy { name, body: [When | Match | Effect | Include] }
-    │
-    ▼
-PolicyTree (IR)                 ← compile.rs, tree.rs
-    │
-    ├── default: Effect
-    ├── policy_name: String
-    ├── root: Node               (tree-shaped decision structure)
-    │   ├── Sequence { children }
-    │   ├── DenyOverrides { children }
-    │   ├── When { predicate, body }
-    │   ├── Match { observable, arms, constraint_policy? }
-    │   └── Leaf { effect }
-    └── node_meta: Vec<NodeMeta>
+    ├── default_effect: Effect
+    ├── sandboxes: HashMap<String, SandboxPolicy>
+    └── tree: Vec<Node>           (uniform trie structure)
+        ├── Condition { observe, pattern, children }
+        └── Decision { Allow | Deny | Ask }
 ```
+
+The match tree is a uniform trie IR where:
+- One node type (`Condition`) with an observable + pattern + children
+- Capability domains (exec/fs/net) are Starlark compile-time sugar, not IR concepts
+- Sandboxes are decoupled and referenced by name
+- Evaluation is a single DFS pass with no node visited twice
 
 ### Compilation Steps
 
 0. **Evaluate Starlark** (if `.star`) — run `main()` to produce JSON IR via `clash_starlark`
-1. **Parse** — JSON IR → AST (`Vec<TopLevel>`)
-2. **Find default** — extract the `default_effect` and `use` declarations
-3. **Inject internal policies** — prepend internal policies (clash self-management, interactive tools) to the active policy, namespacing auto-generated sandbox names to prevent collisions
-4. **Build policy map** — index all policy objects by name
-5. **Flatten** — recursively resolve `{ "include": "name" }` into a flat rule list
-6. **Validate sandbox references** — verify each named `"sandbox": { "named": "name" }` points to an existing policy
-7. **Group** — split rules by capability domain (exec/fs/net/tool)
-8. **Compile matchers** — convert AST patterns to IR with pre-compiled regexes, resolve `{ "env": "NAME" }` references
-9. **Compile sandbox policies** — for each named sandbox reference, compile the referenced policy's rules into standalone rule sets
+1. **Parse** — JSON IR → `CompiledPolicy` (match tree)
+2. **Validate sandbox references** — verify each `SandboxRef` in decision nodes points to an entry in `CompiledPolicy.sandboxes`
+3. **Sort by specificity** — children sorted by pattern specificity: `Literal(3) > Regex(2) > AnyOf/Not(1) > Wildcard(0)`, with ties broken by observable specificity
+4. **Detect unreachable branches** — warn if a wildcard sibling precedes more specific siblings
 
 ---
 
@@ -91,22 +81,25 @@ There is no automatic sorting or conflict detection — the policy author contro
 ## Evaluation Algorithm
 
 ```
-evaluate(tool_name, tool_input, cwd):
-    1. Map tool invocation to EvalContext
-       (command, tool, http.domain, fs.action, fs.path, etc.)
+evaluate(tool_name, tool_input):
+    1. Build QueryContext from tool invocation
+       (tool_name, positional args, tool_input JSON)
 
-    2. Walk the policy tree (root node):
-       - Sequence: evaluate children in order, return first match
-       - DenyOverrides: evaluate ALL children, deny > ask > allow
-       - When: test predicate against context, recurse into body if true
-       - Match: if observable is relevant, dispatch on arms (first-match);
-               if irrelevant and constraint_policy present,
-               merge constraints into SandboxOut, return implicit Allow
-       - Leaf: return effect
+    2. DFS walk the match tree:
+       for each node in children:
+         - Decision: return the decision (allow/deny/ask + optional sandbox ref)
+         - Condition: extract observable value from context,
+                      test against pattern:
+                      - if matches: recurse into children
+                      - if no child produces a decision: backtrack
+                      - if no match: skip to next sibling
 
-    3. If tree walk produces no match → return default effect
+    3. If DFS produces no match → return default_effect
 
-    4. Build PolicyDecision with effect, sandbox_out, and trace
+    4. Resolve sandbox: if decision has SandboxRef,
+       look up in CompiledPolicy.sandboxes
+
+    5. Build PolicyDecision with effect, sandbox, and trace
 ```
 
 > **Note:** This evaluation runs once per Claude Code tool call via the PreToolUse hook. It does not run for child processes spawned by allowed Bash commands. Child processes inherit kernel-level sandbox restrictions (fs/net) but are not checked against exec rules.
@@ -133,19 +126,24 @@ This enables the `clash explain` command and structured audit logging.
 
 ---
 
-## Constraint Derivation
+## Sandbox Attachment
 
-Runtime constraints (filesystem and network sandbox policies) are derived from match blocks in the decision tree.
+Runtime constraints (filesystem and network sandbox policies) are attached to decisions via named sandbox references.
 
 ### How It Works
 
-Match blocks on constraint-derivable observables (`ctx.http.domain`, `ctx.http.method`, `ctx.http.port`, `ctx.http.path`, `ctx.fs.action`, `ctx.fs.path`, `ctx.fs.exists`) are pre-compiled into a `SandboxPolicy` at compile time. The `constraint_policy` is attached to the `Node::Match` in the decision tree.
+Sandbox definitions are declared at the top level of the policy and referenced by name in `Decision` nodes. When a decision includes a `SandboxRef`, the evaluator looks up the corresponding `SandboxPolicy` from `CompiledPolicy.sandboxes` and attaches it to the `PolicyDecision`.
 
-At runtime, the decision tree is evaluated. When a match block's observable is **relevant** (e.g. the request involves HTTP), it dispatches normally (first-match on arms). When the observable is **irrelevant** (e.g. an `ctx.http.domain` match on a non-HTTP request), the match block contributes its pre-compiled constraints to the `SandboxOut` and returns an implicit `Allow`.
+```python
+policy(
+    sandboxes = [cwd_sb],
+    rules = [
+        exe("cargo").allow(sandbox="cwd_access"),
+    ],
+)
+```
 
-### DenyOverrides for When Bodies
-
-When a `(when ...)` block has multiple body items (e.g. an effect + constraint match blocks), the body uses `DenyOverrides` semantics: all children are evaluated (not just the first match), allowing both the decision effect and constraints to be collected.
+This keeps sandbox definitions decoupled from the decision tree — the same sandbox can be referenced by multiple rules.
 
 ### Enforcement
 

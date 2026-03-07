@@ -1,33 +1,18 @@
-//! Capability-based policy language.
+//! Match-tree policy language.
 //!
-//! Four capability domains: `exec` (commands), `fs` (filesystem), `net` (network), `tool` (agent tools).
-//!
-//! Policies are authored and stored as JSON. The AST types serve as the
-//! serialization IR via serde.
+//! Policies are authored in Starlark and compiled to a uniform trie IR.
+//! Evaluation is a single DFS pass — first match wins.
 
-pub mod ast;
 pub mod compile;
-pub mod decision_tree;
-pub mod edit;
 pub mod error;
-pub mod eval;
 pub mod ir;
-pub mod print;
+pub mod match_tree;
 pub mod sandbox_types;
-pub mod schema;
-pub mod specificity;
-pub mod tree;
 
-pub use ast::PolicyDocument;
-pub use compile::{
-    AllShadows, ShadowInfo, compile_document_to_tree, compile_document_to_tree_with_internals,
-    compile_multi_level_to_tree, detect_all_shadows, detect_all_shadows_from_rules,
-};
-pub use decision_tree::DecisionTree;
+pub use compile::compile_multi_level_to_tree;
 pub use error::{CompileError, PolicyError, PolicyParseError};
 pub use ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
-pub use print::print_tree;
-pub use tree::PolicyTree;
+pub use match_tree::CompiledPolicy;
 
 use std::fmt;
 

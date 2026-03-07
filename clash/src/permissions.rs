@@ -58,7 +58,7 @@ pub fn check_permission(
         }
     };
 
-    let decision = tree.evaluate(&input.tool_name, &input.tool_input, &input.cwd);
+    let decision = tree.evaluate(&input.tool_name, &input.tool_input);
     let noun = extract_noun(&input.tool_name, &input.tool_input);
 
     info!(
@@ -365,39 +365,53 @@ mod tests {
 
     // --- policy engine tests ---
 
+    /// V5 policy: allow Bash when positional_arg(0) matches `bin`.
+    fn v5_allow_exec(bin: &str) -> String {
+        format!(
+            r#"{{"schema_version":5,"default_effect":"deny","sandboxes":{{}},"tree":[
+            {{"condition":{{"observe":"tool_name","pattern":{{"literal":{{"literal":"Bash"}}}},"children":[
+                {{"condition":{{"observe":{{"positional_arg":0}},"pattern":{{"literal":{{"literal":"{bin}"}}}},"children":[
+                    {{"decision":{{"allow":null}}}}
+                ]}}}}
+            ]}}}}
+        ]}}"#
+        )
+    }
+
     #[test]
     fn test_policy_allow_git_status() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
-        );
+        let settings = settings_with_policy(&v5_allow_exec("git"));
         let result = check_permission(&bash_input("git status"), &settings)?;
         assert_decision(
             &result,
             claude_settings::PermissionRule::Allow,
-            Some("policy: allowed"),
+            Some("result: allow"),
         );
         Ok(())
     }
 
     #[test]
     fn test_policy_deny_git_push() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "exec": {"bin": {"literal": "git"}, "args": [{"literal": "push"}, {"any": null}]}}}, {"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
-        );
+        // deny git push, allow git *
+        let source = r#"{"schema_version":5,"default_effect":"deny","sandboxes":{},"tree":[
+            {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
+                {"condition":{"observe":{"positional_arg":0},"pattern":{"literal":{"literal":"git"}},"children":[
+                    {"condition":{"observe":{"positional_arg":1},"pattern":{"literal":{"literal":"push"}},"children":[
+                        {"decision":"deny"}
+                    ]}},
+                    {"decision":{"allow":null}}
+                ]}}
+            ]}}
+        ]}"#;
+        let settings = settings_with_policy(source);
         let result = check_permission(&bash_input("git push origin main"), &settings)?;
-        assert_decision(
-            &result,
-            claude_settings::PermissionRule::Deny,
-            None, // uses rule description as reason, not "policy: denied"
-        );
+        assert_decision(&result, claude_settings::PermissionRule::Deny, None);
         Ok(())
     }
 
     #[test]
     fn test_policy_default_deny() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
-        );
+        let settings = settings_with_policy(&v5_allow_exec("git"));
         // ls doesn't match any rule
         let result = check_permission(&bash_input("ls"), &settings)?;
         assert_eq!(
@@ -409,9 +423,14 @@ mod tests {
 
     #[test]
     fn test_policy_read_under_cwd() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/home/user/project"}}}}}}]}]}"#,
-        );
+        let source = r#"{"schema_version":5,"default_effect":"deny","sandboxes":{},"tree":[
+            {"condition":{"observe":"fs_op","pattern":{"literal":{"literal":"read"}},"children":[
+                {"condition":{"observe":"fs_path","pattern":{"prefix":{"literal":"/home/user/project"}},"children":[
+                    {"decision":{"allow":null}}
+                ]}}
+            ]}}
+        ]}"#;
+        let settings = settings_with_policy(source);
         let input = ToolUseHookInput {
             tool_name: "Read".into(),
             tool_input: json!({"file_path": "/home/user/project/src/main.rs"}),
@@ -422,16 +441,21 @@ mod tests {
         assert_decision(
             &result,
             claude_settings::PermissionRule::Allow,
-            Some("policy: allowed"),
+            Some("result: allow"),
         );
         Ok(())
     }
 
     #[test]
     fn test_policy_read_outside_cwd_denied() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/home/user/project"}}}}}}]}]}"#,
-        );
+        let source = r#"{"schema_version":5,"default_effect":"deny","sandboxes":{},"tree":[
+            {"condition":{"observe":"fs_op","pattern":{"literal":{"literal":"read"}},"children":[
+                {"condition":{"observe":"fs_path","pattern":{"prefix":{"literal":"/home/user/project"}},"children":[
+                    {"decision":{"allow":null}}
+                ]}}
+            ]}}
+        ]}"#;
+        let settings = settings_with_policy(source);
         let input = ToolUseHookInput {
             tool_name: "Read".into(),
             tool_input: json!({"file_path": "/etc/passwd"}),
@@ -461,9 +485,7 @@ mod tests {
 
     #[test]
     fn test_explanation_contains_matched_rule() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
-        );
+        let settings = settings_with_policy(&v5_allow_exec("git"));
         let result = check_permission(&bash_input("git status"), &settings)?;
         let ctx = get_additional_context(&result).expect("should have additional_context");
         assert!(
@@ -475,9 +497,15 @@ mod tests {
 
     #[test]
     fn test_explanation_no_rules_matched() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"{"schema_version": 4, "use": "main", "default_effect": "ask", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "exec": {"bin": {"literal": "git"}, "args": [{"any": null}]}}}]}]}"#,
-        );
+        // default=ask so that unmatched tools get ask, not deny
+        let source = r#"{"schema_version":5,"default_effect":"ask","sandboxes":{},"tree":[
+            {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
+                {"condition":{"observe":{"positional_arg":0},"pattern":{"literal":{"literal":"git"}},"children":[
+                    {"decision":{"allow":null}}
+                ]}}
+            ]}}
+        ]}"#;
+        let settings = settings_with_policy(source);
         let result = check_permission(&bash_input("ls"), &settings)?;
         let ctx = get_additional_context(&result).expect("should have additional_context");
         assert!(
@@ -529,30 +557,39 @@ mod tests {
 
     #[test]
     fn test_ask_user_question_allowed_by_blanket_tool_rule() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "tool": {}}}]}]}"#,
-        );
+        // Blanket allow all tools: wildcard on tool_name
+        let source = r#"{"schema_version":5,"default_effect":"deny","sandboxes":{},"tree":[
+            {"condition":{"observe":"tool_name","pattern":"wildcard","children":[
+                {"decision":{"allow":null}}
+            ]}}
+        ]}"#;
+        let settings = settings_with_policy(source);
         let input = ToolUseHookInput {
             tool_name: "AskUserQuestion".into(),
             tool_input: json!({"questions": [{"question": "Which approach?", "options": []}]}),
             ..Default::default()
         };
         let result = check_permission(&input, &settings)?;
-        // Policy layer evaluates to Allow — the passthrough to preserve
-        // Claude Code's interactive UI happens in the hook handler layer.
         assert_decision(
             &result,
             claude_settings::PermissionRule::Allow,
-            Some("policy: allowed"),
+            Some("result: allow"),
         );
         Ok(())
     }
 
     #[test]
     fn test_ask_user_question_denied_by_explicit_deny() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "tool": {"name": {"literal": "AskUserQuestion"}}}}, {"rule": {"effect": "allow", "tool": {}}}]}]}"#,
-        );
+        // Deny AskUserQuestion, allow everything else
+        let source = r#"{"schema_version":5,"default_effect":"deny","sandboxes":{},"tree":[
+            {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"AskUserQuestion"}},"children":[
+                {"decision":"deny"}
+            ]}},
+            {"condition":{"observe":"tool_name","pattern":"wildcard","children":[
+                {"decision":{"allow":null}}
+            ]}}
+        ]}"#;
+        let settings = settings_with_policy(source);
         let input = ToolUseHookInput {
             tool_name: "AskUserQuestion".into(),
             tool_input: json!({"questions": []}),
@@ -698,9 +735,13 @@ mod tests {
 
     #[test]
     fn test_deny_decision_includes_agent_context() -> Result<()> {
-        let settings = settings_with_policy(
-            r#"{"schema_version": 4, "use": "main", "default_effect": "deny", "policies": [{"name": "main", "body": [{"rule": {"effect": "deny", "exec": {}}}]}]}"#,
-        );
+        // Deny all Bash commands
+        let source = r#"{"schema_version":5,"default_effect":"deny","sandboxes":{},"tree":[
+            {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
+                {"decision":"deny"}
+            ]}}
+        ]}"#;
+        let settings = settings_with_policy(source);
         let result = check_permission(&bash_input("ls -la"), &settings)?;
         assert_eq!(
             get_decision(&result),

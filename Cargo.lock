@@ -562,13 +562,10 @@ version = "0.3.6"
 dependencies = [
  "allocative",
  "anyhow",
- "dirs",
  "regex",
  "serde_json",
- "sha2",
  "starlark",
  "tempfile",
- "tracing",
 ]
 
 [[package]]
