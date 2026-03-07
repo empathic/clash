@@ -87,19 +87,20 @@ fn resolve_sandbox_policy(
 }
 
 /// Load the policy file, compile it, and generate a sandbox policy.
-fn load_sandbox_for_profile(profile_name: &str, cwd: &str) -> Result<SandboxPolicy> {
+fn load_sandbox_for_profile(profile_name: &str, _cwd: &str) -> Result<SandboxPolicy> {
     use crate::settings::ClashSettings;
 
     let path = ClashSettings::policy_file()?;
     let json = crate::settings::evaluate_star_policy(&path)
         .with_context(|| format!("failed to evaluate {}", path.display()))?;
-    let tree = crate::policy::compile::compile_policy(&json)
+    let policy = crate::policy::compile::compile_to_tree(&json)
         .with_context(|| format!("failed to compile {}", path.display()))?;
 
-    tree.build_sandbox_policy(profile_name, cwd).ok_or_else(|| {
+    policy.sandboxes.get(profile_name).cloned().ok_or_else(|| {
         anyhow::anyhow!(
-            "policy has no sandbox-relevant constraints (no fs rules found for profile '{}')",
-            profile_name
+            "policy has no sandbox named '{}' (available: {:?})",
+            profile_name,
+            policy.sandboxes.keys().collect::<Vec<_>>()
         )
     })
 }
@@ -187,7 +188,7 @@ pub fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
 ///
 /// On other platforms: applies the sandbox in-process and execs the command
 /// directly via `exec_sandboxed()` (no violation capture).
-fn run_sandboxed_command(
+pub(crate) fn run_sandboxed_command(
     policy: &SandboxPolicy,
     cwd: &std::path::Path,
     command: &[String],

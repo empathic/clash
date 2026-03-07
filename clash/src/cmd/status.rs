@@ -2,11 +2,10 @@ use anyhow::Result;
 use tracing::{Level, instrument};
 
 use crate::policy::Effect;
-use crate::policy::ast::OpPattern;
 use crate::settings::{ClashSettings, PolicyLevel};
 use crate::style;
 
-/// Show policy status: layers, rules with shadowing, and potential issues.
+/// Show policy status: layers, rules, and potential issues.
 #[instrument(level = Level::TRACE)]
 pub fn run(_json: bool, verbose: bool) -> Result<()> {
     if crate::settings::is_disabled() {
@@ -26,7 +25,7 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     }
 
     let settings = ClashSettings::load_or_create()?;
-    let tree = match settings.policy_tree() {
+    let policy = match settings.policy_tree() {
         Some(t) => t,
         None => {
             if let Some(err) = settings.policy_error() {
@@ -42,19 +41,17 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     println!("{}", style::banner());
     println!();
 
-    // Policy syntax version
+    // Policy version
     println!(
         "{} {}",
         style::header("Policy version"),
-        style::dim(&format!("(syntax v{})", tree.version))
+        style::dim("(syntax v5)")
     );
-    // Schema version 4 is current; no upgrade needed.
     println!();
 
     let loaded = settings.loaded_policies();
     let multi_level = loaded.len() > 1;
 
-    // Build a lookup for level paths.
     let level_path = |level: PolicyLevel| -> Option<String> {
         loaded
             .iter()
@@ -62,7 +59,6 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
             .map(|lp| lp.path.display().to_string())
     };
 
-    // 1. Policy layers
     println!("{}", style::header("Policy layers"));
     println!("{}", style::dim("─────────────"));
     for &level in &[
@@ -88,104 +84,96 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     }
     println!();
 
-    // 2. Effective policy — rules in evaluation order with shadow detection
     println!(
         "{} {}",
         style::header("Effective policy"),
         style::dim(&format!(
             "(default: {})",
-            style::effect(&tree.default.to_string())
+            style::effect(&policy.default_effect.to_string())
         ))
     );
     println!("{}", style::dim("─────────────────────────────────"));
 
-    let total =
-        tree.exec_rules.len() + tree.fs_rules.len() + tree.net_rules.len() + tree.tool_rules.len();
-    if total == 0 && tree.version < 2 {
+    let rules = policy.format_rules();
+    if rules.is_empty() {
         println!(
             "  {}",
             style::dim(&format!(
                 "(no rules — default {} applies to everything)",
-                tree.default
+                policy.default_effect
             ))
         );
+    } else {
+        // TODO: the way we are doing color prefixing here is really gross. Create something more structured
+        for rule in &rules {
+            // Color the effect prefix
+            let colored = if rule.starts_with("allow") {
+                format!(
+                    "  {} {}",
+                    style::green("allow"),
+                    &rule["allow".len()..].trim()
+                )
+            } else if rule.starts_with("deny") {
+                format!("  {} {}", style::red("deny"), &rule["deny".len()..].trim())
+            } else if rule.starts_with("ask") {
+                format!("  {} {}", style::yellow("ask"), &rule["ask".len()..].trim())
+            } else {
+                format!("  {}", rule)
+            };
+            println!("{}", colored);
+        }
     }
 
-    let everything_else = match tree.default {
+    let everything_else = match policy.default_effect {
         Effect::Allow => style::green("allowed"),
         Effect::Deny => style::red("denied"),
         Effect::Ask => style::yellow("requires approval"),
     };
     println!("\n  Everything else: {}", everything_else);
     println!();
+    println!("{}", style::header("Sandboxes"));
+    println!("{}", style::dim("─────────────────────────────────"));
+    if policy.sandboxes.is_empty() {
+        println!("  {}", style::dim("(no sandboxes defined)"));
+    }
+    for (name, sb) in policy.sandboxes.iter() {
+        println!("  {}", style::cyan(name));
+        println!("    default: {}", style::dim(&sb.default.display()));
+        for rule in &sb.rules {
+            let effect_str = match rule.effect {
+                crate::policy::sandbox_types::RuleEffect::Allow => style::green("allow"),
+                crate::policy::sandbox_types::RuleEffect::Deny => style::red("deny"),
+            };
+            let match_suffix = match rule.path_match {
+                crate::policy::sandbox_types::PathMatch::Subpath => "/**",
+                crate::policy::sandbox_types::PathMatch::Literal => "",
+                crate::policy::sandbox_types::PathMatch::Regex => " (regex)",
+            };
+            println!(
+                "    {} {} {}",
+                effect_str,
+                rule.caps.display(),
+                style::dim(&format!("{}{}", rule.path, match_suffix))
+            );
+        }
+        let net_str = match &sb.network {
+            crate::policy::sandbox_types::NetworkPolicy::Deny => style::red("deny"),
+            crate::policy::sandbox_types::NetworkPolicy::Allow => style::green("allow"),
+            crate::policy::sandbox_types::NetworkPolicy::Localhost => style::yellow("localhost"),
+            crate::policy::sandbox_types::NetworkPolicy::AllowDomains(domains) => {
+                style::green(&format!("allow [{}]", domains.join(", ")))
+            }
+        };
+        println!("    network: {}", net_str);
+    }
 
-    // 3. Potential issues
     println!("{}", style::header("Potential issues"));
     println!("{}", style::dim("────────────────"));
+
     let mut issues = Vec::new();
 
-    // Check for overly permissive wildcard exec rules
-    for rule in &tree.exec_rules {
-        if rule.effect == Effect::Allow
-            && !rule
-                .origin_policy
-                .as_ref()
-                .is_some_and(|p| p.starts_with("__internal_"))
-            && let crate::policy::ast::CapMatcher::Exec(ref m) = rule.source.matcher
-            && matches!(m.bin, crate::policy::ast::Pattern::Any)
-        {
-            issues.push(
-                "Wildcard exec allow: all commands are allowed. Consider restricting to specific programs."
-                    .to_string(),
-            );
-        }
-    }
-
-    // Check for overly permissive fs rules
-    for rule in &tree.fs_rules {
-        if rule.effect == Effect::Allow
-            && !rule
-                .origin_policy
-                .as_ref()
-                .is_some_and(|p| p.starts_with("__internal_"))
-            && let crate::policy::ast::CapMatcher::Fs(ref m) = rule.source.matcher
-            && matches!(m.op, OpPattern::Any)
-            && m.path.is_none()
-        {
-            issues.push(
-                "Wildcard filesystem allow: all file operations on all paths are allowed."
-                    .to_string(),
-            );
-        }
-    }
-
-    // Check for overly permissive net rules
-    for rule in &tree.net_rules {
-        if rule.effect == Effect::Allow
-            && !rule
-                .origin_policy
-                .as_ref()
-                .is_some_and(|p| p.starts_with("__internal_"))
-            && let crate::policy::ast::CapMatcher::Net(ref m) = rule.source.matcher
-            && matches!(m.domain, crate::policy::ast::Pattern::Any)
-        {
-            issues.push(
-                "Wildcard network allow: all domains are accessible. Consider restricting to specific domains."
-                    .to_string(),
-            );
-        }
-    }
-
-    // Check default allow with no deny rules
-    if tree.default == Effect::Allow
-        && tree
-            .exec_rules
-            .iter()
-            .chain(&tree.fs_rules)
-            .chain(&tree.net_rules)
-            .all(|r| r.effect != Effect::Deny)
-    {
-        issues.push("Default is allow with no deny rules: everything is permitted.".to_string());
+    if policy.default_effect == Effect::Allow && policy.tree.is_empty() {
+        issues.push("Default is allow with no rules: everything is permitted.".to_string());
     }
 
     if issues.is_empty() {

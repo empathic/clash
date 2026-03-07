@@ -155,7 +155,7 @@ fn resolve_sandbox_policy(
 ) -> Option<SandboxPolicy> {
     // Path 1: re-evaluate against the decision tree.
     if let Some(tree) = settings.policy_tree() {
-        let decision = tree.evaluate(&input.tool_name, &input.tool_input, &input.cwd);
+        let decision = tree.evaluate(&input.tool_name, &input.tool_input);
         if let Some(sandbox) = decision.sandbox {
             info!("resolve_sandbox_policy: found sandbox via decision tree re-evaluation");
             return Some(sandbox);
@@ -873,15 +873,16 @@ mod tests {
 
     #[test]
     fn test_check_returns_hint_with_sandbox() {
+        // V5: allow Bash with a sandbox that denies network and has limited fs
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
-            r#"{
-  "schema_version": 4, "use": "main", "default_effect": "deny",
-  "policies": [{ "name": "main", "body": [
-    { "rule": { "effect": "allow", "exec": { "bin": {"any": null} } } },
-    { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}} } } }
-  ]}]
-}"#,
+            r#"{"schema_version":5,"default_effect":"deny",
+  "sandboxes":{"restricted":{"default":"read + execute","rules":[{"effect":"allow","caps":"read","path":"/tmp"}],"network":"deny"}},
+  "tree":[
+    {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
+      {"decision":{"allow":"restricted"}}
+    ]}}
+  ]}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Bash".into(),
@@ -904,14 +905,16 @@ mod tests {
 
     #[test]
     fn test_check_returns_none_when_path_is_allowed() {
+        // Sandbox allows read+write+create under the .fly path → not a sandbox violation
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
-            r#"
-(default deny "main")
-(policy "main"
-  (allow (exec *))
-  (allow (fs (or read write create) (subpath "/Users/emschwartz/.fly"))))
-"#,
+            r#"{"schema_version":5,"default_effect":"deny",
+  "sandboxes":{"permissive":{"default":"read + execute","rules":[{"effect":"allow","caps":"read + write + create","path":"/Users/emschwartz/.fly"}],"network":"deny"}},
+  "tree":[
+    {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
+      {"decision":{"allow":"permissive"}}
+    ]}}
+  ]}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Bash".into(),
@@ -922,7 +925,6 @@ mod tests {
             cwd: "/tmp".into(),
             ..Default::default()
         };
-        // Path is under an explicitly allowed subpath → not a sandbox violation
         let result = check_for_sandbox_fs_hint(&input, &settings);
         assert!(
             result.is_none(),
@@ -932,19 +934,18 @@ mod tests {
 
     #[test]
     fn test_check_returns_hint_with_explicit_sandbox() {
+        // Explicit sandbox only allows read under /project → .fly access denied
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
-            r#"{
-  "schema_version": 4, "use": "main", "default_effect": "deny",
-  "policies": [
-    { "name": "restricted", "body": [
-      { "rule": { "effect": "allow", "fs": { "op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/project"}}} } } }
-    ]},
-    { "name": "main", "body": [
-      { "rule": { "effect": "allow", "exec": { "bin": {"literal": "fly"}, "args": [{"any": null}] }, "sandbox": {"named": "restricted"} } }
-    ]}
-  ]
-}"#,
+            r#"{"schema_version":5,"default_effect":"deny",
+  "sandboxes":{"restricted":{"default":"read + execute","rules":[{"effect":"allow","caps":"read","path":"/project"}],"network":"deny"}},
+  "tree":[
+    {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
+      {"condition":{"observe":{"positional_arg":0},"pattern":{"literal":{"literal":"fly"}},"children":[
+        {"decision":{"allow":"restricted"}}
+      ]}}
+    ]}}
+  ]}"#,
         );
         let input = ToolUseHookInput {
             tool_name: "Bash".into(),
