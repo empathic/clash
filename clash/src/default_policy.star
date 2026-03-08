@@ -3,9 +3,12 @@ load("@clash//rust.star", "rust")
 load("@clash//python.star", "python")
 load("@clash//node.star", "node")
 
-_fs_access = sandbox(fs = [
-    cwd(read = allow, write = allow, follow_worktrees = True),
-])
+_fs_access = sandbox(
+    name = "cwd",
+    fs = [
+        cwd(read = allow, write = allow, follow_worktrees = True),
+    ],
+)
 
 def main():
     return policy(default = deny, rules = [

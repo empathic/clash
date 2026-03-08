@@ -23,12 +23,16 @@ exe("git", args = ["commit"]).ask()
 ```
 
 <details>
-<summary>JSON IR</summary>
+<summary>JSON IR (v5 match tree)</summary>
 
 ```json
-{ "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
-{ "rule": { "effect": "deny",  "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
-{ "rule": { "effect": "ask",   "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "commit" }, { "any": null }] } } }
+{ "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } }, "children": [
+    { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } }, "children": [
+        { "decision": { "allow": null } }
+    ] } }
+] } }
+{ "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "push" } }, "children": [{ "decision": "deny" }] } }
+{ "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "commit" } }, "children": [{ "decision": { "ask": null } }] } }
 ```
 </details>
 
@@ -50,12 +54,20 @@ exe(["cargo", "rustc"]).allow()  # multiple binaries
 ```
 
 <details>
-<summary>JSON IR</summary>
+<summary>JSON IR (v5 match tree)</summary>
 
 ```json
-{ "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
-{ "rule": { "effect": "deny",  "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }
-{ "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" }, "args": [{ "literal": "test" }, { "any": null }] } } }
+{ "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } }, "children": [
+    { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } }, "children": [
+        { "decision": { "allow": null } }
+    ] } }
+] } }
+{ "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } }, "children": [
+    { "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "push" } }, "children": [{ "decision": "deny" }] } }
+] } }
+{ "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "cargo" } }, "children": [
+    { "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "test" } }, "children": [{ "decision": { "allow": null } }] } }
+] } }
 ```
 </details>
 
@@ -73,13 +85,9 @@ home().child(".ssh", read = allow)          # read under ~/.ssh
 ```
 
 <details>
-<summary>JSON IR</summary>
+<summary>JSON IR (v5 match tree)</summary>
 
-```json
-{ "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
-{ "rule": { "effect": "allow", "fs": { "op": { "or": ["read", "write"] }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
-{ "rule": { "effect": "deny",  "fs": { "op": { "single": "write" }, "path": { "static": ".env" } } } }
-```
+Filesystem rules are compiled by Starlark into condition nodes that observe tool names and named arguments. The `cwd()` builder generates conditions matching Read/Write/Edit/Glob/Grep tools with path checks via `named_arg` or `nested_field` observables.
 </details>
 
 The fs domain maps to agent tools: `Read` / `Glob` / `Grep` → `fs read`, `Write` / `Edit` → `fs write`.
@@ -92,13 +100,9 @@ domains({"github.com": allow, "crates.io": allow})
 ```
 
 <details>
-<summary>JSON IR</summary>
+<summary>JSON IR (v5 match tree)</summary>
 
-```json
-{ "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
-{ "rule": { "effect": "allow", "net": { "domain": { "or": [{ "literal": "github.com" }, { "literal": "crates.io" }] } } } }
-{ "rule": { "effect": "deny",  "net": { "domain": { "regex": ".*\\.evil\\.com" } } } }
-```
+Network rules are compiled by Starlark into condition nodes that observe the tool name (WebFetch/WebSearch) and extract the domain via `nested_field` or `named_arg` observables.
 </details>
 
 The net domain maps to: `WebFetch` → `net` with the URL's domain, `WebSearch` → `net` with wildcard domain.
@@ -114,34 +118,25 @@ The tool domain matches agent tools by name. Use this for tools that don't map t
 
 ---
 
-## Patterns
+## Patterns (v5 match tree)
 
-### Wildcards
+In the v5 match tree IR, patterns are used inside condition nodes to match against observable values.
 
-`{ "any": null }` matches anything in that position. `"*"` is the shorthand form for domains:
+### Wildcard
+
+`"wildcard"` matches anything:
 
 ```json
-{ "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
-{ "rule": { "effect": "allow", "fs": { "op": { "single": "read" } } } }
-{ "rule": { "effect": "allow", "net": { "domain": "*" } } }
+{ "condition": { "observe": "tool_name", "pattern": "wildcard", "children": [{ "decision": { "allow": null } }] } }
 ```
 
-### Literals
+### Literal
 
-`{ "literal": "value" }` matches exactly:
-
-```json
-{ "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }] } }
-{ "net": { "domain": { "literal": "github.com" } } }
-```
-
-### Glob
-
-`{ "glob": "pattern" }` matches using shell glob syntax:
+`{ "literal": <value> }` matches a resolved value exactly:
 
 ```json
-{ "exec": { "bin": { "glob": "cargo-*" } } }
-{ "fs": { "op": { "single": "read" }, "path": { "glob": "**/*.log" } } }
+{ "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } }, "children": [...] } }
+{ "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } }, "children": [...] } }
 ```
 
 ### Regex
@@ -149,56 +144,32 @@ The tool domain matches agent tools by name. Use this for tools that don't map t
 `{ "regex": "pattern" }` for flexible matching:
 
 ```json
-{ "exec": { "bin": { "regex": "^cargo-.*" } } }
-{ "net": { "domain": { "regex": ".*\\.example\\.com" } } }
+{ "condition": { "observe": { "positional_arg": 0 }, "pattern": { "regex": "^cargo-.*" }, "children": [...] } }
 ```
 
 ### Combinators
 
-`{ "or": [...] }` matches any of the listed values:
+`{ "any_of": [...] }` matches any sub-pattern. `{ "not": <pattern> }` negates:
 
 ```json
-{ "net": { "domain": { "or": [{ "literal": "github.com" }, { "literal": "crates.io" }] } } }
-{ "fs": { "op": { "or": ["read", "write"] } } }
+{ "condition": { "observe": "tool_name", "pattern": { "any_of": [
+    { "literal": { "literal": "Read" } },
+    { "literal": { "literal": "Glob" } },
+    { "literal": { "literal": "Grep" } }
+] }, "children": [{ "decision": { "allow": null } }] } }
 ```
 
 ---
 
-## Path filters
+## Values
 
-### Subpath
+Values appear inside `Literal` patterns and are resolved at eval time:
 
-Match a directory and everything beneath it using `{ "subpath": { "path": ... } }`:
-
-```json
-{ "subpath": { "path": { "env": "PWD" } } }
-{ "subpath": { "path": { "static": "/home/user" } } }
-```
-
-### Environment variables
-
-`{ "env": "NAME" }` is resolved at evaluation time:
-
-```json
-{ "subpath": { "path": { "env": "PWD" } } }
-{ "subpath": { "path": { "env": "HOME" } } }
-```
-
-### Worktree-aware subpath
-
-When working in a git worktree, git operations write to the backing repository's `.git/` directory — which is outside the worktree. The `"worktree": true` flag detects this and automatically extends access:
-
-```json
-{ "subpath": { "path": { "env": "PWD" }, "worktree": true } }
-```
-
-### Path concatenation
-
-`{ "join": [...] }` concatenates path expressions:
-
-```json
-{ "subpath": { "path": { "join": [{ "env": "HOME" }, { "static": "/.clash" }] } } }
-```
+| Form | JSON | Description |
+|---|---|---|
+| Literal string | `{ "literal": "git" }` | A constant string value |
+| Environment var | `{ "env": "HOME" }` | Resolved from environment at eval time |
+| Path join | `{ "path": [{ "env": "HOME" }, { "literal": ".ssh" }] }` | Segments joined with `/` |
 
 ---
 
@@ -251,44 +222,12 @@ def main():
 ```
 
 <details>
-<summary>JSON IR (include-based composition)</summary>
+<summary>Compiled JSON IR (v5 match tree)</summary>
 
-```json
-{
-  "schema_version": 4,
-  "use": "main",
-  "default_effect": "deny",
-  "policies": [
-    {
-      "name": "cwd-access",
-      "body": [
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "write" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } }
-      ]
-    },
-    {
-      "name": "safe-git",
-      "body": [
-        { "rule": { "effect": "deny",  "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
-        { "rule": { "effect": "deny",  "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "reset" }, { "any": null }] } } },
-        { "rule": { "effect": "ask",   "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "commit" }, { "any": null }] } } },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
-      ]
-    },
-    {
-      "name": "main",
-      "body": [
-        { "include": "cwd-access" },
-        { "include": "safe-git" },
-        { "rule": { "effect": "allow", "net": { "domain": { "or": [{ "literal": "github.com" }, { "literal": "crates.io" }] } } } }
-      ]
-    }
-  ]
-}
-```
+In v5, composition happens at the Starlark level — the compiled output is a flat match tree with no includes. The tree from the Starlark above would contain condition nodes for git commands (deny push/reset, ask commit, allow others) followed by the remaining rules, all flattened into a single tree array.
 </details>
 
-Starlark `load()` imports values from other `.star` files. In JSON IR, `{ "include": "name" }` inlines a referenced policy's rules. Circular references are rejected at compile time.
+Starlark `load()` imports values from other `.star` files. All composition (function calls, list splicing, imports) resolves at compile time — the v5 JSON IR has no include mechanism.
 
 ---
 
@@ -317,31 +256,26 @@ def main():
 Note that `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
 
 <details>
-<summary>JSON IR</summary>
+<summary>JSON IR (v5 match tree)</summary>
 
 ```json
 {
-  "schema_version": 4,
-  "use": "main",
+  "schema_version": 5,
   "default_effect": "deny",
-  "policies": [
-    {
-      "name": "cargo-env",
-      "body": [
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "write" }, "path": { "subpath": { "path": { "static": "./target" } } } } } },
-        { "rule": { "effect": "allow", "net": { "domain": "*" } } }
-      ]
-    },
-    {
-      "name": "main",
-      "body": [
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } }, "sandbox": { "named": "cargo-env" } } }
-      ]
-    }
+  "sandboxes": {
+    "cargo-env": { "fs": [...], "net": "allow" }
+  },
+  "tree": [
+    { "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } },
+        "children": [
+          { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "cargo" } },
+              "children": [{ "decision": { "allow": "cargo-env" } }] } }
+        ] } }
   ]
 }
 ```
+
+Sandboxes are declared in the top-level `sandboxes` map and referenced by name in decision nodes.
 </details>
 
 ### What sandboxes enforce

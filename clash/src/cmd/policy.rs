@@ -34,7 +34,7 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
 /// Handle `clash policy list`.
 fn handle_list(json: bool) -> Result<()> {
     let settings = ClashSettings::load_or_create()?;
-    let tree = match settings.policy_tree() {
+    let policy = match settings.policy_tree() {
         Some(t) => t,
         None => {
             if let Some(err) = settings.policy_error() {
@@ -44,63 +44,38 @@ fn handle_list(json: bool) -> Result<()> {
         }
     };
 
-    let all_rules: Vec<&crate::policy::decision_tree::CompiledRule> = tree
-        .exec_rules
-        .iter()
-        .chain(&tree.fs_rules)
-        .chain(&tree.net_rules)
-        .chain(&tree.tool_rules)
-        .collect();
+    let rules = policy.format_rules();
 
     if json {
-        let entries: Vec<serde_json::Value> = all_rules
+        let entries: Vec<serde_json::Value> = rules
             .iter()
-            .map(|r| {
-                let origin = r.origin_policy.as_deref().unwrap_or(&tree.policy_name);
-                let builtin = origin.starts_with("__internal_");
-                let mut entry = serde_json::json!({
-                    "effect": format!("{}", r.effect),
-                    "rule": r.source.to_string(),
-                    "origin": origin,
-                    "builtin": builtin,
-                });
-                if let Some(ref level) = r.origin_level {
-                    entry["level"] = serde_json::json!(level.to_string());
-                }
-                entry
+            .enumerate()
+            .map(|(i, r)| {
+                serde_json::json!({
+                    "index": i,
+                    "rule": r,
+                })
             })
             .collect();
         println!("{}", serde_json::to_string_pretty(&entries)?);
     } else {
-        if all_rules.is_empty() {
+        if rules.is_empty() {
             println!(
-                "No rules in policy {}.",
-                style::cyan(&format!("\"{}\"", tree.policy_name))
+                "No rules in policy. {}",
+                style::dim(&format!("(default: {})", policy.default_effect))
             );
             return Ok(());
         }
         println!(
-            "Policy {} {}\n",
-            style::cyan(&format!("\"{}\"", tree.policy_name)),
+            "Policy {}\n",
             style::dim(&format!(
                 "(default: {}, {} rules)",
-                style::effect(&tree.default.to_string()),
-                all_rules.len()
+                style::effect(&policy.default_effect.to_string()),
+                rules.len()
             ))
         );
-        for rule in &all_rules {
-            let tag = if let Some(ref level) = rule.origin_level {
-                format!("{} ", style::cyan(&format!("[{}]", level)))
-            } else if rule
-                .origin_policy
-                .as_ref()
-                .is_some_and(|p| p.starts_with("__internal_"))
-            {
-                format!("{} ", style::dim("[builtin]"))
-            } else {
-                String::new()
-            };
-            println!("  {}{}", tag, rule.source);
+        for rule in &rules {
+            println!("  {}", rule);
         }
     }
     Ok(())
@@ -109,7 +84,7 @@ fn handle_list(json: bool) -> Result<()> {
 /// Handle `clash policy show`.
 fn handle_show(json: bool) -> Result<()> {
     let settings = ClashSettings::load_or_create()?;
-    let tree = match settings.policy_tree() {
+    let policy = match settings.policy_tree() {
         Some(t) => t,
         None => {
             if let Some(err) = settings.policy_error() {
@@ -122,15 +97,9 @@ fn handle_show(json: bool) -> Result<()> {
     let loaded = settings.loaded_policies();
 
     if json {
-        let rule_count = tree.exec_rules.len()
-            + tree.fs_rules.len()
-            + tree.net_rules.len()
-            + tree.tool_rules.len();
         let output = serde_json::json!({
-            "policy_name": tree.policy_name,
-            "default": format!("{}", tree.default),
-            "rule_count": rule_count,
-            "source": tree.to_source(),
+            "default": format!("{}", policy.default_effect),
+            "rule_count": policy.rule_count(),
             "levels": loaded
                 .iter()
                 .map(|lp| {
@@ -158,7 +127,9 @@ fn handle_show(json: bool) -> Result<()> {
             println!();
         }
         if loaded.is_empty() {
-            print!("{}", crate::policy::print_tree(tree));
+            for rule in policy.format_rules() {
+                println!("  {}", rule);
+            }
         }
     }
     Ok(())
@@ -170,7 +141,6 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
         return validate_single_file(&path, json);
     }
 
-    // Validate all available policy levels.
     let levels = ClashSettings::available_policy_levels();
     if levels.is_empty() {
         if json {
@@ -222,19 +192,14 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
             &crate::policy::compile::StdEnvResolver,
             crate::settings::INTERNAL_POLICIES,
         ) {
-            Ok(tree) => {
-                let rule_count = tree.exec_rules.len()
-                    + tree.fs_rules.len()
-                    + tree.net_rules.len()
-                    + tree.tool_rules.len();
+            Ok(policy) => {
                 if json {
                     results.push(serde_json::json!({
                         "level": level.to_string(),
                         "path": path.display().to_string(),
                         "valid": true,
-                        "policy_name": tree.policy_name,
-                        "default": format!("{}", tree.default),
-                        "rule_count": rule_count,
+                        "default": format!("{}", policy.default_effect),
+                        "rule_count": policy.rule_count(),
                     }));
                 } else {
                     println!(
@@ -244,10 +209,9 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
                         path.display()
                     );
                     println!(
-                        "  policy {}, default {}, {} rules",
-                        style::bold(&format!("\"{}\"", tree.policy_name)),
-                        style::effect(&tree.default.to_string()),
-                        rule_count
+                        "  default {}, {} rules",
+                        style::effect(&policy.default_effect.to_string()),
+                        policy.rule_count()
                     );
                 }
             }
@@ -308,29 +272,23 @@ fn validate_single_file(path: &std::path::Path, json: bool) -> Result<()> {
         &crate::policy::compile::StdEnvResolver,
         crate::settings::INTERNAL_POLICIES,
     ) {
-        Ok(tree) => {
-            let rule_count = tree.exec_rules.len()
-                + tree.fs_rules.len()
-                + tree.net_rules.len()
-                + tree.tool_rules.len();
+        Ok(policy) => {
             if json {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
                         "valid": true,
                         "path": path.display().to_string(),
-                        "policy_name": tree.policy_name,
-                        "default": format!("{}", tree.default),
-                        "rule_count": rule_count,
+                        "default": format!("{}", policy.default_effect),
+                        "rule_count": policy.rule_count(),
                     }))?
                 );
             } else {
                 println!("{} {}", style::green_bold("✓"), path.display());
                 println!(
-                    "  policy {}, default {}, {} rules",
-                    style::bold(&format!("\"{}\"", tree.policy_name)),
-                    style::effect(&tree.default.to_string()),
-                    rule_count
+                    "  default {}, {} rules",
+                    style::effect(&policy.default_effect.to_string()),
+                    policy.rule_count()
                 );
             }
             Ok(())

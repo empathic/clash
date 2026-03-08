@@ -6,144 +6,151 @@ permalink: /policy/grammar/
 ---
 
 <h1 class="page-title">Policy Schema</h1>
-<p class="page-desc">JSON IR schema for compiled clash policies. Policies are authored as <a href="/policy/">Starlark (.star) files</a> and compiled to this format.</p>
+<p class="page-desc">JSON IR schema (v5) for compiled clash policies. Policies are authored as <a href="/policy/">Starlark (.star) files</a> and compiled to this format.</p>
 
 ## Document structure
 
 ```json
 {
-  "schema_version": 4,
-  "use": "<policy-name>",
+  "schema_version": 5,
   "default_effect": "<effect>",
-  "policies": [
-    {
-      "name": "<policy-name>",
-      "body": [ <rule | include> ]
-    }
-  ]
+  "sandboxes": { "<name>": <sandbox-policy> },
+  "tree": [ <node>, ... ]
 }
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `schema_version` | integer | Always `4` |
-| `use` | string | Name of the entry-point policy |
+| `schema_version` | integer | Always `5` |
 | `default_effect` | string | Effect when no rule matches: `"allow"`, `"deny"`, or `"ask"` |
-| `policies` | array | Named policy blocks |
+| `sandboxes` | object | Named sandbox definitions (may be empty) |
+| `tree` | array | Root-level nodes of the match tree |
 
-## Rules
+## Nodes
 
-```json
-{ "rule": { "effect": "<effect>", "<domain>": <matcher> } }
-{ "rule": { "effect": "<effect>", "<domain>": <matcher>, "sandbox": { "named": "<policy-name>" } } }
-```
+The tree is a uniform trie of two node types:
 
-### Effects
+### Condition
 
-`"allow"` | `"deny"` | `"ask"`
-
-## Capability domains
-
-### Exec — shell commands
+Observe a value from the query context, test against a pattern, recurse into children on match:
 
 ```json
-{ "exec": { "bin": <pattern>, "args": [ <pattern> ] } }
+{ "condition": { "observe": <observable>, "pattern": <pattern>, "children": [ <node>, ... ] } }
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `bin` | pattern | Binary name matcher |
-| `args` | array of patterns | Positional argument matchers (optional) |
+| `observe` | observable | What to extract from the query context |
+| `pattern` | pattern | What to test the observed value against |
+| `children` | array of nodes | Evaluated (in order) if the pattern matches |
 
-### Fs — file operations
+### Decision
+
+A leaf node that produces an effect:
 
 ```json
-{ "fs": { "op": <op-pattern>, "path": <path-filter> } }
+{ "decision": { "allow": null } }
+{ "decision": "deny" }
+{ "decision": { "ask": null } }
+{ "decision": { "allow": "<sandbox-name>" } }
 ```
 
-| Field | Type | Description |
+| Form | Description |
+|---|---|
+| `{ "allow": null }` | Allow without sandbox |
+| `{ "allow": "<name>" }` | Allow with named sandbox |
+| `"deny"` | Deny |
+| `{ "ask": null }` | Ask the user |
+| `{ "ask": "<name>" }` | Ask the user, with sandbox if approved |
+
+## Observables
+
+What to extract from the query context for pattern matching.
+
+```json
+"tool_name"
+"hook_type"
+"agent_name"
+{ "positional_arg": 0 }
+"has_arg"
+{ "named_arg": "file_path" }
+{ "nested_field": ["input", "url"] }
+```
+
+| Observable | JSON | Description |
 |---|---|---|
-| `op` | op-pattern | Operation matcher |
-| `path` | path-filter | Path matcher (optional) |
-
-### Net — network access
-
-```json
-{ "net": { "domain": <pattern> } }
-```
-
-### Tool — agent tools
-
-```json
-{ "tool": { "name": <pattern> } }
-```
+| Tool name | `"tool_name"` | The agent tool being invoked (e.g. "Bash", "Read") |
+| Hook type | `"hook_type"` | The hook event type |
+| Agent name | `"agent_name"` | The agent identifier |
+| Positional arg | `{ "positional_arg": N }` | Nth positional argument (0-indexed) |
+| Has arg | `"has_arg"` | True if any positional arg matches the pattern |
+| Named arg | `{ "named_arg": "key" }` | Value of a named argument |
+| Nested field | `{ "nested_field": ["a", "b"] }` | Path into structured tool_input JSON |
 
 ## Patterns
 
 ```json
-{ "literal": "value" }
+"wildcard"
+{ "literal": <value> }
 { "regex": "pattern" }
-{ "glob": "pattern" }
-{ "any": null }
-{ "or": [ <pattern>, <pattern> ] }
-"*"
+{ "any_of": [ <pattern>, ... ] }
+{ "not": <pattern> }
 ```
 
 | Form | Description |
 |---|---|
-| `{"literal": "..."}` | Exact string match |
+| `"wildcard"` | Matches anything |
+| `{"literal": <value>}` | Exact match against a resolved value |
 | `{"regex": "..."}` | Regular expression match |
-| `{"glob": "..."}` | Shell glob match |
-| `{"any": null}` | Wildcard — matches anything |
-| `{"or": [...]}` | Match any of the listed patterns |
-| `"*"` | Shorthand wildcard (domains) |
+| `{"any_of": [...]}` | Match any of the listed patterns |
+| `{"not": <pattern>}` | Negated match |
 
-## Op patterns
+## Values
 
-```json
-{ "single": "read" }
-{ "or": ["read", "write"] }
-"*"
-```
-
-Operations: `"read"`, `"write"`, `"create"`, `"delete"`
-
-## Path filters
+Values appear inside `literal` patterns and are resolved at evaluation time:
 
 ```json
-{ "subpath": { "path": <path-expr> } }
-{ "subpath": { "path": <path-expr>, "worktree": true } }
-{ "static": "/absolute/path" }
-{ "regex": "pattern" }
-{ "glob": "pattern" }
-```
-
-### Path expressions
-
-```json
-{ "env": "PWD" }
-{ "static": "/path" }
-{ "join": [ <path-expr>, <path-expr> ] }
+{ "literal": "git" }
+{ "env": "HOME" }
+{ "path": [{ "env": "HOME" }, { "literal": ".ssh" }] }
 ```
 
 | Form | Description |
 |---|---|
-| `{"env": "NAME"}` | Resolved from environment variable at compile time |
-| `{"static": "..."}` | Literal path string |
-| `{"join": [...]}` | Concatenation of path expressions |
+| `{"literal": "..."}` | Constant string |
+| `{"env": "NAME"}` | Resolved from environment variable |
+| `{"path": [...]}` | Segments joined with `/` |
 
-## Includes
+## Effects
 
-```json
-{ "include": "<policy-name>" }
-```
-
-Inlines the referenced policy's rules. Circular includes are rejected at compile time.
+`"allow"` | `"deny"` | `"ask"`
 
 ## Sandbox references
 
+Decision nodes reference sandboxes by name. The sandbox must exist in the top-level `sandboxes` map:
+
 ```json
-{ "rule": { "effect": "allow", "exec": { "bin": {"literal": "cargo"} }, "sandbox": { "named": "cargo-env" } } }
+{
+  "sandboxes": {
+    "cargo-env": { "fs": [...], "net": "allow" }
+  },
+  "tree": [
+    { "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } },
+        "children": [
+          { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "cargo" } },
+              "children": [{ "decision": { "allow": "cargo-env" } }] } }
+        ] } }
+  ]
+}
 ```
 
-The `"sandbox"` field on an exec rule references a named policy whose rules define the sandbox's filesystem and network constraints.
+## Evaluation
+
+Evaluation is a single DFS pass over the tree:
+
+1. For each node in children (in order):
+   - **Decision**: return the decision immediately
+   - **Condition**: extract the observable value from the query context, test against the pattern. If it matches, recurse into children. If a child produces a decision, return it. Otherwise, backtrack and try the next sibling.
+2. If no node produces a decision, return the `default_effect`.
+
+First-match semantics: the first matching path through the tree wins. Specificity is encoded by sibling order — put more specific conditions before broader ones.

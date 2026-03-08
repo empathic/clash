@@ -1,6 +1,10 @@
 # Clash standard library — all DSL builders.
 #
-# Rust globals available: rule(), _policy(), import_json(), allow, deny, ask
+# Emits v5 match tree nodes using _mt_* Rust primitives.
+# Rust globals available: _mt_pattern, _mt_exe, _mt_tool, _mt_hook, _mt_agent,
+# _mt_arg, _mt_has_arg, _mt_named, _mt_field, _mt_allow, _mt_deny, _mt_ask,
+# _mt_not, _mt_or, _mt_policy, _mt_fs_op, _mt_fs_path, _mt_net_domain,
+# _mt_prefix, allow, deny, ask
 
 # ---------------------------------------------------------------------------
 # Pattern helpers
@@ -9,80 +13,20 @@
 def _pattern(value):
     """Convert a value to a matcher pattern.
 
-    - None          → {"any": null}
-    - "foo"         → {"literal": "foo"}
-    - ["a", "b"]    → {"or": [{"literal": "a"}, {"literal": "b"}]}
-    - regex("...")  → {"regex": "..."}
+    - None          → wildcard
+    - "foo"         → literal
+    - ["a", "b"]    → any_of
+    - regex("...")  → regex
     """
-    if value == None:
-        return {"any": None}
-    if type(value) == "list":
-        return {"or": [_pattern(v) for v in value]}
-    if type(value) == "struct" and hasattr(value, "_regex"):
-        return {"regex": value._regex}
-    return {"literal": value}
+    return _mt_pattern(value)
 
 def regex(pattern):
-    """Create a regex pattern for use in exe() or tool()."""
+    """Create a regex pattern."""
     return struct(_regex = pattern)
-
-# ---------------------------------------------------------------------------
-# Finalizer helpers
-# ---------------------------------------------------------------------------
-
-def _finalizers(build_rule, _sandbox = None):
-    """Create allow/deny/ask finalizer methods and a sandbox setter for a rule builder."""
-    def _allow():
-        r = build_rule("allow")
-        return r.sandbox(_sandbox) if _sandbox else r
-    def _deny():
-        r = build_rule("deny")
-        return r.sandbox(_sandbox) if _sandbox else r
-    def _ask():
-        r = build_rule("ask")
-        return r.sandbox(_sandbox) if _sandbox else r
-    def _set_sandbox(sb):
-        return _finalizers(build_rule, sb)
-    return struct(allow = _allow, deny = _deny, ask = _ask, sandbox = _set_sandbox)
 
 # ---------------------------------------------------------------------------
 # Exec / tool builders
 # ---------------------------------------------------------------------------
-
-def _exe_builder(bins, args_pat = None, _sandbox = None):
-    """Internal: build an exe builder with composable .also() chaining."""
-    def _build_exec():
-        if len(bins) == 1:
-            bin_pat = bins[0]
-        else:
-            bin_pat = {"or": bins}
-        _exec = {"bin": bin_pat}
-        if args_pat != None:
-            _exec["args"] = args_pat
-        return _exec
-
-    def _build(effect):
-        r = rule({"rule": {"effect": effect, "exec": _build_exec()}})
-        return r.sandbox(_sandbox) if _sandbox else r
-
-    def _also(other):
-        return _exe_builder(bins + other._bins, args_pat, _sandbox)
-
-    def _set_sandbox(sb):
-        return _exe_builder(bins, args_pat, sb)
-
-    def _allow():
-        return _build("allow")
-    def _deny():
-        return _build("deny")
-    def _ask():
-        return _build("ask")
-
-    return struct(
-        allow = _allow, deny = _deny, ask = _ask,
-        sandbox = _set_sandbox, also = _also,
-        _bins = bins,
-    )
 
 def exe(name = None, args = None):
     """Build an exec rule.
@@ -91,20 +35,56 @@ def exe(name = None, args = None):
         exe("git").allow()
         exe("git", args=["push"]).deny()
         exe("cargo").sandbox(my_sandbox).allow()
-        exe(["cargo", "rustc"]).sandbox(my_sandbox).allow()
-        exe("cargo").also(exe("rustc")).sandbox(my_sandbox).allow()
+        exe(["cargo", "rustc"]).allow()
         exe().deny()  # deny all exec
     """
-    if type(name) == "list":
-        bins = [_pattern(n) for n in name]
-    else:
-        bins = [_pattern(name)]
+    node = _mt_exe(_pattern(name))
 
-    args_pat = None
     if args != None:
-        args_pat = [_pattern(a) for a in args] + [{"any": None}]
+        # Chain positional arg conditions for each arg
+        def _wrap_with_args(base, arg_list):
+            """Wrap a condition node with nested positional arg conditions."""
+            inner = base
+            for i in range(len(arg_list) - 1, -1, -1):
+                inner = _mt_arg(i + 1, _pattern(arg_list[i])).on([inner])
+            return inner
 
-    return _exe_builder(bins, args_pat)
+        # Create a placeholder that we'll attach args to
+        # The exe() node is ToolName=Bash → PosArg(0)=name → (args here)
+        # We need to modify the inner PosArg(0) node to add arg children
+        node = _exe_with_args(name, args)
+
+    return _with_sandbox_support(node)
+
+def _exe_with_args(name, args):
+    """Build an exe node with positional args already nested."""
+    # Build from inside out: start with the deepest arg
+    # exe("git", args=["push"]) → ToolName=Bash → PosArg(0)=git → PosArg(1)=push → [children]
+    pat = _pattern(name)
+    inner_node = _mt_exe(pat)
+    # The inner node is: {condition: {observe: tool_name, pattern: Bash, children: [{condition: {observe: pos_arg(0), pattern: name, children: []}}]}}
+    # We need to add arg conditions as children of the innermost node
+    arg_nodes = []
+    for i, a in enumerate(args):
+        arg_nodes.append(_mt_arg(i + 1, _pattern(a)))
+
+    # Chain the arg nodes: each wraps around the next
+    # For [push, --force]: pos_arg(1)=push → pos_arg(2)=--force → [decision]
+    # But we want them as flat siblings at the deepest level, not nested
+    # Actually for exe("git", args=["push"]).deny(), we want:
+    # ToolName=Bash → PosArg(0)=git → PosArg(1)=push → [decision]
+    # Build the chain from inside out
+    result = _mt_exe(pat)
+    if len(args) > 0:
+        # Build nested chain: arg(n, ...) wrapping the innermost
+        # Start with the outermost exe node and add arg children
+        innermost = _mt_arg(len(args), _pattern(args[len(args) - 1]))
+        for i in range(len(args) - 2, -1, -1):
+            innermost = _mt_arg(i + 1, _pattern(args[i])).on([innermost])
+        # Now we need to set innermost as child of the PosArg(0)=name node
+        # which is inside the exe node
+        result = _mt_exe(pat).on([innermost])
+    return result
 
 def tool(name = None):
     """Build a tool rule.
@@ -112,12 +92,9 @@ def tool(name = None):
     Usage:
         tool().allow()
         tool("WebSearch").deny()
-        tool(regex("mcp__.*")).ask()
+        tool(["Read", "Glob", "Grep"]).allow()
     """
-    def _build(effect):
-        return rule({"rule": {"effect": effect, "tool": {"name": _pattern(name)}}})
-
-    return _finalizers(_build)
+    return _with_sandbox_support(_mt_tool(_pattern(name)))
 
 # ---------------------------------------------------------------------------
 # Filesystem path builders
@@ -130,8 +107,11 @@ def _validate_effect(name, value):
     if value != None and value not in _VALID_EFFECTS:
         fail("invalid effect '{}' for {}, must be allow, deny, or ask".format(value, name))
 
-def _emit_fs_rules(path_expr, worktree, read, write, execute, allow_all):
-    """Emit fs rule dicts for a path with given permissions."""
+def _fs_nodes(path_value, read = None, write = None, execute = None, allow_all = False):
+    """Build match tree nodes for filesystem access.
+
+    Returns a list of condition nodes that match on FsOp and FsPath.
+    """
     _validate_effect("read", read)
     _validate_effect("write", write)
     _validate_effect("execute", execute)
@@ -141,76 +121,89 @@ def _emit_fs_rules(path_expr, worktree, read, write, execute, allow_all):
         write = allow
         execute = allow
 
-    # Map permissions to (op_name, effect) pairs
-    ops = []
+    nodes = []
+
     if read != None:
-        ops.append(("read", read))
+        node = _mt_fs_op(_pattern("read")).on([
+            _mt_fs_path(_mt_prefix(path_value)).on([
+                _effect_decision(read),
+            ]),
+        ])
+        nodes.append(node)
+
     if write != None:
-        ops.append(("write", write))
-        ops.append(("create", write))
-    if execute != None:
-        ops.append(("delete", execute))
+        node = _mt_fs_op(_pattern("write")).on([
+            _mt_fs_path(_mt_prefix(path_value)).on([
+                _effect_decision(write),
+            ]),
+        ])
+        nodes.append(node)
 
-    if len(ops) == 0:
-        return []
+    return nodes
 
-    # Build subpath expression
-    subpath = {"path": path_expr}
-    if worktree:
-        subpath["worktree"] = True
-    path_filter = {"subpath": subpath}
+def _effect_decision(effect):
+    """Create a decision node from an effect string."""
+    if effect == allow:
+        return _mt_allow(None)
+    elif effect == deny:
+        return _mt_deny()
+    elif effect == ask:
+        return _mt_ask(None)
+    else:
+        fail("unknown effect: " + str(effect))
 
-    # Group by effect
-    groups = {}
-    for op, eff in ops:
-        if eff not in groups:
-            groups[eff] = []
-        groups[eff].append(op)
+def _caps_string(read, write, execute, allow_all):
+    """Compute a sandbox caps string from permission kwargs."""
+    if allow_all:
+        return "read + write + create + delete + execute"
+    parts = []
+    if read == allow:
+        parts.append("read")
+    if write == allow:
+        parts.extend(["write", "create"])
+    if execute == allow:
+        parts.append("execute")
+    return " + ".join(parts) if parts else ""
 
-    rules = []
-    for eff in [allow, deny, ask]:
-        if eff not in groups:
-            continue
-        effect_ops = groups[eff]
-        if len(effect_ops) == 1:
-            op_pattern = {"single": effect_ops[0]}
-        else:
-            op_pattern = {"or": effect_ops}
-        rules.append(rule({
-            "rule": {
-                "effect": eff,
-                "fs": {"op": op_pattern, "path": path_filter},
-            },
-        }))
-
-    return rules
-
-def _path_entry(path_expr, worktree = False, read = None, write = None,
-                execute = None, allow_all = False, _children = None):
-    """Internal: build a path entry struct with .child() and ._rules."""
+def _path_entry(path_value, worktree = False, read = None, write = None,
+                execute = None, allow_all = False, _children = None,
+                _extra_sandbox_rules = None):
+    """Internal: build a path entry struct with .child() and ._nodes."""
     if _children == None:
         _children = []
 
-    # Capture parent perms for child() closure
     _read = read
     _write = write
     _execute = execute
     _allow_all = allow_all
 
-    # Compute all rules: own + children
-    _rules = _emit_fs_rules(path_expr, worktree, read, write, execute, allow_all)
+    _nodes = _fs_nodes(path_value, read, write, execute, allow_all)
     for c in _children:
-        _rules.extend(c)
+        _nodes.extend(c)
+
+    # Build sandbox rules (path + caps pairs for sandbox-exec compilation).
+    _sandbox_rules = list(_extra_sandbox_rules or [])
+    _caps = _caps_string(read, write, execute, allow_all)
+    if _caps:
+        _sandbox_rules.append({"path_value": path_value, "caps": _caps})
 
     def child(name, read = None, write = None, execute = None, allow_all = False):
-        child_path = {"join": [path_expr, {"static": name}]}
-        child_rules = _emit_fs_rules(child_path, False, read, write, execute, allow_all)
+        # For child paths, join with the parent
+        # We create a struct with the joined path info for _mt_prefix
+        child_path = struct(_join = [path_value, name])
+        child_nodes = _fs_nodes(child_path, read, write, execute, allow_all)
+        child_caps = _caps_string(read, write, execute, allow_all)
+        child_sb_rules = list(_sandbox_rules)
+        if child_caps:
+            child_sb_rules.append({"path_value": child_path, "caps": child_caps})
         return _path_entry(
-            path_expr, worktree, _read, _write, _execute, _allow_all,
-            _children + [child_rules],
+            path_value, worktree, _read, _write, _execute, _allow_all,
+            _children + [child_nodes],
+            child_sb_rules,
         )
 
-    return struct(child = child, _rules = _rules, _is_path = True)
+    return struct(child = child, _nodes = _nodes, _is_path = True, _path_value = path_value,
+                  _sandbox_rules = _sandbox_rules)
 
 def cwd(follow_worktrees = False, read = None, write = None,
         execute = None, allow_all = False):
@@ -220,7 +213,7 @@ def cwd(follow_worktrees = False, read = None, write = None,
         cwd(read=allow, write=allow)
         cwd(follow_worktrees=True, allow_all=True)
     """
-    return _path_entry({"env": "PWD"}, follow_worktrees, read, write, execute, allow_all)
+    return _path_entry(struct(_env = "PWD"), follow_worktrees, read, write, execute, allow_all)
 
 def home(read = None, write = None, execute = None, allow_all = False):
     """Build a HOME path entry.
@@ -229,7 +222,7 @@ def home(read = None, write = None, execute = None, allow_all = False):
         home().child(".ssh", read=allow)
         home().child(".cargo", allow_all=True)
     """
-    return _path_entry({"env": "HOME"}, False, read, write, execute, allow_all)
+    return _path_entry(struct(_env = "HOME"), False, read, write, execute, allow_all)
 
 def tempdir(read = None, write = None, execute = None, allow_all = False):
     """Build a TMPDIR path entry.
@@ -237,7 +230,7 @@ def tempdir(read = None, write = None, execute = None, allow_all = False):
     Usage:
         tempdir(allow_all=True)
     """
-    return _path_entry({"env": "TMPDIR"}, False, read, write, execute, allow_all)
+    return _path_entry(struct(_env = "TMPDIR"), False, read, write, execute, allow_all)
 
 def path(path_str = None, env = None, read = None, write = None,
          execute = None, allow_all = False):
@@ -251,8 +244,8 @@ def path(path_str = None, env = None, read = None, write = None,
         fail("path() takes either a path string or env=, not both")
     if path_str == None and env == None:
         fail("path() requires either a path string or env= argument")
-    path_expr = {"static": path_str} if path_str != None else {"env": env}
-    return _path_entry(path_expr, False, read, write, execute, allow_all)
+    path_value = struct(_env = env) if env != None else path_str
+    return _path_entry(path_value, False, read, write, execute, allow_all)
 
 # ---------------------------------------------------------------------------
 # Network builders
@@ -261,19 +254,17 @@ def path(path_str = None, env = None, read = None, write = None,
 def _domain_pattern(name):
     """Convert a domain string to a matcher pattern."""
     if name == "*":
-        return {"any": None}
+        return _pattern(None)  # wildcard
     if name.startswith("*."):
-        # Wildcard subdomain → regex matching the suffix
         suffix = name[2:]
-        # Escape regex special chars in the suffix
         escaped = ""
         for c in suffix.elems():
             if c in ".+*?^${}()|[]\\":
                 escaped += "\\" + c
             else:
                 escaped += c
-        return {"regex": "(^|.*\\.)" + escaped}
-    return {"literal": name}
+        return _pattern(regex("(^|.*\\.)" + escaped))
+    return _pattern(name)
 
 def domains(mapping):
     """Build net rules from a {domain: effect} dict.
@@ -281,15 +272,13 @@ def domains(mapping):
     Usage:
         domains({"github.com": allow, "*.npmjs.org": allow})
     """
-    rules = []
-    for domain, effect in mapping.items():
-        rules.append(rule({
-            "rule": {
-                "effect": effect,
-                "net": {"domain": _domain_pattern(domain)},
-            },
-        }))
-    return rules
+    nodes = []
+    for domain_name, effect in mapping.items():
+        node = _mt_net_domain(_domain_pattern(domain_name)).on([
+            _effect_decision(effect),
+        ])
+        nodes.append(struct(_node = node, _domain_name = domain_name))
+    return nodes
 
 def domain(name, effect):
     """Build a single net rule.
@@ -297,105 +286,242 @@ def domain(name, effect):
     Usage:
         domain("github.com", allow)
     """
-    return [rule({
-        "rule": {
-            "effect": effect,
-            "net": {"domain": _domain_pattern(name)},
-        },
-    })]
+    node = _mt_net_domain(_domain_pattern(name)).on([
+        _effect_decision(effect),
+    ])
+    return [struct(_node = node, _domain_name = name)]
 
 # ---------------------------------------------------------------------------
 # Sandbox builder
 # ---------------------------------------------------------------------------
 
-def _make_sandbox(default, body):
-    """Create a sandbox struct with merge support."""
+def _make_sandbox(name, default, fs_rules, net_policy, net_domain_names = None):
+    """Create a sandbox struct."""
+    if net_domain_names == None:
+        net_domain_names = []
     def _merge(other):
-        """Merge two sandboxes. Bodies are concatenated; strictest default wins."""
         merged_default = deny if (default == deny or other._default == deny) else default
-        return _make_sandbox(merged_default, body + other._body)
+        merged_domains = net_domain_names + (other._net_domain_names if hasattr(other, "_net_domain_names") else [])
+        return _make_sandbox(name, merged_default, fs_rules + other._fs_rules, net_policy or other._net_policy, merged_domains)
 
     return struct(
+        _name = name,
         _default = default,
-        _body = body,
+        _fs_rules = fs_rules,
+        _net_policy = net_policy,
+        _net_domain_names = net_domain_names,
         _is_sandbox = True,
         merge = _merge,
     )
 
-def sandbox(default = "deny", fs = None, net = None):
+def sandbox(name = None, default = "deny", fs = None, net = None):
     """Build a sandbox definition.
 
     Usage:
         sandbox(
+            "example",
             default=deny,
             fs=[cwd(read=allow), home().child(".ssh", read=allow)],
             net=allow,
         )
-        sandbox(default=deny, net=[domains({"github.com": allow})])
-
-    Sandboxes can be merged:
-        a = sandbox(fs=[cwd(read=allow)])
-        b = sandbox(fs=[home().child(".ssh", read=allow)])
-        combined = a.merge(b)
     """
-    body = []
+    if name == None:
+        fail("sandbox name is required")
 
+    fs_rules = []
     if fs != None:
         for entry in fs:
-            if hasattr(entry, "_rules"):
-                # Path entry — expand its rules
-                body.extend([{"rule": r.json["rule"]} for r in entry._rules])
+            if hasattr(entry, "_is_path"):
+                # Path entry — collect sandbox rules from it
+                if hasattr(entry, "_sandbox_rules"):
+                    fs_rules.extend(entry._sandbox_rules)
             else:
                 fail("sandbox fs= entries must be path values (cwd, home, tempdir, path)")
 
+    net_policy = None
+    net_domain_names = []
     if net != None:
         if type(net) == "string":
-            # Simple effect: allow/deny/ask all network
-            body.append({"rule": {"effect": net, "net": {"domain": {"any": None}}}})
+            net_policy = net  # "allow" or "deny"
         elif type(net) == "list":
+            # domains() returns a list of structs with _node and _domain_name
+            net_domains = []
             for entry in net:
                 if type(entry) == "list":
-                    # domains() returns a list of RuleValues
-                    body.extend([{"rule": r.json["rule"]} for r in entry])
+                    for sub in entry:
+                        if hasattr(sub, "_domain_name"):
+                            net_domain_names.append(sub._domain_name)
+                            net_domains.append(sub._node if hasattr(sub, "_node") else sub)
+                        else:
+                            net_domains.append(sub)
                 else:
-                    fail("sandbox net= list entries must be domains() results")
+                    if hasattr(entry, "_domain_name"):
+                        net_domain_names.append(entry._domain_name)
+                        net_domains.append(entry._node if hasattr(entry, "_node") else entry)
+                    else:
+                        net_domains.append(entry)
+            net_policy = net_domains
         else:
             fail("sandbox net= must be an effect string or a list of domain entries")
 
-    return _make_sandbox(default, body)
+    return _make_sandbox(name, default, fs_rules, net_policy, net_domain_names)
+
+# ---------------------------------------------------------------------------
+# Sandbox support for rule builders (exe, tool)
+# ---------------------------------------------------------------------------
+
+def _with_sandbox_support(node):
+    """Wrap a match tree node with .sandbox() and .also() support."""
+
+    def _allow():
+        result = node.allow()
+        return struct(_node = result, _sandbox = None)
+
+    def _deny():
+        result = node.deny()
+        return struct(_node = result, _sandbox = None)
+
+    def _ask():
+        result = node.ask()
+        return struct(_node = result, _sandbox = None)
+
+    def _set_sandbox(sb):
+        return _with_sandbox_and_node(node, sb)
+
+    return struct(
+        allow = _allow,
+        deny = _deny,
+        ask = _ask,
+        sandbox = _set_sandbox,
+        on = node.on,
+        _node = node,
+        _sandbox = None,
+    )
+
+def _with_sandbox_and_node(node, sb):
+    """Create a rule builder with sandbox attached."""
+    def _allow():
+        result = node.allow(sandbox = sb._name)
+        return struct(_node = result, _sandbox = sb)
+    def _deny():
+        result = node.deny()
+        return struct(_node = result, _sandbox = sb)
+    def _ask():
+        result = node.ask(sandbox = sb._name)
+        return struct(_node = result, _sandbox = sb)
+    def _set_sandbox(new_sb):
+        return _with_sandbox_and_node(node, new_sb)
+
+    return struct(
+        allow = _allow,
+        deny = _deny,
+        ask = _ask,
+        sandbox = _set_sandbox,
+        on = node.on,
+        _node = node,
+        _sandbox = sb,
+    )
 
 # ---------------------------------------------------------------------------
 # Policy wrapper
 # ---------------------------------------------------------------------------
 
 def policy(default = "deny", rules = None):
-    """Build a policy. Flattens nested lists.
-
-    Filesystem path entries (cwd, home, etc.) must be inside a sandbox()
-    attached to a tool() or exe() rule — bare path entries are not allowed.
+    """Build a policy.
 
     Usage:
-        fs_access = sandbox(fs=[cwd(read=allow, write=allow)])
         policy(default=deny, rules=[
-            tool(["Read", "Glob", "Grep"]).sandbox(fs_access).allow(),
-            tool(["Write", "Edit"]).sandbox(fs_access).allow(),
+            cwd(read=allow, write=allow),
+            exe("git", args=["push"]).deny(),
             exe("git").allow(),
+            domains({"github.com": allow}),
         ])
     """
     if rules == None:
         rules = []
 
-    flat = []
+    flat_nodes = []
+    sandbox_list = []
+    _seen_sandboxes = {}
+
     for item in rules:
         if hasattr(item, "_is_path"):
-            fail(
-                "bare path entries (cwd, home, etc.) are not allowed in policy rules. " +
-                "Wrap them in a sandbox() and attach to a tool() or exe() rule. " +
-                "Example: tool(['Read']).sandbox(sandbox(fs=[cwd(read=allow)])).allow()"
-            )
+            # Path entry → expand to fs match tree nodes
+            flat_nodes.extend(item._nodes)
         elif type(item) == "list":
-            flat.extend(item)
+            # domains() returns a list
+            for sub in item:
+                if hasattr(sub, "_node"):
+                    _collect_node(sub, flat_nodes, sandbox_list, _seen_sandboxes)
+                else:
+                    flat_nodes.append(sub)
+        elif hasattr(item, "_node"):
+            # Rule builder (from exe/tool with sandbox support)
+            _collect_node(item, flat_nodes, sandbox_list, _seen_sandboxes)
         else:
-            flat.append(item)
+            flat_nodes.append(item)
 
-    return _policy(default = default, rules = flat)
+    return _mt_policy(default = default, sandboxes = sandbox_list, rules = flat_nodes)
+
+def _collect_node(item, flat_nodes, sandbox_list, seen):
+    """Extract a node and its sandbox from a rule builder."""
+    flat_nodes.append(item._node if hasattr(item, "_node") else item)
+    if hasattr(item, "_sandbox") and item._sandbox != None:
+        sb = item._sandbox
+        if sb._name not in seen:
+            seen[sb._name] = True
+            sandbox_list.append(_sandbox_to_json(sb))
+
+def _sandbox_to_json(sb):
+    """Convert a sandbox struct to JSON-compatible dict for _mt_policy."""
+    rules = []
+    for r in sb._fs_rules:
+        pv = r["path_value"]
+        path_str = _resolve_path_value(pv)
+        caps = r.get("caps", "read + write + create")
+        rules.append({
+            "effect": "allow",
+            "caps": caps,
+            "path": path_str,
+            "path_match": "subpath",
+        })
+
+    net = "deny"
+    if sb._net_policy != None:
+        if type(sb._net_policy) == "string":
+            net = sb._net_policy
+        elif type(sb._net_policy) == "list":
+            # Use stored domain names extracted during sandbox() construction
+            domain_names = sb._net_domain_names if hasattr(sb, "_net_domain_names") else []
+            if domain_names:
+                net = {"allow_domains": domain_names}
+            else:
+                net = "localhost"
+
+    # deny default = read-only (can read system files and execute binaries)
+    # allow default = full access
+    if sb._default == deny:
+        default_caps = "read + execute"
+    else:
+        default_caps = "read + write + create + delete + execute"
+
+    return {
+        "name": sb._name,
+        "default": default_caps,
+        "rules": rules,
+        "network": net,
+    }
+
+def _resolve_path_value(pv):
+    """Convert a path value struct to a $ENV string for sandbox rules."""
+    if type(pv) == "string":
+        return pv
+    if type(pv) == "struct":
+        if hasattr(pv, "_env"):
+            return "$" + pv._env
+        if hasattr(pv, "_join"):
+            parts = []
+            for p in pv._join:
+                parts.append(_resolve_path_value(p))
+            return "/".join(parts)
+    return str(pv)

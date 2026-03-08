@@ -128,25 +128,17 @@ def main():
 
 ```json
 {
-  "schema_version": 4,
-  "use": "main",
+  "schema_version": 5,
   "default_effect": "ask",
-  "policies": [
-    {
-      "name": "main",
-      "body": [
-        { "include": "cwd-access" },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } } } },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } }
-      ]
-    },
-    {
-      "name": "cwd-access",
-      "body": [
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } },
-        { "rule": { "effect": "allow", "fs": { "op": { "or": ["write", "create"] }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } }
-      ]
-    }
+  "sandboxes": {},
+  "tree": [
+    { "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } },
+        "children": [
+          { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "cargo" } },
+              "children": [{ "decision": { "allow": null } }] } },
+          { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } },
+              "children": [{ "decision": { "allow": null } }] } }
+        ] } }
   ]
 }
 ```

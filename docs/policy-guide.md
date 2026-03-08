@@ -30,19 +30,21 @@ The Starlark policy above compiles to the following JSON intermediate representa
 
 ```json
 {
-  "schema_version": 4,
-  "use": "main",
+  "schema_version": 5,
   "default_effect": "deny",
-  "policies": [
-    {
-      "name": "main",
-      "body": [
-        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" } } } } } },
-        { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
-      ]
-    }
+  "sandboxes": {},
+  "tree": [
+    { "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } },
+        "children": [
+          { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } },
+              "children": [
+                { "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "push" } },
+                    "children": [{ "decision": "deny" }] } },
+                { "decision": { "allow": null } }
+              ] } }
+        ] } },
+    { "condition": { "observe": "tool_name", "pattern": "wildcard",
+        "children": [{ "decision": { "allow": null } }] } }
   ]
 }
 ```
@@ -304,83 +306,72 @@ tool("Read").sandbox(my_sandbox).allow()
 
 ---
 
-## JSON IR Patterns (Advanced Reference)
+## JSON IR Reference (Advanced)
 
-> Users typically do not write JSON IR directly. This section is a reference for the compiled output format.
+> Users typically do not write JSON IR directly. This section is a reference for the compiled output format (schema v5).
 
-### Wildcards
-
-`{ "any": null }` or `"*"` matches anything in that position:
+### Document Structure
 
 ```json
-{ "exec": { "bin": { "literal": "git" } } }
-{ "fs": { "op": { "single": "read" } } }
-{ "net": { "domain": "*" } }
+{
+  "schema_version": 5,
+  "default_effect": "deny",
+  "sandboxes": {},
+  "tree": [ <node>, ... ]
+}
 ```
 
-### Literals
+The tree is an array of `Node` values. Each node is either a `condition` (observe + pattern + children) or a `decision` (allow/deny/ask).
 
-`{ "literal": "value" }` matches exactly:
+### Nodes
+
+**Condition** — observe a value from the query context and test it against a pattern:
 
 ```json
-{ "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }] } }
-{ "net": { "domain": { "literal": "github.com" } } }
+{ "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } }, "children": [...] } }
+{ "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } }, "children": [...] } }
 ```
 
-### Regex
-
-`{ "regex": "pattern" }` for flexible matching:
+**Decision** — a leaf that produces an effect:
 
 ```json
-{ "exec": { "bin": { "regex": "^cargo-.*" } } }
-{ "net": { "domain": { "regex": ".*\\.example\\.com" } } }
-{ "fs": { "op": { "single": "read" }, "path": { "regex": ".*\\.log" } } }
+{ "decision": { "allow": null } }
+{ "decision": "deny" }
+{ "decision": { "ask": null } }
+{ "decision": { "allow": "my-sandbox" } }
 ```
 
-### Glob
+### Observables
 
-`{ "glob": "pattern" }` for glob-style matching:
+| Observable | JSON | Description |
+|---|---|---|
+| Tool name | `"tool_name"` | The agent tool name (e.g. "Bash", "Read") |
+| Hook type | `"hook_type"` | The hook event type |
+| Agent name | `"agent_name"` | The agent identifier |
+| Positional arg | `{ "positional_arg": N }` | Nth positional argument (0-indexed) |
+| Has arg | `"has_arg"` | Scan all args, true if any matches |
+| Named arg | `{ "named_arg": "key" }` | A named argument by key |
+| Nested field | `{ "nested_field": ["a", "b"] }` | Path into structured tool_input JSON |
 
-```json
-{ "fs": { "op": { "single": "read" }, "path": { "glob": "**/*.log" } } }
-```
+### Patterns
 
----
+| Pattern | JSON | Description |
+|---|---|---|
+| Wildcard | `"wildcard"` | Matches anything |
+| Literal | `{ "literal": { "literal": "value" } }` | Exact string match |
+| Env literal | `{ "literal": { "env": "PWD" } }` | Match against env var value |
+| Regex | `{ "regex": "^cargo-.*" }` | Regular expression match |
+| AnyOf | `{ "any_of": [<pattern>, ...] }` | Match any sub-pattern |
+| Not | `{ "not": <pattern> }` | Negated match |
 
-## JSON IR Path Filters (Advanced Reference)
+### Values
 
-### Subpath
-
-Match a directory and everything beneath it:
-
-```json
-{ "subpath": { "path": { "env": "PWD" } } }
-{ "subpath": { "path": { "static": "/home/user" } } }
-```
-
-### Worktree-Aware Subpath
-
-When working in a git worktree, git operations write to the backing repository's `.git/` directory -- which is outside the worktree's directory tree. The `"worktree": true` flag on `subpath` tells the compiler to detect this and automatically extend access:
-
-```json
-{ "subpath": { "path": { "env": "PWD" }, "worktree": true } }
-```
-
-In Starlark, use `cwd(follow_worktrees = True, ...)` to get this behavior.
-
-### Environment Variables
-
-`{ "env": "NAME" }` is resolved at compile time:
+Values appear inside `Literal` patterns and resolve at eval time:
 
 ```json
-{ "subpath": { "path": { "env": "PWD" } } }
-{ "subpath": { "path": { "env": "HOME" } } }
-```
-
-### Path Join
-
-```json
-{ "subpath": { "path": { "join": [{ "env": "HOME" }, { "static": "/projects" }] } } }
+{ "literal": "git" }
+{ "env": "HOME" }
+{ "path": [{ "env": "HOME" }, { "literal": ".ssh" }] }
 ```
 
 ---

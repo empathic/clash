@@ -126,28 +126,26 @@ def main():
 
 ```json
 {
-  "schema_version": 4,
-  "use": "main",
+  "schema_version": 5,
   "default_effect": "ask",
-  "policies": [
-    {
-      "name": "cwd-access",
-      "body": [
-        { "rule": { "effect": "allow", "fs": { "op": { "single": "read" }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } },
-        { "rule": { "effect": "allow", "fs": { "op": { "or": ["write", "create"] }, "path": { "subpath": { "path": { "env": "PWD" }, "worktree": true } } } } }
-      ]
-    },
-    {
-      "name": "main",
-      "body": [
-        { "include": "cwd-access" },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "cargo" } } } },
-        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } },
-        { "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "reset" }, { "literal": "--hard" }, { "any": null }] } } },
-        { "rule": { "effect": "allow", "exec": { "bin": { "literal": "git" } } } },
-        { "rule": { "effect": "allow", "net": { "domain": { "literal": "github.com" } } } }
-      ]
-    }
+  "sandboxes": {},
+  "tree": [
+    { "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } },
+        "children": [
+          { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "cargo" } },
+              "children": [{ "decision": { "allow": null } }] } },
+          { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } },
+              "children": [
+                { "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "push" } },
+                    "children": [{ "decision": "deny" }] } },
+                { "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "reset" } },
+                    "children": [
+                      { "condition": { "observe": { "positional_arg": 2 }, "pattern": { "literal": { "literal": "--hard" } },
+                          "children": [{ "decision": "deny" }] } }
+                    ] } },
+                { "decision": { "allow": null } }
+              ] } }
+        ] } }
   ]
 }
 ```

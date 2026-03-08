@@ -143,6 +143,60 @@ impl SandboxReport {
     }
 }
 
+/// Inspect sandbox enforcement for an audit log entry identified by its short hash.
+pub fn inspect_hash(hash: &str) -> Result<SandboxReport> {
+    let entry = crate::debug::log::find_by_hash(hash)?;
+    inspect(&entry.tool_name, Some(&entry.tool_input_summary))
+}
+
+/// Execute a command under sandbox enforcement, resolved from an audit log entry.
+///
+/// Looks up the entry, evaluates it against the current policy to obtain the
+/// sandbox policy, extracts the shell command, and runs it sandboxed.
+pub fn exec_entry(entry: &super::AuditLogEntry) -> Result<()> {
+    let (tool_name, tool_input) = crate::debug::replay::resolve_tool_input(
+        &entry.tool_name,
+        Some(&entry.tool_input_summary),
+    )?;
+
+    let command = extract_shell_command(&tool_name, &tool_input).ok_or_else(|| {
+        anyhow::anyhow!(
+            "cannot execute tool '{}' in a sandbox — only Bash commands are supported",
+            tool_name,
+        )
+    })?;
+
+    let settings = ClashSettings::load_or_create()?;
+    let tree = settings
+        .policy_tree()
+        .ok_or_else(|| anyhow::anyhow!("no compiled policy available — run `clash init`"))?;
+
+    let decision = tree.evaluate(&tool_name, &tool_input);
+    let sandbox = decision.sandbox.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no sandbox policy applies to this command (effect: {})",
+            decision.effect,
+        )
+    })?;
+
+    let cwd = std::env::current_dir().context("failed to determine current directory")?;
+
+    eprintln!("Replaying in sandbox: {}", command.join(" "));
+    crate::sandbox_cmd::run_sandboxed_command(&sandbox, &cwd, &command, None, None)
+}
+
+/// Extract a shell command from a tool invocation.
+///
+/// Returns `Some(["bash", "-c", <command>])` for Bash tool inputs,
+/// `None` for other tools that can't be meaningfully run in a shell sandbox.
+fn extract_shell_command(tool_name: &str, tool_input: &serde_json::Value) -> Option<Vec<String>> {
+    if tool_name != "Bash" {
+        return None;
+    }
+    let cmd = tool_input.get("command")?.as_str()?;
+    Some(vec!["bash".to_string(), "-c".to_string(), cmd.to_string()])
+}
+
 /// Inspect sandbox enforcement for a tool invocation.
 pub fn inspect(tool: &str, input: Option<&str>) -> Result<SandboxReport> {
     let cwd = std::env::current_dir()
@@ -156,7 +210,7 @@ pub fn inspect(tool: &str, input: Option<&str>) -> Result<SandboxReport> {
         .policy_tree()
         .ok_or_else(|| anyhow::anyhow!("no compiled policy available — run `clash init`"))?;
 
-    let decision = tree.evaluate(&tool_name, &tool_input, &cwd);
+    let decision = tree.evaluate(&tool_name, &tool_input);
     let noun = crate::permissions::extract_noun(&tool_name, &tool_input);
 
     let sandbox = decision.sandbox.clone();

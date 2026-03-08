@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::policy::tree::PolicyTree;
+use crate::policy::match_tree::CompiledPolicy;
 use anyhow::{Context, Result};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
@@ -155,7 +155,7 @@ pub struct LoadedPolicy {
 #[derive(Debug, Default)]
 pub struct ClashSettings {
     /// Pre-compiled policy tree for fast evaluation.
-    compiled: Option<PolicyTree>,
+    compiled: Option<CompiledPolicy>,
 
     /// Policy sources loaded from each level (ordered by precedence, highest first).
     loaded_policies: Vec<LoadedPolicy>,
@@ -347,10 +347,7 @@ impl ClashSettings {
 
     /// Set the policy source directly (compile from policy source text).
     pub fn set_policy_source(&mut self, source: &str) {
-        match crate::policy::compile::compile_to_tree(
-            source,
-            &crate::policy::compile::StdEnvResolver,
-        ) {
+        match crate::policy::compile::compile_to_tree(source) {
             Ok(tree) => {
                 self.compiled = Some(tree);
                 self.policy_error = None;
@@ -368,13 +365,13 @@ impl ClashSettings {
     const MAX_POLICY_SIZE: u64 = 1024 * 1024;
 
     /// Return the pre-compiled policy tree, if one was successfully compiled.
-    pub fn policy_tree(&self) -> Option<&PolicyTree> {
+    pub fn policy_tree(&self) -> Option<&CompiledPolicy> {
         self.compiled.as_ref()
     }
 
     /// Backward-compat alias for `policy_tree()`.
     #[doc(hidden)]
-    pub fn decision_tree(&self) -> Option<&PolicyTree> {
+    pub fn decision_tree(&self) -> Option<&CompiledPolicy> {
         self.compiled.as_ref()
     }
 
@@ -437,10 +434,7 @@ impl ClashSettings {
         match evaluate_star_policy(path) {
             Ok(json_source) => {
                 self.load_notification_audit_config();
-                match crate::policy::compile::compile_to_tree(
-                    &json_source,
-                    &crate::policy::compile::StdEnvResolver,
-                ) {
+                match crate::policy::compile::compile_to_tree(&json_source) {
                     Ok(tree) => {
                         info!(path = %path.display(), "Loaded policy");
                         self.compiled = Some(tree);
@@ -546,7 +540,7 @@ impl ClashSettings {
         // Use a session-aware resolver that provides TRANSCRIPT_DIR etc.
         let resolver = SessionEnvResolver { hook_ctx };
 
-        // Compile (single-level or multi-level) directly to PolicyTree.
+        // Compile (single-level or multi-level) directly to CompiledPolicy.
         let result = if level_sources.len() == 1 {
             let (_, source) = &level_sources[0];
             crate::policy::compile::compile_to_tree_with_internals(
@@ -690,26 +684,7 @@ pub fn evaluate_star_policy(path: &std::path::Path) -> Result<String> {
 
     let base_dir = path.parent().unwrap_or(std::path::Path::new("."));
 
-    // Check disk cache first
-    let cache = clash_starlark::StarCache::new();
-    let cache_key = clash_starlark::StarCache::cache_key(&source, &[]);
-    if let Some(ref cache) = cache
-        && let Some(cached) = cache.get(&cache_key)
-    {
-        tracing::debug!(path = %path.display(), "starlark cache hit");
-        return Ok(cached);
-    }
-
     let output = clash_starlark::evaluate(&source, &path.display().to_string(), base_dir)?;
-    // .with_context(|| format!("failed to evaluate {}", path.display()))?;
-
-    // Update cache with full key (including loaded files)
-    let full_key = clash_starlark::StarCache::cache_key(&source, &output.loaded_files);
-    if let Some(ref cache) = cache
-        && let Err(e) = cache.put(&full_key, &output.json)
-    {
-        tracing::warn!(error = %e, "failed to cache starlark output");
-    }
 
     Ok(output.json)
 }
@@ -763,7 +738,7 @@ mod test {
             "default_policy.star",
             std::path::Path::new("."),
         )?;
-        let tree = crate::policy::compile::compile_to_tree(&output.json, &TestEnv)?;
+        let tree = crate::policy::compile::compile_to_tree(&output.json)?;
         let _ = tree;
         Ok(())
     }
@@ -866,8 +841,13 @@ mod test {
 
     #[test]
     fn set_policy_source_works() {
-        // set_policy_source takes JSON IR (the compiled output of starlark evaluation).
-        let simple_policy = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": [{"rule": {"effect": "allow", "fs": {"op": {"single": "read"}, "path": {"subpath": {"path": {"static": "/tmp"}}}}}}]}]}"#;
+        let simple_policy = r#"{"schema_version":5,"default_effect":"deny","sandboxes":{},"tree":[
+            {"condition":{"observe":"fs_op","pattern":{"literal":{"literal":"read"}},"children":[
+                {"condition":{"observe":"fs_path","pattern":{"prefix":{"literal":"/tmp"}},"children":[
+                    {"decision":{"allow":null}}
+                ]}}
+            ]}}
+        ]}"#;
         let mut settings = ClashSettings::default();
         settings.set_policy_source(simple_policy);
         assert!(settings.decision_tree().is_some());
@@ -984,7 +964,8 @@ mod test {
         assert_eq!(resolver.resolve("TRANSCRIPT_DIR").unwrap(), "/tmp/session");
 
         // Verify the internal_claude.star compiles with this resolver
-        let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": []}]}"#;
+        let user_source =
+            r#"{"schema_version": 5, "default_effect": "deny", "sandboxes": {}, "tree": []}"#;
         let internal = include_str!("internal_claude.star");
         let result = crate::policy::compile::compile_to_tree_with_internals(
             user_source,
@@ -1000,9 +981,9 @@ mod test {
 
     #[test]
     fn internal_claude_policy_compiles_without_session_context() {
-        // Even without hook context, the policy should compile (using sentinel).
         let resolver = SessionEnvResolver { hook_ctx: None };
-        let user_source = r#"{"schema_version": 1, "default_effect": "deny", "use": "main", "policies": [{"name": "main", "body": []}]}"#;
+        let user_source =
+            r#"{"schema_version": 5, "default_effect": "deny", "sandboxes": {}, "tree": []}"#;
         let internal = include_str!("internal_claude.star");
         let result = crate::policy::compile::compile_to_tree_with_internals(
             user_source,

@@ -1,6 +1,7 @@
 load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "domains", "exe", "regex")
 
 python_sandbox = sandbox(
+    name = "python_dev",
     default = deny,
     fs = [
         cwd(read = allow, write = allow, execute = allow),
