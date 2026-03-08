@@ -10,4 +10,5 @@ pub mod policy;
 pub mod schema;
 pub mod status;
 pub mod statusline;
+pub mod uninstall;
 pub mod update;
