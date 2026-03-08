@@ -14,6 +14,7 @@ allocative = "0.3"
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 regex = { workspace = true }
+include_dir = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

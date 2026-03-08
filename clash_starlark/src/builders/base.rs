@@ -34,4 +34,70 @@ impl Display for BasePolicyValue {
 starlark_simple_value!(BasePolicyValue);
 
 #[starlark_value(type = "BasePolicyValue")]
-impl<'v> StarlarkValue<'v> for BasePolicyValue {}
+impl<'v> StarlarkValue<'v> for BasePolicyValue {
+    fn get_methods() -> Option<&'static starlark::environment::Methods> {
+        static RES: starlark::environment::MethodsStatic =
+            starlark::environment::MethodsStatic::new();
+        RES.methods(base_policy_methods)
+    }
+}
+
+#[starlark::starlark_module]
+fn base_policy_methods(builder: &mut starlark::environment::MethodsBuilder) {
+    /// Merge two policies together.
+    ///
+    /// Combines tree nodes and sandboxes from both policies. The default
+    /// effect is the most restrictive: if either policy defaults to "deny",
+    /// the merged policy defaults to "deny".
+    fn merge(this: &BasePolicyValue, other: &BasePolicyValue) -> anyhow::Result<BasePolicyValue> {
+        let default_effect = if this.default_effect == "deny" || other.default_effect == "deny" {
+            "deny".to_string()
+        } else {
+            this.default_effect.clone()
+        };
+
+        let base_doc = match (&this.base_doc, &other.base_doc) {
+            (Some(left), Some(right)) => {
+                let mut doc = left.clone();
+                let obj = doc
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow::anyhow!("policy document is not an object"))?;
+
+                // Merge tree arrays
+                if let Some(right_tree) = right.get("tree").and_then(|t| t.as_array()) {
+                    let tree = obj
+                        .entry("tree")
+                        .or_insert_with(|| serde_json::json!([]))
+                        .as_array_mut()
+                        .ok_or_else(|| anyhow::anyhow!("policy tree is not an array"))?;
+                    tree.extend(right_tree.iter().cloned());
+                }
+
+                // Merge sandbox maps
+                if let Some(right_sb) = right.get("sandboxes").and_then(|s| s.as_object()) {
+                    let sandboxes = obj
+                        .entry("sandboxes")
+                        .or_insert_with(|| serde_json::json!({}))
+                        .as_object_mut()
+                        .ok_or_else(|| anyhow::anyhow!("policy sandboxes is not an object"))?;
+                    for (k, v) in right_sb {
+                        sandboxes.entry(k.clone()).or_insert_with(|| v.clone());
+                    }
+                }
+
+                // Update default effect
+                obj.insert("default_effect".into(), serde_json::json!(default_effect));
+
+                Some(doc)
+            }
+            (Some(doc), None) => Some(doc.clone()),
+            (None, Some(doc)) => Some(doc.clone()),
+            (None, None) => None,
+        };
+
+        Ok(BasePolicyValue {
+            base_doc,
+            default_effect,
+        })
+    }
+}

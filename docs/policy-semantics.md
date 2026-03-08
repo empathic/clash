@@ -56,6 +56,8 @@ The match tree is a uniform trie IR where:
 3. **Sort by specificity** — children sorted by pattern specificity: `Literal(3) > Regex(2) > AnyOf/Not(1) > Wildcard(0)`, with ties broken by observable specificity
 4. **Detect unreachable branches** — warn if a wildcard sibling precedes more specific siblings
 
+Built-in rules for clash CLI commands and Claude Code interactive tools are provided by `@clash//builtin.star` and merged into the user's policy via the `merge()` method in Starlark. This keeps the compilation pipeline simple — no implicit policy injection.
+
 ---
 
 ## Rule Ordering

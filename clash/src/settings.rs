@@ -87,13 +87,6 @@ impl std::str::FromStr for PolicyLevel {
 /// Default policy source embedded at compile time.
 pub const DEFAULT_POLICY: &str = include_str!("default_policy.star");
 
-/// Internal policies embedded at compile time. Each entry is (name, source).
-/// These are always active unless the user defines a policy with the same name.
-pub const INTERNAL_POLICIES: &[(&str, &str)] = &[
-    ("__internal_clash__", include_str!("internal_clash.star")),
-    ("__internal_claude__", include_str!("internal_claude.star")),
-];
-
 /// Session-level context from Claude Code hook input.
 ///
 /// Carries runtime values that aren't available as standard environment
@@ -537,27 +530,16 @@ impl ClashSettings {
             return Ok(this);
         }
 
-        // Use a session-aware resolver that provides TRANSCRIPT_DIR etc.
-        let resolver = SessionEnvResolver { hook_ctx };
-
         // Compile (single-level or multi-level) directly to CompiledPolicy.
         let result = if level_sources.len() == 1 {
             let (_, source) = &level_sources[0];
-            crate::policy::compile::compile_to_tree_with_internals(
-                source,
-                &resolver,
-                INTERNAL_POLICIES,
-            )
+            crate::policy::compile::compile_to_tree(source)
         } else {
             let level_refs: Vec<(PolicyLevel, &str)> = level_sources
                 .iter()
                 .map(|(l, s)| (*l, s.as_str()))
                 .collect();
-            crate::policy::compile::compile_multi_level_to_tree(
-                &level_refs,
-                &resolver,
-                INTERNAL_POLICIES,
-            )
+            crate::policy::compile::compile_multi_level_to_tree(&level_refs)
         };
 
         match result {
@@ -953,51 +935,6 @@ mod test {
         assert!(result.is_ok(), "HOME should resolve via StdEnvResolver");
     }
 
-    #[test]
-    fn internal_claude_policy_compiles_with_session_context() {
-        use crate::policy::compile::EnvResolver;
-        let ctx = HookContext::from_transcript_path("/tmp/session/transcript.jsonl");
-        let resolver = SessionEnvResolver {
-            hook_ctx: Some(&ctx),
-        };
-        // Verify TRANSCRIPT_DIR resolves to the actual directory
-        assert_eq!(resolver.resolve("TRANSCRIPT_DIR").unwrap(), "/tmp/session");
-
-        // Verify the internal_claude.star compiles with this resolver
-        let user_source =
-            r#"{"schema_version": 5, "default_effect": "deny", "sandboxes": {}, "tree": []}"#;
-        let internal = include_str!("internal_claude.star");
-        let result = crate::policy::compile::compile_to_tree_with_internals(
-            user_source,
-            &resolver,
-            &[("__internal_claude__", internal)],
-        );
-        assert!(
-            result.is_ok(),
-            "internal_claude.star should compile with session resolver: {:?}",
-            result.err()
-        );
-    }
-
-    #[test]
-    fn internal_claude_policy_compiles_without_session_context() {
-        let resolver = SessionEnvResolver { hook_ctx: None };
-        let user_source =
-            r#"{"schema_version": 5, "default_effect": "deny", "sandboxes": {}, "tree": []}"#;
-        let internal = include_str!("internal_claude.star");
-        let result = crate::policy::compile::compile_to_tree_with_internals(
-            user_source,
-            &resolver,
-            &[("__internal_claude__", internal)],
-        );
-        assert!(
-            result.is_ok(),
-            "internal_claude.star should compile with sentinel: {:?}",
-            result.err()
-        );
-    }
-
-    // --- is_disabled tests ---
     //
     // These test `is_truthy_disable_value` directly to avoid env var races.
     // `env::set_var` is process-wide and Rust runs tests on parallel threads,

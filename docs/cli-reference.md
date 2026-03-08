@@ -74,12 +74,12 @@ clash status [OPTIONS]
 | Flag | Description |
 |------|-------------|
 | `--json` | Output as JSON instead of human-readable text |
-| `--verbose` | Show all rules including builtin clash self-management rules |
+| `--verbose` | Show all rules including builtin rules from `@clash//builtin.star` |
 
 Outputs a comprehensive breakdown covering:
 
 - **Policy layers** — which levels are active (user, project, session) with file paths, and the automatic precedence chain (session > project > user)
-- **Effective policy** — all rules in evaluation order grouped by domain (exec, filesystem, network, tool), with level tags showing where each rule originates and shadow indicators when a higher-precedence layer overrides a lower one. Builtin rules (clash self-management) are collapsed into a summary count by default; pass `--verbose` to expand them.
+- **Effective policy** — all rules in evaluation order grouped by domain (exec, filesystem, network, tool), with level tags showing where each rule originates and shadow indicators when a higher-precedence layer overrides a lower one. Builtin rules (from `@clash//builtin.star`, merged via `merge(base)`) are collapsed into a summary count by default; pass `--verbose` to expand them.
 - **Potential issues** — detectable misconfigurations (overly broad wildcards, missing deny rules, shadowed rules, etc.)
 
 **Example:**
