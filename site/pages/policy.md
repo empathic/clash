@@ -229,6 +229,32 @@ In v5, composition happens at the Starlark level — the compiled output is a fl
 
 Starlark `load()` imports values from other `.star` files. All composition (function calls, list splicing, imports) resolves at compile time — the v5 JSON IR has no include mechanism.
 
+### Merging policies
+
+The `merge()` method combines two policies. Tree nodes and sandboxes are concatenated; the most restrictive default effect wins.
+
+```python
+load("@clash//builtin.star", "base")
+load("@clash//std.star", "exe", "policy", "cwd", "domains")
+
+def main():
+    my_policy = policy(default = deny, rules = [
+        cwd(read = allow, write = allow),
+        exe("git").allow(),
+        domains({"github.com": allow}),
+    ])
+    return my_policy.merge(base)
+```
+
+### Built-in policy (`@clash//builtin.star`)
+
+The `base` export from `@clash//builtin.star` bundles rules for:
+
+- **Clash CLI** — allows `clash status`, `clash policy list/show/explain`, and `clash bug` with appropriate sandboxes
+- **Claude Code tools** — allows interactive tools (`Agent`, `Skill`, `AskUserQuestion`, `ToolSearch`, etc.) with a sandbox scoped to `~/.claude`
+
+Merge with `base` to get sensible defaults. If you don't, you'll need your own rules for these tools.
+
 ---
 
 ## Sandbox policies

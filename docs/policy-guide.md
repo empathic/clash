@@ -169,6 +169,40 @@ def main():
 
 You can also use `load()` to import from other `.star` files.
 
+### Merging Policies
+
+The `merge()` method combines two policies into one. Tree nodes and sandboxes from both policies are concatenated, and the most restrictive default effect wins (if either defaults to "deny", the merged result defaults to "deny").
+
+```python
+load("@clash//builtin.star", "base")
+load("@clash//std.star", "exe", "policy", "cwd", "domains")
+
+def main():
+    my_policy = policy(default = deny, rules = [
+        cwd(read = allow, write = allow),
+        exe("git").allow(),
+        domains({"github.com": allow}),
+    ])
+    return my_policy.merge(base)
+```
+
+The `base` policy from `@clash//builtin.star` includes built-in rules for clash CLI commands and Claude Code interactive tools (Agent, Skill, etc.). Merging with `base` ensures these tools work correctly alongside your custom rules.
+
+### Built-in Policy (`@clash//builtin.star`)
+
+The `@clash//builtin.star` module exports a `base` policy that bundles rules for:
+
+- **Clash CLI** — allows `clash status`, `clash policy list`, `clash policy show`, `clash explain`, and `clash bug` with appropriate sandboxes
+- **Claude Code tools** — allows interactive tools (`Agent`, `AskUserQuestion`, `EnterPlanMode`, `Skill`, `ToolSearch`, etc.) with a sandbox scoped to `~/.claude`
+
+Load and merge it into your policy to get sensible defaults for these tools:
+
+```python
+load("@clash//builtin.star", "base")
+```
+
+If you don't merge with `base`, you'll need to write your own rules for clash CLI commands and Claude Code interactive tools.
+
 ---
 
 ## Sandbox Policies
@@ -506,5 +540,7 @@ clash policy show
 ## Reference
 
 - `@clash//std.star` -- built-in standard library (loaded via `load()` in policy files)
+- `@clash//builtin.star` -- built-in policy for clash CLI and Claude Code tools (exports `base`)
+- `@clash//rust.star`, `@clash//python.star` -- pre-built sandbox configurations for common toolchains
 - [Policy Semantics](./policy-semantics.md) -- compilation pipeline and evaluation algorithm
 - [CLI Reference](./cli-reference.md) -- full command documentation

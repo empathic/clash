@@ -40,16 +40,7 @@ impl EnvResolver for StdEnvResolver {
 
 /// Compile a JSON policy source string into a `CompiledPolicy`.
 pub fn compile_to_tree(source: &str) -> Result<CompiledPolicy> {
-    compile_policy_with_internals(source, &[])
-}
-
-/// Compile a JSON source string with internal policies.
-pub fn compile_to_tree_with_internals(
-    source: &str,
-    _env: &dyn EnvResolver,
-    internals: &[(&str, &str)],
-) -> Result<CompiledPolicy> {
-    compile_policy_with_internals(source, internals)
+    compile_policy(source)
 }
 
 /// Compile multiple policy levels with internals, returning a merged `CompiledPolicy`.
@@ -58,15 +49,13 @@ pub fn compile_to_tree_with_internals(
 /// so they match before lower-precedence ones (first-match semantics).
 pub fn compile_multi_level_to_tree(
     levels: &[(crate::settings::PolicyLevel, &str)],
-    _env: &dyn EnvResolver,
-    internals: &[(&str, &str)],
 ) -> Result<CompiledPolicy> {
     if levels.is_empty() {
         bail!("no policy levels to compile");
     }
 
     if levels.len() == 1 {
-        return compile_policy_with_internals(levels[0].1, internals);
+        return compile_policy(levels[0].1);
     }
 
     // Sort by precedence (highest first) for first-match semantics.
@@ -92,21 +81,6 @@ pub fn compile_multi_level_to_tree(
         }
     }
 
-    // Append internal policies (lowest priority).
-    for (name, int_source) in internals {
-        match eval_internal_star(name, int_source) {
-            Ok(int_policy) => {
-                merged.tree.extend(int_policy.tree);
-                for (k, v) in int_policy.sandboxes {
-                    merged.sandboxes.entry(k).or_insert(v);
-                }
-            }
-            Err(e) => {
-                tracing::warn!("failed to compile internal policy {name}: {e}");
-            }
-        }
-    }
-
     let errors = merged.validate();
     if !errors.is_empty() {
         bail!("match tree validation errors: {}", errors.join("; "));
@@ -118,29 +92,9 @@ pub fn compile_multi_level_to_tree(
 }
 
 /// Compile a single policy source with optional internal policies.
-fn compile_policy_with_internals(
-    source: &str,
-    internals: &[(&str, &str)],
-) -> Result<CompiledPolicy> {
+fn compile_policy(source: &str) -> Result<CompiledPolicy> {
     let mut policy: CompiledPolicy = serde_json::from_str(source)
         .map_err(|e| anyhow::anyhow!("invalid match tree policy JSON: {e}"))?;
-
-    // Merge internal policies (prepend = lower priority, user rules override).
-    for (name, int_source) in internals {
-        match eval_internal_star(name, int_source) {
-            Ok(int_policy) => {
-                let mut merged_tree = int_policy.tree;
-                merged_tree.append(&mut policy.tree);
-                policy.tree = merged_tree;
-                for (k, v) in int_policy.sandboxes {
-                    policy.sandboxes.entry(k).or_insert(v);
-                }
-            }
-            Err(e) => {
-                tracing::warn!("failed to compile internal policy {name}: {e}");
-            }
-        }
-    }
 
     let errors = policy.validate();
     if !errors.is_empty() {
@@ -150,14 +104,6 @@ fn compile_policy_with_internals(
     sort_by_specificity(&mut policy.tree);
 
     Ok(policy)
-}
-
-/// Evaluate an internal `.star` source and parse as match tree.
-fn eval_internal_star(name: &str, star_source: &str) -> Result<CompiledPolicy> {
-    let output = clash_starlark::evaluate(star_source, name, std::path::Path::new("."))
-        .map_err(|e| anyhow::anyhow!("failed to evaluate internal policy {name}: {e}"))?;
-    serde_json::from_str(&output.json)
-        .map_err(|e| anyhow::anyhow!("failed to parse internal policy {name}: {e}"))
 }
 
 #[cfg(test)]
@@ -198,7 +144,7 @@ mod tests {
             }]
         }"#;
         // With no internals, should just compile the source.
-        let policy = compile_policy_with_internals(source, &[]).unwrap();
+        let policy = compile_policy(source).unwrap();
         assert_eq!(policy.tree.len(), 1);
     }
 }

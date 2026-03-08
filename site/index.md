@@ -108,10 +108,11 @@ files you specify.
 
 ```python
 # ~/.clash/policy.star (user level)
+load("@clash//builtin.star", "base")
 load("@clash//std.star", "exe", "policy", "cwd", "domains")
 
 def main():
-    return policy(default = ask, rules = [
+    my_rules = policy(default = ask, rules = [
         cwd(follow_worktrees = True, read = allow, write = allow),
         exe("cargo").allow(),
         exe("git", args = ["push"]).deny(),
@@ -119,6 +120,7 @@ def main():
         exe("git").allow(),
         domains({"github.com": allow}),
     ])
+    return my_rules.merge(base)
 ```
 
 <details>

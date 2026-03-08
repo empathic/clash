@@ -187,11 +187,7 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
             }
         };
 
-        match crate::policy::compile::compile_to_tree_with_internals(
-            &source,
-            &crate::policy::compile::StdEnvResolver,
-            crate::settings::INTERNAL_POLICIES,
-        ) {
+        match crate::policy::compile::compile_to_tree(&source) {
             Ok(policy) => {
                 if json {
                     results.push(serde_json::json!({
@@ -267,11 +263,7 @@ fn validate_single_file(path: &std::path::Path, json: bool) -> Result<()> {
     let source = crate::settings::evaluate_star_policy(path)
         .with_context(|| format!("failed to evaluate: {}", path.display()))?;
 
-    match crate::policy::compile::compile_to_tree_with_internals(
-        &source,
-        &crate::policy::compile::StdEnvResolver,
-        crate::settings::INTERNAL_POLICIES,
-    ) {
+    match crate::policy::compile::compile_to_tree(&source) {
         Ok(policy) => {
             if json {
                 println!(
