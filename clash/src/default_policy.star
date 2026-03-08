@@ -1,3 +1,4 @@
+load("@clash//builtin.star", "base")
 load("@clash//std.star", "tool", "policy", "sandbox", "cwd", "home")
 load("@clash//rust.star", "rust")
 load("@clash//python.star", "python")
@@ -11,10 +12,11 @@ _fs_access = sandbox(
 )
 
 def main():
-    return policy(default = deny, rules = [
+    my_policy = policy(default = deny, rules = [
         tool(["Read", "Glob", "Grep"]).sandbox(_fs_access).allow(),
         tool(["Write", "Edit", "NotebookEdit"]).sandbox(_fs_access).allow(),
         node,
         python,
         rust,
     ])
+    return my_policy.merge(base)
