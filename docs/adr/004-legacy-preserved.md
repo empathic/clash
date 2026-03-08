@@ -35,4 +35,4 @@ Rationale:
 - The unified IR required complex translation layers
 - Starlark/JSON format is simpler, has compile-time conflict detection, and round-trips cleanly
 
-Users migrating from v1 should rewrite their policies in Starlark format. See the [Policy Writing Guide](../policy-guide.md) for examples.
+Users upgrading to v0.4.0 should rewrite their policies in Starlark format. See the [Migration Guide](../migration-guide.md) for side-by-side examples, or the [Policy Writing Guide](../policy-guide.md) for full reference.
