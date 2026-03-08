@@ -1,28 +1,35 @@
 ---
 layout: base.njk
 title: Migration Guide
-description: How to migrate from legacy policy formats (s-expressions, YAML, simple permissions) to Starlark.
+description: How to migrate from s-expression policies (v0.3.x) to Starlark (v0.4.0).
 permalink: /migration/
 ---
 
 <h1 class="page-title">Migration Guide</h1>
-<p class="page-desc">Upgrading from legacy policy formats to Starlark (<code>.star</code>).</p>
+<p class="page-desc">Upgrading from s-expression policies (v0.3.x) to Starlark (v0.4.0).</p>
 
 ## What changed
 
-Clash v2 replaced three legacy formats with a single Starlark policy language. The key shift: rules now target **capabilities** (exec, fs, net) instead of **tool names** (Bash, Read, Write).
+In v0.3.x, policies declared rules inside fixed capability domains using s-expressions:
 
-| | Legacy | Starlark (v2) |
+```
+(allow (exec "git" *))        ← effect + domain
+```
+
+In v0.4.0, the policy engine is a **match tree** — patterns match against properties of each tool invocation (tool name, arguments, file paths, URLs) and produce a decision. Decisions can optionally attach a **sandbox** that constrains what the spawned process can access at the kernel level.
+
+The Starlark builders (`exe()`, `cwd()`, `domains()`) compile down to match tree nodes. They're ergonomic sugar over a general-purpose pattern matching engine.
+
+| | v0.3.x (s-expressions) | v0.4.0 (Starlark) |
 |---|---|---|
-| **Rules target** | Tool names (`Bash`, `Read`) | Capabilities (`exec`, `fs`, `net`) |
-| **Composition** | Profiles with inheritance | Functions + `load()` |
-| **Sandboxes** | Not available | Kernel-enforced |
+| **Model** | Flat rules in fixed domains | Match tree: pattern match → decision |
+| **Evaluation** | Specificity-based | First-match (order matters) |
+| **Composition** | Named policies | Functions, variables, `load()` |
+| **Sandbox** | Not available | Kernel-enforced (Landlock/Seatbelt) |
 
 ---
 
 ## From s-expressions
-
-S-expression policies used `(effect (domain args...))` syntax.
 
 ### Exec rules
 
@@ -51,7 +58,7 @@ S-expression policies used `(effect (domain args...))` syntax.
 
 <div class="migration-compare">
 
-**Before** — s-expression policy:
+**Before** — v0.3.x s-expression policy:
 
 ```
 (default deny "main")
@@ -63,7 +70,7 @@ S-expression policies used `(effect (domain args...))` syntax.
   (allow (net (domain "github.com"))))
 ```
 
-**After** — Starlark policy (`~/.clash/policy.star`):
+**After** — v0.4.0 Starlark policy (`~/.clash/policy.star`):
 
 ```python
 load("@clash//std.star", "exe", "policy", "cwd", "domains")
@@ -80,20 +87,20 @@ def main():
 
 </div>
 
-Note the order change: Starlark uses **first-match** semantics. Specific denies go before broad allows.
+**Rule order matters.** In v0.3.x, specificity determined which rule won. In v0.4.0, the **first matching rule wins** — put specific denies before broad allows.
 
 ---
 
 ## From Claude Code simple permissions
 
-Claude Code's built-in format used tool-name patterns in a JSON allow/deny list.
+Claude Code's built-in format (pre-Clash, or v0.1.x) used tool-name patterns.
 
 | Simple format | Starlark |
 |---|---|
 | `"Bash(git:*)"` in allow | `exe("git").allow()` |
 | `"Bash(rm:*)"` in deny | `exe("rm").deny()` |
 | `"Read(*)"` in allow | `cwd(read = allow)` |
-| `"Read(.env)"` in deny | Use `default = deny` and only allow `cwd()` |
+| `"Read(.env)"` in deny | Use `default = deny` and scope `cwd()` to your project |
 
 <div class="migration-compare">
 
@@ -127,9 +134,7 @@ def main():
 
 ## From YAML profiles
 
-YAML policies used named profiles with inheritance and constraints.
-
-### Profiles become functions
+YAML policies (early v0.3.x) used named profiles with inheritance.
 
 <div class="migration-compare">
 
@@ -172,6 +177,12 @@ def main():
 
 </div>
 
+Profile inheritance becomes list splicing. For cross-file reuse, use `load()`:
+
+```python
+load("readonly.star", "readonly_rules")
+```
+
 ### URL constraints become domain rules
 
 ```yaml
@@ -189,22 +200,24 @@ domains({"github.com": allow})
 
 ## Key differences
 
-1. **Rule order matters.** First match wins — put specific denies before broad allows.
-2. **Capabilities, not tools.** `exe()` replaces `Bash(...)`. `cwd()` replaces `Read(...)`/`Write(...)`.
-3. **No profiles.** Use Starlark variables and `load()` imports for reuse.
-4. **Sandboxes are new.** Attach kernel-enforced restrictions to exec rules — see the [policy language reference](/policy/#sandbox-policies).
+1. **First-match, not specificity.** In v0.3.x, more-specific rules won regardless of order. In v0.4.0, the first matching rule wins — order matters.
+2. **Match tree under the hood.** The builders compile to a trie that pattern-matches on tool invocation properties. Capability domains are sugar, not primitives.
+3. **Sandboxes are new.** Attach kernel-enforced filesystem and network constraints to exec rules — see the [policy reference](/policy/#sandbox-policies).
+4. **No profiles or named policies.** Use Starlark variables, functions, and `load()` imports.
 5. **Validate after migrating.** Run `clash policy validate` to catch errors.
 
 ---
 
 ## File locations
 
-| Layer | Old path | New path |
-|---|---|---|
-| User | `~/.clash/policy.yaml` | `~/.clash/policy.star` |
-| Project | `<repo>/.clash/policy.yaml` | `<repo>/.clash/policy.star` |
+The file path is the same (`~/.clash/policy.star`), but the syntax inside has changed from s-expressions to Starlark. Clash v0.4.0 will not parse s-expression syntax — you must rewrite the contents.
 
-Old `.yaml` files are ignored. Delete them after migrating.
+| Layer | Path |
+|---|---|
+| User | `~/.clash/policy.star` |
+| Project | `<repo>/.clash/policy.star` |
+
+If you had a `.yaml` policy from an earlier format, that is also no longer read. Remove old `.yaml` files after migrating.
 
 ---
 
