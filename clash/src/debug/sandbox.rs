@@ -154,14 +154,17 @@ pub fn inspect_hash(hash: &str) -> Result<SandboxReport> {
 /// Looks up the entry, evaluates it against the current policy to obtain the
 /// sandbox policy, extracts the shell command, and runs it sandboxed.
 pub fn exec_entry(entry: &super::AuditLogEntry) -> Result<()> {
-    let (tool_name, tool_input) =
-        crate::debug::replay::resolve_tool_input(&entry.tool_name, Some(&entry.tool_input_summary))?;
+    let (tool_name, tool_input) = crate::debug::replay::resolve_tool_input(
+        &entry.tool_name,
+        Some(&entry.tool_input_summary),
+    )?;
 
-    let command = extract_shell_command(&tool_name, &tool_input)
-        .ok_or_else(|| anyhow::anyhow!(
+    let command = extract_shell_command(&tool_name, &tool_input).ok_or_else(|| {
+        anyhow::anyhow!(
             "cannot execute tool '{}' in a sandbox — only Bash commands are supported",
             tool_name,
-        ))?;
+        )
+    })?;
 
     let settings = ClashSettings::load_or_create()?;
     let tree = settings
@@ -169,11 +172,12 @@ pub fn exec_entry(entry: &super::AuditLogEntry) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("no compiled policy available — run `clash init`"))?;
 
     let decision = tree.evaluate(&tool_name, &tool_input);
-    let sandbox = decision.sandbox
-        .ok_or_else(|| anyhow::anyhow!(
+    let sandbox = decision.sandbox.ok_or_else(|| {
+        anyhow::anyhow!(
             "no sandbox policy applies to this command (effect: {})",
             decision.effect,
-        ))?;
+        )
+    })?;
 
     let cwd = std::env::current_dir().context("failed to determine current directory")?;
 
@@ -190,11 +194,7 @@ fn extract_shell_command(tool_name: &str, tool_input: &serde_json::Value) -> Opt
         return None;
     }
     let cmd = tool_input.get("command")?.as_str()?;
-    Some(vec![
-        "bash".to_string(),
-        "-c".to_string(),
-        cmd.to_string(),
-    ])
+    Some(vec!["bash".to_string(), "-c".to_string(), cmd.to_string()])
 }
 
 /// Inspect sandbox enforcement for a tool invocation.

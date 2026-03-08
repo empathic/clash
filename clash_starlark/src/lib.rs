@@ -109,6 +109,7 @@ load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(
+        name = "test",
         default = deny,
         fs = [
             cwd(read = allow, write = allow),
@@ -177,7 +178,7 @@ def main():
 load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 
 def main():
-    box = sandbox(default = deny, fs = [cwd(read = allow)])
+    box = sandbox(name = "test", default = deny, fs = [cwd(read = allow)])
     return policy(
         default = deny,
         rules = [
@@ -209,6 +210,7 @@ load("@clash//std.star", "exe", "policy", "sandbox", "domains")
 
 def main():
     box = sandbox(
+        name = "test",
         default = deny,
         net = [
             domains({"github.com": allow, "crates.io": allow}),
@@ -230,6 +232,7 @@ load("@clash//std.star", "exe", "policy", "sandbox", "home")
 
 def main():
     box = sandbox(
+        name = "test",
         default = deny,
         fs = [
             home().child(".ssh", read = allow),
@@ -252,6 +255,7 @@ load("@clash//std.star", "exe", "policy", "sandbox", "domains")
 
 def main():
     box = sandbox(
+        name = "test",
         default = deny,
         net = [domains({"*.npmjs.org": allow})],
     )
@@ -270,6 +274,7 @@ load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(
+        name = "test",
         default = deny,
         fs = [cwd(follow_worktrees = True, read = allow, write = allow)],
     )
@@ -290,6 +295,7 @@ load("@clash//std.star", "exe", "policy", "sandbox", "tempdir")
 
 def main():
     box = sandbox(
+        name = "test",
         default = deny,
         fs = [tempdir(allow_all = True)],
     )
@@ -308,6 +314,7 @@ load("@clash//std.star", "exe", "policy", "sandbox", "path")
 
 def main():
     box = sandbox(
+        name = "test",
         default = deny,
         fs = [path("/usr/local/bin", read = allow, execute = allow)],
     )
@@ -326,6 +333,7 @@ load("@clash//std.star", "exe", "policy", "sandbox", "path")
 
 def main():
     box = sandbox(
+        name = "test",
         default = deny,
         fs = [path(env = "CARGO_HOME", read = allow, write = allow)],
     )
@@ -343,7 +351,7 @@ def main():
 load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 
 def main():
-    box = sandbox(default = deny, fs = [cwd(read = "invalid")])
+    box = sandbox(name = "test", default = deny, fs = [cwd(read = "invalid")])
     return policy(default = deny, rules = [exe("test").sandbox(box).allow()])
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from("."));
@@ -404,7 +412,7 @@ def main():
             r#"
 load("@clash//std.star", "sandbox", "cwd")
 
-my_sandbox = sandbox(default = deny, fs = [cwd(read = allow)])
+my_sandbox = sandbox(name = "test", default = deny, fs = [cwd(read = allow)])
 "#,
         )
         .unwrap();
@@ -431,6 +439,7 @@ load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home")
 
 def main():
     gitbox = sandbox(
+        name = "gitbox",
         default = deny,
         fs = [
             cwd(

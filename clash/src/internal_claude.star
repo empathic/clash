@@ -1,6 +1,6 @@
 load("@clash//std.star", "tool", "policy", "sandbox", "home", "path")
 
-_claude_fs = sandbox(fs = [
+_claude_fs = sandbox(name = "claude_fs", fs = [
     home().child(".claude", read = allow, write = allow),
     path(env = "TRANSCRIPT_DIR", read = allow),
 ])

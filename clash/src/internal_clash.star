@@ -2,6 +2,7 @@ load("@clash//std.star", "exe", "policy", "sandbox", "home", "path")
 
 def main():
     _clash_fs = sandbox(
+        name = "clash_fs",
         default = deny,
         fs = [
             home().child(".clash", read = allow),
@@ -9,6 +10,7 @@ def main():
     )
 
     _clash_net = sandbox(
+        name = "clash_net",
         default = deny,
         fs = [
             home().child(".clash", read = allow),
