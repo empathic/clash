@@ -21,7 +21,7 @@
 * `clash` is an installed binary on the user's PATH. ALWAYS run it directly as `clash` (e.g., `clash status`, `clash policy list`).
 * NEVER use `cargo run --bin clash` to run clash. That is for building/testing the crate, not for invoking the tool.
 * Skills reference `clash` commands — execute them exactly as written.
-* Available CLI commands: `clash init`, `clash status`, `clash policy list`, `clash policy validate`, `clash policy show`, `clash explain`, `clash doctor`, `clash update`, `clash launch`, `clash sandbox`.
+* Available CLI commands: `clash init`, `clash uninstall`, `clash status`, `clash policy list`, `clash policy validate`, `clash policy show`, `clash explain`, `clash doctor`, `clash update`, `clash launch`, `clash sandbox`.
 
 ## Development
 

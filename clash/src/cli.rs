@@ -100,6 +100,13 @@ pub enum Commands {
         scope: Option<String>,
     },
 
+    /// Remove clash: undo bypass permissions, uninstall plugin, remove config and binary
+    Uninstall {
+        /// Skip confirmation prompts
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+
     /// Show policy status: layers, rules with shadowing, and potential issues
     Status {
         /// Output as JSON instead of human-readable text

@@ -187,6 +187,35 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
+/// Remove the clash status line, returning whether it was removed.
+///
+/// Used by `clash uninstall` to integrate status line removal into the
+/// teardown flow without duplicate messaging.
+pub fn uninstall_for_teardown() -> Result<bool> {
+    let cs = claude_settings::ClaudeSettings::new();
+    let current = cs.read_or_default(claude_settings::SettingsLevel::User)?;
+
+    match current.extra.get("statusLine") {
+        None => Ok(false),
+        Some(val) => {
+            let is_clash = val
+                .get("command")
+                .and_then(|v| v.as_str())
+                .is_some_and(|c| c.contains("clash statusline"));
+
+            if !is_clash {
+                return Ok(false);
+            }
+
+            cs.update(claude_settings::SettingsLevel::User, |s| {
+                s.extra.remove("statusLine");
+            })?;
+
+            Ok(true)
+        }
+    }
+}
+
 /// Remove the clash status line from Claude Code user settings.
 fn uninstall() -> Result<()> {
     let cs = claude_settings::ClaudeSettings::new();
