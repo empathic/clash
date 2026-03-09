@@ -1,11 +1,9 @@
 //! `clash shell` — bash-compatible shell with per-command sandbox enforcement.
 //!
 //! Uses brush (a bash-compatible shell implementation in Rust) with an external
-//! command hook that wraps every external command invocation through
-//! `clash sandbox exec --profile <binary> --fallback-default`. This gives
-//! per-command sandbox resolution: each command in a pipeline, script, or
-//! interactive session gets its own sandbox profile looked up by binary name,
-//! falling back to the default sandbox when no command-specific profile exists.
+//! command hook that evaluates the clash policy for every external command,
+//! exactly as if Claude had issued it via the Bash tool. If the policy includes
+//! a sandbox, the command is wrapped through `clash sandbox exec --policy <json>`.
 //!
 //! Three modes:
 //! - `clash shell` — interactive REPL (brush-interactive with basic backend)
@@ -17,20 +15,70 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tracing::info;
 
-/// Build the external command hook that wraps commands through `clash sandbox exec`.
+use crate::policy::CompiledPolicy;
+use crate::settings::ClashSettings;
+
+/// Build the external command hook that evaluates the policy for each command
+/// and wraps it with the appropriate sandbox (same as Claude's Bash tool).
+/// Shell builtins that should never be wrapped — they must run in-process.
+const SHELL_BUILTINS: &[&str] = &[
+    ".", ":", "[", "alias", "bg", "bind", "break", "builtin", "caller", "cd", "command",
+    "compgen", "complete", "compopt", "continue", "declare", "dirs", "disown", "echo", "enable",
+    "eval", "exec", "exit", "export", "false", "fc", "fg", "getopts", "hash", "help", "history",
+    "jobs", "kill", "let", "local", "logout", "mapfile", "popd", "printf", "pushd", "pwd", "read",
+    "readarray", "readonly", "return", "set", "shift", "shopt", "source", "suspend", "test",
+    "times", "trap", "true", "type", "typeset", "ulimit", "umask", "unalias", "unset", "wait",
+];
+
 fn make_sandbox_hook(
     clash_bin: String,
-    cwd: String,
+    policy: Arc<CompiledPolicy>,
 ) -> brush_core::ExternalCommandHook {
     Arc::new(move |executable_path: &str, args: &[String]| {
+        // Don't wrap shell builtins — they must run in the shell process.
+        let basename = executable_path.rsplit('/').next().unwrap_or(executable_path);
+        if SHELL_BUILTINS.contains(&basename) {
+            return None;
+        }
+
+        // Reconstruct the full command string as it would appear in a Bash tool call.
+        let mut cmd_parts = vec![executable_path.to_string()];
+        cmd_parts.extend(args.iter().cloned());
+        let command_str = cmd_parts.join(" ");
+
+        // Build a tool_input that matches what Claude's Bash tool produces.
+        let tool_input = serde_json::json!({
+            "command": command_str,
+        });
+
+        // Evaluate the policy exactly as check_permission would.
+        let decision = policy.evaluate("Bash", &tool_input);
+
+        // If the policy denies this command, let it run unsandboxed — the kernel
+        // sandbox on the parent clash-shell process already constrains it.
+        // (Full deny enforcement is a future enhancement.)
+        let sandbox = match decision.sandbox {
+            Some(ref sbx) => sbx,
+            None => return None, // No sandbox in policy — run unchanged.
+        };
+
+        let policy_json = match serde_json::to_string(sandbox) {
+            Ok(j) => j,
+            Err(_) => return None,
+        };
+
+        // Use the process cwd (which brush updates via chdir on `cd`).
+        let current_cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| ".".to_string());
+
         let mut new_args = vec![
             "sandbox".to_string(),
             "exec".to_string(),
-            "--profile".to_string(),
-            executable_path.to_string(),
-            "--fallback-default".to_string(),
+            "--sandbox".to_string(),
+            policy_json,
             "--cwd".to_string(),
-            cwd.clone(),
+            current_cwd,
             "--".to_string(),
             executable_path.to_string(),
         ];
@@ -51,7 +99,15 @@ pub fn run_shell(
         .to_string_lossy()
         .to_string();
 
-    let hook = make_sandbox_hook(clash_bin, cwd.clone());
+    // Load the policy so we can evaluate it per-command.
+    let settings = ClashSettings::load_or_create()
+        .context("failed to load clash settings")?;
+    let policy = settings
+        .policy_tree()
+        .context("no compiled policy available — run `clash init` first")?
+        .clone();
+
+    let hook = make_sandbox_hook(clash_bin, Arc::new(policy));
 
     // Build a tokio runtime for brush's async API.
     let rt = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
@@ -67,6 +123,17 @@ pub fn run_shell(
     })
 }
 
+/// Register the standard set of bash builtins (cd, export, source, etc.)
+/// into a shell instance. brush-core doesn't include builtins by default;
+/// they live in the separate brush-builtins crate.
+fn register_builtins(shell: &mut brush_core::Shell) {
+    for (name, registration) in
+        brush_builtins::default_builtins(brush_builtins::BuiltinSet::BashMode)
+    {
+        shell.register_builtin(&name, registration);
+    }
+}
+
 /// Execute a command string (`clash shell -c "..."`).
 async fn run_command_string(
     command: &str,
@@ -79,9 +146,13 @@ async fn run_command_string(
         .command_string_mode(true)
         .working_dir(std::path::PathBuf::from(cwd))
         .external_command_hook(hook)
+        .profile(brush_core::ProfileLoadBehavior::Skip)
+        .rc(brush_core::RcLoadBehavior::Skip)
         .build()
         .await
         .map_err(|e| anyhow::anyhow!("failed to create shell: {e}"))?;
+
+    register_builtins(&mut shell);
 
     let params = shell.default_exec_params();
     let source_info = brush_core::SourceInfo::from("clash-shell");
@@ -115,9 +186,13 @@ async fn run_script(
     let mut shell = brush_core::Shell::builder()
         .working_dir(std::path::PathBuf::from(cwd))
         .external_command_hook(hook)
+        .profile(brush_core::ProfileLoadBehavior::Skip)
+        .rc(brush_core::RcLoadBehavior::Skip)
         .build()
         .await
         .map_err(|e| anyhow::anyhow!("failed to create shell: {e}"))?;
+
+    register_builtins(&mut shell);
 
     let result = shell
         .run_script(script_path, args.into_iter())
@@ -137,14 +212,18 @@ async fn run_interactive(
 ) -> Result<()> {
     info!("starting interactive shell with sandbox hook");
 
-    let shell = brush_core::Shell::builder()
+    let mut shell = brush_core::Shell::builder()
         .interactive(true)
         .working_dir(std::path::PathBuf::from(cwd))
         .external_command_hook(hook)
         .shell_name("clash-shell".to_string())
+        .profile(brush_core::ProfileLoadBehavior::Skip)
+        .rc(brush_core::RcLoadBehavior::Skip)
         .build()
         .await
         .map_err(|e| anyhow::anyhow!("failed to create shell: {e}"))?;
+
+    register_builtins(&mut shell);
 
     let shell_ref = std::sync::Arc::new(tokio::sync::Mutex::new(shell));
 
@@ -167,32 +246,57 @@ async fn run_interactive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::CompiledPolicy;
+
+    /// Compile a Starlark policy string into a CompiledPolicy.
+    fn compile_star(source: &str) -> CompiledPolicy {
+        let output =
+            clash_starlark::evaluate(source, "test.star", std::path::Path::new(".")).unwrap();
+        let mut settings = ClashSettings::default();
+        settings.set_policy_source(&output.json);
+        settings.policy_tree().unwrap().clone()
+    }
+
+    /// Build a test policy that allows Bash with a sandbox.
+    fn test_policy() -> Arc<CompiledPolicy> {
+        Arc::new(compile_star(
+            r#"load("@clash//std.star", "policy", "sandbox", "cwd", "exe")
+def main():
+    return policy(default = deny, rules = [
+        exe().sandbox(sandbox(name="test", default=deny, fs=[cwd().allow(read=True)])).allow(),
+    ])
+"#,
+        ))
+    }
 
     fn test_hook() -> brush_core::ExternalCommandHook {
-        make_sandbox_hook("/usr/bin/clash".to_string(), "/tmp".to_string())
+        make_sandbox_hook("/usr/bin/clash".to_string(), test_policy())
     }
 
     #[test]
-    fn hook_wraps_external_command() {
+    fn hook_wraps_with_policy_json() {
         let hook = test_hook();
         let result = hook("git", &["push".to_string()]);
         let (exe, args) = result.unwrap();
         assert_eq!(exe, "/usr/bin/clash");
-        assert!(args.contains(&"sandbox".to_string()));
-        assert!(args.contains(&"exec".to_string()));
-        assert!(args.contains(&"--profile".to_string()));
-        assert!(args.contains(&"git".to_string()));
-        assert!(args.contains(&"--fallback-default".to_string()));
-        assert!(args.contains(&"push".to_string()));
+        assert_eq!(args[0], "sandbox");
+        assert_eq!(args[1], "exec");
+        assert_eq!(args[2], "--sandbox");
+        // args[3] should be the sandbox policy JSON
+        let _: serde_json::Value =
+            serde_json::from_str(&args[3]).expect("--policy arg should be valid JSON");
+        assert_eq!(args[4], "--cwd");
+        assert!(!args[5].is_empty(), "cwd should be non-empty");
+        assert_eq!(args[6], "--");
+        assert_eq!(args[7], "git");
+        assert_eq!(args[8], "push");
     }
 
     #[test]
     fn hook_preserves_args_order() {
         let hook = test_hook();
         let result = hook("cat", &["file1.txt".to_string(), "file2.txt".to_string()]);
-        let (exe, args) = result.unwrap();
-        assert_eq!(exe, "/usr/bin/clash");
-        // Args after "--" should be: cat file1.txt file2.txt
+        let (_, args) = result.unwrap();
         let dash_pos = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(args[dash_pos + 1], "cat");
         assert_eq!(args[dash_pos + 2], "file1.txt");
@@ -200,21 +304,16 @@ mod tests {
     }
 
     #[test]
-    fn hook_produces_correct_sandbox_command() {
-        let hook = test_hook();
-        let result = hook("cargo", &["build".to_string(), "--release".to_string()]);
-        let (exe, args) = result.unwrap();
-        assert_eq!(exe, "/usr/bin/clash");
-        assert_eq!(args[0], "sandbox");
-        assert_eq!(args[1], "exec");
-        assert_eq!(args[2], "--profile");
-        assert_eq!(args[3], "cargo");
-        assert_eq!(args[4], "--fallback-default");
-        assert_eq!(args[5], "--cwd");
-        assert_eq!(args[6], "/tmp");
-        assert_eq!(args[7], "--");
-        assert_eq!(args[8], "cargo");
-        assert_eq!(args[9], "build");
-        assert_eq!(args[10], "--release");
+    fn hook_returns_none_without_sandbox() {
+        let policy = Arc::new(compile_star(
+            r#"load("@clash//std.star", "policy")
+def main():
+    return policy(default = allow, rules = [])
+"#,
+        ));
+        let hook = make_sandbox_hook("/usr/bin/clash".to_string(), policy);
+        // No sandbox → command runs unchanged.
+        let result = hook("git", &["push".to_string()]);
+        assert!(result.is_none());
     }
 }

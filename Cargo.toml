@@ -53,6 +53,7 @@ uuid = { version = "1", features = ["v4"] }
 ureq = "2"
 tokio = { version = "1", features = [
     "rt",
+    "rt-multi-thread",
     "net",
     "io-util",
     "sync",
@@ -86,6 +87,7 @@ nucleo-matcher = "0.3"
 which = "7"
 brush-parser = { git = "https://github.com/eliothedeman/brush", branch = "empathic/external-command-hook" }
 brush-core = { git = "https://github.com/eliothedeman/brush", branch = "empathic/external-command-hook" }
+brush-builtins = { git = "https://github.com/eliothedeman/brush", branch = "empathic/external-command-hook" }
 brush-interactive = { git = "https://github.com/eliothedeman/brush", branch = "empathic/external-command-hook", features = ["basic"] }
 
 # Dev dependencies

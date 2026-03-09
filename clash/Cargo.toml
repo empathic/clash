@@ -48,6 +48,7 @@ clash_notify = { workspace = true }
 clash_starlark = { workspace = true }
 claude_settings = { workspace = true }
 brush-parser = { workspace = true }
+brush-builtins = { workspace = true }
 brush-core = { workspace = true }
 brush-interactive = { workspace = true }
 
