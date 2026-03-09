@@ -6,7 +6,7 @@
 
 use anyhow::{Result, bail};
 
-use crate::policy::match_tree::{CompiledPolicy, sort_by_specificity};
+use crate::policy::match_tree::{CompiledPolicy, Node};
 
 /// Environment variable resolver used during compilation to expand `(env NAME)`.
 pub trait EnvResolver {
@@ -86,7 +86,7 @@ pub fn compile_multi_level_to_tree(
         bail!("match tree validation errors: {}", errors.join("; "));
     }
 
-    sort_by_specificity(&mut merged.tree);
+    merged.tree = Node::compact(merged.tree);
 
     Ok(merged)
 }
@@ -101,7 +101,7 @@ fn compile_policy(source: &str) -> Result<CompiledPolicy> {
         bail!("match tree validation errors: {}", errors.join("; "));
     }
 
-    sort_by_specificity(&mut policy.tree);
+    policy.tree = Node::compact(policy.tree);
 
     Ok(policy)
 }

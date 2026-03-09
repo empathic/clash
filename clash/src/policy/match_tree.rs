@@ -118,7 +118,7 @@ impl Pattern {
             Pattern::AnyOf(_) => 1,
             Pattern::Regex(_) => 2,
             Pattern::Prefix(_) => 3,
-            Pattern::Literal(_) => 3,
+            Pattern::Literal(_) => 4,
         }
     }
 }
@@ -861,28 +861,67 @@ impl CompiledPolicy {
 }
 
 // ---------------------------------------------------------------------------
-// Specificity sorting
+// Compact: merge duplicate siblings + sort by specificity
 // ---------------------------------------------------------------------------
 
-/// Sort children by specificity (most specific first).
-/// Literal > Regex > AnyOf/Not > Wildcard.
-/// Ties broken by observable specificity.
-pub fn sort_by_specificity(nodes: &mut [Node]) {
-    nodes.sort_by(|a, b| node_specificity(b).cmp(&node_specificity(a)));
-    for node in nodes.iter_mut() {
-        if let Node::Condition { children, .. } = node {
-            sort_by_specificity(children);
-        }
-    }
-}
+impl Node {
+    /// Merge sibling `Condition` nodes that share the same `(observe, pattern)`,
+    /// combining their children, then sort by specificity. Recurses into children.
+    pub fn compact(nodes: Vec<Node>) -> Vec<Node> {
+        let mut out: Vec<Node> = Vec::new();
 
-fn node_specificity(node: &Node) -> (u8, u8) {
-    match node {
-        // Decisions are fallbacks — sort last so conditions are tried first.
-        Node::Decision(_) => (0, 0),
-        Node::Condition {
-            observe, pattern, ..
-        } => (pattern.specificity(), observe.specificity()),
+        // Merge duplicates via linear scan (no Hash needed, trees are small).
+        for node in nodes {
+            match node {
+                Node::Condition {
+                    observe,
+                    pattern,
+                    children,
+                } => {
+                    if let Some(existing) = out.iter_mut().find_map(|n| match n {
+                        Node::Condition {
+                            observe: o,
+                            pattern: p,
+                            children: c,
+                        } if *o == observe && *p == pattern => Some(c),
+                        _ => None,
+                    }) {
+                        existing.extend(children);
+                    } else {
+                        out.push(Node::Condition {
+                            observe,
+                            pattern,
+                            children,
+                        });
+                    }
+                }
+                decision => out.push(decision),
+            }
+        }
+
+        // Recurse into children.
+        for node in &mut out {
+            if let Node::Condition { children, .. } = node {
+                *children = Self::compact(std::mem::take(children));
+            }
+        }
+
+        // Sort: Conditions before Decisions, then by specificity (most specific first).
+        // TODO: unpack the nodes and do a direct comparison instead of a silly mapping to 8bit numbers
+        out.sort_by(|a, b| Self::sort_key(b).cmp(&Self::sort_key(a)));
+
+        out
+    }
+
+    /// Sort key: `(is_condition, pattern_specificity, observable_specificity)`.
+    /// Higher values sort first (via reverse comparison in `compact`).
+    fn sort_key(node: &Node) -> (u8, u8, u8) {
+        match node {
+            Node::Condition {
+                observe, pattern, ..
+            } => (1, pattern.specificity(), observe.specificity()),
+            Node::Decision(_) => (0, 0, 0),
+        }
     }
 }
 
@@ -1021,7 +1060,7 @@ mod tests {
     #[test]
     fn specificity_ordering() {
         // More specific (Literal) should come before less specific (Wildcard)
-        let mut nodes = vec![
+        let nodes = vec![
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Wildcard,
@@ -1033,7 +1072,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Allow(None))],
             },
         ];
-        sort_by_specificity(&mut nodes);
+        let nodes = Node::compact(nodes);
         // Literal should be first after sorting
         let ctx = make_ctx("Bash", "echo hello");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
