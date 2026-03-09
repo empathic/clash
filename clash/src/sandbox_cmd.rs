@@ -8,13 +8,9 @@ use tracing::{Level, info, instrument};
 pub enum SandboxCmd {
     /// Apply sandbox restrictions and exec a command
     Exec {
-        /// Sandbox policy as JSON string (overrides --profile)
+        /// Sandbox config: inline JSON or a named sandbox from the policy
         #[arg(long)]
-        policy: Option<String>,
-
-        /// Profile name from policy.yaml (default: active profile)
-        #[arg(long)]
-        profile: Option<String>,
+        sandbox: Option<String>,
 
         /// Working directory for path resolution
         #[arg(long, default_value = ".")]
@@ -37,13 +33,9 @@ pub enum SandboxCmd {
 
     /// Test sandbox enforcement interactively
     Test {
-        /// Sandbox policy as JSON string (overrides --profile)
+        /// Sandbox config: inline JSON or a named sandbox from the policy
         #[arg(long)]
-        policy: Option<String>,
-
-        /// Profile name from policy.yaml (default: active profile)
-        #[arg(long)]
-        profile: Option<String>,
+        sandbox: Option<String>,
 
         /// Working directory for path resolution
         #[arg(long, default_value = ".")]
@@ -71,19 +63,19 @@ fn resolve_cwd(cwd: &str) -> Result<String> {
     Ok(abs.to_string_lossy().into_owned())
 }
 
-/// Resolve sandbox policy: `--policy` JSON wins, then `--profile` name,
-/// then falls back to the active profile from policy.yaml.
-fn resolve_sandbox_policy(
-    policy_json: Option<&str>,
-    profile_name: Option<&str>,
-    cwd: &str,
-) -> Result<SandboxPolicy> {
-    if let Some(json) = policy_json {
-        return serde_json::from_str(json).context("failed to parse --policy JSON");
+/// Resolve sandbox policy from `--sandbox` flag.
+///
+/// If the value looks like JSON (starts with `{`), parse it inline.
+/// Otherwise treat it as a named sandbox from the compiled policy.
+/// If no value is provided, falls back to the default sandbox.
+fn resolve_sandbox_policy(sandbox_arg: Option<&str>, cwd: &str) -> Result<SandboxPolicy> {
+    match sandbox_arg {
+        Some(val) if val.starts_with('{') => {
+            serde_json::from_str(val).context("failed to parse --sandbox JSON")
+        }
+        Some(name) => load_sandbox_for_profile(name, cwd),
+        None => load_sandbox_for_profile("", cwd),
     }
-    // Empty string means "use default profile from config"
-    let name = profile_name.unwrap_or("");
-    load_sandbox_for_profile(name, cwd)
 }
 
 /// Load the policy file, compile it, and generate a sandbox policy.
@@ -110,16 +102,14 @@ fn load_sandbox_for_profile(profile_name: &str, _cwd: &str) -> Result<SandboxPol
 pub fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
     match cmd {
         SandboxCmd::Exec {
-            policy,
-            profile,
+            sandbox,
             cwd,
             session_id,
             tool_use_id,
             command,
         } => {
             let cwd = resolve_cwd(&cwd)?;
-            let sandbox_policy =
-                resolve_sandbox_policy(policy.as_deref(), profile.as_deref(), &cwd)?;
+            let sandbox_policy = resolve_sandbox_policy(sandbox.as_deref(), &cwd)?;
             let cwd_path = std::path::PathBuf::from(&cwd);
 
             run_sandboxed_command(
@@ -131,14 +121,12 @@ pub fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
             )
         }
         SandboxCmd::Test {
-            policy,
-            profile,
+            sandbox,
             cwd,
             command,
         } => {
             let cwd = resolve_cwd(&cwd)?;
-            let sandbox_policy =
-                resolve_sandbox_policy(policy.as_deref(), profile.as_deref(), &cwd)?;
+            let sandbox_policy = resolve_sandbox_policy(sandbox.as_deref(), &cwd)?;
             let cwd_path = std::path::PathBuf::from(&cwd);
 
             eprintln!("Testing sandbox with policy:");
