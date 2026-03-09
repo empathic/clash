@@ -157,6 +157,17 @@ pub enum Commands {
         args: Vec<String>,
     },
 
+    /// Format Starlark policy files using ruff
+    Fmt {
+        /// Check formatting without modifying files (exit 1 if unformatted)
+        #[arg(long)]
+        check: bool,
+
+        /// Policy files to format (default: all active policy files)
+        #[arg(trailing_var_arg = true)]
+        files: Vec<std::path::PathBuf>,
+    },
+
     /// Explain which policy rule would match a given tool invocation
     Explain {
         /// Output as JSON instead of human-readable text
