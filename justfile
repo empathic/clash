@@ -71,6 +71,69 @@ ci:
 clash *ARGS:
     cargo run -p clash -- {{ARGS}}
 
+# Prepare a release: bump versions, freeze site docs, commit on a release branch.
+# Usage: just release 0.4.0
+release VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    version="{{VERSION}}"
+    # Strip leading 'v' if provided
+    version="${version#v}"
+    tag="v${version}"
+    branch="release/${tag}"
+
+    # Ensure we're on a clean working tree
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "Error: working tree is not clean" >&2
+        exit 1
+    fi
+
+    # Create release branch from current HEAD
+    git checkout -b "$branch"
+
+    # Bump version in all workspace Cargo.toml files
+    old_version=$(grep -m1 '^version = ' clash/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+    echo "Bumping ${old_version} → ${version}"
+
+    for toml in clash/Cargo.toml clash_notify/Cargo.toml claude_settings/Cargo.toml clash_starlark/Cargo.toml clester/Cargo.toml; do
+        sed -i '' "s/^version = \"${old_version}\"/version = \"${version}\"/" "$toml"
+    done
+
+    # Bump workspace dependency versions in root Cargo.toml
+    sed -i '' "s/version = \"${old_version}\" }/version = \"${version}\" }/" Cargo.toml
+
+    # Freeze site docs for this version
+    cd site && bun run freeze "${tag}" && cd ..
+
+    # Commit everything
+    git add -A
+    git commit -m "chore: release ${tag}"
+
+    echo ""
+    echo "Release branch '${branch}' ready."
+    echo "Next steps:"
+    echo "  git push -u origin ${branch}"
+    echo "  gh pr create --title 'chore: release ${tag}' --body 'Version bump and frozen docs for ${tag}'"
+    echo ""
+    echo "After the PR is merged, tag from main:"
+    echo "  just tag ${version}"
+
+# Tag and push a release after the release PR has been merged.
+# Usage: just tag 0.4.0
+tag VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    version="{{VERSION}}"
+    version="${version#v}"
+    tag="v${version}"
+
+    git fetch origin main
+    git tag "${tag}" origin/main
+    echo "Tagged ${tag} at origin/main"
+    echo "Run 'git push origin ${tag}' to trigger the release workflows."
+
 fix:
     cargo fix --allow-dirty
 
