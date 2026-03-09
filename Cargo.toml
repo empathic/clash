@@ -84,7 +84,9 @@ similar = "2"
 
 nucleo-matcher = "0.3"
 which = "7"
-brush-parser = "0.3"
+brush-parser = { git = "https://github.com/eliothedeman/brush", branch = "empathic/external-command-hook" }
+brush-core = { git = "https://github.com/eliothedeman/brush", branch = "empathic/external-command-hook" }
+brush-interactive = { git = "https://github.com/eliothedeman/brush", branch = "empathic/external-command-hook", features = ["basic"] }
 
 # Dev dependencies
 tempfile = "3"

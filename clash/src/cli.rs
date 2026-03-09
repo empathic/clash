@@ -131,10 +131,11 @@ pub enum Commands {
 
     /// Run a bash-compatible shell with per-command sandbox enforcement
     ///
-    /// Parses shell commands using brush-parser and rewrites each external
-    /// command to run under its own sandbox profile. The profile is looked
-    /// up by binary name (e.g., `sandboxes["git"]`), falling back to the
-    /// default sandbox when no command-specific profile exists.
+    /// Every external command is executed through its own sandbox profile,
+    /// looked up by binary name (e.g., `sandboxes["git"]`), falling back
+    /// to the default sandbox when no command-specific profile exists.
+    ///
+    /// Modes: interactive REPL (no args), command string (-c), or script file.
     Shell {
         /// Execute a command string and exit (like bash -c)
         #[arg(short = 'c')]
