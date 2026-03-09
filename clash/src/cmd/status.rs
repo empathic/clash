@@ -94,8 +94,8 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     );
     println!("{}", style::dim("─────────────────────────────────"));
 
-    let rules = policy.format_rules();
-    if rules.is_empty() {
+    let lines = policy.format_tree();
+    if lines.is_empty() {
         println!(
             "  {}",
             style::dim(&format!(
@@ -104,23 +104,8 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
             ))
         );
     } else {
-        // TODO: the way we are doing color prefixing here is really gross. Create something more structured
-        for rule in &rules {
-            // Color the effect prefix
-            let colored = if rule.starts_with("allow") {
-                format!(
-                    "  {} {}",
-                    style::green("allow"),
-                    &rule["allow".len()..].trim()
-                )
-            } else if rule.starts_with("deny") {
-                format!("  {} {}", style::red("deny"), &rule["deny".len()..].trim())
-            } else if rule.starts_with("ask") {
-                format!("  {} {}", style::yellow("ask"), &rule["ask".len()..].trim())
-            } else {
-                format!("  {}", rule)
-            };
-            println!("{}", colored);
+        for line in &lines {
+            println!("  {}", colorize_tree_line(line));
         }
     }
 
@@ -185,4 +170,33 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Colorize a tree line by highlighting the effect after the `→` separator.
+fn colorize_tree_line(line: &str) -> String {
+    if let Some(idx) = line.rfind(" → ") {
+        let (prefix, rest) = line.split_at(idx);
+        let effect = &rest[" → ".len()..];
+        let colored_effect = if effect.starts_with("allow") {
+            format!("{}{}", style::green("allow"), &effect["allow".len()..])
+        } else if effect.starts_with("deny") {
+            format!("{}{}", style::red("deny"), &effect["deny".len()..])
+        } else if effect.starts_with("ask") {
+            format!("{}{}", style::yellow("ask"), &effect["ask".len()..])
+        } else {
+            effect.to_string()
+        };
+        format!("{} → {}", prefix, colored_effect)
+    } else if line.starts_with("allow") || line.starts_with("deny") || line.starts_with("ask") {
+        // Bare decision node (no condition prefix)
+        if line.starts_with("allow") {
+            format!("{}{}", style::green("allow"), &line["allow".len()..])
+        } else if line.starts_with("deny") {
+            format!("{}{}", style::red("deny"), &line["deny".len()..])
+        } else {
+            format!("{}{}", style::yellow("ask"), &line["ask".len()..])
+        }
+    } else {
+        line.to_string()
+    }
 }

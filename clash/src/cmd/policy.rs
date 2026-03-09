@@ -44,9 +44,8 @@ fn handle_list(json: bool) -> Result<()> {
         }
     };
 
-    let rules = policy.format_rules();
-
     if json {
+        let rules = policy.format_rules();
         let entries: Vec<serde_json::Value> = rules
             .iter()
             .enumerate()
@@ -59,7 +58,8 @@ fn handle_list(json: bool) -> Result<()> {
             .collect();
         println!("{}", serde_json::to_string_pretty(&entries)?);
     } else {
-        if rules.is_empty() {
+        let lines = policy.format_tree();
+        if lines.is_empty() {
             println!(
                 "No rules in policy. {}",
                 style::dim(&format!("(default: {})", policy.default_effect))
@@ -69,13 +69,12 @@ fn handle_list(json: bool) -> Result<()> {
         println!(
             "Policy {}\n",
             style::dim(&format!(
-                "(default: {}, {} rules)",
+                "(default: {})",
                 style::effect(&policy.default_effect.to_string()),
-                rules.len()
             ))
         );
-        for rule in &rules {
-            println!("  {}", rule);
+        for line in &lines {
+            println!("  {}", line);
         }
     }
     Ok(())

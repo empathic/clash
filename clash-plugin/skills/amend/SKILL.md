@@ -20,8 +20,8 @@ load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home", "dom
 
 def main():
     fs_access = sandbox(fs=[
-        cwd(follow_worktrees = True, read = allow, write = allow),
-        home().child(".ssh", read = allow),
+        cwd(follow_worktrees = True).allow(read = True, write = True),
+        home().child(".ssh").allow(read = True),
     ])
 
     return policy(default = deny, rules = [
@@ -55,7 +55,7 @@ def main():
      ```
    - Allow filesystem access under cwd (via sandbox):
      ```python
-     fs_sandbox = sandbox(fs=[cwd(follow_worktrees = True, read = allow)])
+     fs_sandbox = sandbox(fs=[cwd(follow_worktrees = True).allow(read = True)])
      tool(["Read", "Glob", "Grep"]).sandbox(fs_sandbox).allow()
      ```
    - Allow network access to a domain:

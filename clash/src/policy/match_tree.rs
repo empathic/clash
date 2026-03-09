@@ -276,27 +276,99 @@ impl CompiledPolicy {
         self.tree.len()
     }
 
-    /// Format rules as human-readable lines for display.
+    /// Format rules as human-readable lines for display (flat, denormalized).
     pub fn format_rules(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for node in &self.tree {
-            format_node(node, &mut Vec::new(), &mut lines);
+            format_node_flat(node, &mut Vec::new(), &mut lines);
+        }
+        lines
+    }
+
+    /// Format rules as a tree with box-drawing characters.
+    /// Merges duplicate condition nodes to show shared structure.
+    pub fn format_tree(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        let len = self.tree.len();
+        for (i, node) in self.tree.iter().enumerate() {
+            let is_last = i == len - 1;
+            format_tree_node(node, "", is_last, true, &mut lines);
         }
         lines
     }
 }
 
-/// Recursively format a node as a human-readable rule line.
-fn format_node(node: &Node, path: &mut Vec<String>, lines: &mut Vec<String>) {
+/// Recursively render a node as tree lines with box-drawing characters.
+fn format_tree_node(
+    node: &Node,
+    prefix: &str,
+    is_last: bool,
+    is_root: bool,
+    lines: &mut Vec<String>,
+) {
+    let connector = if is_root {
+        ""
+    } else if is_last {
+        "└── "
+    } else {
+        "├── "
+    };
+    let child_prefix = if is_root {
+        ""
+    } else if is_last {
+        "    "
+    } else {
+        "│   "
+    };
+
     match node {
         Node::Decision(d) => {
-            let effect = match d {
-                Decision::Allow(Some(sb)) => format!("allow [sandbox: {}]", sb.0),
-                Decision::Allow(None) => "allow".to_string(),
-                Decision::Deny => "deny".to_string(),
-                Decision::Ask(Some(sb)) => format!("ask [sandbox: {}]", sb.0),
-                Decision::Ask(None) => "ask".to_string(),
-            };
+            let effect = format_decision(d);
+            lines.push(format!("{prefix}{connector}{effect}"));
+        }
+        Node::Condition {
+            observe,
+            pattern,
+            children,
+        } => {
+            let label = format_condition(observe, pattern);
+
+            // Single decision child → show inline: "label → effect"
+            if children.len() == 1 {
+                if let Node::Decision(d) = &children[0] {
+                    let effect = format_decision(d);
+                    lines.push(format!("{prefix}{connector}{label} → {effect}"));
+                    return;
+                }
+            }
+
+            // Branch — show label, then children as sub-tree
+            lines.push(format!("{prefix}{connector}{label}"));
+            let new_prefix = format!("{prefix}{child_prefix}");
+            let child_count = children.len();
+            for (i, child) in children.iter().enumerate() {
+                let child_is_last = i == child_count - 1;
+                format_tree_node(child, &new_prefix, child_is_last, false, lines);
+            }
+        }
+    }
+}
+
+fn format_decision(d: &Decision) -> String {
+    match d {
+        Decision::Allow(Some(sb)) => format!("allow [sandbox: {}]", sb.0),
+        Decision::Allow(None) => "allow".to_string(),
+        Decision::Deny => "deny".to_string(),
+        Decision::Ask(Some(sb)) => format!("ask [sandbox: {}]", sb.0),
+        Decision::Ask(None) => "ask".to_string(),
+    }
+}
+
+/// Recursively format a node as a flat, denormalized rule line.
+fn format_node_flat(node: &Node, path: &mut Vec<String>, lines: &mut Vec<String>) {
+    match node {
+        Node::Decision(d) => {
+            let effect = format_decision(d);
             if path.is_empty() {
                 lines.push(format!("{effect} *"));
             } else {
@@ -314,7 +386,7 @@ fn format_node(node: &Node, path: &mut Vec<String>, lines: &mut Vec<String>) {
                 lines.push(format!("(no decision) {}", path.join(" → ")));
             } else {
                 for child in children {
-                    format_node(child, path, lines);
+                    format_node_flat(child, path, lines);
                 }
             }
             path.pop();

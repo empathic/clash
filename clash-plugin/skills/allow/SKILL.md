@@ -39,13 +39,13 @@ Help the user add an **allow** rule to their clash policy by editing the `.star`
      ```
    - Filesystem access under cwd (via sandbox on a tool rule):
      ```python
-     fs_sandbox = sandbox(fs=[cwd(follow_worktrees = True, read = allow, write = allow)])
+     fs_sandbox = sandbox(fs=[cwd(follow_worktrees = True).allow(read = True, write = True)])
      tool(["Read", "Glob", "Grep"]).sandbox(fs_sandbox).allow()
      tool(["Write", "Edit"]).sandbox(fs_sandbox).allow()
      ```
    - Filesystem access under a specific path (via sandbox):
      ```python
-     ssh_sandbox = sandbox(fs=[home().child(".ssh", read = allow)])
+     ssh_sandbox = sandbox(fs=[home().child(".ssh").allow(read = True)])
      exe("ssh").sandbox(ssh_sandbox).allow()
      ```
    - Network access to a domain:

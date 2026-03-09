@@ -7,7 +7,7 @@ load("@clash//node.star", "node")
 _fs_access = sandbox(
     name = "cwd",
     fs = [
-        cwd(read = allow, write = allow, follow_worktrees = True),
+        cwd(follow_worktrees = True).allow(read = True, write = True),
     ],
 )
 

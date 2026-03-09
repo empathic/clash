@@ -2,7 +2,7 @@
 #
 # Emits v5 match tree nodes using minimal Rust primitives.
 # Rust globals available: _mt_node, _mt_condition, _mt_pattern, _mt_prefix,
-# _mt_policy, allow, deny, ask
+# _mt_literal, _mt_policy, allow, deny, ask
 
 # ---------------------------------------------------------------------------
 # Pattern helpers
@@ -143,32 +143,17 @@ def tool(name = None):
 # Filesystem path builders
 # ---------------------------------------------------------------------------
 
-_VALID_EFFECTS = ["allow", "deny", "ask"]
-
-def _validate_effect(name, value):
-    """Validate that an effect is allow, deny, or ask."""
-    if value != None and value not in _VALID_EFFECTS:
-        fail("invalid effect '{}' for {}, must be allow, deny, or ask".format(value, name))
-
-def _fs_nodes(path_value, read = None, write = None, execute = None, allow_all = False):
+def _fs_nodes(path_pattern, read = None, write = None):
     """Build match tree nodes for filesystem access.
 
-    Returns a list of condition nodes that match on FsOp and FsPath.
+    path_pattern: a MatchTreeNode from _mt_prefix, _mt_literal, or _mt_pattern.
+    read/write: effect values (allow/deny/ask) or None to skip.
     """
-    _validate_effect("read", read)
-    _validate_effect("write", write)
-    _validate_effect("execute", execute)
-
-    if allow_all:
-        read = allow
-        write = allow
-        execute = allow
-
     nodes = []
 
     if read != None:
         node = _mt_fs_op(_pattern("read")).on([
-            _mt_fs_path(_mt_prefix(path_value)).on([
+            _mt_fs_path(path_pattern).on([
                 _effect_decision(read),
             ]),
         ])
@@ -176,7 +161,7 @@ def _fs_nodes(path_value, read = None, write = None, execute = None, allow_all =
 
     if write != None:
         node = _mt_fs_op(_pattern("write")).on([
-            _mt_fs_path(_mt_prefix(path_value)).on([
+            _mt_fs_path(path_pattern).on([
                 _effect_decision(write),
             ]),
         ])
@@ -195,100 +180,127 @@ def _effect_decision(effect):
     else:
         fail("unknown effect: " + str(effect))
 
-def _caps_list(read, write, execute, allow_all):
-    """Compute a sandbox caps list from permission kwargs."""
-    if allow_all:
+def _caps_from_bools(read, write, execute, all_ops):
+    """Compute sandbox caps list from boolean flags."""
+    if all_ops:
         return ["read", "write", "create", "delete", "execute"]
     parts = []
-    if read == allow:
+    if read:
         parts.append("read")
-    if write == allow:
+    if write:
         parts.extend(["write", "create"])
-    if execute == allow:
+    if execute:
         parts.append("execute")
     return parts
 
-def _path_entry(path_value, worktree = False, read = None, write = None,
-                execute = None, allow_all = False, _children = None,
-                _extra_sandbox_rules = None):
-    """Internal: build a path entry struct with .child() and ._nodes."""
-    if _children == None:
-        _children = []
+def _make_path_pattern(path_value, match_type):
+    """Create the appropriate FsPath pattern for the given match type."""
+    if match_type == "literal":
+        return _mt_literal(path_value)
+    elif match_type == "regex":
+        return _mt_pattern(path_value)
+    else:
+        return _mt_prefix(path_value)
 
-    _read = read
-    _write = write
-    _execute = execute
-    _allow_all = allow_all
+def _path_match(path_value, worktree = False, match_type = "subpath"):
+    """A path selector — use .child()/.file()/.match() to refine, then .allow()/.deny()/.ask() to decide."""
 
-    _nodes = _fs_nodes(path_value, read, write, execute, allow_all)
-    for c in _children:
-        _nodes.extend(c)
-
-    # Build sandbox rules (path + caps pairs for sandbox-exec compilation).
-    _sandbox_rules = list(_extra_sandbox_rules or [])
-    _caps = _caps_list(read, write, execute, allow_all)
-    if len(_caps) > 0:
-        _sandbox_rules.append({"path_value": path_value, "caps": _caps})
-
-    def child(name, read = None, write = None, execute = None, allow_all = False):
-        # For child paths, join with the parent
-        # We create a struct with the joined path info for _mt_prefix
+    def child(name):
+        """Select a subdirectory (subpath match)."""
         child_path = struct(_join = [path_value, name])
-        child_nodes = _fs_nodes(child_path, read, write, execute, allow_all)
-        child_caps = _caps_list(read, write, execute, allow_all)
-        child_sb_rules = list(_sandbox_rules)
-        if len(child_caps) > 0:
-            child_sb_rules.append({"path_value": child_path, "caps": child_caps})
-        return _path_entry(
-            path_value, worktree, _read, _write, _execute, _allow_all,
-            _children + [child_nodes],
-            child_sb_rules,
+        return _path_match(child_path, worktree, "subpath")
+
+    def file(name):
+        """Select a specific file (exact match)."""
+        file_path = struct(_join = [path_value, name])
+        return _path_match(file_path, worktree, "literal")
+
+    def match(pat):
+        """Select paths by regex pattern."""
+        return _path_match(pat, worktree, "regex")
+
+    def _resolve(effect, read, write, execute, all):
+        all_ops = (read == None and write == None and execute == None)
+        _read = effect if (read or all_ops) else None
+        _write = effect if (write or all_ops) else None
+
+        path_pat = _make_path_pattern(path_value, match_type)
+        nodes = _fs_nodes(path_pat, _read, _write)
+
+        sandbox_rules = []
+        if effect == allow:
+            caps = _caps_from_bools(
+                read or all_ops,
+                write or all_ops,
+                execute or all_ops,
+                all_ops,
+            )
+            if len(caps) > 0:
+                sandbox_rules.append({
+                    "path_value": path_value,
+                    "caps": caps,
+                    "match_type": match_type,
+                })
+
+        return struct(
+            _is_path = True,
+            _nodes = nodes,
+            _path_value = path_value,
+            _sandbox_rules = sandbox_rules,
         )
 
-    return struct(child = child, _nodes = _nodes, _is_path = True, _path_value = path_value,
-                  _sandbox_rules = _sandbox_rules)
+    def _allow(read = None, write = None, execute = None, all=None):
+        return _resolve(allow, read, write, execute, all)
 
-def cwd(follow_worktrees = False, read = None, write = None,
-        execute = None, allow_all = False):
-    """Build a CWD path entry.
+    def _deny(read = None, write = None, execute = None, all=None):
+        return _resolve(deny, read, write, execute, all)
+
+    def _ask(read = None, write = None, execute = None, all=None):
+        return _resolve(ask, read, write, execute, all)
+
+    return struct(child = child, file = file, match = match,
+                  allow = _allow, deny = _deny, ask = _ask)
+
+def cwd(follow_worktrees = False):
+    """Build a CWD path match.
 
     Usage:
-        cwd(read=allow, write=allow)
-        cwd(follow_worktrees=True, allow_all=True)
+        cwd().allow(read=True, write=True)
+        cwd(follow_worktrees=True).allow()
+        cwd().child("src").allow(read=True)
     """
-    return _path_entry(struct(_env = "PWD"), follow_worktrees, read, write, execute, allow_all)
+    return _path_match(struct(_env = "PWD"), follow_worktrees)
 
-def home(read = None, write = None, execute = None, allow_all = False):
-    """Build a HOME path entry.
+def home():
+    """Build a HOME path match.
 
     Usage:
-        home().child(".ssh", read=allow)
-        home().child(".cargo", allow_all=True)
+        home().child(".ssh").allow(read=True)
+        home().child(".cargo").allow()
     """
-    return _path_entry(struct(_env = "HOME"), False, read, write, execute, allow_all)
+    return _path_match(struct(_env = "HOME"), False)
 
-def tempdir(read = None, write = None, execute = None, allow_all = False):
-    """Build a TMPDIR path entry.
+def tempdir():
+    """Build a TMPDIR path match.
 
     Usage:
-        tempdir(allow_all=True)
+        tempdir().allow()
     """
-    return _path_entry(struct(_env = "TMPDIR"), False, read, write, execute, allow_all)
+    return _path_match(struct(_env = "TMPDIR"), False)
 
-def path(path_str = None, env = None, read = None, write = None,
-         execute = None, allow_all = False):
-    """Build a path entry for an arbitrary path or env var.
+def path(path_str = None, env = None):
+    """Build a path match for an arbitrary path or env var.
 
     Usage:
-        path("/usr/local/bin", read=allow, execute=allow)
-        path(env="CARGO_HOME", read=allow, write=allow)
+        path("/usr/local/bin").allow(read=True, execute=True)
+        path(env="CARGO_HOME").allow(read=True, write=True)
     """
     if path_str != None and env != None:
         fail("path() takes either a path string or env=, not both")
     if path_str == None and env == None:
         fail("path() requires either a path string or env= argument")
     path_value = struct(_env = env) if env != None else path_str
-    return _path_entry(path_value, False, read, write, execute, allow_all)
+    return _path_match(path_value, False)
 
 # ---------------------------------------------------------------------------
 # Network builders
@@ -343,7 +355,7 @@ def _make_sandbox(name, default, fs_rules, net_policy, net_domain_names = None):
     if net_domain_names == None:
         net_domain_names = []
     def _merge(other):
-        merged_default = deny if (default == deny or other._default == deny) else default
+        merged_default = default if other._default == None else other._default 
         merged_domains = net_domain_names + (other._net_domain_names if hasattr(other, "_net_domain_names") else [])
         return _make_sandbox(name, merged_default, fs_rules + other._fs_rules, net_policy or other._net_policy, merged_domains)
 
@@ -364,7 +376,7 @@ def sandbox(name = None, default = "deny", fs = None, net = None):
         sandbox(
             "example",
             default=deny,
-            fs=[cwd(read=allow), home().child(".ssh", read=allow)],
+            fs=[cwd().allow(read=True), home().child(".ssh").allow(read=True)],
             net=allow,
         )
     """
@@ -413,8 +425,20 @@ def sandbox(name = None, default = "deny", fs = None, net = None):
 # Sandbox support for rule builders (exe, tool)
 # ---------------------------------------------------------------------------
 
+def _expand_children(children):
+    """Expand a list of children, flattening path entries into their nodes."""
+    expanded = []
+    for child in children:
+        if hasattr(child, "_is_path"):
+            expanded.extend(child._nodes)
+        elif hasattr(child, "_node"):
+            expanded.append(child._node)
+        else:
+            expanded.append(child)
+    return expanded
+
 def _with_sandbox_support(node):
-    """Wrap a match tree node with .sandbox() and .also() support."""
+    """Wrap a match tree node with .sandbox(), .on(), and decision support."""
 
     def _allow():
         result = node.allow()
@@ -431,12 +455,17 @@ def _with_sandbox_support(node):
     def _set_sandbox(sb):
         return _with_sandbox_and_node(node, sb)
 
+    def _on(children):
+        expanded = _expand_children(children)
+        result = node.on(expanded)
+        return _with_sandbox_support(result)
+
     return struct(
         allow = _allow,
         deny = _deny,
         ask = _ask,
         sandbox = _set_sandbox,
-        on = node.on,
+        on = _on,
         _node = node,
         _sandbox = None,
     )
@@ -454,13 +483,17 @@ def _with_sandbox_and_node(node, sb):
         return struct(_node = result, _sandbox = sb)
     def _set_sandbox(new_sb):
         return _with_sandbox_and_node(node, new_sb)
+    def _on(children):
+        expanded = _expand_children(children)
+        result = node.on(expanded)
+        return _with_sandbox_and_node(result, sb)
 
     return struct(
         allow = _allow,
         deny = _deny,
         ask = _ask,
         sandbox = _set_sandbox,
-        on = node.on,
+        on = _on,
         _node = node,
         _sandbox = sb,
     )
@@ -474,10 +507,12 @@ def policy(default = "deny", rules = None):
 
     Usage:
         policy(default=deny, rules=[
-            cwd(read=allow, write=allow),
+            cwd().allow(read=True, write=True),
             exe("git", args=["push"]).deny(),
             exe("git").allow(),
-            domains({"github.com": allow}),
+            tool("Glob").on([
+                cwd().child("src").allow(read=True),
+            ]),
         ])
     """
     if rules == None:
@@ -526,7 +561,7 @@ def _sandbox_to_json(sb):
             "effect": "allow",
             "caps": caps,
             "path": path_str,
-            "path_match": "subpath",
+            "path_match": r.get("match_type", "subpath"),
         })
 
     net = "deny"

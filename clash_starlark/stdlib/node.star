@@ -4,10 +4,10 @@ node_sandbox = sandbox(
     name = "node_dev",
     default = deny,
     fs = [
-        cwd(read = allow, write = allow, execute = allow),
-        home().child(".npm", allow_all = True),
-        home().child(".config/npm", read = allow),
-        tempdir(allow_all = True),
+        cwd().allow(read = True, write = True, execute = True),
+        home().child(".npm").allow(),
+        home().child(".config/npm").allow(read = True),
+        tempdir().allow(),
     ],
     net = [
         domains({

@@ -4,10 +4,10 @@ python_sandbox = sandbox(
     name = "python_dev",
     default = deny,
     fs = [
-        cwd(read = allow, write = allow, execute = allow),
-        home().child(".local", read = allow, write = allow),
-        home().child(".cache/pip", allow_all = True),
-        tempdir(allow_all = True),
+        cwd().allow(read = True, write = True, execute = True),
+        home().child(".local").allow(read = True, write = True),
+        home().child(".cache/pip").allow(),
+        tempdir().allow(),
     ],
     net = [
         domains({

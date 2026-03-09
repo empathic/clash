@@ -112,7 +112,7 @@ load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 def main():
     cwd_access = sandbox(
         default = deny,
-        fs = [cwd(follow_worktrees = True, read = allow, write = allow)],
+        fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
     )
     return policy(
         default = ask,
@@ -164,7 +164,7 @@ def main():
         default = deny,
         rules = [
             exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow(),
-            exe("git").sandbox(sandbox(default = deny, fs = [cwd(read = allow)])).allow(),
+            exe("git").sandbox(sandbox(default = deny, fs = [cwd().allow(read = True)])).allow(),
         ],
     )
 ```
@@ -182,9 +182,9 @@ def main():
     cargo_box = sandbox(
         default = deny,
         fs = [
-            cwd(read = allow),
-            path("./target", write = allow),
-            tempdir(allow_all = True),
+            cwd().allow(read = True),
+            path("./target").allow(write = True),
+            tempdir().allow(),
         ],
         net = allow,
     )
