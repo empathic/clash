@@ -83,6 +83,7 @@ shlex = "1"
 similar = "2"
 
 nucleo-matcher = "0.3"
+which = "7"
 
 # Dev dependencies
 tempfile = "3"

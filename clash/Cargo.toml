@@ -38,6 +38,7 @@ nu-ansi-term = { workspace = true }
 reedline = { workspace = true }
 dialoguer = { workspace = true }
 semver = { workspace = true }
+which = { workspace = true }
 sha2 = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }

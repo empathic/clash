@@ -27,6 +27,7 @@ fn main() -> Result<()> {
                 };
                 cmd::explain::run(json, Some(tool), input)
             }
+            Commands::Fmt { check, files } => cmd::fmt::run(check, files),
             Commands::Policy(policy_cmd) => cmd::policy::run(policy_cmd),
             Commands::Sandbox(sandbox_cmd) => run_sandbox(sandbox_cmd),
             Commands::Doctor => cmd::doctor::run(),

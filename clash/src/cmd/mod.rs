@@ -3,6 +3,7 @@ pub mod commands;
 pub mod debug;
 pub mod doctor;
 pub mod explain;
+pub mod fmt;
 pub mod hooks;
 pub mod init;
 pub mod launch;
