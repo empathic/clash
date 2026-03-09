@@ -84,6 +84,7 @@ similar = "2"
 
 nucleo-matcher = "0.3"
 which = "7"
+brush-parser = "0.3"
 
 # Dev dependencies
 tempfile = "3"
