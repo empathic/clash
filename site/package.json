@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "eleventy --serve",
-    "build": "eleventy"
+    "build": "eleventy",
+    "build:versioned": "node scripts/build-versioned.js",
+    "freeze": "node scripts/freeze.js"
   },
   "dependencies": {
     "@11ty/eleventy": "^3.0.0",

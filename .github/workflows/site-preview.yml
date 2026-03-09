@@ -24,7 +24,7 @@ jobs:
         working-directory: site
 
       - name: Build site
-        run: bun run build
+        run: bun run build:versioned
         working-directory: site
 
       - name: Deploy to Cloudflare Pages
