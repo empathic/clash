@@ -78,10 +78,10 @@ The `exe()` builder matches binary names. The `args` parameter matches positiona
 ### Fs — file operations
 
 ```python
-cwd(read = allow)                          # read under working directory
-cwd(read = allow, write = allow)           # read + write under cwd
-cwd(follow_worktrees = True, read = allow) # git worktree-aware
-home().child(".ssh", read = allow)          # read under ~/.ssh
+cwd().allow(read = True)                          # read under working directory
+cwd().allow(read = True, write = True)             # read + write under cwd
+cwd(follow_worktrees = True).allow(read = True)    # git worktree-aware
+home().child(".ssh").allow(read = True)             # read under ~/.ssh
 ```
 
 <details>
@@ -215,7 +215,7 @@ load("safe_git.star", "safe_git_rules")
 
 def main():
     return policy(default = deny, rules = [
-        cwd(follow_worktrees = True, read = allow, write = allow),
+        cwd(follow_worktrees = True).allow(read = True, write = True),
         *safe_git_rules,
         domains({"github.com": allow, "crates.io": allow}),
     ])
@@ -231,7 +231,7 @@ Starlark `load()` imports values from other `.star` files. All composition (func
 
 ### Merging policies
 
-The `merge()` method combines two policies. Tree nodes and sandboxes are concatenated; the most restrictive default effect wins.
+The `merge()` method combines two policies. In `a.merge(b)`, `b` is merged on top: `b`'s default effect is used, tree nodes from both are concatenated (`a`'s rules first, then `b`'s), and sandboxes are merged (first defined wins on name conflicts).
 
 ```python
 load("@clash//builtin.star", "base")
@@ -239,7 +239,7 @@ load("@clash//std.star", "exe", "policy", "cwd", "domains")
 
 def main():
     my_policy = policy(default = deny, rules = [
-        cwd(read = allow, write = allow),
+        cwd().allow(read = True, write = True),
         exe("git").allow(),
         domains({"github.com": allow}),
     ])
@@ -271,7 +271,7 @@ load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 def main():
     cargo_env = sandbox(
         default = deny,
-        fs = [cwd(read = allow, write = allow)],
+        fs = [cwd().allow(read = True, write = True)],
         net = allow,
     )
     return policy(default = deny, rules = [
@@ -326,7 +326,7 @@ load("@clash//std.star", "policy", "cwd")
 
 def main():
     return policy(default = deny, rules = [
-        cwd(read = allow),
+        cwd().allow(read = True),
     ])
 ```
 
@@ -337,7 +337,7 @@ load("@clash//std.star", "exe", "policy", "cwd", "domains")
 
 def main():
     return policy(default = ask, rules = [
-        cwd(follow_worktrees = True, read = allow, write = allow),
+        cwd(follow_worktrees = True).allow(read = True, write = True),
         exe(["cargo", "npm"]).allow(),
         exe("git", args = ["status"]).allow(),
         exe("git", args = ["diff"]).allow(),
@@ -375,17 +375,17 @@ load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "domains")
 def main():
     cargo_env = sandbox(
         default = deny,
-        fs = [cwd(read = allow, write = allow)],
+        fs = [cwd().allow(read = True, write = True)],
         net = allow,
     )
     npm_env = sandbox(
         default = deny,
-        fs = [cwd(read = allow, write = allow)],
+        fs = [cwd().allow(read = True, write = True)],
         net = [domains({"registry.npmjs.org": allow})],
     )
     return policy(default = deny, rules = [
         exe("cargo").sandbox(cargo_env).allow(),
         exe("npm").sandbox(npm_env).allow(),
-        cwd(read = allow),
+        cwd().allow(read = True),
     ])
 ```

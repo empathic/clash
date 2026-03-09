@@ -73,6 +73,17 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
+    /// Convert a path value to a literal (exact) pattern (needs Rust for env/join dispatch).
+    fn _mt_literal<'v>(
+        #[starlark(require = pos)] value: Value<'v>,
+        heap: &'v starlark::values::Heap,
+    ) -> anyhow::Result<MatchTreeNode> {
+        let val_json = path_value_to_json(value, heap)?;
+        Ok(MatchTreeNode {
+            json: serde_json::json!({"literal": val_json}),
+        })
+    }
+
     /// Internal match tree policy constructor.
     fn _mt_policy<'v>(
         #[starlark(require = named)] default: Option<&str>,

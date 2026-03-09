@@ -47,18 +47,18 @@ Read the policy file, then insert the appropriate rule into the `rules = [...]` 
   ```
 - Allow filesystem reads under cwd (via sandbox on a tool/exe rule):
   ```python
-  fs_sandbox = sandbox(fs=[cwd(read = allow)])
+  fs_sandbox = sandbox(fs=[cwd().allow(read = True)])
   tool(["Read", "Glob", "Grep"]).sandbox(fs_sandbox).allow()
   ```
 - Allow filesystem read/write/create under cwd:
   ```python
-  fs_sandbox = sandbox(fs=[cwd(follow_worktrees = True, read = allow, write = allow)])
+  fs_sandbox = sandbox(fs=[cwd(follow_worktrees = True).allow(read = True, write = True)])
   tool(["Read", "Glob", "Grep"]).sandbox(fs_sandbox).allow()
   tool(["Write", "Edit"]).sandbox(fs_sandbox).allow()
   ```
 - Access to a subdirectory of home (via sandbox):
   ```python
-  ssh_sandbox = sandbox(fs=[home().child(".ssh", read = allow)])
+  ssh_sandbox = sandbox(fs=[home().child(".ssh").allow(read = True)])
   exe("ssh").sandbox(ssh_sandbox).allow()
   ```
 

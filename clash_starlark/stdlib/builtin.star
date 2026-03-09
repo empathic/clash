@@ -4,7 +4,7 @@ clashbox = sandbox(
     name = "clash_box",
     default = deny,
     fs = [
-        home().child(".clash", read = allow),
+        home().child(".clash").allow(read = True),
     ],
     net = allow,
 )
@@ -22,11 +22,12 @@ clash = policy(
     ],
 )
 
-_claude_fs = sandbox(name = "claude_fs", fs = [ home().child(".claude", read = allow, write = allow),
-    path(env = "TRANSCRIPT_DIR", read = allow),
+_claude_fs = sandbox(name = "claude_fs", fs = [
+    home().child(".claude").allow(read = True, write = True),
+    path(env = "TRANSCRIPT_DIR").allow(read = True),
 ])
 
-claude =  policy(default = deny, rules = [
+claude = policy(default = deny, rules = [
     tool([
         "Agent",
         "AskUserQuestion",

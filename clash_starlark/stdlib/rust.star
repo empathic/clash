@@ -4,11 +4,11 @@ rust_sandbox = sandbox(
     name = "rust_dev",
     default = deny,
     fs = [
-        cwd(read = allow, write = allow, execute = allow),
-        cwd().child("target", allow_all = True),
-        home().child(".cargo", allow_all = True),
-        home().child(".rustup", read = allow, execute = allow),
-        tempdir(allow_all = True),
+        cwd().allow(read = True, write = True, execute = True),
+        cwd().child("target").allow(),
+        home().child(".cargo").allow(),
+        home().child(".rustup").allow(read = True, execute = True),
+        tempdir().allow(),
     ],
     net = [
         domains({

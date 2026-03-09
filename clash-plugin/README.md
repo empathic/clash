@@ -50,8 +50,8 @@ load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home", "dom
 
 def main():
     fs_access = sandbox(fs=[
-        cwd(follow_worktrees = True, read = allow, write = allow),
-        home().child(".ssh", read = allow),
+        cwd(follow_worktrees = True).allow(read = True, write = True),
+        home().child(".ssh").allow(read = True),
     ])
 
     return policy(default = deny, rules = [
@@ -74,8 +74,8 @@ Note: Filesystem path entries (`cwd`, `home`, `tempdir`, `path`) cannot appear d
 | Deny a subcommand | `exe("git", args = ["push"]).deny()` |
 | Ask for confirmation | `exe("git", args = ["commit"]).ask()` |
 | Multiple binaries | `exe(["cargo", "rustc"]).allow()` |
-| Filesystem (via sandbox) | `tool(["Read"]).sandbox(sandbox(fs=[cwd(read = allow)])).allow()` |
-| Home subdir (via sandbox) | `exe("ssh").sandbox(sandbox(fs=[home().child(".ssh", read = allow)])).allow()` |
+| Filesystem (via sandbox) | `tool(["Read"]).sandbox(sandbox(fs=[cwd().allow(read = True)])).allow()` |
+| Home subdir (via sandbox) | `exe("ssh").sandbox(sandbox(fs=[home().child(".ssh").allow(read = True)])).allow()` |
 | Network domains | `domains({"github.com": allow})` |
 | Tool access | `tool().allow()` |
 | Sandbox on exec | `exe("cargo").sandbox(sb).allow()` |
@@ -85,7 +85,7 @@ Note: Filesystem path entries (`cwd`, `home`, `tempdir`, `path`) cannot appear d
 ```python
 sb = sandbox(
     default = deny,
-    fs = [cwd(follow_worktrees = True, read = allow, write = allow)],
+    fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
     net = allow,
 )
 exe("cargo").sandbox(sb).allow()
@@ -107,7 +107,7 @@ If a command fails because of sandbox restrictions, update the policy's sandbox 
 # If cargo needs network access, add net = allow to its sandbox
 cargo_env = sandbox(
     default = deny,
-    fs = [cwd(follow_worktrees = True, read = allow, write = allow)],
+    fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
     net = allow,
 )
 exe("cargo").sandbox(cargo_env).allow()

@@ -113,7 +113,7 @@ load("@clash//std.star", "exe", "policy", "cwd", "domains")
 
 def main():
     my_rules = policy(default = ask, rules = [
-        cwd(follow_worktrees = True, read = allow, write = allow),
+        cwd(follow_worktrees = True).allow(read = True, write = True),
         exe("cargo").allow(),
         exe("git", args = ["push"]).deny(),
         exe("git", args = ["reset", "--hard"]).deny(),

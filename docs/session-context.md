@@ -146,7 +146,7 @@ Suggest one of these fixes:
    ```python
    cargo_env = sandbox(
        default = deny,
-       fs = [cwd(read = allow)],
+       fs = [cwd().allow(read = True)],
        net = allow,
    )
    ```
@@ -177,8 +177,8 @@ Suggest adding the blocked paths to their policy:
    my_env = sandbox(
        default = deny,
        fs = [
-           cwd(read = allow, write = allow),
-           path("/Users/user/.fly", read = allow, write = allow),
+           cwd().allow(read = True, write = True),
+           path("/Users/user/.fly").allow(read = True, write = True),
        ],
    )
    ```

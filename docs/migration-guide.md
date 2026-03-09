@@ -76,9 +76,9 @@ The `exe()` builder compiles to match tree nodes that observe the tool name (mus
 
 | S-expression | Starlark |
 |---|---|
-| `(allow (fs read (subpath "/project")))` | `cwd(read = allow)` |
-| `(allow (fs (or read write) (subpath ".")))` | `cwd(read = allow, write = allow)` |
-| `(allow (fs read (subpath "$HOME/.ssh")))` | `home().child(".ssh", read = allow)` |
+| `(allow (fs read (subpath "/project")))` | `cwd().allow(read = True)` |
+| `(allow (fs (or read write) (subpath ".")))` | `cwd().allow(read = True, write = True)` |
+| `(allow (fs read (subpath "$HOME/.ssh")))` | `home().child(".ssh").allow(read = True)` |
 
 The `cwd()` and `home()` builders compile to match tree nodes that observe tool names (`Read`, `Write`, `Edit`, `Glob`, `Grep`) and match the file path argument against a subpath pattern.
 
@@ -111,7 +111,7 @@ def main():
         exe("git", args = ["push"]).deny(),
         exe("git").allow(),
         exe("cargo").allow(),
-        cwd(read = allow),
+        cwd().allow(read = True),
         domains({"github.com": allow}),
     ])
 ```
@@ -126,7 +126,7 @@ Claude Code's built-in format (used before Clash, or in v0.1.x with Clash) used 
 |---|---|
 | `"Bash(git:*)"` in allow | `exe("git").allow()` |
 | `"Bash(rm:*)"` in deny | `exe("rm").deny()` |
-| `"Read(*)"` in allow | `cwd(read = allow)` |
+| `"Read(*)"` in allow | `cwd().allow(read = True)` |
 | `"Read(.env)"` in deny | Use `default = deny` and scope `cwd()` to your project |
 
 ### Full example
@@ -148,7 +148,7 @@ def main():
     return policy(default = deny, rules = [
         exe("rm").deny(),
         exe("git").allow(),
-        cwd(read = allow),
+        cwd().allow(read = True),
     ])
 ```
 
@@ -180,7 +180,7 @@ profiles:
 load("@clash//std.star", "exe", "policy", "cwd")
 
 readonly_rules = [
-    cwd(read = allow),
+    cwd().allow(read = True),
 ]
 
 def main():

@@ -112,7 +112,7 @@ def main():
         name = "test",
         default = deny,
         fs = [
-            cwd(read = allow, write = allow),
+            cwd().allow(read = True, write = True),
         ],
         net = allow,
     )
@@ -178,7 +178,7 @@ def main():
 load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 
 def main():
-    box = sandbox(name = "test", default = deny, fs = [cwd(read = allow)])
+    box = sandbox(name = "test", default = deny, fs = [cwd().allow(read = True)])
     return policy(
         default = deny,
         rules = [
@@ -235,7 +235,7 @@ def main():
         name = "test",
         default = deny,
         fs = [
-            home().child(".ssh", read = allow),
+            home().child(".ssh").allow(read = True),
         ],
     )
     return policy(default = deny, rules = [exe("git").sandbox(box).allow()])
@@ -276,7 +276,7 @@ def main():
     box = sandbox(
         name = "test",
         default = deny,
-        fs = [cwd(follow_worktrees = True, read = allow, write = allow)],
+        fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
     )
     return policy(default = deny, rules = [exe("git").sandbox(box).allow()])
 "#,
@@ -297,7 +297,7 @@ def main():
     box = sandbox(
         name = "test",
         default = deny,
-        fs = [tempdir(allow_all = True)],
+        fs = [tempdir().allow()],
     )
     return policy(default = deny, rules = [exe("test").sandbox(box).allow()])
 "#,
@@ -316,7 +316,7 @@ def main():
     box = sandbox(
         name = "test",
         default = deny,
-        fs = [path("/usr/local/bin", read = allow, execute = allow)],
+        fs = [path("/usr/local/bin").allow(read = True, execute = True)],
     )
     return policy(default = deny, rules = [exe("test").sandbox(box).allow()])
 "#,
@@ -335,7 +335,7 @@ def main():
     box = sandbox(
         name = "test",
         default = deny,
-        fs = [path(env = "CARGO_HOME", read = allow, write = allow)],
+        fs = [path(env = "CARGO_HOME").allow(read = True, write = True)],
     )
     return policy(default = deny, rules = [exe("cargo").sandbox(box).allow()])
 "#,
@@ -345,13 +345,13 @@ def main():
     }
 
     #[test]
-    fn test_invalid_effect_errors() {
-        // Test with a path builder that validates effects
+    fn test_bare_path_in_sandbox_errors() {
+        // Using cwd() without a decision (.allow()/.deny()/.ask()) in sandbox fs= should fail
         let source = r#"
 load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
 
 def main():
-    box = sandbox(name = "test", default = deny, fs = [cwd(read = "invalid")])
+    box = sandbox(name = "test", default = deny, fs = [cwd()])
     return policy(default = deny, rules = [exe("test").sandbox(box).allow()])
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from("."));
@@ -412,7 +412,7 @@ def main():
             r#"
 load("@clash//std.star", "sandbox", "cwd")
 
-my_sandbox = sandbox(name = "test", default = deny, fs = [cwd(read = allow)])
+my_sandbox = sandbox(name = "test", default = deny, fs = [cwd().allow(read = True)])
 "#,
         )
         .unwrap();
@@ -442,14 +442,9 @@ def main():
         name = "gitbox",
         default = deny,
         fs = [
-            cwd(
-                follow_worktrees = True,
-                read = allow,
-                write = allow,
-                execute = allow,
-            ),
-            home().child(".git", allow_all = True),
-            home().child(".ssh", read = allow),
+            cwd(follow_worktrees = True).allow(read = True, write = True, execute = True),
+            home().child(".git").allow(),
+            home().child(".ssh").allow(read = True),
         ],
         net = allow,
     )
@@ -698,5 +693,141 @@ def main():
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
+    }
+
+    #[test]
+    fn test_file_exact_match() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "tool", "policy", "cwd")
+
+def main():
+    return policy(default = deny, rules = [
+        cwd().file(".env").deny(write = True),
+        cwd().allow(read = True, write = True),
+        tool().allow(),
+    ])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        // First rule: FsOp=write → FsPath=literal(cwd/.env) → deny
+        let fs_op = &tree[0]["condition"];
+        assert_eq!(fs_op["observe"], "fs_op");
+        let fs_path = &fs_op["children"].as_array().unwrap()[0]["condition"];
+        assert_eq!(fs_path["observe"], "fs_path");
+        // Should be a literal pattern (not prefix)
+        assert!(
+            fs_path["pattern"]["literal"].is_object(),
+            "expected literal pattern for .file(), got {:?}",
+            fs_path["pattern"]
+        );
+    }
+
+    #[test]
+    fn test_file_sandbox_match_type() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
+
+def main():
+    box = sandbox(
+        name = "test",
+        default = deny,
+        fs = [
+            cwd().file("config.json").allow(read = True),
+            cwd().allow(read = True),
+        ],
+    )
+    return policy(default = deny, rules = [exe("test").sandbox(box).allow()])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let sandbox = &doc["sandboxes"]["test"];
+        let rules = sandbox["rules"].as_array().unwrap();
+        // First rule should have path_match: literal
+        assert_eq!(rules[0]["path_match"], "literal");
+        // Second rule should have path_match: subpath
+        assert_eq!(rules[1]["path_match"], "subpath");
+    }
+
+    #[test]
+    fn test_tool_on_with_path_entries() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "tool", "policy", "cwd")
+
+def main():
+    return policy(default = deny, rules = [
+        tool("Glob").on([
+            cwd().child("src").allow(read = True),
+        ]),
+    ])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 1);
+        // tool("Glob") → ToolName=Glob → children should contain fs nodes
+        let tool_node = &tree[0]["condition"];
+        assert_eq!(tool_node["observe"], "tool_name");
+        let children = tool_node["children"].as_array().unwrap();
+        // Should have fs nodes nested under the tool condition
+        assert!(!children.is_empty());
+        assert_eq!(children[0]["condition"]["observe"], "fs_op");
+    }
+
+    #[test]
+    fn test_tool_on_mixed_children() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "tool", "policy", "cwd")
+
+def main():
+    return policy(default = deny, rules = [
+        tool("Read").on([
+            cwd().file(".env").deny(read = True),
+            cwd().allow(read = True),
+        ]),
+    ])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 1);
+        let tool_node = &tree[0]["condition"];
+        let children = tool_node["children"].as_array().unwrap();
+        // Should have 2 children: deny .env write, allow cwd read
+        assert_eq!(
+            children.len(),
+            2,
+            "expected 2 fs nodes, got {}",
+            children.len()
+        );
+    }
+
+    #[test]
+    fn test_path_match_with_regex() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "tool", "policy", "cwd", "regex")
+
+def main():
+    return policy(default = deny, rules = [
+        cwd().match(regex(".*\\.log")).deny(write = True),
+        tool().allow(),
+    ])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        let fs_op = &tree[0]["condition"];
+        let fs_path = &fs_op["children"].as_array().unwrap()[0]["condition"];
+        // Should be a regex pattern
+        assert!(
+            fs_path["pattern"]["regex"].is_string(),
+            "expected regex pattern for .match(), got {:?}",
+            fs_path["pattern"]
+        );
     }
 }

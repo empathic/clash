@@ -16,7 +16,7 @@ def main():
     return policy(default = deny, rules = [
         exe("git", args = ["push"]).deny(),
         exe("git").allow(),
-        cwd(read = allow, write = allow),
+        cwd().allow(read = True, write = True),
         domains({"github.com": allow}),
     ])
 ```
@@ -83,9 +83,9 @@ The first argument matches the binary name; `args` matches positional arguments.
 ### Fs -- File Operations
 
 ```python
-cwd(read = allow)
-cwd(read = allow, write = allow)
-home().child(".ssh", read = allow)
+cwd().allow(read = True)
+cwd().allow(read = True, write = True)
+home().child(".ssh").allow(read = True)
 path("/etc").deny()
 ```
 
@@ -149,7 +149,7 @@ load("@clash//std.star", "exe", "policy", "cwd")
 
 def cwd_access():
     return [
-        cwd(read = allow, write = allow),
+        cwd().allow(read = True, write = True),
     ]
 
 def safe_git():
@@ -171,7 +171,7 @@ You can also use `load()` to import from other `.star` files.
 
 ### Merging Policies
 
-The `merge()` method combines two policies into one. Tree nodes and sandboxes from both policies are concatenated, and the most restrictive default effect wins (if either defaults to "deny", the merged result defaults to "deny").
+The `merge()` method combines two policies. In `a.merge(b)`, `b` is merged on top of `a`: `b`'s default effect is used, tree nodes from both are concatenated (`a`'s rules first, then `b`'s), and sandboxes are merged (first defined wins on name conflicts).
 
 ```python
 load("@clash//builtin.star", "base")
@@ -179,7 +179,7 @@ load("@clash//std.star", "exe", "policy", "cwd", "domains")
 
 def main():
     my_policy = policy(default = deny, rules = [
-        cwd(read = allow, write = allow),
+        cwd().allow(read = True, write = True),
         exe("git").allow(),
         domains({"github.com": allow}),
     ])
@@ -218,8 +218,8 @@ def main():
     cargo_env = sandbox(
         default = deny,
         fs = [
-            cwd(read = allow),
-            path("./target", write = allow),
+            cwd().allow(read = True),
+            path("./target").allow(write = True),
         ],
         net = allow,
     )
@@ -227,7 +227,7 @@ def main():
     git_env = sandbox(
         default = deny,
         fs = [
-            cwd(read = allow),
+            cwd().allow(read = True),
         ],
     )
 
@@ -235,7 +235,7 @@ def main():
         exe("git", args = ["push"]).deny(),
         exe("cargo").sandbox(cargo_env).allow(),
         exe("git").sandbox(git_env).allow(),
-        cwd(read = allow),
+        cwd().allow(read = True),
         domains({"github.com": allow}),
     ])
 ```
@@ -311,18 +311,18 @@ exe("git").also(exe("gh"))
 
 ```python
 # Current working directory (with worktree support)
-cwd(read = allow, write = allow)
-cwd(follow_worktrees = True, read = allow, write = allow)
+cwd().allow(read = True, write = True)
+cwd(follow_worktrees = True).allow(read = True, write = True)
 
 # Home directory and subdirectories
-home().child(".ssh", read = allow)
+home().child(".ssh").allow(read = True)
 
 # Temp directories
-tempdir(allow_all = True)
+tempdir().allow()
 
 # Arbitrary paths
-path("/usr/local", read = allow)
-path(env = "CARGO_HOME", read = allow)
+path("/usr/local").allow(read = True)
+path(env = "CARGO_HOME").allow(read = True)
 ```
 
 ### Tools
@@ -421,7 +421,7 @@ load("@clash//std.star", "policy", "cwd")
 
 def main():
     return policy(default = deny, rules = [
-        cwd(read = allow),
+        cwd().allow(read = True),
     ])
 ```
 
@@ -434,7 +434,7 @@ load("@clash//std.star", "exe", "policy", "cwd", "domains")
 
 def main():
     return policy(default = deny, rules = [
-        cwd(read = allow, write = allow),
+        cwd().allow(read = True, write = True),
         exe("cargo").allow(),
         exe("npm").allow(),
         exe("git", args = ["status"]).allow(),
@@ -461,8 +461,8 @@ def main():
         exe("git", args = ["push", "--force"]).deny(),
         exe("git", args = ["reset", "--hard"]).deny(),
         exe("sudo").deny(),
-        path(".env", write = deny),
-        home(write = deny),
+        path(".env").deny(write = True),
+        home().deny(write = True),
     ])
 ```
 
@@ -475,7 +475,7 @@ load("@clash//std.star", "exe", "policy", "cwd")
 
 def main():
     return policy(default = deny, rules = [
-        cwd(read = allow),
+        cwd().allow(read = True),
         exe("cat").allow(),
         exe("ls").allow(),
         exe("grep").allow(),
@@ -493,8 +493,8 @@ def main():
     cargo_env = sandbox(
         default = deny,
         fs = [
-            cwd(read = allow),
-            path("./target", write = allow),
+            cwd().allow(read = True),
+            path("./target").allow(write = True),
         ],
         net = allow,
     )
@@ -502,8 +502,8 @@ def main():
     npm_env = sandbox(
         default = deny,
         fs = [
-            cwd(read = allow),
-            path("./node_modules", write = allow),
+            cwd().allow(read = True),
+            path("./node_modules").allow(write = True),
         ],
         net = domains({"registry.npmjs.org": allow}),
     )
@@ -511,7 +511,7 @@ def main():
     return policy(default = deny, rules = [
         exe("cargo").sandbox(cargo_env).allow(),
         exe("npm").sandbox(npm_env).allow(),
-        cwd(read = allow),
+        cwd().allow(read = True),
     ])
 ```
 
