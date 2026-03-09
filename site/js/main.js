@@ -1,3 +1,20 @@
+// Version selector toggle
+document.addEventListener("DOMContentLoaded", function () {
+  var selector = document.querySelector(".version-selector");
+  if (selector) {
+    var btn = selector.querySelector(".version-btn");
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var isOpen = selector.classList.toggle("open");
+      btn.setAttribute("aria-expanded", isOpen);
+    });
+    document.addEventListener("click", function () {
+      selector.classList.remove("open");
+      btn.setAttribute("aria-expanded", "false");
+    });
+  }
+});
+
 // Copy-to-clipboard for code blocks
 document.addEventListener("DOMContentLoaded", function () {
   document.querySelectorAll("pre").forEach(function (pre) {

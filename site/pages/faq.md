@@ -10,7 +10,7 @@ permalink: /faq/
 
 ## Which agents does Clash support?
 
-Currently, **Claude Code** is fully supported. Codex CLI, Gemini CLI, and OpenCode are planned. The policy language and capability model are agent-independent — only the integration layer (hooks) is specific to each agent. See the [agent support table](/#agent-support) for tracking issues.
+Currently, **Claude Code** is fully supported. Codex CLI, Gemini CLI, and OpenCode are planned. The policy language and capability model are agent-independent — only the integration layer (hooks) is specific to each agent. See the [agent support table]({{ version.pathPrefix }}/#agent-support) for tracking issues.
 
 ---
 

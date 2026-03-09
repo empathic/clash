@@ -36,6 +36,10 @@ module.exports = function (eleventyConfig) {
 
   eleventyConfig.setLibrary("md", md);
 
+  // Ignore the versions directory — versioned builds are handled by scripts/build-versioned.js
+  eleventyConfig.ignores.add("versions");
+  eleventyConfig.ignores.add("scripts");
+
   return {
     dir: {
       input: ".",

@@ -145,6 +145,95 @@ hr {
   text-decoration: none;
 }
 
+/* ── Version selector ────────────────────────────────────────── */
+
+.version-selector {
+  position: relative;
+}
+
+.version-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35em;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--shade);
+  background: var(--lawn);
+  border: 1px solid var(--fence);
+  border-radius: 4px;
+  padding: 0.25em 0.6em;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.version-btn:hover {
+  border-color: var(--grass);
+  color: var(--grass);
+}
+
+.version-menu {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 8rem;
+  background: var(--ground);
+  border: 1px solid var(--fence);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  list-style: none;
+  padding: var(--space-xs) 0;
+  z-index: 200;
+}
+.version-selector.open .version-menu {
+  display: block;
+}
+
+.version-menu li a {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.35em 0.75em;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--bark);
+  text-decoration: none;
+}
+.version-menu li a:hover {
+  background: var(--lawn);
+  text-decoration: none;
+}
+.version-menu li[aria-selected="true"] a {
+  color: var(--grass);
+  font-weight: 600;
+}
+
+.version-badge {
+  font-family: var(--font-body);
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #1a6b2e;
+  background: #d4f5dc;
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+}
+
+/* ── Version banner ─────────────────────────────────────────── */
+
+.version-banner {
+  background: var(--lawn);
+  border-bottom: 1px solid var(--fence);
+  text-align: center;
+  padding: var(--space-sm) var(--space-lg);
+  font-size: 0.85rem;
+  color: var(--shade);
+}
+.version-banner a {
+  font-weight: 500;
+}
+
 .nav-github { display: flex; align-items: center; color: var(--shade); }
 .nav-github:hover { color: var(--grass); text-decoration: none; }
 
