@@ -1,8 +1,7 @@
 # Clash match tree DSL — tree-shaped policy builders.
 #
-# Rust globals available: _mt_exe, _mt_tool, _mt_hook, _mt_agent, _mt_arg,
-# _mt_has_arg, _mt_named, _mt_field, _mt_allow, _mt_deny, _mt_ask,
-# _mt_pattern, _mt_not, _mt_or, _mt_policy
+# Rust globals available: _mt_node, _mt_condition, _mt_pattern, _mt_prefix,
+# _mt_policy, allow, deny, ask
 
 # ---------------------------------------------------------------------------
 # Pattern helpers (reuse from std.star concepts)
@@ -36,7 +35,9 @@ def exe(name = None):
         ])
         exe("cargo").allow(sandbox="cwd_access")
     """
-    return _mt_exe(_mt_pat(name))
+    inner = _mt_condition({"positional_arg": 0}, _mt_pat(name))
+    bash_pat = _mt_pattern("Bash")
+    return _mt_condition("tool_name", bash_pat).on([inner])
 
 def tool(name = None):
     """Match a tool by name.
@@ -45,7 +46,7 @@ def tool(name = None):
         tool("Read").allow()
         tool().allow()
     """
-    return _mt_tool(_mt_pat(name))
+    return _mt_condition("tool_name", _mt_pat(name))
 
 def hook(name = None):
     """Match a hook type.
@@ -53,7 +54,7 @@ def hook(name = None):
     Usage:
         hook("PreToolUse").on([...])
     """
-    return _mt_hook(_mt_pat(name))
+    return _mt_condition("hook_type", _mt_pat(name))
 
 def agent(name = None):
     """Match an agent by name.
@@ -61,7 +62,7 @@ def agent(name = None):
     Usage:
         agent("code-review").allow()
     """
-    return _mt_agent(_mt_pat(name))
+    return _mt_condition("agent_name", _mt_pat(name))
 
 def arg(n, pattern = None):
     """Match a positional argument.
@@ -69,7 +70,7 @@ def arg(n, pattern = None):
     Usage:
         arg(1, "push").deny()
     """
-    return _mt_arg(n, _mt_pat(pattern))
+    return _mt_condition({"positional_arg": n}, _mt_pat(pattern))
 
 def has_arg(pattern = None):
     """Match if any argument matches (orderless scan).
@@ -77,7 +78,7 @@ def has_arg(pattern = None):
     Usage:
         has_arg("--force").deny()
     """
-    return _mt_has_arg(_mt_pat(pattern))
+    return _mt_condition("has_arg", _mt_pat(pattern))
 
 def named(name, pattern = None):
     """Match a named tool argument.
@@ -85,7 +86,7 @@ def named(name, pattern = None):
     Usage:
         named("file_path", regex(".*\\.env")).deny()
     """
-    return _mt_named(name, _mt_pat(pattern))
+    return _mt_condition({"named_arg": name}, _mt_pat(pattern))
 
 def field(path, pattern = None):
     """Match a nested field in tool_input JSON.
@@ -93,7 +94,7 @@ def field(path, pattern = None):
     Usage:
         field(["command", "args"], "sensitive").deny()
     """
-    return _mt_field(path, _mt_pat(pattern))
+    return _mt_condition({"nested_field": path}, _mt_pat(pattern))
 
 # ---------------------------------------------------------------------------
 # Decision nodes
@@ -106,11 +107,13 @@ def allow(sandbox = None):
         allow()
         allow(sandbox="cwd_access")
     """
-    return _mt_allow(sandbox)
+    if sandbox != None:
+        return _mt_node({"decision": {"allow": sandbox}})
+    return _mt_node({"decision": {"allow": None}})
 
 def deny():
     """Create a deny decision node."""
-    return _mt_deny()
+    return _mt_node({"decision": "deny"})
 
 def ask(sandbox = None):
     """Create an ask decision node.
@@ -119,7 +122,9 @@ def ask(sandbox = None):
         ask()
         ask(sandbox="cwd_access")
     """
-    return _mt_ask(sandbox)
+    if sandbox != None:
+        return _mt_node({"decision": {"ask": sandbox}})
+    return _mt_node({"decision": {"ask": None}})
 
 # ---------------------------------------------------------------------------
 # Pattern combinators
@@ -131,7 +136,7 @@ def or_pat(*args):
     Usage:
         exe(or_pat("cargo", "rustc")).allow()
     """
-    return _mt_or([_mt_pat(a) for a in args])
+    return _mt_node({"any_of": [_mt_pat(a) for a in args]})
 
 def not_pat(pattern):
     """Match if the pattern does NOT match.
@@ -139,7 +144,7 @@ def not_pat(pattern):
     Usage:
         exe(not_pat("rm")).allow()
     """
-    return _mt_not(_mt_pat(pattern))
+    return _mt_node({"not": _mt_pat(pattern)})
 
 # ---------------------------------------------------------------------------
 # Policy wrapper

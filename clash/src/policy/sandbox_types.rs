@@ -72,8 +72,29 @@ impl Cap {
         Ok(result)
     }
 
+    /// Return capabilities as a list of name strings.
+    pub fn to_list(&self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if self.contains(Cap::READ) {
+            names.push("read");
+        }
+        if self.contains(Cap::WRITE) {
+            names.push("write");
+        }
+        if self.contains(Cap::CREATE) {
+            names.push("create");
+        }
+        if self.contains(Cap::DELETE) {
+            names.push("delete");
+        }
+        if self.contains(Cap::EXECUTE) {
+            names.push("execute");
+        }
+        names
+    }
+
     /// Parse a single capability name.
-    fn parse_single(s: &str) -> Result<Cap, String> {
+    pub fn parse_single(s: &str) -> Result<Cap, String> {
         match s {
             "read" => Ok(Cap::READ),
             "write" => Ok(Cap::WRITE),
@@ -109,14 +130,47 @@ impl Cap {
 
 impl Serialize for Cap {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.display())
+        use serde::ser::SerializeSeq;
+        let names = self.to_list();
+        let mut seq = serializer.serialize_seq(Some(names.len()))?;
+        for name in &names {
+            seq.serialize_element(name)?;
+        }
+        seq.end()
     }
 }
 
 impl<'de> Deserialize<'de> for Cap {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        Cap::parse(&s).map_err(serde::de::Error::custom)
+        use serde::de;
+
+        struct CapVisitor;
+
+        impl<'de> de::Visitor<'de> for CapVisitor {
+            type Value = Cap;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str(r#"a list of capabilities like ["read", "write"] or a string like "read + write""#)
+            }
+
+            // TODO(0.4.1): remove legacy string format support (e.g. "read + write")
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Cap, E> {
+                Cap::parse(value).map_err(de::Error::custom)
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Cap, A::Error> {
+                let mut caps = Cap::empty();
+                while let Some(name) = seq.next_element::<String>()? {
+                    caps |= Cap::parse_single(&name).map_err(de::Error::custom)?;
+                }
+                if caps.is_empty() {
+                    return Err(de::Error::custom("capability list must not be empty"));
+                }
+                Ok(caps)
+            }
+        }
+
+        deserializer.deserialize_any(CapVisitor)
     }
 }
 
@@ -427,9 +481,16 @@ mod tests {
     fn test_cap_serde_roundtrip() {
         let caps = Cap::READ | Cap::WRITE | Cap::CREATE;
         let json = serde_json::to_string(&caps).unwrap();
-        assert_eq!(json, r#""read + write + create""#);
+        assert_eq!(json, r#"["read","write","create"]"#);
         let deserialized: Cap = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, caps);
+    }
+
+    #[test]
+    fn test_cap_deserialize_string_compat() {
+        // String format still accepted for backwards compat
+        let caps: Cap = serde_json::from_str(r#""read + write""#).unwrap();
+        assert_eq!(caps, Cap::READ | Cap::WRITE);
     }
 
     #[test]

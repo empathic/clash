@@ -11,7 +11,7 @@ use serde_json::{Value as JsonValue, json};
 use starlark::starlark_simple_value;
 use starlark::values::list::ListRef;
 use starlark::values::{
-    Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace, Value, ValueLike, starlark_value,
+    Heap, ProvidesStaticType, StarlarkValue, Trace, Value, ValueLike, starlark_value,
 };
 
 // ---------------------------------------------------------------------------
@@ -19,10 +19,16 @@ use starlark::values::{
 // ---------------------------------------------------------------------------
 
 /// A match tree node value in Starlark — represents a Condition or Decision node.
-#[derive(Debug, Clone, ProvidesStaticType, NoSerialize, Allocative)]
+#[derive(Debug, Clone, ProvidesStaticType, Allocative)]
 pub struct MatchTreeNode {
     #[allocative(skip)]
     pub json: JsonValue,
+}
+
+impl serde::Serialize for MatchTreeNode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.json.serialize(serializer)
+    }
 }
 
 unsafe impl Trace<'_> for MatchTreeNode {
@@ -140,8 +146,8 @@ fn set_children_on_deepest_leaf(json: &mut JsonValue, children: Vec<JsonValue>) 
 // Builder functions (registered as Starlark globals)
 // ---------------------------------------------------------------------------
 
-/// Create a condition node with a string observable.
-pub fn mt_condition(observe: &str, pattern: JsonValue) -> MatchTreeNode {
+/// Create a condition node. `observe` is JSON (string or structured).
+pub fn mt_condition(observe: JsonValue, pattern: JsonValue) -> MatchTreeNode {
     MatchTreeNode {
         json: json!({
             "condition": {
@@ -150,146 +156,6 @@ pub fn mt_condition(observe: &str, pattern: JsonValue) -> MatchTreeNode {
                 "children": []
             }
         }),
-    }
-}
-
-/// Create a condition node for tool name matching.
-pub fn mt_tool(pattern: JsonValue) -> MatchTreeNode {
-    MatchTreeNode {
-        json: json!({
-            "condition": {
-                "observe": "tool_name",
-                "pattern": pattern,
-                "children": []
-            }
-        }),
-    }
-}
-
-/// Create a condition node for exe (Bash command) matching.
-/// This expands to: ToolName="Bash" → PositionalArg(0)=pattern
-pub fn mt_exe(pattern: JsonValue) -> MatchTreeNode {
-    MatchTreeNode {
-        json: json!({
-            "condition": {
-                "observe": "tool_name",
-                "pattern": {"literal": {"literal": "Bash"}},
-                "children": [{
-                    "condition": {
-                        "observe": {"positional_arg": 0},
-                        "pattern": pattern,
-                        "children": []
-                    }
-                }]
-            }
-        }),
-    }
-}
-
-/// Create a condition node for hook type matching.
-pub fn mt_hook(pattern: JsonValue) -> MatchTreeNode {
-    MatchTreeNode {
-        json: json!({
-            "condition": {
-                "observe": "hook_type",
-                "pattern": pattern,
-                "children": []
-            }
-        }),
-    }
-}
-
-/// Create a condition node for agent name matching.
-pub fn mt_agent(pattern: JsonValue) -> MatchTreeNode {
-    MatchTreeNode {
-        json: json!({
-            "condition": {
-                "observe": "agent_name",
-                "pattern": pattern,
-                "children": []
-            }
-        }),
-    }
-}
-
-/// Create a condition node for positional arg matching.
-pub fn mt_arg(n: i32, pattern: JsonValue) -> MatchTreeNode {
-    MatchTreeNode {
-        json: json!({
-            "condition": {
-                "observe": {"positional_arg": n},
-                "pattern": pattern,
-                "children": []
-            }
-        }),
-    }
-}
-
-/// Create a condition node for has_arg matching.
-pub fn mt_has_arg(pattern: JsonValue) -> MatchTreeNode {
-    MatchTreeNode {
-        json: json!({
-            "condition": {
-                "observe": "has_arg",
-                "pattern": pattern,
-                "children": []
-            }
-        }),
-    }
-}
-
-/// Create a condition node for named arg matching.
-pub fn mt_named(name: &str, pattern: JsonValue) -> MatchTreeNode {
-    MatchTreeNode {
-        json: json!({
-            "condition": {
-                "observe": {"named_arg": name},
-                "pattern": pattern,
-                "children": []
-            }
-        }),
-    }
-}
-
-/// Create a condition node for nested field matching.
-pub fn mt_field(path: Vec<String>, pattern: JsonValue) -> MatchTreeNode {
-    MatchTreeNode {
-        json: json!({
-            "condition": {
-                "observe": {"nested_field": path},
-                "pattern": pattern,
-                "children": []
-            }
-        }),
-    }
-}
-
-/// Create a decision node.
-pub fn mt_decision_allow(sandbox: Option<&str>) -> MatchTreeNode {
-    let decision = if let Some(sb) = sandbox {
-        json!({"allow": sb})
-    } else {
-        json!({"allow": null})
-    };
-    MatchTreeNode {
-        json: json!({"decision": decision}),
-    }
-}
-
-pub fn mt_decision_deny() -> MatchTreeNode {
-    MatchTreeNode {
-        json: json!({"decision": "deny"}),
-    }
-}
-
-pub fn mt_decision_ask(sandbox: Option<&str>) -> MatchTreeNode {
-    let decision = if let Some(sb) = sandbox {
-        json!({"ask": sb})
-    } else {
-        json!({"ask": null})
-    };
-    MatchTreeNode {
-        json: json!({"decision": decision}),
     }
 }
 
@@ -343,14 +209,4 @@ pub fn path_value_to_json<'v>(value: Value<'v>, heap: &'v Heap) -> anyhow::Resul
         }
     }
     anyhow::bail!("cannot convert {} to a path value", value.get_type())
-}
-
-/// Convert a Starlark not() pattern value to JSON.
-pub fn not_pattern_to_json(inner: JsonValue) -> JsonValue {
-    json!({"not": inner})
-}
-
-/// Convert a Starlark or() pattern value to JSON.
-pub fn or_pattern_to_json(items: Vec<JsonValue>) -> JsonValue {
-    json!({"any_of": items})
 }
