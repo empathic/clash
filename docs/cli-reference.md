@@ -325,14 +325,14 @@ clash sandbox check
 Apply sandbox restrictions and execute a command.
 
 ```
-clash sandbox exec [OPTIONS] --policy <POLICY> --cwd <CWD> [COMMAND]...
+clash sandbox exec [OPTIONS] --sandbox <SANDBOX> --cwd <CWD> [COMMAND]...
 ```
 
 **Options:**
 
 | Flag | Description |
 |------|-------------|
-| `--policy <POLICY>` | Sandbox policy as JSON string |
+| `--sandbox <SANDBOX>` | Sandbox config: inline JSON or a named sandbox from the policy |
 | `--cwd <CWD>` | Working directory for path resolution |
 
 **Arguments:**
@@ -346,13 +346,13 @@ clash sandbox exec [OPTIONS] --policy <POLICY> --cwd <CWD> [COMMAND]...
 ```bash
 # Run ls under a read-only sandbox
 clash sandbox exec \
-  --policy '{"read":["/Users/me/project"],"write":[]}' \
+  --sandbox '{"read":["/Users/me/project"],"write":[]}' \
   --cwd /Users/me/project \
   ls -la
 
 # Run cargo with write access to target/
 clash sandbox exec \
-  --policy '{"read":["."],"write":["./target"]}' \
+  --sandbox '{"read":["."],"write":["./target"]}' \
   --cwd /Users/me/project \
   cargo build
 ```
@@ -362,7 +362,7 @@ clash sandbox exec \
 Test sandbox enforcement interactively. Same interface as `exec` but designed for verifying that restrictions work as expected.
 
 ```
-clash sandbox test [OPTIONS] --policy <POLICY> --cwd <CWD> [COMMAND]...
+clash sandbox test [OPTIONS] --sandbox <SANDBOX> --cwd <CWD> [COMMAND]...
 ```
 
 **Options and arguments are the same as `sandbox exec`.**

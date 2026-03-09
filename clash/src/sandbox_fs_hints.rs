@@ -62,7 +62,7 @@ pub fn check_for_sandbox_fs_hint(
     // Get the sandbox policy. Try re-evaluation first (works if tool_input
     // is the original command). Fall back to extracting the policy from the
     // rewritten command string (PostToolUse may receive the rewritten command
-    // like "clash sandbox exec --policy '{...}' ...").
+    // like "clash sandbox exec --sandbox '{...}' ...").
     let sandbox = match resolve_sandbox_policy(input, settings) {
         Some(s) => s,
         None => {
@@ -147,7 +147,7 @@ pub fn check_for_sandbox_fs_hint(
 /// Try to recover the sandbox policy for this tool invocation.
 ///
 /// 1. Re-evaluate the policy (works when PostToolUse gets the original command).
-/// 2. Fall back to extracting the `--policy` JSON from the rewritten command
+/// 2. Fall back to extracting the `--sandbox` JSON from the rewritten command
 ///    string (works when PostToolUse gets the `clash sandbox exec ...` wrapper).
 fn resolve_sandbox_policy(
     input: &ToolUseHookInput,
@@ -165,12 +165,12 @@ fn resolve_sandbox_policy(
         info!("resolve_sandbox_policy: no decision tree available");
     }
 
-    // Path 2: extract --policy JSON from the rewritten command string.
+    // Path 2: extract --sandbox JSON from the rewritten command string.
     let command = input.tool_input.get("command")?.as_str()?;
-    if !command.contains("sandbox exec") || !command.contains("--policy") {
+    if !command.contains("sandbox exec") || !command.contains("--sandbox") {
         info!(
             command_prefix = &command[..command.len().min(80)],
-            "resolve_sandbox_policy: command does not contain sandbox exec + --policy"
+            "resolve_sandbox_policy: command does not contain sandbox exec + --sandbox"
         );
         return None;
     }
@@ -185,10 +185,10 @@ fn resolve_sandbox_policy(
 
 /// Extract the sandbox policy JSON from a rewritten `clash sandbox exec` command.
 fn extract_policy_json(command: &str) -> Option<SandboxPolicy> {
-    let policy_idx = command.find("--policy ")?;
-    let after_flag = &command[policy_idx + "--policy ".len()..];
+    let policy_idx = command.find("--sandbox ")?;
+    let after_flag = &command[policy_idx + "--sandbox ".len()..];
 
-    // The policy JSON is shell-escaped in single quotes: '--policy '{...}''
+    // The policy JSON is shell-escaped in single quotes: '--sandbox '{...}''
     // We need to find the JSON object boundaries.
     let json_start = after_flag.find('{')?;
     let json_str = &after_flag[json_start..];

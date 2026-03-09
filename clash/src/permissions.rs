@@ -210,7 +210,7 @@ fn wrap_bash_with_sandbox(
     }
 
     let sandboxed_command = format!(
-        "{} sandbox exec --policy {} --cwd {}{} -- bash -c {}",
+        "{} sandbox exec --sandbox {} --cwd {}{} -- bash -c {}",
         shell_escape(&clash_bin.to_string_lossy()),
         shell_escape(&policy_json),
         shell_escape(&input.cwd),
@@ -678,7 +678,7 @@ mod tests {
         let wrapped = result.unwrap();
         let cmd = extract_wrapped_command(&wrapped);
         assert!(cmd.contains("sandbox exec"));
-        assert!(cmd.contains("--policy"));
+        assert!(cmd.contains("--sandbox"));
         assert!(cmd.contains("--cwd"));
         assert!(cmd.contains("-- bash -c 'ls -la'"));
     }

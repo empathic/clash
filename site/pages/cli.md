@@ -140,12 +140,12 @@ clash sandbox check
 Apply sandbox restrictions and execute a command.
 
 ```bash
-clash sandbox exec --policy <JSON> --cwd <CWD> [COMMAND]...
+clash sandbox exec --sandbox <SANDBOX> --cwd <CWD> [COMMAND]...
 ```
 
 ```bash
 clash sandbox exec \
-  --policy '{"read":["/Users/me/project"],"write":[]}' \
+  --sandbox '{"read":["/Users/me/project"],"write":[]}' \
   --cwd /Users/me/project \
   ls -la
 ```
