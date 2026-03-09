@@ -564,6 +564,7 @@ dependencies = [
  "anyhow",
  "include_dir",
  "regex",
+ "serde",
  "serde_json",
  "starlark",
  "tempfile",

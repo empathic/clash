@@ -19,7 +19,9 @@ pub fn run(yes: bool) -> Result<()> {
 
     if !yes
         && !dialoguer::Confirm::new()
-            .with_prompt("Uninstall clash? This will remove all clash configuration from Claude Code")
+            .with_prompt(
+                "Uninstall clash? This will remove all clash configuration from Claude Code",
+            )
             .default(true)
             .interact()
             .unwrap_or(false)
@@ -53,7 +55,9 @@ pub fn run(yes: bool) -> Result<()> {
     );
     println!(
         "  {}",
-        style::dim("curl -fsSL https://raw.githubusercontent.com/empathic/clash/main/install.sh | bash")
+        style::dim(
+            "curl -fsSL https://raw.githubusercontent.com/empathic/clash/main/install.sh | bash"
+        )
     );
     println!(
         "  {}",
@@ -121,17 +125,11 @@ fn remove_status_line() {
             );
         }
         Ok(false) => {
-            println!(
-                "{} No clash status line configured.",
-                style::dim("·"),
-            );
+            println!("{} No clash status line configured.", style::dim("·"),);
         }
         Err(e) => {
             warn!(error = %e, "failed to remove status line");
-            eprintln!(
-                "  {} Could not remove status line: {e}",
-                style::yellow("!"),
-            );
+            eprintln!("  {} Could not remove status line: {e}", style::yellow("!"),);
         }
     }
 }
@@ -156,8 +154,7 @@ fn disable_plugin() {
         return;
     }
 
-    if let Err(e) =
-        claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", false)
+    if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", false)
     {
         warn!(error = %e, "failed to disable plugin in settings");
         eprintln!(
@@ -243,11 +240,7 @@ fn remove_settings_dir(yes: bool) {
             .interact()
             .unwrap_or(false)
     {
-        println!(
-            "{} Kept {}.",
-            style::dim("·"),
-            dir.display(),
-        );
+        println!("{} Kept {}.", style::dim("·"), dir.display(),);
         return;
     }
 
@@ -261,11 +254,7 @@ fn remove_settings_dir(yes: bool) {
         return;
     }
 
-    println!(
-        "{} Removed {}.",
-        style::green_bold("✓"),
-        dir.display(),
-    );
+    println!("{} Removed {}.", style::green_bold("✓"), dir.display(),);
 }
 
 /// Find and remove the clash binary.
@@ -273,10 +262,7 @@ fn remove_binary(yes: bool) {
     let binary_path = match find_clash_binary() {
         Some(p) => p,
         None => {
-            println!(
-                "{} clash binary not found on PATH.",
-                style::dim("·"),
-            );
+            println!("{} clash binary not found on PATH.", style::dim("·"),);
             return;
         }
     };
@@ -299,11 +285,7 @@ fn remove_binary(yes: bool) {
             .interact()
             .unwrap_or(false)
     {
-        println!(
-            "{} Kept binary at {}.",
-            style::dim("·"),
-            binary_path,
-        );
+        println!("{} Kept binary at {}.", style::dim("·"), binary_path,);
         return;
     }
 
@@ -317,11 +299,7 @@ fn remove_binary(yes: bool) {
         return;
     }
 
-    println!(
-        "{} Removed {}.",
-        style::green_bold("✓"),
-        binary_path,
-    );
+    println!("{} Removed {}.", style::green_bold("✓"), binary_path,);
 }
 
 /// Locate the clash binary on PATH.

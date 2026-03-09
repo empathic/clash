@@ -8,10 +8,7 @@ use starlark::starlark_module;
 use starlark::values::{Value, ValueLike};
 
 use crate::builders::base::BasePolicyValue;
-use crate::builders::match_tree::{
-    self as mt, MatchTreeNode, not_pattern_to_json, or_pattern_to_json, path_value_to_json,
-    pattern_to_json,
-};
+use crate::builders::match_tree::{self as mt, MatchTreeNode, path_value_to_json, pattern_to_json};
 
 /// Build the globals environment with all Clash DSL functions and constants.
 pub fn clash_globals() -> starlark::environment::Globals {
@@ -33,8 +30,30 @@ fn register_globals(builder: &mut GlobalsBuilder) {
     const deny: &str = "deny";
     const ask: &str = "ask";
 
-    // -- Match tree primitives (used by @clash//std.star and @clash//match_tree.star) --
+    // -- Minimal Rust primitives (everything else is in @clash//std.star) --
 
+    /// Wrap an arbitrary dict/value as a MatchTreeNode.
+    /// This is the escape hatch that lets Starlark code build any node shape.
+    fn _mt_node<'v>(#[starlark(require = pos)] value: Value<'v>) -> anyhow::Result<MatchTreeNode> {
+        let json = starlark_to_json(value)?;
+        Ok(MatchTreeNode { json })
+    }
+
+    /// Generic condition builder. `observe` can be a string ("tool_name")
+    /// or a dict ({"positional_arg": 0}). `pattern` is a MatchTreeNode from _mt_pattern().
+    fn _mt_condition<'v>(
+        #[starlark(require = pos)] observe: Value<'v>,
+        #[starlark(require = pos)] pattern: &MatchTreeNode,
+    ) -> anyhow::Result<MatchTreeNode> {
+        let observe_json = starlark_to_json(observe)?;
+        Ok(mt::mt_condition(observe_json, pattern.json.clone()))
+    }
+
+    /// Convert a value to a matcher pattern (type dispatch in Rust).
+    /// - None          → wildcard
+    /// - "foo"         → literal
+    /// - ["a", "b"]    → any_of
+    /// - regex("...")  → regex
     fn _mt_pattern<'v>(
         #[starlark(require = pos)] value: Value<'v>,
         heap: &'v starlark::values::Heap,
@@ -43,68 +62,7 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         Ok(MatchTreeNode { json: pat })
     }
 
-    fn _mt_exe<'v>(
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-    ) -> anyhow::Result<MatchTreeNode> {
-        Ok(mt::mt_exe(pattern.json.clone()))
-    }
-
-    fn _mt_tool<'v>(
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-    ) -> anyhow::Result<MatchTreeNode> {
-        Ok(mt::mt_tool(pattern.json.clone()))
-    }
-
-    fn _mt_hook<'v>(
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-    ) -> anyhow::Result<MatchTreeNode> {
-        Ok(mt::mt_hook(pattern.json.clone()))
-    }
-
-    fn _mt_agent<'v>(
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-    ) -> anyhow::Result<MatchTreeNode> {
-        Ok(mt::mt_agent(pattern.json.clone()))
-    }
-
-    fn _mt_arg(
-        #[starlark(require = pos)] n: i32,
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-    ) -> anyhow::Result<MatchTreeNode> {
-        Ok(mt::mt_arg(n, pattern.json.clone()))
-    }
-
-    fn _mt_has_arg<'v>(
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-    ) -> anyhow::Result<MatchTreeNode> {
-        Ok(mt::mt_has_arg(pattern.json.clone()))
-    }
-
-    fn _mt_named<'v>(
-        #[starlark(require = pos)] name: &str,
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-    ) -> anyhow::Result<MatchTreeNode> {
-        Ok(mt::mt_named(name, pattern.json.clone()))
-    }
-
-    fn _mt_fs_op<'v>(
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-    ) -> anyhow::Result<MatchTreeNode> {
-        Ok(mt::mt_condition("fs_op", pattern.json.clone()))
-    }
-
-    fn _mt_fs_path<'v>(
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-    ) -> anyhow::Result<MatchTreeNode> {
-        Ok(mt::mt_condition("fs_path", pattern.json.clone()))
-    }
-
-    fn _mt_net_domain<'v>(
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-    ) -> anyhow::Result<MatchTreeNode> {
-        Ok(mt::mt_condition("net_domain", pattern.json.clone()))
-    }
-
+    /// Convert a path value to a prefix pattern (needs Rust for env/join dispatch).
     fn _mt_prefix<'v>(
         #[starlark(require = pos)] value: Value<'v>,
         heap: &'v starlark::values::Heap,
@@ -112,69 +70,6 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         let val_json = path_value_to_json(value, heap)?;
         Ok(MatchTreeNode {
             json: serde_json::json!({"prefix": val_json}),
-        })
-    }
-
-    fn _mt_field<'v>(
-        #[starlark(require = pos)] path: Value<'v>,
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-    ) -> anyhow::Result<MatchTreeNode> {
-        let list = starlark::values::list::ListRef::from_value(path)
-            .ok_or_else(|| anyhow::anyhow!("field() path must be a list of strings"))?;
-        let segments: Result<Vec<String>, _> = list
-            .iter()
-            .map(|v| {
-                v.unpack_str()
-                    .map(|s| s.to_string())
-                    .ok_or_else(|| anyhow::anyhow!("field() path segments must be strings"))
-            })
-            .collect();
-        Ok(mt::mt_field(segments?, pattern.json.clone()))
-    }
-
-    fn _mt_allow(#[starlark(require = pos)] sandbox: Value) -> anyhow::Result<MatchTreeNode> {
-        let sb = if sandbox.is_none() {
-            None
-        } else {
-            sandbox.unpack_str()
-        };
-        Ok(mt::mt_decision_allow(sb))
-    }
-
-    fn _mt_deny() -> anyhow::Result<MatchTreeNode> {
-        Ok(mt::mt_decision_deny())
-    }
-
-    fn _mt_ask(#[starlark(require = pos)] sandbox: Value) -> anyhow::Result<MatchTreeNode> {
-        let sb = if sandbox.is_none() {
-            None
-        } else {
-            sandbox.unpack_str()
-        };
-        Ok(mt::mt_decision_ask(sb))
-    }
-
-    fn _mt_not(
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-    ) -> anyhow::Result<MatchTreeNode> {
-        Ok(MatchTreeNode {
-            json: not_pattern_to_json(pattern.json.clone()),
-        })
-    }
-
-    fn _mt_or<'v>(#[starlark(require = pos)] patterns: Value<'v>) -> anyhow::Result<MatchTreeNode> {
-        let list = starlark::values::list::ListRef::from_value(patterns)
-            .ok_or_else(|| anyhow::anyhow!("_mt_or requires a list"))?;
-        let items: Result<Vec<_>, _> = list
-            .iter()
-            .map(|v| {
-                v.downcast_ref::<MatchTreeNode>()
-                    .map(|n| n.json.clone())
-                    .ok_or_else(|| anyhow::anyhow!("_mt_or items must be pattern nodes"))
-            })
-            .collect();
-        Ok(MatchTreeNode {
-            json: or_pattern_to_json(items?),
         })
     }
 

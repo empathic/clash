@@ -1,10 +1,8 @@
 # Clash standard library — all DSL builders.
 #
-# Emits v5 match tree nodes using _mt_* Rust primitives.
-# Rust globals available: _mt_pattern, _mt_exe, _mt_tool, _mt_hook, _mt_agent,
-# _mt_arg, _mt_has_arg, _mt_named, _mt_field, _mt_allow, _mt_deny, _mt_ask,
-# _mt_not, _mt_or, _mt_policy, _mt_fs_op, _mt_fs_path, _mt_net_domain,
-# _mt_prefix, allow, deny, ask
+# Emits v5 match tree nodes using minimal Rust primitives.
+# Rust globals available: _mt_node, _mt_condition, _mt_pattern, _mt_prefix,
+# _mt_policy, allow, deny, ask
 
 # ---------------------------------------------------------------------------
 # Pattern helpers
@@ -25,6 +23,80 @@ def regex(pattern):
     return struct(_regex = pattern)
 
 # ---------------------------------------------------------------------------
+# Match tree node builders (pure Starlark over _mt_condition / _mt_node)
+# ---------------------------------------------------------------------------
+
+def _mt_exe(pattern):
+    """Build ToolName=Bash → PosArg(0)=pattern."""
+    inner = _mt_condition({"positional_arg": 0}, pattern)
+    bash_pat = _mt_pattern("Bash")
+    return _mt_condition("tool_name", bash_pat).on([inner])
+
+def _mt_tool(pattern):
+    """Build ToolName=pattern."""
+    return _mt_condition("tool_name", pattern)
+
+def _mt_hook(pattern):
+    """Build HookType=pattern."""
+    return _mt_condition("hook_type", pattern)
+
+def _mt_agent(pattern):
+    """Build AgentName=pattern."""
+    return _mt_condition("agent_name", pattern)
+
+def _mt_arg(n, pattern):
+    """Build PosArg(n)=pattern."""
+    return _mt_condition({"positional_arg": n}, pattern)
+
+def _mt_has_arg(pattern):
+    """Build HasArg=pattern."""
+    return _mt_condition("has_arg", pattern)
+
+def _mt_named(name, pattern):
+    """Build NamedArg(name)=pattern."""
+    return _mt_condition({"named_arg": name}, pattern)
+
+def _mt_field(path, pattern):
+    """Build NestedField(path)=pattern."""
+    return _mt_condition({"nested_field": path}, pattern)
+
+def _mt_fs_op(pattern):
+    """Build FsOp=pattern."""
+    return _mt_condition("fs_op", pattern)
+
+def _mt_fs_path(pattern):
+    """Build FsPath=pattern."""
+    return _mt_condition("fs_path", pattern)
+
+def _mt_net_domain(pattern):
+    """Build NetDomain=pattern."""
+    return _mt_condition("net_domain", pattern)
+
+def _mt_allow(sandbox):
+    """Build an allow decision node."""
+    if sandbox != None:
+        return _mt_node({"decision": {"allow": sandbox}})
+    return _mt_node({"decision": {"allow": None}})
+
+def _mt_deny():
+    """Build a deny decision node."""
+    return _mt_node({"decision": "deny"})
+
+def _mt_ask(sandbox):
+    """Build an ask decision node."""
+    if sandbox != None:
+        return _mt_node({"decision": {"ask": sandbox}})
+    return _mt_node({"decision": {"ask": None}})
+
+def _mt_not(pattern):
+    """Build a negated pattern."""
+    return _mt_node({"not": pattern})
+
+def _mt_or(patterns):
+    """Build an any_of pattern."""
+    return _mt_node({"any_of": patterns})
+
+# ---------------------------------------------------------------------------
 # Exec / tool builders
 # ---------------------------------------------------------------------------
 
@@ -41,48 +113,19 @@ def exe(name = None, args = None):
     node = _mt_exe(_pattern(name))
 
     if args != None:
-        # Chain positional arg conditions for each arg
-        def _wrap_with_args(base, arg_list):
-            """Wrap a condition node with nested positional arg conditions."""
-            inner = base
-            for i in range(len(arg_list) - 1, -1, -1):
-                inner = _mt_arg(i + 1, _pattern(arg_list[i])).on([inner])
-            return inner
-
-        # Create a placeholder that we'll attach args to
-        # The exe() node is ToolName=Bash → PosArg(0)=name → (args here)
-        # We need to modify the inner PosArg(0) node to add arg children
         node = _exe_with_args(name, args)
 
     return _with_sandbox_support(node)
 
 def _exe_with_args(name, args):
     """Build an exe node with positional args already nested."""
-    # Build from inside out: start with the deepest arg
-    # exe("git", args=["push"]) → ToolName=Bash → PosArg(0)=git → PosArg(1)=push → [children]
     pat = _pattern(name)
-    inner_node = _mt_exe(pat)
-    # The inner node is: {condition: {observe: tool_name, pattern: Bash, children: [{condition: {observe: pos_arg(0), pattern: name, children: []}}]}}
-    # We need to add arg conditions as children of the innermost node
-    arg_nodes = []
-    for i, a in enumerate(args):
-        arg_nodes.append(_mt_arg(i + 1, _pattern(a)))
-
-    # Chain the arg nodes: each wraps around the next
-    # For [push, --force]: pos_arg(1)=push → pos_arg(2)=--force → [decision]
-    # But we want them as flat siblings at the deepest level, not nested
-    # Actually for exe("git", args=["push"]).deny(), we want:
-    # ToolName=Bash → PosArg(0)=git → PosArg(1)=push → [decision]
-    # Build the chain from inside out
     result = _mt_exe(pat)
     if len(args) > 0:
         # Build nested chain: arg(n, ...) wrapping the innermost
-        # Start with the outermost exe node and add arg children
         innermost = _mt_arg(len(args), _pattern(args[len(args) - 1]))
         for i in range(len(args) - 2, -1, -1):
             innermost = _mt_arg(i + 1, _pattern(args[i])).on([innermost])
-        # Now we need to set innermost as child of the PosArg(0)=name node
-        # which is inside the exe node
         result = _mt_exe(pat).on([innermost])
     return result
 
@@ -152,10 +195,10 @@ def _effect_decision(effect):
     else:
         fail("unknown effect: " + str(effect))
 
-def _caps_string(read, write, execute, allow_all):
-    """Compute a sandbox caps string from permission kwargs."""
+def _caps_list(read, write, execute, allow_all):
+    """Compute a sandbox caps list from permission kwargs."""
     if allow_all:
-        return "read + write + create + delete + execute"
+        return ["read", "write", "create", "delete", "execute"]
     parts = []
     if read == allow:
         parts.append("read")
@@ -163,7 +206,7 @@ def _caps_string(read, write, execute, allow_all):
         parts.extend(["write", "create"])
     if execute == allow:
         parts.append("execute")
-    return " + ".join(parts) if parts else ""
+    return parts
 
 def _path_entry(path_value, worktree = False, read = None, write = None,
                 execute = None, allow_all = False, _children = None,
@@ -183,8 +226,8 @@ def _path_entry(path_value, worktree = False, read = None, write = None,
 
     # Build sandbox rules (path + caps pairs for sandbox-exec compilation).
     _sandbox_rules = list(_extra_sandbox_rules or [])
-    _caps = _caps_string(read, write, execute, allow_all)
-    if _caps:
+    _caps = _caps_list(read, write, execute, allow_all)
+    if len(_caps) > 0:
         _sandbox_rules.append({"path_value": path_value, "caps": _caps})
 
     def child(name, read = None, write = None, execute = None, allow_all = False):
@@ -192,9 +235,9 @@ def _path_entry(path_value, worktree = False, read = None, write = None,
         # We create a struct with the joined path info for _mt_prefix
         child_path = struct(_join = [path_value, name])
         child_nodes = _fs_nodes(child_path, read, write, execute, allow_all)
-        child_caps = _caps_string(read, write, execute, allow_all)
+        child_caps = _caps_list(read, write, execute, allow_all)
         child_sb_rules = list(_sandbox_rules)
-        if child_caps:
+        if len(child_caps) > 0:
             child_sb_rules.append({"path_value": child_path, "caps": child_caps})
         return _path_entry(
             path_value, worktree, _read, _write, _execute, _allow_all,
@@ -478,7 +521,7 @@ def _sandbox_to_json(sb):
     for r in sb._fs_rules:
         pv = r["path_value"]
         path_str = _resolve_path_value(pv)
-        caps = r.get("caps", "read + write + create")
+        caps = r.get("caps", ["read", "write", "create"])
         rules.append({
             "effect": "allow",
             "caps": caps,
@@ -501,9 +544,9 @@ def _sandbox_to_json(sb):
     # deny default = read-only (can read system files and execute binaries)
     # allow default = full access
     if sb._default == deny:
-        default_caps = "read + execute"
+        default_caps = ["read", "execute"]
     else:
-        default_caps = "read + write + create + delete + execute"
+        default_caps = ["read", "write", "create", "delete", "execute"]
 
     return {
         "name": sb._name,
