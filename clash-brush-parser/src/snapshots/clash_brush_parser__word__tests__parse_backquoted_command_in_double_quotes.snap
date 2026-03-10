@@ -1,0 +1,21 @@
+---
+source: clash-brush-parser/src/word.rs
+assertion_line: 1274
+expression: "test_parse(r#\"\"`echo hi`\"\"#)?"
+---
+ParseTestResults(
+  input: "\"`echo hi`\"",
+  result: [
+    WordPieceWithSource(
+      piece: DoubleQuotedSequence([
+        WordPieceWithSource(
+          piece: BackquotedCommandSubstitution("echo hi"),
+          start_index: 1,
+          end_index: 10,
+        ),
+      ]),
+      start_index: 0,
+      end_index: 11,
+    ),
+  ],
+)

@@ -1,0 +1,27 @@
+---
+source: clash-brush-parser/src/parser/tests/extended_test.rs
+assertion_line: 24
+expression: "ParseResult { input, result: &result }"
+---
+ParseResult(
+  input: "[[ -d /path/to/dir ]]",
+  result: Program(
+    complete_commands: [
+      CompoundList([
+        CompoundListItem(AndOrList(
+          first: Pipeline(
+            seq: [
+              ExtendedTest(ExtendedTestExprCommand(
+                expr: UnaryTest(FileExistsAndIsDir, Word(
+                  value: "/path/to/dir",
+                  loc: "[location]",
+                )),
+                loc: "[location]",
+              ), None),
+            ],
+          ),
+        ), Sequence),
+      ]),
+    ],
+  ),
+)

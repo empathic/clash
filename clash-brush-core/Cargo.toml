@@ -1,0 +1,83 @@
+[package]
+name = "clash-brush-core"
+description = "Reusable core of a POSIX/bash shell (used by brush-shell)"
+version = "0.4.0"
+authors = ["reuben olinsky"]
+categories = ["command-line-utilities", "development-tools"]
+edition.workspace = true
+rust-version.workspace = true
+keywords = ["cli", "shell", "sh", "bash", "script"]
+license = "MIT"
+repository = "https://github.com/reubeno/brush"
+
+[lib]
+bench = false
+
+[features]
+default = []
+serde = ["dep:serde", "brush-parser/serde", "rpds/serde", "chrono/serde"]
+experimental-parser = ["brush-parser/winnow-parser"]
+
+[dependencies]
+async-recursion = "1.1.1"
+async-trait = "0.1.89"
+brush-parser = { version = "^0.3.0", path = "../clash-brush-parser", package = "clash-brush-parser" }
+bon = "3.9.0"
+cached = "0.56.0"
+cfg-if = "1.0.4"
+chrono = "0.4.44"
+clap = { version = "4.5.57", features = ["derive", "wrap_help"] }
+color-print = "0.3.7"
+fancy-regex = "0.17.0"
+futures = "0.3.32"
+inherent = "1.0.13"
+itertools = "0.14.0"
+normalize-path = "0.2.1"
+rand = "0.10.0"
+rpds = "1.2.0"
+serde = { version = "1.0.228", optional = true, features = ["derive"] }
+strum = "0.28.0"
+strum_macros = "0.28.0"
+thiserror = "2.0.18"
+tracing = "0.1.44"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+tokio = { version = "1.49.0", features = ["io-util", "macros", "rt", "sync"] }
+
+[target.'cfg(any(unix, windows))'.dependencies]
+hostname = "0.4.2"
+tokio = { version = "1.49.0", features = [
+    "io-util",
+    "macros",
+    "process",
+    "rt",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+] }
+
+[target.'cfg(windows)'.dependencies]
+whoami = "2.1.1"
+
+[target.'cfg(unix)'.dependencies]
+command-fds = "0.3.2"
+libc = "0.2.180"
+nix = { version = "0.31.2", features = [
+    "fs",
+    "poll",
+    "process",
+    "resource",
+    "signal",
+    "term",
+    "user",
+] }
+terminfo = "0.9.0"
+uzers = "0.12.2"
+
+[target.wasm32-unknown-unknown.dependencies]
+getrandom = { version = "0.4.1", features = ["wasm_js"] }
+uuid = { version = "1.21.0", features = ["js"] }
+
+[dev-dependencies]
+anyhow = "1.0.102"
+pretty_assertions = { version = "1.4.1", features = ["unstable"] }

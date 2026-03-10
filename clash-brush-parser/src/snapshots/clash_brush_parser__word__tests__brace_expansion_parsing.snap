@@ -1,0 +1,17 @@
+---
+source: clash-brush-parser/src/word.rs
+assertion_line: 1336
+expression: "super::parse_brace_expansions(input,\n&options)?.ok_or_else(||\nanyhow::anyhow!(\"Expected brace expansion to be parsed successfully\"))?"
+---
+[
+  Text("x"),
+  Expr([
+    Child([
+      Text("a"),
+    ]),
+    Child([
+      Text("b"),
+    ]),
+  ]),
+  Text("y"),
+]

@@ -1,7 +1,8 @@
 [package]
 name = "claude_settings"
 version = "0.4.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "A library for reading and writing Claude Code settings on Unix-like systems"
 license.workspace = true
 repository.workspace = true

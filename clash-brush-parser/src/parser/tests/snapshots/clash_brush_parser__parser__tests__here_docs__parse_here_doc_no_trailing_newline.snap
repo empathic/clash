@@ -1,0 +1,39 @@
+---
+source: clash-brush-parser/src/parser/tests/here_docs.rs
+assertion_line: 28
+expression: "ParseResult { input, result: &result }"
+---
+ParseResult(
+  input: "cat <<EOF\nSomething\nEOF",
+  result: Program(
+    complete_commands: [
+      CompoundList([
+        CompoundListItem(AndOrList(
+          first: Pipeline(
+            seq: [
+              Simple(SimpleCommand(
+                word_or_name: Some(Word(
+                  value: "cat",
+                  loc: "[location]",
+                )),
+                suffix: Some(CommandSuffix([
+                  IoRedirect(HereDocument(None, IoHereDocument(
+                    requires_expansion: true,
+                    here_end: Word(
+                      value: "EOF",
+                      loc: "[location]",
+                    ),
+                    doc: Word(
+                      value: "Something\n",
+                      loc: "[location]",
+                    ),
+                  ))),
+                ])),
+              )),
+            ],
+          ),
+        ), Sequence),
+      ]),
+    ],
+  ),
+)

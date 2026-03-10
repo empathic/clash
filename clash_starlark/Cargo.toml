@@ -1,7 +1,8 @@
 [package]
 name = "clash_starlark"
 version = "0.4.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "Starlark policy evaluator for Clash — compiles .star files to JSON policy"
 license.workspace = true
 repository.workspace = true

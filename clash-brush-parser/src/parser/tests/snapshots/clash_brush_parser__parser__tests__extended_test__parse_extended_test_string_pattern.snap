@@ -1,0 +1,30 @@
+---
+source: clash-brush-parser/src/parser/tests/extended_test.rs
+assertion_line: 114
+expression: "ParseResult { input, result: &result }"
+---
+ParseResult(
+  input: "[[ \"$str\" == *pattern* ]]",
+  result: Program(
+    complete_commands: [
+      CompoundList([
+        CompoundListItem(AndOrList(
+          first: Pipeline(
+            seq: [
+              ExtendedTest(ExtendedTestExprCommand(
+                expr: BinaryTest(StringExactlyMatchesPattern, Word(
+                  value: "\"$str\"",
+                  loc: "[location]",
+                ), Word(
+                  value: "*pattern*",
+                  loc: "[location]",
+                )),
+                loc: "[location]",
+              ), None),
+            ],
+          ),
+        ), Sequence),
+      ]),
+    ],
+  ),
+)

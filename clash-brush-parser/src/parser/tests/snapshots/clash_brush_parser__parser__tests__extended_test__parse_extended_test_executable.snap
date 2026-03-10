@@ -1,0 +1,27 @@
+---
+source: clash-brush-parser/src/parser/tests/extended_test.rs
+assertion_line: 57
+expression: "ParseResult { input, result: &result }"
+---
+ParseResult(
+  input: "[[ -x file ]]",
+  result: Program(
+    complete_commands: [
+      CompoundList([
+        CompoundListItem(AndOrList(
+          first: Pipeline(
+            seq: [
+              ExtendedTest(ExtendedTestExprCommand(
+                expr: UnaryTest(FileExistsAndIsExecutable, Word(
+                  value: "file",
+                  loc: "[location]",
+                )),
+                loc: "[location]",
+              ), None),
+            ],
+          ),
+        ), Sequence),
+      ]),
+    ],
+  ),
+)
