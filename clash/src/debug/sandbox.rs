@@ -240,10 +240,13 @@ pub fn inspect(tool: &str, input: Option<&str>) -> Result<SandboxReport> {
 
 /// Compute effective capabilities for a set of notable paths.
 fn compute_notable_path_caps(policy: &SandboxPolicy, cwd: &str) -> Vec<(String, Cap)> {
-    let home = dirs::home_dir()
-        .map(|h| h.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "/home".into());
-    let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+    let resolver = crate::policy::path::PathResolver::from_env();
+    let home = if resolver.home().is_empty() {
+        "/home".to_string()
+    } else {
+        resolver.home().to_string()
+    };
+    let tmpdir = resolver.tmpdir().to_string();
 
     let mut paths = vec![
         (cwd.to_string(), "CWD"),

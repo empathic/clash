@@ -140,15 +140,12 @@ fn make_sandbox_hook(
         // $HOME and $TMPDIR are process-global; $PWD is resolved by sandbox
         // exec via its process cwd (which brush sets correctly).
         let mut resolved = sandbox.clone();
-        let home = dirs::home_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        let resolver = crate::policy::path::PathResolver::from_env();
         for rule in &mut resolved.rules {
             rule.path = rule
                 .path
-                .replace("$HOME", &home)
-                .replace("$TMPDIR", &tmpdir);
+                .replace("$HOME", resolver.home())
+                .replace("$TMPDIR", resolver.tmpdir());
         }
 
         if debug {

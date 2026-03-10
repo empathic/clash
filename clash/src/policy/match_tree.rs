@@ -551,12 +551,7 @@ impl QueryContext {
 
 /// Resolve a potentially relative path against CWD.
 fn resolve_relative_path(path: &str) -> String {
-    if path.starts_with('/') {
-        path.to_string()
-    } else {
-        let cwd = std::env::var("PWD").unwrap_or_default();
-        format!("{cwd}/{path}")
-    }
+    super::path::PathResolver::from_env().resolve_relative(path)
 }
 
 /// Extract the domain from a URL string.
