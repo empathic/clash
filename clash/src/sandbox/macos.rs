@@ -98,10 +98,20 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     // implicitly allow stat("/Users") or stat("/Users/eliot").
     let mut ancestors: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
-    // Process allow rules first, then deny rules override.
-    // For Subpath/Literal rules, resolve well-known symlinks
-    // (e.g., /var → /private/var, /tmp → /private/tmp on macOS) so that
-    // Seatbelt matches against the real filesystem path.
+    // Resolve all rule paths and collect ancestors, then sort by
+    // specificity before emitting.  Seatbelt uses last-match-wins, so
+    // we emit broadest rules first and most specific last — ensuring a
+    // specific allow on /Users/eliot overrides a broad deny on /Users.
+    struct ResolvedRule {
+        effect: RuleEffect,
+        caps: Cap,
+        path_match: PathMatch,
+        canonical: String,
+        resolved: String,
+    }
+
+    let mut resolved_rules: Vec<ResolvedRule> = Vec::with_capacity(policy.rules.len());
+
     for rule in &policy.rules {
         let resolved = SandboxPolicy::resolve_path(&rule.path, cwd);
         // Strip trailing slashes — Seatbelt's `subpath` filter requires
@@ -133,19 +143,45 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
             }
         }
 
+        resolved_rules.push(ResolvedRule {
+            effect: rule.effect,
+            caps: rule.caps,
+            path_match: rule.path_match,
+            canonical,
+            resolved,
+        });
+    }
+
+    // Sort by path depth (component count) ascending so broadest rules
+    // are emitted first.  Within the same depth, deny before allow so
+    // that a same-level allow wins via last-match-wins.
+    resolved_rules.sort_by(|a, b| {
+        let depth_a = a.canonical.matches('/').count();
+        let depth_b = b.canonical.matches('/').count();
+        depth_a.cmp(&depth_b).then_with(|| {
+            // Deny = 0 (first), Allow = 1 (last) — allow wins at same depth
+            let effect_ord = |e: &RuleEffect| match e {
+                RuleEffect::Deny => 0,
+                RuleEffect::Allow => 1,
+            };
+            effect_ord(&a.effect).cmp(&effect_ord(&b.effect))
+        })
+    });
+
+    for rule in &resolved_rules {
         match rule.effect {
             RuleEffect::Allow => {
-                emit_caps_for_path(&mut p, &canonical, rule.caps, rule.path_match);
+                emit_caps_for_path(&mut p, &rule.canonical, rule.caps, rule.path_match);
                 // Also emit for the non-canonical path if different, since
                 // Seatbelt may not resolve symlinks before matching.
-                if canonical != resolved {
-                    emit_caps_for_path(&mut p, &resolved, rule.caps, rule.path_match);
+                if rule.canonical != rule.resolved {
+                    emit_caps_for_path(&mut p, &rule.resolved, rule.caps, rule.path_match);
                 }
             }
             RuleEffect::Deny => {
-                emit_deny_for_path(&mut p, &canonical, rule.caps, rule.path_match);
-                if canonical != resolved {
-                    emit_deny_for_path(&mut p, &resolved, rule.caps, rule.path_match);
+                emit_deny_for_path(&mut p, &rule.canonical, rule.caps, rule.path_match);
+                if rule.canonical != rule.resolved {
+                    emit_deny_for_path(&mut p, &rule.resolved, rule.caps, rule.path_match);
                 }
             }
         }
@@ -306,6 +342,7 @@ fn emit_deny_for_path(profile: &mut String, path: &str, caps: Cap, path_match: P
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::sandbox_types::SandboxRule;
 
     // ── sbpl_escape ──────────────────────────────────────────────────
 
@@ -398,6 +435,130 @@ mod tests {
         assert!(
             profile.contains("(deny network*)"),
             "Localhost policy should deny all other network"
+        );
+    }
+
+    // ── Rule specificity ordering ─────────────────────────────────
+
+    #[test]
+    fn specific_allow_overrides_broad_deny() {
+        // Reproduces the real-world bug: deny on /Users shadowed allow
+        // on /Users/eliot because deny was emitted after allow.
+        let policy = SandboxPolicy {
+            default: Cap::EXECUTE,
+            rules: vec![
+                SandboxRule {
+                    effect: RuleEffect::Allow,
+                    caps: Cap::READ | Cap::WRITE,
+                    path: "/Users/eliot".into(),
+                    path_match: PathMatch::Subpath,
+                },
+                SandboxRule {
+                    effect: RuleEffect::Deny,
+                    caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE | Cap::EXECUTE,
+                    path: "/Users".into(),
+                    path_match: PathMatch::Subpath,
+                },
+            ],
+            network: NetworkPolicy::Deny,
+        };
+        let profile = compile_to_sbpl(&policy, "/tmp");
+
+        // The deny on /Users must appear BEFORE the allow on /Users/eliot
+        // so that Seatbelt's last-match-wins gives the specific allow priority.
+        let deny_pos = profile
+            .find("(deny file-read* (subpath \"/Users\"))")
+            .expect("should contain deny on /Users");
+        let allow_pos = profile
+            .find("(allow file-read* (subpath \"/Users/eliot\"))")
+            .expect("should contain allow on /Users/eliot");
+        assert!(
+            deny_pos < allow_pos,
+            "deny /Users (pos {deny_pos}) must come before allow /Users/eliot (pos {allow_pos})\nprofile:\n{profile}"
+        );
+    }
+
+    #[test]
+    fn deny_at_same_depth_loses_to_allow() {
+        // When allow and deny target the same path, allow should come last
+        // (and win) in the compiled profile.
+        let policy = SandboxPolicy {
+            default: Cap::empty() | Cap::EXECUTE,
+            rules: vec![
+                SandboxRule {
+                    effect: RuleEffect::Deny,
+                    caps: Cap::WRITE,
+                    path: "/data".into(),
+                    path_match: PathMatch::Subpath,
+                },
+                SandboxRule {
+                    effect: RuleEffect::Allow,
+                    caps: Cap::WRITE,
+                    path: "/data".into(),
+                    path_match: PathMatch::Subpath,
+                },
+            ],
+            network: NetworkPolicy::Deny,
+        };
+        let profile = compile_to_sbpl(&policy, "/tmp");
+        let deny_pos = profile
+            .find("(deny file-write* (subpath \"/data\"))")
+            .expect("should contain deny write on /data");
+        let allow_pos = profile
+            .find("(allow file-write* (subpath \"/data\"))")
+            .expect("should contain allow write on /data");
+        assert!(
+            deny_pos < allow_pos,
+            "deny should come before allow at same depth\nprofile:\n{profile}"
+        );
+    }
+
+    #[test]
+    fn three_level_specificity() {
+        // deny /Users → allow /Users/eliot → deny /Users/eliot/.ssh
+        let policy = SandboxPolicy {
+            default: Cap::EXECUTE,
+            rules: vec![
+                SandboxRule {
+                    effect: RuleEffect::Allow,
+                    caps: Cap::READ,
+                    path: "/Users/eliot".into(),
+                    path_match: PathMatch::Subpath,
+                },
+                SandboxRule {
+                    effect: RuleEffect::Deny,
+                    caps: Cap::READ,
+                    path: "/Users".into(),
+                    path_match: PathMatch::Subpath,
+                },
+                SandboxRule {
+                    effect: RuleEffect::Deny,
+                    caps: Cap::READ,
+                    path: "/Users/eliot/.ssh".into(),
+                    path_match: PathMatch::Subpath,
+                },
+            ],
+            network: NetworkPolicy::Deny,
+        };
+        let profile = compile_to_sbpl(&policy, "/tmp");
+
+        let deny_users = profile
+            .find("(deny file-read* (subpath \"/Users\"))")
+            .expect("deny /Users");
+        let allow_eliot = profile
+            .find("(allow file-read* (subpath \"/Users/eliot\"))")
+            .expect("allow /Users/eliot");
+        let deny_ssh = profile
+            .find("(deny file-read* (subpath \"/Users/eliot/.ssh\"))")
+            .expect("deny /Users/eliot/.ssh");
+
+        assert!(
+            deny_users < allow_eliot,
+            "deny /Users must come before allow /Users/eliot"
+        );
+        assert!(
+            allow_eliot < deny_ssh,
+            "allow /Users/eliot must come before deny /Users/eliot/.ssh"
         );
     }
 
