@@ -3,8 +3,6 @@ name: Deploy prod site
 on:
   push:
     branches: [main]
-    paths:
-      - "site/**"
 
 permissions:
   contents: read
