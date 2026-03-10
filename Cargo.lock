@@ -708,7 +708,7 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 
 [[package]]
 name = "clash"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "base64",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "clash-brush-core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-recursion",
@@ -867,7 +867,7 @@ dependencies = [
 
 [[package]]
 name = "clash_notify"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "mac-notification-sys",
  "notify-rust",
@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "clash_starlark"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "allocative",
  "anyhow",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "claude_settings"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "dirs",
@@ -906,7 +906,7 @@ dependencies = [
 
 [[package]]
 name = "clester"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "clap",
