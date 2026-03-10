@@ -56,7 +56,7 @@ pub fn run(
 
     let result = hotln::proxy(HOTLINE_PROXY_URL)
         .with_token(HOTLINE_PROXY_TOKEN)
-        .create_issue(&title, full_description.as_deref(), &system_info);
+        .create_issue(&title, full_description.as_deref(), &system_info, &[]);
 
     match result {
         Ok(url) => {

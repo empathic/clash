@@ -51,7 +51,7 @@ pub enum SandboxCmd {
 }
 
 /// Resolve `--cwd` to an absolute path.
-fn resolve_cwd(cwd: &str) -> Result<String> {
+pub(crate) fn resolve_cwd(cwd: &str) -> Result<String> {
     let path = std::path::Path::new(cwd);
     let abs = if path.is_absolute() {
         path.to_path_buf()

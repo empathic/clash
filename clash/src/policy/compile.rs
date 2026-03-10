@@ -67,6 +67,7 @@ pub fn compile_multi_level_to_tree(
         .map_err(|e| anyhow::anyhow!("{} policy: invalid JSON: {}", sorted[0].0.name(), e))?;
     let mut merged = CompiledPolicy {
         sandboxes: first.sandboxes,
+        default_sandbox: first.default_sandbox,
         tree: first.tree,
         default_effect: first.default_effect,
     };

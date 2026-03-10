@@ -4,7 +4,7 @@ clashbox = sandbox(
     name = "clash_box",
     default = deny,
     fs = [
-        home().child(".clash").allow(read = True),
+        home().child(".clash").recurse().allow(read = True),
     ],
     net = allow,
 )

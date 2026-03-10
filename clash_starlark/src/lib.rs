@@ -747,8 +747,8 @@ def main():
         let rules = sandbox["rules"].as_array().unwrap();
         // First rule should have path_match: literal
         assert_eq!(rules[0]["path_match"], "literal");
-        // Second rule should have path_match: subpath
-        assert_eq!(rules[1]["path_match"], "subpath");
+        // Second rule should have path_match: literal (cwd() without .recurse() is literal)
+        assert_eq!(rules[1]["path_match"], "literal");
     }
 
     #[test]

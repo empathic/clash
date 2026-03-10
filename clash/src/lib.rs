@@ -46,6 +46,7 @@ pub mod sandbox_fs_hints;
 pub mod schema;
 pub mod session_policy;
 pub mod settings;
+pub mod shell_cmd;
 pub mod style;
 pub mod tracing_init;
 pub mod version;

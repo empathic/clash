@@ -142,13 +142,32 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
 
     let levels = ClashSettings::available_policy_levels();
     if levels.is_empty() {
+        let diag = ClashSettings::diagnose_missing_policies();
         if json {
+            let details: Vec<serde_json::Value> = diag
+                .iter()
+                .map(|(level, path, reason)| {
+                    serde_json::json!({"level": level, "path": path, "reason": reason})
+                })
+                .collect();
             println!(
                 "{}",
-                serde_json::json!({"valid": false, "error": "no policy files found", "hint": "run `clash init` to create a policy"})
+                serde_json::json!({"valid": false, "error": "no policy files found", "hint": "run `clash init` to create a policy", "checked": details})
             );
         } else {
             eprintln!("{}: no policy files found", style::err_red_bold("error"));
+            eprintln!();
+            eprintln!("  Checked the following locations:");
+            for (level, path, reason) in &diag {
+                eprintln!(
+                    "    {} ({}): {} — {}",
+                    level,
+                    path,
+                    style::err_red_bold("✗"),
+                    reason
+                );
+            }
+            eprintln!();
             eprintln!(
                 "  {}: run {} to create a policy",
                 style::err_cyan_bold("hint"),

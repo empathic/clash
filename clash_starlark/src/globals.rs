@@ -89,6 +89,7 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] default: Option<&str>,
         #[starlark(require = named)] sandboxes: Option<Value<'v>>,
         #[starlark(require = named)] rules: Option<Value<'v>>,
+        #[starlark(require = named)] default_sandbox: Option<Value<'v>>,
     ) -> anyhow::Result<BasePolicyValue> {
         use serde_json::json;
 
@@ -124,13 +125,33 @@ fn register_globals(builder: &mut GlobalsBuilder) {
             }
         }
 
+        // Convert default_sandbox from Starlark dict to JSON
+        let default_sandbox_json = match default_sandbox {
+            Some(val) if !val.is_none() => {
+                let sb_json = starlark_to_json(val)?;
+                // Extract the sandbox name to reference it
+                if let Some(name) = sb_json.get("name").and_then(|n| n.as_str()) {
+                    Some(json!(name))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
         // Build the v5 policy document
-        let doc = json!({
+        let mut doc = json!({
             "schema_version": 5,
             "default_effect": default_effect,
             "sandboxes": sandbox_map,
             "tree": tree_nodes,
         });
+
+        if let Some(ds) = default_sandbox_json {
+            doc.as_object_mut()
+                .unwrap()
+                .insert("default_sandbox".to_string(), ds);
+        }
 
         Ok(BasePolicyValue {
             base_doc: Some(doc),

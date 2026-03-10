@@ -264,6 +264,9 @@ pub struct CompiledPolicy {
     /// Default effect when no rule matches.
     #[serde(default = "default_effect")]
     pub default_effect: Effect,
+    /// Name of the default sandbox (used by `clash shell` when no rule-specific sandbox matches).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_sandbox: Option<String>,
 }
 
 fn default_effect() -> Effect {
@@ -1239,6 +1242,7 @@ mod tests {
                 "missing".into(),
             ))))],
             default_effect: Effect::Deny,
+            default_sandbox: None,
         };
         let errors = policy.validate();
         assert_eq!(errors.len(), 1);
@@ -1262,6 +1266,7 @@ mod tests {
                 "cwd_access".into(),
             ))))],
             default_effect: Effect::Deny,
+            default_sandbox: None,
         };
         assert!(policy.validate().is_empty());
     }
@@ -1294,6 +1299,7 @@ mod tests {
                 },
             ],
             default_effect: Effect::Deny,
+            default_sandbox: None,
         };
 
         // git push → allow
@@ -1411,6 +1417,7 @@ mod tests {
                 }],
             }],
             default_effect: Effect::Deny,
+            default_sandbox: None,
         };
 
         // Plain command should match
@@ -1448,6 +1455,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Allow(None))],
             }],
             default_effect: Effect::Deny,
+            default_sandbox: None,
         };
         let json = serde_json::to_string_pretty(&policy).unwrap();
         let deserialized: CompiledPolicy = serde_json::from_str(&json).unwrap();

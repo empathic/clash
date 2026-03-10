@@ -129,6 +129,35 @@ pub enum Commands {
         all: bool,
     },
 
+    /// Run a bash-compatible shell with per-command sandbox enforcement
+    ///
+    /// Every external command is executed through its own sandbox profile,
+    /// looked up by binary name (e.g., `sandboxes["git"]`), falling back
+    /// to the default sandbox when no command-specific profile exists.
+    ///
+    /// Modes: interactive REPL (no args), command string (-c), or script file.
+    Shell {
+        /// Execute a command string and exit (like bash -c)
+        #[arg(short = 'c')]
+        command: Option<String>,
+
+        /// Working directory for sandbox path resolution
+        #[arg(long, default_value = ".")]
+        cwd: String,
+
+        /// Default sandbox name from the policy (used when no rule-specific sandbox matches)
+        #[arg(long)]
+        sandbox: Option<String>,
+
+        /// Print the sandbox policy matched for each command before execution
+        #[arg(long)]
+        debug: bool,
+
+        /// Script path and arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
     /// Apply sandbox restrictions and exec commands
     #[command(subcommand)]
     Sandbox(SandboxCmd),
