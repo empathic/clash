@@ -928,6 +928,36 @@ impl CompiledPolicy {
             }
         }
     }
+
+    /// Return platform-specific warnings for sandbox policies.
+    ///
+    /// These are non-fatal: the policy is valid but some rules behave
+    /// differently on certain platforms.
+    pub fn platform_warnings(&self) -> Vec<String> {
+        use crate::policy::sandbox_types::{NetworkPolicy, PathMatch};
+
+        let mut warnings = Vec::new();
+        for (name, sandbox) in &self.sandboxes {
+            for rule in &sandbox.rules {
+                if rule.path_match == PathMatch::Regex {
+                    warnings.push(format!(
+                        "sandbox '{}': regex path rule '{}' is not enforced on Linux \
+                         (Landlock cannot match regex paths)",
+                        name, rule.path,
+                    ));
+                }
+            }
+            if let NetworkPolicy::AllowDomains(domains) = &sandbox.network {
+                warnings.push(format!(
+                    "sandbox '{}': domain filtering ({}) is advisory on Linux \
+                     (relies on HTTP_PROXY which programs can bypass)",
+                    name,
+                    domains.join(", "),
+                ));
+            }
+        }
+        warnings
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1713,5 +1743,85 @@ mod tests {
         assert!(ctx.fs_op.is_none());
         assert!(ctx.fs_path.is_none());
         assert!(ctx.net_domain.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // platform_warnings tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn platform_warnings_regex_path() {
+        use crate::policy::sandbox_types::*;
+
+        let policy = CompiledPolicy {
+            sandboxes: HashMap::from([(
+                "dev".to_string(),
+                SandboxPolicy {
+                    default: Cap::READ | Cap::EXECUTE,
+                    rules: vec![SandboxRule {
+                        effect: RuleEffect::Allow,
+                        caps: Cap::WRITE,
+                        path: r"/tmp/build-\d+".to_string(),
+                        path_match: PathMatch::Regex,
+                    }],
+                    network: NetworkPolicy::Deny,
+                },
+            )]),
+            tree: vec![],
+            default_effect: Effect::Deny,
+            default_sandbox: None,
+        };
+        let warnings = policy.platform_warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("regex"));
+        assert!(warnings[0].contains("Linux"));
+    }
+
+    #[test]
+    fn platform_warnings_allow_domains() {
+        use crate::policy::sandbox_types::*;
+
+        let policy = CompiledPolicy {
+            sandboxes: HashMap::from([(
+                "net".to_string(),
+                SandboxPolicy {
+                    default: Cap::READ | Cap::EXECUTE,
+                    rules: vec![],
+                    network: NetworkPolicy::AllowDomains(vec!["github.com".to_string()]),
+                },
+            )]),
+            tree: vec![],
+            default_effect: Effect::Deny,
+            default_sandbox: None,
+        };
+        let warnings = policy.platform_warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("advisory"));
+        assert!(warnings[0].contains("Linux"));
+    }
+
+    #[test]
+    fn platform_warnings_none_for_clean_policy() {
+        use crate::policy::sandbox_types::*;
+
+        let policy = CompiledPolicy {
+            sandboxes: HashMap::from([(
+                "dev".to_string(),
+                SandboxPolicy {
+                    default: Cap::READ | Cap::EXECUTE,
+                    rules: vec![SandboxRule {
+                        effect: RuleEffect::Allow,
+                        caps: Cap::WRITE,
+                        path: "/tmp".to_string(),
+                        path_match: PathMatch::Subpath,
+                    }],
+                    network: NetworkPolicy::Deny,
+                },
+            )]),
+            tree: vec![],
+            default_effect: Effect::Deny,
+            default_sandbox: None,
+        };
+        assert!(policy.platform_warnings().is_empty());
     }
 }
