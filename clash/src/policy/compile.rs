@@ -148,4 +148,52 @@ mod tests {
         let policy = compile_policy(source).unwrap();
         assert_eq!(policy.tree.len(), 1);
     }
+
+    #[test]
+    fn compile_valid_sandbox_reference() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {
+                "dev": {
+                    "default": ["read", "execute"],
+                    "network": "deny"
+                }
+            },
+            "tree": [{
+                "condition": {
+                    "observe": "tool_name",
+                    "pattern": {"literal": {"literal": "Bash"}},
+                    "children": [{"decision": {"allow": "dev"}}]
+                }
+            }]
+        }"#;
+        let policy = compile_to_tree(source);
+        assert!(policy.is_ok(), "valid sandbox reference should compile");
+        let policy = policy.unwrap();
+        assert!(policy.sandboxes.contains_key("dev"));
+    }
+
+    #[test]
+    fn compile_undefined_sandbox_reference_fails() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {},
+            "tree": [{
+                "condition": {
+                    "observe": "tool_name",
+                    "pattern": {"literal": {"literal": "Bash"}},
+                    "children": [{"decision": {"allow": "nonexistent"}}]
+                }
+            }]
+        }"#;
+        let result = compile_to_tree(source);
+        assert!(result.is_err(), "undefined sandbox reference should fail");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("nonexistent"),
+            "error should mention the undefined sandbox name, got: {err}"
+        );
+    }
 }

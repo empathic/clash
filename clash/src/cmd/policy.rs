@@ -207,14 +207,19 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
 
         match crate::policy::compile::compile_to_tree(&source) {
             Ok(policy) => {
+                let warnings = policy.platform_warnings();
                 if json {
-                    results.push(serde_json::json!({
+                    let mut entry = serde_json::json!({
                         "level": level.to_string(),
                         "path": path.display().to_string(),
                         "valid": true,
                         "default": format!("{}", policy.default_effect),
                         "rule_count": policy.rule_count(),
-                    }));
+                    });
+                    if !warnings.is_empty() {
+                        entry["warnings"] = serde_json::json!(warnings);
+                    }
+                    results.push(entry);
                 } else {
                     println!(
                         "{} {} {}",
@@ -227,6 +232,13 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
                         style::effect(&policy.default_effect.to_string()),
                         policy.rule_count()
                     );
+                    for w in &warnings {
+                        eprintln!(
+                            "  {} {}",
+                            style::err_yellow("warning:"),
+                            w,
+                        );
+                    }
                 }
             }
             Err(e) => {
@@ -283,15 +295,20 @@ fn validate_single_file(path: &std::path::Path, json: bool) -> Result<()> {
 
     match crate::policy::compile::compile_to_tree(&source) {
         Ok(policy) => {
+            let warnings = policy.platform_warnings();
             if json {
+                let mut output = serde_json::json!({
+                    "valid": true,
+                    "path": path.display().to_string(),
+                    "default": format!("{}", policy.default_effect),
+                    "rule_count": policy.rule_count(),
+                });
+                if !warnings.is_empty() {
+                    output["warnings"] = serde_json::json!(warnings);
+                }
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "valid": true,
-                        "path": path.display().to_string(),
-                        "default": format!("{}", policy.default_effect),
-                        "rule_count": policy.rule_count(),
-                    }))?
+                    serde_json::to_string_pretty(&output)?
                 );
             } else {
                 println!("{} {}", style::green_bold("✓"), path.display());
@@ -300,6 +317,13 @@ fn validate_single_file(path: &std::path::Path, json: bool) -> Result<()> {
                     style::effect(&policy.default_effect.to_string()),
                     policy.rule_count()
                 );
+                for w in &warnings {
+                    eprintln!(
+                        "  {} {}",
+                        style::err_yellow("warning:"),
+                        w,
+                    );
+                }
             }
             Ok(())
         }
