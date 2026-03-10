@@ -44,9 +44,14 @@ fn register_globals(builder: &mut GlobalsBuilder) {
     fn _mt_condition<'v>(
         #[starlark(require = pos)] observe: Value<'v>,
         #[starlark(require = pos)] pattern: &MatchTreeNode,
+        #[starlark(require = named)] doc: Option<&str>,
     ) -> anyhow::Result<MatchTreeNode> {
         let observe_json = starlark_to_json(observe)?;
-        Ok(mt::mt_condition(observe_json, pattern.json.clone()))
+        Ok(mt::mt_condition_with_doc(
+            observe_json,
+            pattern.json.clone(),
+            doc.map(|s| s.to_string()),
+        ))
     }
 
     /// Convert a value to a matcher pattern (type dispatch in Rust).

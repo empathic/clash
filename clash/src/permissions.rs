@@ -650,6 +650,7 @@ mod tests {
             default: Cap::READ | Cap::EXECUTE,
             rules: vec![],
             network: NetworkPolicy::Deny,
+            doc: None,
         }
     }
 

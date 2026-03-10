@@ -72,10 +72,31 @@ pub fn compile_multi_level_to_tree(
         default_effect: first.default_effect,
     };
 
+    // Annotate root-level nodes from the first level with source provenance.
+    for node in &mut merged.tree {
+        if let Node::Condition {
+            source: source @ None,
+            ..
+        } = node
+        {
+            *source = Some(sorted[0].0.name().to_string());
+        }
+    }
+
     // Append rules from lower-precedence levels.
-    for (level, source) in &sorted[1..] {
-        let policy: CompiledPolicy = serde_json::from_str(source)
+    for (level, src) in &sorted[1..] {
+        let mut policy: CompiledPolicy = serde_json::from_str(src)
             .map_err(|e| anyhow::anyhow!("{} policy: invalid JSON: {}", level.name(), e))?;
+        // Annotate root-level nodes with source provenance.
+        for node in &mut policy.tree {
+            if let Node::Condition {
+                source: source @ None,
+                ..
+            } = node
+            {
+                *source = Some(level.name().to_string());
+            }
+        }
         merged.tree.extend(policy.tree);
         for (k, v) in policy.sandboxes {
             merged.sandboxes.entry(k).or_insert(v);

@@ -191,6 +191,10 @@ pub struct SandboxPolicy {
     /// Network access policy.
     #[serde(default)]
     pub network: NetworkPolicy,
+
+    /// Optional docstring describing this sandbox's purpose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
 }
 
 /// A single sandbox rule granting or revoking capabilities on a path.
@@ -208,6 +212,10 @@ pub struct SandboxRule {
     /// How the path is matched against the filesystem.
     #[serde(default)]
     pub path_match: PathMatch,
+
+    /// Optional docstring describing this rule's purpose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
 }
 
 /// How a sandbox rule's path is matched against the filesystem.
@@ -401,6 +409,7 @@ pub fn parse_sandbox_rule(s: &str) -> Result<SandboxRule, String> {
         caps,
         path,
         path_match: PathMatch::Subpath,
+        doc: None,
     })
 }
 
@@ -518,15 +527,18 @@ mod tests {
                     caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE,
                     path: "/project".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
                 SandboxRule {
                     effect: RuleEffect::Deny,
                     caps: Cap::WRITE | Cap::DELETE | Cap::CREATE,
                     path: "/project/.git".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
             ],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
 
         // Default path: read + execute
@@ -562,8 +574,10 @@ mod tests {
                 caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE,
                 path: "$PWD".into(),
                 path_match: PathMatch::Subpath,
+                doc: None,
             }],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
 
         let json = serde_json::to_string(&policy).unwrap();
@@ -638,8 +652,10 @@ mod tests {
                 caps: Cap::WRITE,
                 path: r"/project/.*\.rs$".into(),
                 path_match: PathMatch::Regex,
+                doc: None,
             }],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         let caps = policy.effective_caps("/project/src/main.rs", "/project");
         assert_eq!(caps, Cap::READ | Cap::WRITE);
@@ -658,8 +674,10 @@ mod tests {
                 caps: Cap::WRITE,
                 path: "/etc/hosts".into(),
                 path_match: PathMatch::Literal,
+                doc: None,
             }],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         // Exact match
         let caps = policy.effective_caps("/etc/hosts", "/ignored");
@@ -680,15 +698,18 @@ mod tests {
                     caps: Cap::WRITE | Cap::CREATE,
                     path: "/data".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
                 SandboxRule {
                     effect: RuleEffect::Deny,
                     caps: Cap::WRITE,
                     path: "/data".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
             ],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         // Deny write overrides allow write, but create stays
         let caps = policy.effective_caps("/data/file.txt", "/ignored");
@@ -705,21 +726,25 @@ mod tests {
                     caps: Cap::all(),
                     path: "/project".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
                 SandboxRule {
                     effect: RuleEffect::Deny,
                     caps: Cap::DELETE,
                     path: "/project/.git".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
                 SandboxRule {
                     effect: RuleEffect::Deny,
                     caps: Cap::WRITE | Cap::CREATE,
                     path: "/project/.git".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
             ],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         // In /project but outside .git: full caps
         let caps = policy.effective_caps("/project/src/lib.rs", "/project");
@@ -739,8 +764,10 @@ mod tests {
                 caps: Cap::WRITE,
                 path: "/specific/path".into(),
                 path_match: PathMatch::Subpath,
+                doc: None,
             }],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         // Path that matches no rules gets default
         let caps = policy.effective_caps("/unrelated/path", "/ignored");

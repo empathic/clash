@@ -338,6 +338,27 @@ tool(["Read", "Glob", "Grep"]).allow()
 tool("Read").sandbox(my_sandbox).allow()
 ```
 
+### Docstrings
+
+Annotate rules and sandboxes with `doc=` to explain *why* they exist. Docstrings persist through the compiled IR and appear in `clash status` output.
+
+```python
+# On rules
+exe("git", doc = "Version control").allow()
+tool("WebSearch", doc = "No external searches needed").deny()
+
+# On sandboxes
+sandbox(
+    name = "dev",
+    doc = "Development sandbox for project work",
+    default = deny,
+    fs = [
+        cwd().allow(read = True, write = True, doc = "Project source files"),
+        home().child(".ssh").allow(read = True, doc = "SSH keys for git auth"),
+    ],
+)
+```
+
 ---
 
 ## JSON IR Reference (Advanced)

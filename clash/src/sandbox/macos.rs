@@ -426,6 +426,7 @@ mod tests {
             default: Cap::READ | Cap::EXECUTE,
             rules: vec![],
             network: NetworkPolicy::Localhost,
+            doc: None,
         };
         let profile = compile_to_sbpl(&policy, "/tmp");
         assert!(
@@ -452,15 +453,18 @@ mod tests {
                     caps: Cap::READ | Cap::WRITE,
                     path: "/Users/eliot".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
                 SandboxRule {
                     effect: RuleEffect::Deny,
                     caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE | Cap::EXECUTE,
                     path: "/Users".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
             ],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         let profile = compile_to_sbpl(&policy, "/tmp");
 
@@ -490,15 +494,18 @@ mod tests {
                     caps: Cap::WRITE,
                     path: "/data".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
                 SandboxRule {
                     effect: RuleEffect::Allow,
                     caps: Cap::WRITE,
                     path: "/data".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
             ],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         let profile = compile_to_sbpl(&policy, "/tmp");
         let deny_pos = profile
@@ -524,21 +531,25 @@ mod tests {
                     caps: Cap::READ,
                     path: "/Users/eliot".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
                 SandboxRule {
                     effect: RuleEffect::Deny,
                     caps: Cap::READ,
                     path: "/Users".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
                 SandboxRule {
                     effect: RuleEffect::Deny,
                     caps: Cap::READ,
                     path: "/Users/eliot/.ssh".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
             ],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         let profile = compile_to_sbpl(&policy, "/tmp");
 
@@ -568,11 +579,13 @@ mod tests {
             default: Cap::READ | Cap::EXECUTE,
             rules: vec![],
             network: NetworkPolicy::Localhost,
+            doc: None,
         };
         let domains_policy = SandboxPolicy {
             default: Cap::READ | Cap::EXECUTE,
             rules: vec![],
             network: NetworkPolicy::AllowDomains(vec!["example.com".into()]),
+            doc: None,
         };
         let localhost_profile = compile_to_sbpl(&localhost_policy, "/tmp");
         let domains_profile = compile_to_sbpl(&domains_policy, "/tmp");

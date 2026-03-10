@@ -604,8 +604,10 @@ mod tests {
                 caps: Cap::all(),
                 path: "/project".into(),
                 path_match: PathMatch::Subpath,
+                doc: None,
             }],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         // Path outside /project → likely violation
         assert!(is_likely_sandbox_violation(
@@ -624,8 +626,10 @@ mod tests {
                 caps: Cap::all(),
                 path: "/project".into(),
                 path_match: PathMatch::Subpath,
+                doc: None,
             }],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         // Path inside /project with full caps → not a violation
         assert!(!is_likely_sandbox_violation(
@@ -641,6 +645,7 @@ mod tests {
             default: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::EXECUTE,
             rules: vec![],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         // Default grants write+create → not a violation even for foreign paths
         assert!(!is_likely_sandbox_violation(
@@ -697,6 +702,7 @@ mod tests {
             default: Cap::READ | Cap::EXECUTE,
             rules: vec![],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         let violations = vec![
             audit::SandboxViolation {
@@ -719,6 +725,7 @@ mod tests {
             default: Cap::READ | Cap::EXECUTE,
             rules: vec![],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         let violations = vec![
             audit::SandboxViolation {
@@ -787,6 +794,7 @@ mod tests {
             default: Cap::READ | Cap::EXECUTE,
             rules: vec![],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         let violations = vec![audit::SandboxViolation {
             operation: "file-read-data".into(),
@@ -807,6 +815,7 @@ mod tests {
             default: Cap::READ | Cap::EXECUTE,
             rules: vec![],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
         let violations = vec![audit::SandboxViolation {
             operation: "file-write-create".into(),
