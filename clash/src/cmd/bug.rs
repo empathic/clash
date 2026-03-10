@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use hotln::Attachment;
 use tracing::{Level, instrument};
 
 use crate::settings::ClashSettings;
@@ -13,8 +14,8 @@ pub fn run(
     include_logs: bool,
     include_trace: bool,
 ) -> Result<()> {
-    // Build the description by combining user text with optional config/logs.
     let mut desc_parts: Vec<String> = Vec::new();
+    let mut attachments: Vec<Attachment> = Vec::new();
 
     if let Some(ref d) = description {
         desc_parts.push(d.clone());
@@ -34,7 +35,11 @@ pub fn run(
     if include_logs {
         match read_recent_logs(100) {
             Ok(contents) => {
-                desc_parts.push(format!("### Debug Logs\n\n```\n{}\n```", contents));
+                attachments.push(Attachment {
+                    filename: "debug.log".into(),
+                    content_type: "text/plain".into(),
+                    data: contents.into_bytes(),
+                });
             }
             Err(e) => eprintln!("Warning: could not read logs: {}", e),
         }
@@ -46,7 +51,11 @@ pub fn run(
             .and_then(|doc| doc.to_json().context("serializing trace"))
         {
             Ok(json) => {
-                desc_parts.push(format!("### Session Trace\n\n```json\n{}\n```", json));
+                attachments.push(Attachment {
+                    filename: "trace.json".into(),
+                    content_type: "application/json".into(),
+                    data: json.into_bytes(),
+                });
             }
             Err(e) => eprintln!("Warning: could not export trace: {}", e),
         }
@@ -69,7 +78,12 @@ pub fn run(
 
     let result = hotln::proxy(HOTLINE_PROXY_URL)
         .with_token(HOTLINE_PROXY_TOKEN)
-        .create_issue(&title, full_description.as_deref(), &system_info, &[]);
+        .create_issue(
+            &title,
+            full_description.as_deref(),
+            &system_info,
+            &attachments,
+        );
 
     match result {
         Ok(url) => {
