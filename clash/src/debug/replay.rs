@@ -2,8 +2,8 @@
 
 use anyhow::{Context, Result};
 
+use crate::display;
 use crate::policy::ir::PolicyDecision;
-use crate::policy::sandbox_types::SandboxPolicy;
 use crate::settings::ClashSettings;
 use crate::style;
 
@@ -18,50 +18,9 @@ pub struct ReplayResult {
 impl ReplayResult {
     /// Render as human-readable text.
     pub fn format_human(&self) -> String {
-        let mut lines = Vec::new();
-
-        lines.push(style::bold("Input:").to_string());
-        lines.push(format!("  {}   {}", style::cyan("tool:"), self.tool_name));
-        lines.push(format!("  {}   {}", style::cyan("noun:"), self.noun));
+        let mut lines = display::format_tool_header("Input:", &self.tool_name, &self.noun);
         lines.push(String::new());
-
-        lines.push(format!(
-            "{} {}",
-            style::bold("Decision:"),
-            style::effect(&self.decision.effect.to_string())
-        ));
-        if let Some(ref reason) = self.decision.reason {
-            lines.push(format!("{} {}", style::bold("Reason:  "), reason));
-        }
-        lines.push(String::new());
-
-        if !self.decision.trace.matched_rules.is_empty() {
-            lines.push(style::header("Matched rules:").to_string());
-            for m in &self.decision.trace.matched_rules {
-                let eff = style::effect(&m.effect.to_string());
-                lines.push(format!("  [{}] {} -> {}", m.rule_index, m.description, eff));
-            }
-            lines.push(String::new());
-        }
-
-        if !self.decision.trace.skipped_rules.is_empty() {
-            lines.push(style::dim("Skipped rules:").to_string());
-            for s in &self.decision.trace.skipped_rules {
-                lines.push(format!(
-                    "  {} {} {}",
-                    style::dim(&format!("[{}]", s.rule_index)),
-                    style::dim(&s.description),
-                    style::dim(&format!("({})", s.reason))
-                ));
-            }
-            lines.push(String::new());
-        }
-
-        lines.push(format!(
-            "{} {}",
-            style::bold("Resolution:"),
-            style::effect(&self.decision.trace.final_resolution)
-        ));
+        lines.extend(display::format_decision(&self.decision));
 
         if let Some(ref sandbox) = self.decision.sandbox {
             lines.push(String::new());
@@ -75,7 +34,7 @@ impl ReplayResult {
                     .map(|x| x.0.clone())
                     .unwrap_or_default(),
             ));
-            format_sandbox_summary(&mut lines, sandbox);
+            lines.extend(display::format_sandbox_summary(sandbox));
         }
 
         if self.decision.effect == crate::policy::Effect::Deny {
@@ -92,28 +51,11 @@ impl ReplayResult {
 
     /// Render as JSON.
     pub fn format_json(&self) -> Result<String> {
-        let mut output = serde_json::json!({
-            "tool_name": self.tool_name,
-            "noun": self.noun,
-            "effect": format!("{}", self.decision.effect),
-            "reason": self.decision.reason,
-            "matched_rules": self.decision.trace.matched_rules.iter().map(|m| {
-                serde_json::json!({
-                    "rule_index": m.rule_index,
-                    "description": m.description,
-                    "effect": format!("{}", m.effect),
-                })
-            }).collect::<Vec<_>>(),
-            "skipped_rules": self.decision.trace.skipped_rules.iter().map(|s| {
-                serde_json::json!({
-                    "rule_index": s.rule_index,
-                    "description": s.description,
-                    "reason": s.reason,
-                })
-            }).collect::<Vec<_>>(),
-            "resolution": self.decision.trace.final_resolution,
-            "sandbox": self.decision.sandbox.as_ref().map(|s| serde_json::to_value(s).ok()),
-        });
+        let mut output = display::decision_to_json(&self.decision);
+
+        // replay JSON includes tool_name and noun at the top level
+        output["tool_name"] = serde_json::json!(self.tool_name);
+        output["noun"] = serde_json::json!(self.noun);
 
         if self.decision.effect == crate::policy::Effect::Deny {
             output["suggestion"] = serde_json::json!(self.suggest_allow_command());
@@ -214,27 +156,6 @@ fn build_tool_input(tool_name: &str, noun: &str) -> serde_json::Value {
         _ => "command",
     };
     serde_json::json!({ field: noun })
-}
-
-fn format_sandbox_summary(lines: &mut Vec<String>, sandbox: &SandboxPolicy) {
-    lines.push(format!(
-        "  {}: {}",
-        style::cyan("default"),
-        sandbox.default.display()
-    ));
-    lines.push(format!(
-        "  {}: {:?}",
-        style::cyan("network"),
-        sandbox.network
-    ));
-    for rule in &sandbox.rules {
-        lines.push(format!(
-            "  {:?} {} in {}",
-            rule.effect,
-            rule.caps.display(),
-            rule.path
-        ));
-    }
 }
 
 #[cfg(test)]
