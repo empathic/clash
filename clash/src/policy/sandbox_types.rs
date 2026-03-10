@@ -322,18 +322,16 @@ impl<'de> Deserialize<'de> for NetworkPolicy {
 
 impl SandboxPolicy {
     /// Resolve a path, expanding environment variables ($PWD, $HOME, $TMPDIR).
+    ///
+    /// This is a convenience wrapper around [`super::path::PathResolver`].
+    /// The `cwd` parameter is used for `$PWD`; `$HOME` and `$TMPDIR` are
+    /// read from the current process environment.
     pub fn resolve_path(path: &str, cwd: &str) -> String {
-        path.replace("$PWD", cwd)
-            .replace(
-                "$HOME",
-                &dirs::home_dir()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            )
-            .replace(
-                "$TMPDIR",
-                &std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into()),
-            )
+        let home = dirs::home_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+        super::path::PathResolver::new(cwd, home, tmpdir).resolve_env_vars(path)
     }
 
     /// Compute the effective capabilities for a given path by evaluating all rules.

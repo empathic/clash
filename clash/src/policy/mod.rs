@@ -7,6 +7,7 @@ pub mod compile;
 pub mod error;
 pub mod ir;
 pub mod match_tree;
+pub mod path;
 pub mod sandbox_types;
 
 pub use compile::compile_multi_level_to_tree;
