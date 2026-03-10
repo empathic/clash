@@ -291,10 +291,18 @@ impl ClashSettings {
                             results.push((level.name().to_string(), path_str, "ok".to_string()));
                         }
                         Ok(_) => {
-                            results.push((level.name().to_string(), path_str, "path exists but is not a file".to_string()));
+                            results.push((
+                                level.name().to_string(),
+                                path_str,
+                                "path exists but is not a file".to_string(),
+                            ));
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                            results.push((level.name().to_string(), path_str, "file does not exist".to_string()));
+                            results.push((
+                                level.name().to_string(),
+                                path_str,
+                                "file does not exist".to_string(),
+                            ));
                         }
                         Err(e) => {
                             results.push((level.name().to_string(), path_str, format!("{e}")));
@@ -758,10 +766,10 @@ mod test {
 
     #[test]
     fn load_missing_file_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent-policy.star");
         let mut settings = ClashSettings::default();
-        let path = std::path::Path::new("/tmp/clash-test-nonexistent-policy.star");
-        let _ = std::fs::remove_file(path);
-        let result = settings.load_policy_from_path(path);
+        let result = settings.load_policy_from_path(&path);
         assert!(!result);
         assert!(
             settings.policy_error.is_none(),
