@@ -1999,11 +1999,6 @@ version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "283aa3dd76210bde149b6f99c2ad5616ee8bdd37b640586f030c21b57592a6eb"
 dependencies = [
-name = "hotln"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "283aa3dd76210bde149b6f99c2ad5616ee8bdd37b640586f030c21b57592a6eb"
-dependencies = [
  "base64",
  "serde_json",
  "thiserror 2.0.18",

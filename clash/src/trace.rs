@@ -130,8 +130,7 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
 
     if !entries.is_empty() {
         // Build a temporary conversation from the new entries and derive Steps.
-        let mut conversation =
-            toolpath_claude::Conversation::new(meta.session_id.clone());
+        let mut conversation = toolpath_claude::Conversation::new(meta.session_id.clone());
         for entry in entries {
             conversation.add_entry(entry);
         }
@@ -188,14 +187,17 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
         let tool_label = dec.tool_name.as_deref().unwrap_or("tool");
         let intent = format!("{} {} use", dec.effect, tool_label);
 
-        let mut step = v1::Step::new(&step_id, "agent:clash-policy", &timestamp)
-            .with_intent(&intent);
+        let mut step =
+            v1::Step::new(&step_id, "agent:clash-policy", &timestamp).with_intent(&intent);
         if let Some(ref pid) = parent_id {
             step = step.with_parent(pid);
         }
 
         let mut extra = HashMap::new();
-        extra.insert("tool_use_id".to_string(), serde_json::json!(dec.tool_use_id));
+        extra.insert(
+            "tool_use_id".to_string(),
+            serde_json::json!(dec.tool_use_id),
+        );
         if let Some(ref name) = dec.tool_name {
             extra.insert("tool_name".to_string(), serde_json::json!(name));
         }
@@ -903,13 +905,19 @@ mod tests {
 
         // Step 0: user message
         assert_eq!(path.steps[0].step.actor, "human:user");
-        let s0 = &path.steps[0].change[&artifact_key].structural.as_ref().unwrap();
+        let s0 = &path.steps[0].change[&artifact_key]
+            .structural
+            .as_ref()
+            .unwrap();
         assert_eq!(s0.change_type, "conversation.append");
         assert_eq!(s0.extra["text"], "List files and read README");
 
         // Step 1: assistant tool_use (Bash)
         assert!(path.steps[1].step.actor.starts_with("agent:"));
-        let s1 = &path.steps[1].change[&artifact_key].structural.as_ref().unwrap();
+        let s1 = &path.steps[1].change[&artifact_key]
+            .structural
+            .as_ref()
+            .unwrap();
         assert_eq!(s1.extra["tool_uses"][0], "Bash");
 
         // Step 2: policy evaluation for Bash — interleaved right after the tool use
@@ -927,7 +935,10 @@ mod tests {
 
         // Step 3: assistant tool_use (Read)
         assert!(path.steps[3].step.actor.starts_with("agent:"));
-        let s3 = &path.steps[3].change[&artifact_key].structural.as_ref().unwrap();
+        let s3 = &path.steps[3].change[&artifact_key]
+            .structural
+            .as_ref()
+            .unwrap();
         assert_eq!(s3.extra["tool_uses"][0], "Read");
 
         // Step 4: policy evaluation for Read
@@ -945,24 +956,45 @@ mod tests {
 
         // Step 5: final assistant response
         assert!(path.steps[5].step.actor.starts_with("agent:"));
-        let s5 = &path.steps[5].change[&artifact_key].structural.as_ref().unwrap();
-        assert_eq!(s5.extra["text"], "Here are your files and the README content.");
+        let s5 = &path.steps[5].change[&artifact_key]
+            .structural
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            s5.extra["text"],
+            "Here are your files and the README content."
+        );
 
         // Verify parent chains.
         // Step 0: no parent (first step of first sync).
         assert!(path.steps[0].step.parents.is_empty());
         // Step 1: parents to step 0 (within same derive batch).
-        assert_eq!(path.steps[1].step.parents, vec![path.steps[0].step.id.clone()]);
+        assert_eq!(
+            path.steps[1].step.parents,
+            vec![path.steps[0].step.id.clone()]
+        );
         // Step 2 (policy): parents to step 1 (the tool_use it evaluated).
-        assert_eq!(path.steps[2].step.parents, vec![path.steps[1].step.id.clone()]);
+        assert_eq!(
+            path.steps[2].step.parents,
+            vec![path.steps[1].step.id.clone()]
+        );
         // Step 3: from a later sync, chains to the previous sync's last step (policy step 2).
-        assert_eq!(path.steps[3].step.parents, vec![path.steps[2].step.id.clone()]);
+        assert_eq!(
+            path.steps[3].step.parents,
+            vec![path.steps[2].step.id.clone()]
+        );
         // Step 4 (policy): parents to step 3 (the tool_use it evaluated).
-        assert_eq!(path.steps[4].step.parents, vec![path.steps[3].step.id.clone()]);
+        assert_eq!(
+            path.steps[4].step.parents,
+            vec![path.steps[3].step.id.clone()]
+        );
 
         // Verify round-trip through JSON.
         let json = doc.to_json().unwrap();
-        assert!(!json.contains("convo_byte_offset"), "no internal state leaked");
+        assert!(
+            !json.contains("convo_byte_offset"),
+            "no internal state leaked"
+        );
         let rt = v1::Document::from_json(&json).unwrap();
         assert!(matches!(rt, v1::Document::Path(_)));
 
