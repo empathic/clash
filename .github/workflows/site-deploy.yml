@@ -1,13 +1,14 @@
 name: Deploy prod site 
-permissions:
-  contents: read
-  pull-requests: write
 
 on:
   push:
     branches: [main]
     paths:
       - "site/**"
+
+permissions:
+  contents: read
+
 jobs: 
   publish-stite:
     runs-on: ubuntu-latest
