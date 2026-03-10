@@ -1,6 +1,6 @@
 [package]
 name = "clash_starlark"
-version = "0.3.6"
+version = "0.4.0"
 edition = "2024"
 description = "Starlark policy evaluator for Clash — compiles .star files to JSON policy"
 license.workspace = true
