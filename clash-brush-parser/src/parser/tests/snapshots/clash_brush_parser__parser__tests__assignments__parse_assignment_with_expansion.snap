@@ -1,0 +1,35 @@
+---
+source: clash-brush-parser/src/parser/tests/assignments.rs
+assertion_line: 57
+expression: "ParseResult { input, result: &result }"
+---
+ParseResult(
+  input: "x=$HOME/bin",
+  result: Program(
+    complete_commands: [
+      CompoundList([
+        CompoundListItem(AndOrList(
+          first: Pipeline(
+            seq: [
+              Simple(SimpleCommand(
+                prefix: Some(CommandPrefix([
+                  AssignmentWord(Assignment(
+                    name: VariableName("x"),
+                    value: Scalar(Word(
+                      value: "$HOME/bin",
+                      loc: "[location]",
+                    )),
+                    loc: "[location]",
+                  ), Word(
+                    value: "x=$HOME/bin",
+                    loc: "[location]",
+                  )),
+                ])),
+              )),
+            ],
+          ),
+        ), Sequence),
+      ]),
+    ],
+  ),
+)

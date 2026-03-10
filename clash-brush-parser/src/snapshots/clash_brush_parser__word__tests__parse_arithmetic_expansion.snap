@@ -1,0 +1,17 @@
+---
+source: clash-brush-parser/src/word.rs
+assertion_line: 1286
+expression: "test_parse(\"$((0))\")?"
+---
+ParseTestResults(
+  input: "$((0))",
+  result: [
+    WordPieceWithSource(
+      piece: ArithmeticExpression(UnexpandedArithmeticExpr(
+        value: "0",
+      )),
+      start_index: 0,
+      end_index: 6,
+    ),
+  ],
+)

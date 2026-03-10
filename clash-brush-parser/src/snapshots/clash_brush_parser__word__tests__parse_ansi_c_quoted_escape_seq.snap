@@ -1,0 +1,15 @@
+---
+source: clash-brush-parser/src/word.rs
+assertion_line: 1201
+expression: "test_parse(r\"$'\\\\'\")?"
+---
+ParseTestResults(
+  input: "$\'\\\\\'",
+  result: [
+    WordPieceWithSource(
+      piece: AnsiCQuotedText("\\\\"),
+      start_index: 0,
+      end_index: 5,
+    ),
+  ],
+)

@@ -1,0 +1,22 @@
+---
+source: clash-brush-parser/src/tokenizer.rs
+assertion_line: 1629
+expression: "test_tokenizer(\"$x\")?"
+---
+TokenizerResult(
+  input: "$x",
+  result: [
+    Word("$x", SourceSpan(
+      start: SourcePosition(
+        index: 0,
+        line: 1,
+        column: 1,
+      ),
+      end: SourcePosition(
+        index: 2,
+        line: 1,
+        column: 3,
+      ),
+    )),
+  ],
+)

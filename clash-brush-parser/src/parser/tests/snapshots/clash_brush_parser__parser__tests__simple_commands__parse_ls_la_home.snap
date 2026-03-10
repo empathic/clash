@@ -1,0 +1,36 @@
+---
+source: clash-brush-parser/src/parser/tests/simple_commands.rs
+assertion_line: 66
+expression: "ParseResult { input, result: &result }"
+---
+ParseResult(
+  input: "ls -la /home",
+  result: Program(
+    complete_commands: [
+      CompoundList([
+        CompoundListItem(AndOrList(
+          first: Pipeline(
+            seq: [
+              Simple(SimpleCommand(
+                word_or_name: Some(Word(
+                  value: "ls",
+                  loc: "[location]",
+                )),
+                suffix: Some(CommandSuffix([
+                  Word(Word(
+                    value: "-la",
+                    loc: "[location]",
+                  )),
+                  Word(Word(
+                    value: "/home",
+                    loc: "[location]",
+                  )),
+                ])),
+              )),
+            ],
+          ),
+        ), Sequence),
+      ]),
+    ],
+  ),
+)

@@ -1,0 +1,30 @@
+---
+source: clash-brush-parser/src/parser/tests/extended_test.rs
+assertion_line: 241
+expression: "ParseResult { input, result: &result }"
+---
+ParseResult(
+  input: "[[ 3 -lt 5 ]]",
+  result: Program(
+    complete_commands: [
+      CompoundList([
+        CompoundListItem(AndOrList(
+          first: Pipeline(
+            seq: [
+              ExtendedTest(ExtendedTestExprCommand(
+                expr: BinaryTest(ArithmeticLessThan, Word(
+                  value: "3",
+                  loc: "[location]",
+                ), Word(
+                  value: "5",
+                  loc: "[location]",
+                )),
+                loc: "[location]",
+              ), None),
+            ],
+          ),
+        ), Sequence),
+      ]),
+    ],
+  ),
+)

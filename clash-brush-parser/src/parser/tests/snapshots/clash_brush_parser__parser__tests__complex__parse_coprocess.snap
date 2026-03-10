@@ -1,0 +1,32 @@
+---
+source: clash-brush-parser/src/parser/tests/complex.rs
+assertion_line: 168
+expression: "ParseResult { input, result: &result }"
+---
+ParseResult(
+  input: "coproc cat",
+  result: Program(
+    complete_commands: [
+      CompoundList([
+        CompoundListItem(AndOrList(
+          first: Pipeline(
+            seq: [
+              Simple(SimpleCommand(
+                word_or_name: Some(Word(
+                  value: "coproc",
+                  loc: "[location]",
+                )),
+                suffix: Some(CommandSuffix([
+                  Word(Word(
+                    value: "cat",
+                    loc: "[location]",
+                  )),
+                ])),
+              )),
+            ],
+          ),
+        ), Sequence),
+      ]),
+    ],
+  ),
+)

@@ -5,10 +5,16 @@ members = [
     "claude_settings",
     "clash_starlark",
     "clester",
+    "clash-brush-parser",
+    "clash-brush-core",
+    "clash-brush-builtins",
+    "clash-brush-interactive",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
+edition = "2024"
+rust-version = "1.85"
 license = "Apache-2.0"
 repository = "https://github.com/empathic/clash"
 homepage = "https://github.com/empathic/clash"
@@ -42,6 +48,12 @@ tracing-subscriber = { version = "0.3.22", features = [
 clash_notify = { path = "clash_notify", version = "0.4.0" }
 clash_starlark = { path = "clash_starlark", version = "0.4.0" }
 claude_settings = { path = "claude_settings", version = "0.4.0" }
+clash-brush-parser = { path = "clash-brush-parser", version = "0.3.0" }
+clash-brush-core = { path = "clash-brush-core", version = "0.4.0" }
+clash-brush-builtins = { path = "clash-brush-builtins", version = "0.1.0" }
+clash-brush-interactive = { path = "clash-brush-interactive", version = "0.3.0", features = [
+    "basic",
+] }
 
 starlark = "0.13"
 
@@ -85,10 +97,6 @@ similar = "2"
 
 nucleo-matcher = "0.3"
 which = "7"
-brush-parser = { git = "https://github.com/eliothedeman/brush", branch = "empathic/external-command-hook" }
-brush-core = { git = "https://github.com/eliothedeman/brush", branch = "empathic/external-command-hook" }
-brush-builtins = { git = "https://github.com/eliothedeman/brush", branch = "empathic/external-command-hook" }
-brush-interactive = { git = "https://github.com/eliothedeman/brush", branch = "empathic/external-command-hook", features = ["basic"] }
 
 # Dev dependencies
 tempfile = "3"

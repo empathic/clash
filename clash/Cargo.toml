@@ -1,7 +1,8 @@
 [package]
 name = "clash"
 version = "0.4.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "Command Line Agent Safety Harness — permission policies for coding agents"
 license.workspace = true
 repository.workspace = true
@@ -47,10 +48,10 @@ tar = { workspace = true }
 clash_notify = { workspace = true }
 clash_starlark = { workspace = true }
 claude_settings = { workspace = true }
-brush-parser = { workspace = true }
-brush-builtins = { workspace = true }
-brush-core = { workspace = true }
-brush-interactive = { workspace = true }
+clash-brush-parser = { workspace = true }
+clash-brush-builtins = { workspace = true }
+clash-brush-core = { workspace = true }
+clash-brush-interactive = { workspace = true }
 
 [features]
 default = []

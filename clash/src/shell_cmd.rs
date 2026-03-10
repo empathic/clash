@@ -91,7 +91,7 @@ fn make_sandbox_hook(
     policy: Arc<CompiledPolicy>,
     default_sandbox: Option<SandboxPolicy>,
     debug: bool,
-) -> brush_core::ExternalCommandHook {
+) -> clash_brush_core::ExternalCommandHook {
     Arc::new(move |executable_path: &str, args: &[String]| {
         // Don't wrap shell builtins — they must run in the shell process.
         let basename = executable_path
@@ -241,9 +241,9 @@ pub fn run_shell(
 /// Register the standard set of bash builtins (cd, export, source, etc.)
 /// into a shell instance. brush-core doesn't include builtins by default;
 /// they live in the separate brush-builtins crate.
-fn register_builtins(shell: &mut brush_core::Shell) {
+fn register_builtins(shell: &mut clash_brush_core::Shell) {
     for (name, registration) in
-        brush_builtins::default_builtins(brush_builtins::BuiltinSet::BashMode)
+        clash_brush_builtins::default_builtins(clash_brush_builtins::BuiltinSet::BashMode)
     {
         shell.register_builtin(&name, registration);
     }
@@ -253,16 +253,16 @@ fn register_builtins(shell: &mut brush_core::Shell) {
 async fn run_command_string(
     command: &str,
     cwd: &str,
-    hook: brush_core::ExternalCommandHook,
+    hook: clash_brush_core::ExternalCommandHook,
 ) -> Result<()> {
     info!(command = %command, "executing command string with sandbox hook");
 
-    let mut shell = brush_core::Shell::builder()
+    let mut shell = clash_brush_core::Shell::builder()
         .command_string_mode(true)
         .working_dir(std::path::PathBuf::from(cwd))
         .external_command_hook(hook)
-        .profile(brush_core::ProfileLoadBehavior::Skip)
-        .rc(brush_core::RcLoadBehavior::Skip)
+        .profile(clash_brush_core::ProfileLoadBehavior::Skip)
+        .rc(clash_brush_core::RcLoadBehavior::Skip)
         .build()
         .await
         .map_err(|e| anyhow::anyhow!("failed to create shell: {e}"))?;
@@ -270,7 +270,7 @@ async fn run_command_string(
     register_builtins(&mut shell);
 
     let params = shell.default_exec_params();
-    let source_info = brush_core::SourceInfo::from("clash-shell");
+    let source_info = clash_brush_core::SourceInfo::from("clash-shell");
 
     let result = shell
         .run_string(command, &source_info, &params)
@@ -287,7 +287,7 @@ async fn run_command_string(
 async fn run_script(
     script_args: &[String],
     cwd: &str,
-    hook: brush_core::ExternalCommandHook,
+    hook: clash_brush_core::ExternalCommandHook,
 ) -> Result<()> {
     let script_path = &script_args[0];
     info!(script = %script_path, "executing script with sandbox hook");
@@ -298,11 +298,11 @@ async fn run_script(
         vec![]
     };
 
-    let mut shell = brush_core::Shell::builder()
+    let mut shell = clash_brush_core::Shell::builder()
         .working_dir(std::path::PathBuf::from(cwd))
         .external_command_hook(hook)
-        .profile(brush_core::ProfileLoadBehavior::Skip)
-        .rc(brush_core::RcLoadBehavior::Skip)
+        .profile(clash_brush_core::ProfileLoadBehavior::Skip)
+        .rc(clash_brush_core::RcLoadBehavior::Skip)
         .build()
         .await
         .map_err(|e| anyhow::anyhow!("failed to create shell: {e}"))?;
@@ -321,16 +321,16 @@ async fn run_script(
 }
 
 /// Run an interactive shell REPL (`clash shell`).
-async fn run_interactive(cwd: &str, hook: brush_core::ExternalCommandHook) -> Result<()> {
+async fn run_interactive(cwd: &str, hook: clash_brush_core::ExternalCommandHook) -> Result<()> {
     info!("starting interactive shell with sandbox hook");
 
-    let mut shell = brush_core::Shell::builder()
+    let mut shell = clash_brush_core::Shell::builder()
         .interactive(true)
         .working_dir(std::path::PathBuf::from(cwd))
         .external_command_hook(hook)
         .shell_name("clash-shell".to_string())
-        .profile(brush_core::ProfileLoadBehavior::Skip)
-        .rc(brush_core::RcLoadBehavior::Skip)
+        .profile(clash_brush_core::ProfileLoadBehavior::Skip)
+        .rc(clash_brush_core::RcLoadBehavior::Skip)
         .build()
         .await
         .map_err(|e| anyhow::anyhow!("failed to create shell: {e}"))?;
@@ -339,12 +339,12 @@ async fn run_interactive(cwd: &str, hook: brush_core::ExternalCommandHook) -> Re
 
     let shell_ref = std::sync::Arc::new(tokio::sync::Mutex::new(shell));
 
-    let mut input = brush_interactive::BasicInputBackend::default();
+    let mut input = clash_brush_interactive::BasicInputBackend::default();
 
-    let options = brush_interactive::InteractiveOptions::default();
+    let options = clash_brush_interactive::InteractiveOptions::default();
 
     let mut interactive =
-        brush_interactive::InteractiveShell::new(&shell_ref, &mut input, &options)
+        clash_brush_interactive::InteractiveShell::new(&shell_ref, &mut input, &options)
             .map_err(|e| anyhow::anyhow!("failed to create interactive shell: {e}"))?;
 
     interactive
@@ -381,7 +381,7 @@ def main():
         ))
     }
 
-    fn test_hook() -> brush_core::ExternalCommandHook {
+    fn test_hook() -> clash_brush_core::ExternalCommandHook {
         make_sandbox_hook("/usr/bin/clash".to_string(), test_policy(), None, false)
     }
 

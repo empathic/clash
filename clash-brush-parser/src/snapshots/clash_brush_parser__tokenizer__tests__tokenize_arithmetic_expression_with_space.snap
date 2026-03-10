@@ -1,0 +1,22 @@
+---
+source: clash-brush-parser/src/tokenizer.rs
+assertion_line: 1608
+expression: "test_tokenizer(\"$(( 1 ))\")?"
+---
+TokenizerResult(
+  input: "$(( 1 ))",
+  result: [
+    Word("$(( 1 ))", SourceSpan(
+      start: SourcePosition(
+        index: 0,
+        line: 1,
+        column: 1,
+      ),
+      end: SourcePosition(
+        index: 8,
+        line: 1,
+        column: 9,
+      ),
+    )),
+  ],
+)
