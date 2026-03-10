@@ -26,6 +26,9 @@ fn run_export(session: Option<String>) -> Result<()> {
         None => ClashSettings::active_session_id()?,
     };
 
+    // Sync before export to pick up any new conversation entries.
+    crate::trace::sync_trace(&session_id, None).context("syncing trace before export")?;
+
     let doc = crate::trace::export_trace(&session_id)?;
     let json = doc.to_json().context("serializing trace")?;
     println!("{json}");
