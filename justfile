@@ -83,7 +83,7 @@ release VERSION:
     tag="v${version}"
     branch="release/${tag}"
 
-    # Ensure we're on a clean working tree
+    # Ensure were on a clean working tree
     if ! git diff --quiet || ! git diff --cached --quiet; then
         echo "Error: working tree is not clean" >&2
         exit 1
@@ -96,7 +96,7 @@ release VERSION:
     old_version=$(grep -m1 '^version = ' clash/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
     echo "Bumping ${old_version} → ${version}"
 
-    for toml in clash/Cargo.toml clash_notify/Cargo.toml claude_settings/Cargo.toml clash_starlark/Cargo.toml clester/Cargo.toml; do
+    for toml in **/Cargo.toml; do
         sed -i '' "s/^version = \"${old_version}\"/version = \"${version}\"/" "$toml"
     done
 
