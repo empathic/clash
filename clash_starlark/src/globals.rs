@@ -148,7 +148,9 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         });
 
         if let Some(ds) = default_sandbox_json {
-            doc.as_object_mut().unwrap().insert("default_sandbox".to_string(), ds);
+            doc.as_object_mut()
+                .unwrap()
+                .insert("default_sandbox".to_string(), ds);
         }
 
         Ok(BasePolicyValue {

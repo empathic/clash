@@ -23,12 +23,67 @@ use crate::settings::ClashSettings;
 /// and wraps it with the appropriate sandbox (same as Claude's Bash tool).
 /// Shell builtins that should never be wrapped — they must run in-process.
 const SHELL_BUILTINS: &[&str] = &[
-    ".", ":", "[", "alias", "bg", "bind", "break", "builtin", "caller", "cd", "command",
-    "compgen", "complete", "compopt", "continue", "declare", "dirs", "disown", "echo", "enable",
-    "eval", "exec", "exit", "export", "false", "fc", "fg", "getopts", "hash", "help", "history",
-    "jobs", "kill", "let", "local", "logout", "mapfile", "popd", "printf", "pushd", "pwd", "read",
-    "readarray", "readonly", "return", "set", "shift", "shopt", "source", "suspend", "test",
-    "times", "trap", "true", "type", "typeset", "ulimit", "umask", "unalias", "unset", "wait",
+    ".",
+    ":",
+    "[",
+    "alias",
+    "bg",
+    "bind",
+    "break",
+    "builtin",
+    "caller",
+    "cd",
+    "command",
+    "compgen",
+    "complete",
+    "compopt",
+    "continue",
+    "declare",
+    "dirs",
+    "disown",
+    "echo",
+    "enable",
+    "eval",
+    "exec",
+    "exit",
+    "export",
+    "false",
+    "fc",
+    "fg",
+    "getopts",
+    "hash",
+    "help",
+    "history",
+    "jobs",
+    "kill",
+    "let",
+    "local",
+    "logout",
+    "mapfile",
+    "popd",
+    "printf",
+    "pushd",
+    "pwd",
+    "read",
+    "readarray",
+    "readonly",
+    "return",
+    "set",
+    "shift",
+    "shopt",
+    "source",
+    "suspend",
+    "test",
+    "times",
+    "trap",
+    "true",
+    "type",
+    "typeset",
+    "ulimit",
+    "umask",
+    "unalias",
+    "unset",
+    "wait",
 ];
 
 fn make_sandbox_hook(
@@ -39,7 +94,10 @@ fn make_sandbox_hook(
 ) -> brush_core::ExternalCommandHook {
     Arc::new(move |executable_path: &str, args: &[String]| {
         // Don't wrap shell builtins — they must run in the shell process.
-        let basename = executable_path.rsplit('/').next().unwrap_or(executable_path);
+        let basename = executable_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(executable_path);
         if SHELL_BUILTINS.contains(&basename) {
             return None;
         }
@@ -87,11 +145,17 @@ fn make_sandbox_hook(
             .unwrap_or_default();
         let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
         for rule in &mut resolved.rules {
-            rule.path = rule.path.replace("$HOME", &home).replace("$TMPDIR", &tmpdir);
+            rule.path = rule
+                .path
+                .replace("$HOME", &home)
+                .replace("$TMPDIR", &tmpdir);
         }
 
         if debug {
-            eprintln!("[clash-shell] {}: effect={:?}", command_str, decision.effect);
+            eprintln!(
+                "[clash-shell] {}: effect={:?}",
+                command_str, decision.effect
+            );
             if let Ok(json) = serde_json::to_string_pretty(&resolved) {
                 eprintln!("[clash-shell] sandbox: {}", json);
             }
@@ -133,15 +197,15 @@ pub fn run_shell(
         .to_string();
 
     // Load the policy so we can evaluate it per-command.
-    let settings = ClashSettings::load_or_create()
-        .context("failed to load clash settings")?;
+    let settings = ClashSettings::load_or_create().context("failed to load clash settings")?;
     let policy = settings
         .policy_tree()
         .context("no compiled policy available — run `clash init` first")?
         .clone();
 
     // Resolve the default sandbox: CLI --sandbox flag overrides policy's default_sandbox.
-    let effective_name = sandbox_name.as_deref()
+    let effective_name = sandbox_name
+        .as_deref()
         .or(policy.default_sandbox.as_deref());
 
     let default_sandbox = match effective_name {
@@ -257,10 +321,7 @@ async fn run_script(
 }
 
 /// Run an interactive shell REPL (`clash shell`).
-async fn run_interactive(
-    cwd: &str,
-    hook: brush_core::ExternalCommandHook,
-) -> Result<()> {
+async fn run_interactive(cwd: &str, hook: brush_core::ExternalCommandHook) -> Result<()> {
     info!("starting interactive shell with sandbox hook");
 
     let mut shell = brush_core::Shell::builder()
@@ -346,7 +407,10 @@ def main():
     #[test]
     fn hook_preserves_args_order() {
         let hook = test_hook();
-        let result = hook("/bin/cat", &["file1.txt".to_string(), "file2.txt".to_string()]);
+        let result = hook(
+            "/bin/cat",
+            &["file1.txt".to_string(), "file2.txt".to_string()],
+        );
         let (_, args) = result.unwrap();
         let dash_pos = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(args[dash_pos + 1], "/bin/cat");

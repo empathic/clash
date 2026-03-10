@@ -159,7 +159,13 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
             eprintln!();
             eprintln!("  Checked the following locations:");
             for (level, path, reason) in &diag {
-                eprintln!("    {} ({}): {} — {}", level, path, style::err_red_bold("✗"), reason);
+                eprintln!(
+                    "    {} ({}): {} — {}",
+                    level,
+                    path,
+                    style::err_red_bold("✗"),
+                    reason
+                );
             }
             eprintln!();
             eprintln!(

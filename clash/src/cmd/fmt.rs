@@ -76,10 +76,7 @@ fn discover_policy_files() -> Result<Vec<PathBuf>> {
     let levels = ClashSettings::available_policy_levels();
     let paths: Vec<PathBuf> = levels
         .into_iter()
-        .filter(|(_, path)| {
-            path.extension()
-                .is_some_and(|ext| ext == "star")
-        })
+        .filter(|(_, path)| path.extension().is_some_and(|ext| ext == "star"))
         .map(|(_, path)| path)
         .collect();
     Ok(paths)
@@ -92,10 +89,7 @@ fn validate_paths(files: &[PathBuf]) -> Result<Vec<PathBuf>> {
             anyhow::bail!("file not found: {}", path.display());
         }
         if path.extension().and_then(|e| e.to_str()) != Some("star") {
-            anyhow::bail!(
-                "expected a .star file, got: {}",
-                path.display(),
-            );
+            anyhow::bail!("expected a .star file, got: {}", path.display(),);
         }
     }
     Ok(files.to_vec())
@@ -124,7 +118,10 @@ mod tests {
     fn validate_paths_rejects_non_star() {
         let dir = tempfile::tempdir().unwrap();
         let json_file = dir.path().join("policy.json");
-        std::fs::File::create(&json_file).unwrap().write_all(b"{}").unwrap();
+        std::fs::File::create(&json_file)
+            .unwrap()
+            .write_all(b"{}")
+            .unwrap();
 
         let err = validate_paths(&[json_file]).unwrap_err();
         assert!(err.to_string().contains(".star"), "got: {err}");
@@ -140,7 +137,10 @@ mod tests {
     fn validate_paths_accepts_star_file() {
         let dir = tempfile::tempdir().unwrap();
         let star_file = dir.path().join("policy.star");
-        std::fs::File::create(&star_file).unwrap().write_all(b"x = 1").unwrap();
+        std::fs::File::create(&star_file)
+            .unwrap()
+            .write_all(b"x = 1")
+            .unwrap();
 
         let result = validate_paths(&[star_file.clone()]);
         assert!(result.is_ok());
