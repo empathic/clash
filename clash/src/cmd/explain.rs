@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use tracing::{Level, instrument};
 
+use crate::display;
 use crate::settings::ClashSettings;
 use crate::style;
 
@@ -86,89 +87,20 @@ pub fn run(json_output: bool, tool: Option<String>, input_arg: Option<String>) -
     let noun = crate::permissions::extract_noun(&input.tool_name, &input.tool_input);
 
     if json_output {
-        let output = serde_json::json!({
-            "effect": format!("{}", decision.effect),
-            "reason": decision.reason,
-            "matched_rules": decision.trace.matched_rules.iter().map(|m| {
-                serde_json::json!({
-                    "rule_index": m.rule_index,
-                    "description": m.description,
-                    "effect": format!("{}", m.effect),
-                })
-            }).collect::<Vec<_>>(),
-            "skipped_rules": decision.trace.skipped_rules.iter().map(|s| {
-                serde_json::json!({
-                    "rule_index": s.rule_index,
-                    "description": s.description,
-                    "reason": s.reason,
-                })
-            }).collect::<Vec<_>>(),
-            "resolution": decision.trace.final_resolution,
-            "sandbox": decision.sandbox.as_ref().map(|s| serde_json::to_value(s).ok()),
-        });
+        let output = display::decision_to_json(&decision);
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        println!("{}", style::bold("Input:"));
-        println!("  {}   {}", style::cyan("tool:"), input.tool_name);
-        println!("  {}   {}", style::cyan("noun:"), noun);
-        println!();
-
-        println!(
-            "{} {}",
-            style::bold("Decision:"),
-            style::effect(&decision.effect.to_string())
-        );
-        if let Some(ref reason) = decision.reason {
-            println!("{} {}", style::bold("Reason:  "), reason);
-        }
-        println!();
-
-        if !decision.trace.matched_rules.is_empty() {
-            println!("{}", style::header("Matched rules:"));
-            for m in &decision.trace.matched_rules {
-                let eff = style::effect(&m.effect.to_string());
-                println!("  [{}] {} -> {}", m.rule_index, m.description, eff);
-            }
-            println!();
-        }
-
-        if !decision.trace.skipped_rules.is_empty() {
-            println!("{}", style::dim("Skipped rules:"));
-            for s in &decision.trace.skipped_rules {
-                println!(
-                    "  {} {} {}",
-                    style::dim(&format!("[{}]", s.rule_index)),
-                    style::dim(&s.description),
-                    style::dim(&format!("({})", s.reason))
-                );
-            }
-            println!();
-        }
-
-        println!(
-            "{} {}",
-            style::bold("Resolution:"),
-            style::effect(&decision.trace.final_resolution.clone())
-        );
+        let mut lines = display::format_tool_header("Input:", &input.tool_name, &noun);
+        lines.push(String::new());
+        lines.extend(display::format_decision(&decision));
 
         if let Some(ref sandbox) = decision.sandbox {
-            println!();
-            println!("{}", style::header("Sandbox policy:"));
-            println!(
-                "  {}: {}",
-                style::cyan("default"),
-                sandbox.default.display()
-            );
-            println!("  {}: {:?}", style::cyan("network"), sandbox.network);
-            for rule in &sandbox.rules {
-                println!(
-                    "  {:?} {} in {}",
-                    rule.effect,
-                    rule.caps.display(),
-                    rule.path
-                );
-            }
+            lines.push(String::new());
+            lines.push(style::header("Sandbox policy:").to_string());
+            lines.extend(display::format_sandbox_summary(sandbox));
         }
+
+        println!("{}", lines.join("\n"));
     }
 
     Ok(())

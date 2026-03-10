@@ -1,6 +1,7 @@
 use anyhow::Result;
 use tracing::{Level, instrument};
 
+use crate::display;
 use crate::policy::Effect;
 use crate::settings::{ClashSettings, PolicyLevel};
 use crate::style;
@@ -177,25 +178,9 @@ fn colorize_tree_line(line: &str) -> String {
     if let Some(idx) = line.rfind(" → ") {
         let (prefix, rest) = line.split_at(idx);
         let effect = &rest[" → ".len()..];
-        let colored_effect = if effect.starts_with("allow") {
-            format!("{}{}", style::green("allow"), &effect["allow".len()..])
-        } else if effect.starts_with("deny") {
-            format!("{}{}", style::red("deny"), &effect["deny".len()..])
-        } else if effect.starts_with("ask") {
-            format!("{}{}", style::yellow("ask"), &effect["ask".len()..])
-        } else {
-            effect.to_string()
-        };
-        format!("{} → {}", prefix, colored_effect)
+        format!("{} → {}", prefix, display::colorize_effect_prefix(effect))
     } else if line.starts_with("allow") || line.starts_with("deny") || line.starts_with("ask") {
-        // Bare decision node (no condition prefix)
-        if line.starts_with("allow") {
-            format!("{}{}", style::green("allow"), &line["allow".len()..])
-        } else if line.starts_with("deny") {
-            format!("{}{}", style::red("deny"), &line["deny".len()..])
-        } else {
-            format!("{}{}", style::yellow("ask"), &line["ask".len()..])
-        }
+        display::colorize_effect_prefix(line)
     } else {
         line.to_string()
     }

@@ -8,6 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::display;
 use crate::policy::sandbox_types::{Cap, NetworkPolicy, SandboxPolicy};
 use crate::settings::ClashSettings;
 use crate::style;
@@ -31,11 +32,8 @@ pub struct SandboxReport {
 impl SandboxReport {
     /// Render as human-readable text.
     pub fn format_human(&self) -> String {
-        let mut lines = Vec::new();
-
-        lines.push(style::bold("Sandbox inspection:").to_string());
-        lines.push(format!("  {}   {}", style::cyan("tool:"), self.tool_name));
-        lines.push(format!("  {}   {}", style::cyan("noun:"), self.noun));
+        let mut lines =
+            display::format_tool_header("Sandbox inspection:", &self.tool_name, &self.noun);
         lines.push(format!(
             "  {} {}",
             style::cyan("effect:"),
