@@ -123,7 +123,12 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
         println!("  {}", style::dim("(no sandboxes defined)"));
     }
     for (name, sb) in policy.sandboxes.iter() {
-        println!("  {}", style::cyan(name));
+        let sb_doc = sb
+            .doc
+            .as_deref()
+            .map(|d| format!("  {}", style::dim(&format!("# {d}"))))
+            .unwrap_or_default();
+        println!("  {}{}", style::cyan(name), sb_doc);
         println!("    default: {}", style::dim(&sb.default.display()));
         for rule in &sb.rules {
             let effect_str = match rule.effect {
@@ -135,11 +140,17 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
                 crate::policy::sandbox_types::PathMatch::Literal => "",
                 crate::policy::sandbox_types::PathMatch::Regex => " (regex)",
             };
+            let rule_doc = rule
+                .doc
+                .as_deref()
+                .map(|d| format!("  {}", style::dim(&format!("# {d}"))))
+                .unwrap_or_default();
             println!(
-                "    {} {} {}",
+                "    {} {} {}{}",
                 effect_str,
                 rule.caps.display(),
-                style::dim(&format!("{}{}", rule.path, match_suffix))
+                style::dim(&format!("{}{}", rule.path, match_suffix)),
+                rule_doc,
             );
         }
         let net_str = match &sb.network {

@@ -30,26 +30,33 @@ def regex(pattern):
 # ---------------------------------------------------------------------------
 
 
-def _mt_exe(pattern):
+def _cond(observe, pattern, doc=None):
+    """Build a condition node, only passing doc when non-None."""
+    if doc != None:
+        return _mt_condition(observe, pattern, doc=doc)
+    return _mt_condition(observe, pattern)
+
+
+def _mt_exe(pattern, doc=None):
     """Build ToolName=Bash → PosArg(0)=pattern."""
-    inner = _mt_condition({"positional_arg": 0}, pattern)
+    inner = _cond({"positional_arg": 0}, pattern, doc=doc)
     bash_pat = _mt_pattern("Bash")
     return _mt_condition("tool_name", bash_pat).on([inner])
 
 
-def _mt_tool(pattern):
+def _mt_tool(pattern, doc=None):
     """Build ToolName=pattern."""
-    return _mt_condition("tool_name", pattern)
+    return _cond("tool_name", pattern, doc=doc)
 
 
-def _mt_hook(pattern):
+def _mt_hook(pattern, doc=None):
     """Build HookType=pattern."""
-    return _mt_condition("hook_type", pattern)
+    return _cond("hook_type", pattern, doc=doc)
 
 
-def _mt_agent(pattern):
+def _mt_agent(pattern, doc=None):
     """Build AgentName=pattern."""
-    return _mt_condition("agent_name", pattern)
+    return _cond("agent_name", pattern, doc=doc)
 
 
 def _mt_arg(n, pattern):
@@ -121,7 +128,7 @@ def _mt_or(patterns):
 # ---------------------------------------------------------------------------
 
 
-def exe(name=None, args=None):
+def exe(name=None, args=None, doc=None):
     """Build an exec rule.
 
     Usage:
@@ -130,37 +137,39 @@ def exe(name=None, args=None):
         exe("cargo").sandbox(my_sandbox).allow()
         exe(["cargo", "rustc"]).allow()
         exe().deny()  # deny all exec
+        exe("git", doc="Version control").allow()
     """
-    node = _mt_exe(_pattern(name))
+    node = _mt_exe(_pattern(name), doc=doc)
 
     if args != None:
-        node = _exe_with_args(name, args)
+        node = _exe_with_args(name, args, doc=doc)
 
     return _with_sandbox_support(node)
 
 
-def _exe_with_args(name, args):
+def _exe_with_args(name, args, doc=None):
     """Build an exe node with positional args already nested."""
     pat = _pattern(name)
-    result = _mt_exe(pat)
+    result = _mt_exe(pat, doc=doc)
     if len(args) > 0:
         # Build nested chain: arg(n, ...) wrapping the innermost
         innermost = _mt_arg(len(args), _pattern(args[len(args) - 1]))
         for i in range(len(args) - 2, -1, -1):
             innermost = _mt_arg(i + 1, _pattern(args[i])).on([innermost])
-        result = _mt_exe(pat).on([innermost])
+        result = _mt_exe(pat, doc=doc).on([innermost])
     return result
 
 
-def tool(name=None):
+def tool(name=None, doc=None):
     """Build a tool rule.
 
     Usage:
         tool().allow()
         tool("WebSearch").deny()
         tool(["Read", "Glob", "Grep"]).allow()
+        tool("WebSearch", doc="No external searches").deny()
     """
-    return _with_sandbox_support(_mt_tool(_pattern(name)))
+    return _with_sandbox_support(_mt_tool(_pattern(name), doc=doc))
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +269,7 @@ def _path_match(path_value, worktree=False, match_type="literal"):
         """Select paths by regex pattern."""
         return _path_match(pat, worktree, "regex")
 
-    def _resolve(effect, read, write, execute, all):
+    def _resolve(effect, read, write, execute, all, doc=None):
         all_ops = read == None and write == None and execute == None
         _read = effect if (read or all_ops) else None
         _write = effect if (write or all_ops) else None
@@ -277,14 +286,15 @@ def _path_match(path_value, worktree=False, match_type="literal"):
                 all_ops,
             )
             if len(caps) > 0:
-                sandbox_rules.append(
-                    {
-                        "effect": "allow" if effect == allow else "deny",
-                        "path_value": path_value,
-                        "caps": caps,
-                        "match_type": match_type,
-                    }
-                )
+                rule = {
+                    "effect": "allow" if effect == allow else "deny",
+                    "path_value": path_value,
+                    "caps": caps,
+                    "match_type": match_type,
+                }
+                if doc != None:
+                    rule["doc"] = doc
+                sandbox_rules.append(rule)
 
         return struct(
             _is_path=True,
@@ -293,14 +303,14 @@ def _path_match(path_value, worktree=False, match_type="literal"):
             _sandbox_rules=sandbox_rules,
         )
 
-    def _allow(read=None, write=None, execute=None, all=None):
-        return _resolve(allow, read, write, execute, all)
+    def _allow(read=None, write=None, execute=None, all=None, doc=None):
+        return _resolve(allow, read, write, execute, all, doc=doc)
 
-    def _deny(read=None, write=None, execute=None, all=None):
-        return _resolve(deny, read, write, execute, all)
+    def _deny(read=None, write=None, execute=None, all=None, doc=None):
+        return _resolve(deny, read, write, execute, all, doc=doc)
 
-    def _ask(read=None, write=None, execute=None, all=None):
-        return _resolve(ask, read, write, execute, all)
+    def _ask(read=None, write=None, execute=None, all=None, doc=None):
+        return _resolve(ask, read, write, execute, all, doc=doc)
 
     return struct(
         child=child,
@@ -416,7 +426,7 @@ def domain(name, effect):
 # ---------------------------------------------------------------------------
 
 
-def _make_sandbox(name, default, fs_rules, net_policy, net_domain_names=None):
+def _make_sandbox(name, default, fs_rules, net_policy, net_domain_names=None, doc=None):
     """Create a sandbox struct."""
     if net_domain_names == None:
         net_domain_names = []
@@ -432,6 +442,7 @@ def _make_sandbox(name, default, fs_rules, net_policy, net_domain_names=None):
             fs_rules + other._fs_rules,
             net_policy or other._net_policy,
             merged_domains,
+            doc=doc,
         )
 
     return struct(
@@ -441,11 +452,12 @@ def _make_sandbox(name, default, fs_rules, net_policy, net_domain_names=None):
         _net_policy=net_policy,
         _net_domain_names=net_domain_names,
         _is_sandbox=True,
+        _doc=doc,
         merge=_merge,
     )
 
 
-def sandbox(name=None, default="deny", fs=None, net=None):
+def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
     """Build a sandbox definition.
 
     Usage:
@@ -454,6 +466,7 @@ def sandbox(name=None, default="deny", fs=None, net=None):
             default=deny,
             fs=[cwd().allow(read=True), home().child(".ssh").allow(read=True)],
             net=allow,
+            doc="Description of this sandbox",
         )
     """
     if name == None:
@@ -501,7 +514,7 @@ def sandbox(name=None, default="deny", fs=None, net=None):
         else:
             fail("sandbox net= must be an effect string or a list of domain entries")
 
-    return _make_sandbox(name, default, fs_rules, net_policy, net_domain_names)
+    return _make_sandbox(name, default, fs_rules, net_policy, net_domain_names, doc=doc)
 
 
 # ---------------------------------------------------------------------------
@@ -672,14 +685,16 @@ def _sandbox_to_json(sb):
         pv = r["path_value"]
         path_str = _resolve_path_value(pv)
         caps = r.get("caps", ["read", "write", "create"])
-        rules.append(
-            {
-                "effect": r.get("effect", "allow"),
-                "caps": caps,
-                "path": path_str,
-                "path_match": r.get("match_type", "subpath"),
-            }
-        )
+        rule_dict = {
+            "effect": r.get("effect", "allow"),
+            "caps": caps,
+            "path": path_str,
+            "path_match": r.get("match_type", "subpath"),
+        }
+        doc_val = r.get("doc", None)
+        if doc_val != None:
+            rule_dict["doc"] = doc_val
+        rules.append(rule_dict)
 
     net = "deny"
     if sb._net_policy != None:
@@ -703,12 +718,15 @@ def _sandbox_to_json(sb):
     else:
         default_caps = ["read", "write", "create", "delete", "execute"]
 
-    return {
+    result = {
         "name": sb._name,
         "default": default_caps,
         "rules": rules,
         "network": net,
     }
+    if hasattr(sb, "_doc") and sb._doc != None:
+        result["doc"] = sb._doc
+    return result
 
 
 def _resolve_path_value(pv):

@@ -127,20 +127,16 @@ pub fn try_load_policy(
 
 /// Compile one or more evaluated policy JSON sources into a [`CompiledPolicy`] tree.
 ///
+/// Each tuple is `(level, json_source, source_display_path)`.
 /// When a single source is provided, uses `compile_to_tree`. When multiple
 /// sources are provided, uses `compile_multi_level_to_tree` to merge them
 /// with level-based precedence.
-pub fn compile_policies(level_sources: &[(PolicyLevel, String)]) -> Result<CompiledPolicy> {
-    if level_sources.len() == 1 {
-        let (_, source) = &level_sources[0];
-        compile::compile_to_tree(source)
-    } else {
-        let level_refs: Vec<(PolicyLevel, &str)> = level_sources
-            .iter()
-            .map(|(l, s)| (*l, s.as_str()))
-            .collect();
-        compile::compile_multi_level_to_tree(&level_refs)
-    }
+pub fn compile_policies(level_sources: &[(PolicyLevel, String, String)]) -> Result<CompiledPolicy> {
+    let level_refs: Vec<(PolicyLevel, &str, &str)> = level_sources
+        .iter()
+        .map(|(l, s, p)| (*l, s.as_str(), p.as_str()))
+        .collect();
+    compile::compile_multi_level_to_tree(&level_refs)
 }
 
 /// Compile a raw policy JSON source string directly into a [`CompiledPolicy`] tree.
