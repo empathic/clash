@@ -340,25 +340,37 @@ fn format_tree_node(
             pattern,
             children,
             doc,
-            source: _,
+            source,
         } => {
             let label = format_condition(observe, pattern);
             let doc_suffix = doc
                 .as_deref()
                 .map(|d| format!("  # {d}"))
                 .unwrap_or_default();
+            let source_suffix = if is_root {
+                source
+                    .as_deref()
+                    .map(|s| format!("  [{s}]"))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
 
             // Single decision child → show inline: "label → effect"
             if children.len() == 1
                 && let Node::Decision(d) = &children[0]
             {
                 let effect = format_decision(d);
-                lines.push(format!("{prefix}{connector}{label} → {effect}{doc_suffix}"));
+                lines.push(format!(
+                    "{prefix}{connector}{label} → {effect}{doc_suffix}{source_suffix}"
+                ));
                 return;
             }
 
             // Branch — show label, then children as sub-tree
-            lines.push(format!("{prefix}{connector}{label}{doc_suffix}"));
+            lines.push(format!(
+                "{prefix}{connector}{label}{doc_suffix}{source_suffix}"
+            ));
             let new_prefix = format!("{prefix}{child_prefix}");
             let child_count = children.len();
             for (i, child) in children.iter().enumerate() {
