@@ -1462,4 +1462,261 @@ mod tests {
         assert_eq!(deserialized.tree.len(), 1);
         assert_eq!(deserialized.default_effect, Effect::Deny);
     }
+
+    // -----------------------------------------------------------------------
+    // resolve_relative_path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_relative_path_absolute_unchanged() {
+        let result = resolve_relative_path("/usr/bin/ls");
+        assert_eq!(result, "/usr/bin/ls");
+    }
+
+    #[test]
+    fn resolve_relative_path_prepends_pwd() {
+        // SAFETY: test-only, single-threaded access
+        unsafe { std::env::set_var("PWD", "/home/user/project") };
+        let result = resolve_relative_path("src/main.rs");
+        assert_eq!(result, "/home/user/project/src/main.rs");
+        unsafe { std::env::remove_var("PWD") };
+    }
+
+    #[test]
+    fn resolve_relative_path_empty() {
+        unsafe { std::env::set_var("PWD", "/home/user") };
+        let result = resolve_relative_path("");
+        // Empty path has no leading slash, so gets PWD prepended
+        assert_eq!(result, "/home/user/");
+        unsafe { std::env::remove_var("PWD") };
+    }
+
+    #[test]
+    fn resolve_relative_path_no_leading_slash() {
+        unsafe { std::env::set_var("PWD", "/workspace") };
+        let result = resolve_relative_path("foo/bar.txt");
+        assert_eq!(result, "/workspace/foo/bar.txt");
+        unsafe { std::env::remove_var("PWD") };
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_domain tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_domain_https_url() {
+        assert_eq!(
+            extract_domain("https://example.com/path"),
+            Some("example.com".into())
+        );
+    }
+
+    #[test]
+    fn extract_domain_with_port() {
+        assert_eq!(
+            extract_domain("https://example.com:8080/path"),
+            Some("example.com".into())
+        );
+    }
+
+    #[test]
+    fn extract_domain_with_path() {
+        assert_eq!(
+            extract_domain("https://api.github.com/repos/owner/repo"),
+            Some("api.github.com".into())
+        );
+    }
+
+    #[test]
+    fn extract_domain_http_url() {
+        assert_eq!(
+            extract_domain("http://example.com"),
+            Some("example.com".into())
+        );
+    }
+
+    #[test]
+    fn extract_domain_without_scheme() {
+        assert_eq!(
+            extract_domain("example.com/path"),
+            Some("example.com".into())
+        );
+    }
+
+    #[test]
+    fn extract_domain_empty_input() {
+        assert_eq!(extract_domain(""), None);
+    }
+
+    #[test]
+    fn extract_domain_scheme_only() {
+        assert_eq!(extract_domain("https://"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Value::resolve tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn value_literal_resolve() {
+        let v = Value::Literal("hello".into());
+        assert_eq!(v.resolve(), "hello");
+    }
+
+    #[test]
+    fn value_env_resolve_missing() {
+        let v = Value::Env("NONEXISTENT_CLASH_TEST_VAR_XYZ".into());
+        assert_eq!(v.resolve(), "");
+    }
+
+    #[test]
+    fn value_path_resolve_with_env() {
+        unsafe { std::env::set_var("CLASH_TEST_HOME", "/home/testuser") };
+        let v = Value::Path(vec![
+            Value::Env("CLASH_TEST_HOME".into()),
+            Value::Literal("projects".into()),
+        ]);
+        assert_eq!(v.resolve(), "/home/testuser/projects");
+        unsafe { std::env::remove_var("CLASH_TEST_HOME") };
+    }
+
+    // -----------------------------------------------------------------------
+    // Pattern::matches tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pattern_prefix_exact_match() {
+        let pat = Pattern::Prefix(Value::Literal("/home/user".into()));
+        assert!(pat.matches("/home/user"));
+    }
+
+    #[test]
+    fn pattern_prefix_child_path() {
+        let pat = Pattern::Prefix(Value::Literal("/home/user".into()));
+        assert!(pat.matches("/home/user/documents/file.txt"));
+    }
+
+    #[test]
+    fn pattern_prefix_non_child_similar() {
+        // "/home/username" should NOT match prefix "/home/user"
+        let pat = Pattern::Prefix(Value::Literal("/home/user".into()));
+        assert!(!pat.matches("/home/username"));
+    }
+
+    #[test]
+    fn pattern_literal_with_env() {
+        unsafe { std::env::set_var("CLASH_TEST_TOOL", "Bash") };
+        let pat = Pattern::Literal(Value::Env("CLASH_TEST_TOOL".into()));
+        assert!(pat.matches("Bash"));
+        assert!(!pat.matches("Read"));
+        unsafe { std::env::remove_var("CLASH_TEST_TOOL") };
+    }
+
+    #[test]
+    fn pattern_wildcard_matches_anything() {
+        assert!(Pattern::Wildcard.matches(""));
+        assert!(Pattern::Wildcard.matches("anything"));
+        assert!(Pattern::Wildcard.matches("/some/path"));
+    }
+
+    #[test]
+    fn pattern_any_of_matches_any() {
+        let pat = Pattern::AnyOf(vec![
+            Pattern::Literal(Value::Literal("cat".into())),
+            Pattern::Literal(Value::Literal("dog".into())),
+        ]);
+        assert!(pat.matches("cat"));
+        assert!(pat.matches("dog"));
+        assert!(!pat.matches("fish"));
+    }
+
+    #[test]
+    fn pattern_not_inverts() {
+        let pat = Pattern::Not(Box::new(Pattern::Literal(Value::Literal("rm".into()))));
+        assert!(pat.matches("ls"));
+        assert!(!pat.matches("rm"));
+    }
+
+    // -----------------------------------------------------------------------
+    // QueryContext::from_tool tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn from_tool_bash_parses_args() {
+        let input = serde_json::json!({"command": "git push origin main"});
+        let ctx = QueryContext::from_tool("Bash", &input);
+        assert_eq!(ctx.tool_name, "Bash");
+        assert_eq!(ctx.args[0], "git");
+        assert!(ctx.args.contains(&"push".to_string()));
+        assert!(ctx.fs_op.is_none());
+        assert!(ctx.net_domain.is_none());
+    }
+
+    #[test]
+    fn from_tool_read_extracts_path() {
+        let input = serde_json::json!({"file_path": "/src/main.rs"});
+        let ctx = QueryContext::from_tool("Read", &input);
+        assert_eq!(ctx.tool_name, "Read");
+        assert_eq!(ctx.fs_op.as_deref(), Some("read"));
+        assert_eq!(ctx.fs_path.as_deref(), Some("/src/main.rs"));
+        assert!(ctx.args.is_empty());
+    }
+
+    #[test]
+    fn from_tool_write_extracts_path() {
+        let input = serde_json::json!({"file_path": "/tmp/output.txt"});
+        let ctx = QueryContext::from_tool("Write", &input);
+        assert_eq!(ctx.fs_op.as_deref(), Some("write"));
+        assert_eq!(ctx.fs_path.as_deref(), Some("/tmp/output.txt"));
+    }
+
+    #[test]
+    fn from_tool_edit_extracts_path() {
+        let input = serde_json::json!({"file_path": "/project/lib.rs"});
+        let ctx = QueryContext::from_tool("Edit", &input);
+        assert_eq!(ctx.fs_op.as_deref(), Some("write"));
+        assert_eq!(ctx.fs_path.as_deref(), Some("/project/lib.rs"));
+    }
+
+    #[test]
+    fn from_tool_glob_extracts_path() {
+        let input = serde_json::json!({"path": "/src", "pattern": "*.rs"});
+        let ctx = QueryContext::from_tool("Glob", &input);
+        assert_eq!(ctx.fs_op.as_deref(), Some("read"));
+        assert_eq!(ctx.fs_path.as_deref(), Some("/src"));
+    }
+
+    #[test]
+    fn from_tool_grep_falls_back_to_pattern() {
+        let input = serde_json::json!({"pattern": "/some/path"});
+        let ctx = QueryContext::from_tool("Grep", &input);
+        assert_eq!(ctx.fs_op.as_deref(), Some("read"));
+        assert_eq!(ctx.fs_path.as_deref(), Some("/some/path"));
+    }
+
+    #[test]
+    fn from_tool_webfetch_extracts_domain() {
+        let input = serde_json::json!({"url": "https://api.github.com/repos"});
+        let ctx = QueryContext::from_tool("WebFetch", &input);
+        assert_eq!(ctx.net_domain.as_deref(), Some("api.github.com"));
+        assert!(ctx.fs_op.is_none());
+    }
+
+    #[test]
+    fn from_tool_websearch_wildcard_domain() {
+        let input = serde_json::json!({"query": "rust async"});
+        let ctx = QueryContext::from_tool("WebSearch", &input);
+        assert_eq!(ctx.net_domain.as_deref(), Some("*"));
+    }
+
+    #[test]
+    fn from_tool_unknown_empty() {
+        let input = serde_json::json!({"some": "data"});
+        let ctx = QueryContext::from_tool("UnknownTool", &input);
+        assert_eq!(ctx.tool_name, "UnknownTool");
+        assert!(ctx.args.is_empty());
+        assert!(ctx.fs_op.is_none());
+        assert!(ctx.fs_path.is_none());
+        assert!(ctx.net_domain.is_none());
+    }
 }

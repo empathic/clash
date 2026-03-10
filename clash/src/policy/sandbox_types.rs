@@ -574,4 +574,178 @@ mod tests {
         assert_eq!(deserialized.rules.len(), 1);
         assert_eq!(deserialized.network, NetworkPolicy::Deny);
     }
+
+    // -----------------------------------------------------------------------
+    // SandboxPolicy::resolve_path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_path_pwd_replacement() {
+        let result = SandboxPolicy::resolve_path("$PWD/src", "/my/project");
+        assert_eq!(result, "/my/project/src");
+    }
+
+    #[test]
+    fn resolve_path_home_replacement() {
+        let home = dirs::home_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let result = SandboxPolicy::resolve_path("$HOME/.config", "/ignored");
+        assert_eq!(result, format!("{}/.config", home));
+    }
+
+    #[test]
+    fn resolve_path_tmpdir_replacement() {
+        // SAFETY: test-only, single-threaded access
+        unsafe { std::env::set_var("TMPDIR", "/custom/tmp") };
+        let result = SandboxPolicy::resolve_path("$TMPDIR/scratch", "/ignored");
+        assert_eq!(result, "/custom/tmp/scratch");
+        unsafe { std::env::remove_var("TMPDIR") };
+    }
+
+    #[test]
+    fn resolve_path_tmpdir_fallback() {
+        unsafe { std::env::remove_var("TMPDIR") };
+        let result = SandboxPolicy::resolve_path("$TMPDIR/scratch", "/ignored");
+        assert_eq!(result, "/tmp/scratch");
+    }
+
+    #[test]
+    fn resolve_path_multiple_vars() {
+        unsafe { std::env::set_var("TMPDIR", "/var/tmp") };
+        let home = dirs::home_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let result = SandboxPolicy::resolve_path("$PWD:$HOME:$TMPDIR", "/work");
+        assert_eq!(result, format!("/work:{}:/var/tmp", home));
+        unsafe { std::env::remove_var("TMPDIR") };
+    }
+
+    #[test]
+    fn resolve_path_no_variables() {
+        let result = SandboxPolicy::resolve_path("/usr/local/bin", "/ignored");
+        assert_eq!(result, "/usr/local/bin");
+    }
+
+    // -----------------------------------------------------------------------
+    // SandboxPolicy::effective_caps tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn effective_caps_regex_path_match() {
+        let policy = SandboxPolicy {
+            default: Cap::READ,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::WRITE,
+                path: r"/project/.*\.rs$".into(),
+                path_match: PathMatch::Regex,
+            }],
+            network: NetworkPolicy::Deny,
+        };
+        let caps = policy.effective_caps("/project/src/main.rs", "/project");
+        assert_eq!(caps, Cap::READ | Cap::WRITE);
+
+        // Non-rs file should not match the regex rule
+        let caps = policy.effective_caps("/project/src/main.py", "/project");
+        assert_eq!(caps, Cap::READ);
+    }
+
+    #[test]
+    fn effective_caps_literal_path_match() {
+        let policy = SandboxPolicy {
+            default: Cap::READ,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::WRITE,
+                path: "/etc/hosts".into(),
+                path_match: PathMatch::Literal,
+            }],
+            network: NetworkPolicy::Deny,
+        };
+        // Exact match
+        let caps = policy.effective_caps("/etc/hosts", "/ignored");
+        assert_eq!(caps, Cap::READ | Cap::WRITE);
+
+        // Child path should NOT match literal
+        let caps = policy.effective_caps("/etc/hosts/foo", "/ignored");
+        assert_eq!(caps, Cap::READ);
+    }
+
+    #[test]
+    fn effective_caps_deny_overrides_allow() {
+        let policy = SandboxPolicy {
+            default: Cap::READ,
+            rules: vec![
+                SandboxRule {
+                    effect: RuleEffect::Allow,
+                    caps: Cap::WRITE | Cap::CREATE,
+                    path: "/data".into(),
+                    path_match: PathMatch::Subpath,
+                },
+                SandboxRule {
+                    effect: RuleEffect::Deny,
+                    caps: Cap::WRITE,
+                    path: "/data".into(),
+                    path_match: PathMatch::Subpath,
+                },
+            ],
+            network: NetworkPolicy::Deny,
+        };
+        // Deny write overrides allow write, but create stays
+        let caps = policy.effective_caps("/data/file.txt", "/ignored");
+        assert_eq!(caps, Cap::READ | Cap::CREATE);
+    }
+
+    #[test]
+    fn effective_caps_multiple_overlapping_rules() {
+        let policy = SandboxPolicy {
+            default: Cap::empty() | Cap::READ,
+            rules: vec![
+                SandboxRule {
+                    effect: RuleEffect::Allow,
+                    caps: Cap::all(),
+                    path: "/project".into(),
+                    path_match: PathMatch::Subpath,
+                },
+                SandboxRule {
+                    effect: RuleEffect::Deny,
+                    caps: Cap::DELETE,
+                    path: "/project/.git".into(),
+                    path_match: PathMatch::Subpath,
+                },
+                SandboxRule {
+                    effect: RuleEffect::Deny,
+                    caps: Cap::WRITE | Cap::CREATE,
+                    path: "/project/.git".into(),
+                    path_match: PathMatch::Subpath,
+                },
+            ],
+            network: NetworkPolicy::Deny,
+        };
+        // In /project but outside .git: full caps
+        let caps = policy.effective_caps("/project/src/lib.rs", "/project");
+        assert_eq!(caps, Cap::all());
+
+        // In .git: all minus delete, write, create
+        let caps = policy.effective_caps("/project/.git/HEAD", "/project");
+        assert_eq!(caps, Cap::READ | Cap::EXECUTE);
+    }
+
+    #[test]
+    fn effective_caps_default_when_no_rules_match() {
+        let policy = SandboxPolicy {
+            default: Cap::READ | Cap::EXECUTE,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::WRITE,
+                path: "/specific/path".into(),
+                path_match: PathMatch::Subpath,
+            }],
+            network: NetworkPolicy::Deny,
+        };
+        // Path that matches no rules gets default
+        let caps = policy.effective_caps("/unrelated/path", "/ignored");
+        assert_eq!(caps, Cap::READ | Cap::EXECUTE);
+    }
 }
