@@ -17,7 +17,15 @@ pub fn run(check: bool, files: Vec<PathBuf>) -> Result<()> {
     };
 
     if targets.is_empty() {
-        anyhow::bail!("no policy files found — run `clash init` to create a policy");
+        let diag = crate::settings::ClashSettings::diagnose_missing_policies();
+        let details: Vec<String> = diag
+            .iter()
+            .map(|(level, path, reason)| format!("  {level} ({path}): {reason}"))
+            .collect();
+        anyhow::bail!(
+            "no policy files found\n\nChecked:\n{}\n\nhint: run `clash init` to create a policy",
+            details.join("\n")
+        );
     }
 
     let ruff = find_ruff()?;

@@ -202,8 +202,8 @@ def _make_path_pattern(path_value, match_type):
     else:
         return _mt_prefix(path_value)
 
-def _path_match(path_value, worktree = False, match_type = "subpath"):
-    """A path selector — use .child()/.file()/.match() to refine, then .allow()/.deny()/.ask() to decide."""
+def _path_match(path_value, worktree = False, match_type = "literal"):
+    """A path selector — use .child()/.file()/.recurse()/.match() to refine, then .allow()/.deny()/.ask() to decide."""
 
     def child(name):
         """Select a subdirectory (subpath match)."""
@@ -214,6 +214,10 @@ def _path_match(path_value, worktree = False, match_type = "subpath"):
         """Select a specific file (exact match)."""
         file_path = struct(_join = [path_value, name])
         return _path_match(file_path, worktree, "literal")
+
+    def recurse():
+        """Switch to subpath (recursive) matching — matches this path and everything below it."""
+        return _path_match(path_value, worktree, "subpath")
 
     def match(pat):
         """Select paths by regex pattern."""
@@ -258,7 +262,7 @@ def _path_match(path_value, worktree = False, match_type = "subpath"):
     def _ask(read = None, write = None, execute = None, all=None):
         return _resolve(ask, read, write, execute, all)
 
-    return struct(child = child, file = file, match = match,
+    return struct(child = child, file = file, recurse = recurse, match = match,
                   allow = _allow, deny = _deny, ask = _ask)
 
 def cwd(follow_worktrees = False):
@@ -272,16 +276,17 @@ def cwd(follow_worktrees = False):
     return _path_match(struct(_env = "PWD"), follow_worktrees)
 
 def home():
-    """Build a HOME path match.
+    """Build a HOME path match (literal by default, use .recurse() for recursive).
 
     Usage:
         home().child(".ssh").allow(read=True)
-        home().child(".cargo").allow()
+        home().child(".cargo").recurse().allow()
+        home().recurse().allow(read=True)
     """
     return _path_match(struct(_env = "HOME"), False)
 
 def tempdir():
-    """Build a TMPDIR path match.
+    """Build a TMPDIR path match (recursive by default).
 
     Usage:
         tempdir().allow()
@@ -502,7 +507,7 @@ def _with_sandbox_and_node(node, sb):
 # Policy wrapper
 # ---------------------------------------------------------------------------
 
-def policy(default = "deny", rules = None):
+def policy(default = "deny", rules = None, default_sandbox = None):
     """Build a policy.
 
     Usage:
@@ -513,7 +518,11 @@ def policy(default = "deny", rules = None):
             tool("Glob").on([
                 cwd().child("src").allow(read=True),
             ]),
-        ])
+        ], default_sandbox=sandbox(
+            name="default",
+            default=deny,
+            fs=[cwd().allow(read=True)],
+        ))
     """
     if rules == None:
         rules = []
@@ -539,7 +548,18 @@ def policy(default = "deny", rules = None):
         else:
             flat_nodes.append(item)
 
-    return _mt_policy(default = default, sandboxes = sandbox_list, rules = flat_nodes)
+    # Convert default_sandbox to JSON if provided
+    default_sandbox_json = None
+    if default_sandbox != None:
+        if not hasattr(default_sandbox, "_is_sandbox"):
+            fail("default_sandbox must be a sandbox() value")
+        default_sandbox_json = _sandbox_to_json(default_sandbox)
+        # Also register it in the sandbox map if not already seen
+        if default_sandbox._name not in _seen_sandboxes:
+            _seen_sandboxes[default_sandbox._name] = True
+            sandbox_list.append(default_sandbox_json)
+
+    return _mt_policy(default = default, sandboxes = sandbox_list, rules = flat_nodes, default_sandbox = default_sandbox_json)
 
 def _collect_node(item, flat_nodes, sandbox_list, seen):
     """Extract a node and its sandbox from a rule builder."""
@@ -549,6 +569,21 @@ def _collect_node(item, flat_nodes, sandbox_list, seen):
         if sb._name not in seen:
             seen[sb._name] = True
             sandbox_list.append(_sandbox_to_json(sb))
+
+# macOS system directories required for basic command execution.
+# Programs need to read shared libraries, frameworks, dyld caches, and
+# device nodes to function. These are auto-injected into every sandbox
+# with default=deny so users don't need to declare them manually.
+# On Linux (Landlock), non-existent paths are harmlessly ignored.
+_SYSTEM_READ_PATHS = [
+    "/",
+    "/usr", "/bin", "/sbin",
+    "/System", "/Library",
+    "/dev", "/etc",
+    "/private/etc", "/private/var/db/dyld",
+    "/private/var/folders",
+    "/var/select", "/var/run",
+]
 
 def _sandbox_to_json(sb):
     """Convert a sandbox struct to JSON-compatible dict for _mt_policy."""
@@ -576,10 +611,21 @@ def _sandbox_to_json(sb):
             else:
                 net = "localhost"
 
-    # deny default = read-only (can read system files and execute binaries)
-    # allow default = full access
+    # deny default = execute-only; auto-inject system path reads so
+    # basic commands can load shared libraries and frameworks.
+    # allow default = full access (no system paths needed).
     if sb._default == deny:
-        default_caps = ["read", "execute"]
+        default_caps = ["execute"]
+        for sys_path in _SYSTEM_READ_PATHS:
+            # "/" gets literal match (read the directory itself, not all children);
+            # everything else gets subpath match (recursive read).
+            match_type = "literal" if sys_path == "/" else "subpath"
+            rules.append({
+                "effect": "allow",
+                "caps": ["read", "execute"],
+                "path": sys_path,
+                "path_match": match_type,
+            })
     else:
         default_caps = ["read", "write", "create", "delete", "execute"]
 

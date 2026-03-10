@@ -59,33 +59,101 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     p += "(allow sysctl-read)\n";
     p += "(allow mach-lookup)\n";
     p += "(allow mach-register)\n";
+    // DNS resolution via mDNSResponder
+    p += "(allow system-socket)\n";
 
     // Default capabilities applied to root
     emit_caps_for_path(&mut p, "/", policy.default, PathMatch::Subpath);
 
+    // Root directory readable (literal, not recursive) — some commands need
+    // to stat "/" itself (e.g. `ls /`, path resolution).
+    p += "(allow file-read* (literal \"/\"))\n";
+
+    // System paths always readable — required for dyld, shared libraries,
+    // frameworks, and basic process operation regardless of policy.
+    // dyld needs file-read* on binaries (not just process-exec) to load them.
+    for sys_path in &[
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/System",
+        "/Library",
+        "/dev",
+        "/etc",
+        "/private/etc",
+        "/private/var/db/dyld",
+        "/private/var/folders",
+        "/var/select",
+        "/var/run",
+    ] {
+        p += &format!("(allow file-read* (subpath \"{}\"))\n", sys_path);
+    }
+
     // /dev/null always writable
     p += "(allow file-write* (literal \"/dev/null\"))\n";
-    p += "(allow file-read-data (literal \"/dev/null\"))\n";
+
+    // Collect all ancestor directories that need literal read access so that
+    // realpath() / stat() can traverse to rule paths.  Seatbelt evaluates each
+    // stat() independently, so `(subpath "/Users/eliot/.cargo")` does NOT
+    // implicitly allow stat("/Users") or stat("/Users/eliot").
+    let mut ancestors: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     // Process allow rules first, then deny rules override.
-    // For Subpath/Literal rules, canonicalize the path to resolve symlinks
+    // For Subpath/Literal rules, resolve well-known symlinks
     // (e.g., /var → /private/var, /tmp → /private/tmp on macOS) so that
     // Seatbelt matches against the real filesystem path.
     for rule in &policy.rules {
         let resolved = SandboxPolicy::resolve_path(&rule.path, cwd);
+        // Strip trailing slashes — Seatbelt's `subpath` filter requires
+        // paths without trailing separators (e.g. $TMPDIR ends with "/").
+        let resolved = resolved.trim_end_matches('/').to_string();
         let canonical = if rule.path_match != PathMatch::Regex {
             canonicalize_or_keep(&resolved)
         } else {
-            resolved
+            resolved.clone()
         };
+
+        // Collect ancestor directories for path traversal (both forms)
+        if rule.path_match != PathMatch::Regex {
+            for path in [&canonical, &resolved] {
+                let mut dir = path.as_str();
+                while let Some(pos) = dir.rfind('/') {
+                    if pos == 0 {
+                        break; // "/" is already handled above
+                    }
+                    dir = &dir[..pos];
+                    if !ancestors.insert(dir.to_string()) {
+                        break; // Already seen this ancestor and all its parents
+                    }
+                }
+            }
+        }
+
         match rule.effect {
             RuleEffect::Allow => {
                 emit_caps_for_path(&mut p, &canonical, rule.caps, rule.path_match);
+                // Also emit for the non-canonical path if different, since
+                // Seatbelt may not resolve symlinks before matching.
+                if canonical != resolved {
+                    emit_caps_for_path(&mut p, &resolved, rule.caps, rule.path_match);
+                }
             }
             RuleEffect::Deny => {
                 emit_deny_for_path(&mut p, &canonical, rule.caps, rule.path_match);
+                if canonical != resolved {
+                    emit_deny_for_path(&mut p, &resolved, rule.caps, rule.path_match);
+                }
             }
         }
+    }
+
+    // Allow stat()/readdir() on ancestor directories so realpath() can
+    // traverse to rule paths.
+    for ancestor in &ancestors {
+        p += &format!(
+            "(allow file-read* (literal \"{}\"))\n",
+            sbpl_escape(ancestor)
+        );
     }
 
     // Network
@@ -112,12 +180,37 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     p
 }
 
-/// Resolve symlinks in a path for Seatbelt matching. Falls back to the
-/// original string if canonicalization fails (e.g., path doesn't exist yet).
+/// Resolve symlinks for Seatbelt matching, but avoid resolving firmlinks.
+///
+/// macOS firmlinks (e.g. `/Users` → `/System/Volumes/Data/Users`) are
+/// transparent to Seatbelt — it evaluates against the firmlink path, not
+/// the underlying volume path.  `std::fs::canonicalize` resolves firmlinks,
+/// which produces paths that Seatbelt never sees, causing rules to silently
+/// fail.
+///
+/// Instead we only resolve the well-known macOS symlinks that Seatbelt
+/// *does* follow (`/var` → `/private/var`, `/tmp` → `/private/tmp`, etc.).
 fn canonicalize_or_keep(path: &str) -> String {
-    std::fs::canonicalize(path)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| path.to_string())
+    // Well-known macOS symlinks that Seatbelt resolves.
+    static SYMLINK_PREFIXES: &[(&str, &str)] = &[
+        ("/var/", "/private/var/"),
+        ("/tmp/", "/private/tmp/"),
+        ("/etc/", "/private/etc/"),
+    ];
+
+    for &(prefix, replacement) in SYMLINK_PREFIXES {
+        if path.starts_with(prefix) {
+            return format!("{}{}", replacement, &path[prefix.len()..]);
+        }
+    }
+
+    // Exact matches (no trailing slash)
+    match path {
+        "/var" => "/private/var".to_string(),
+        "/tmp" => "/private/tmp".to_string(),
+        "/etc" => "/private/etc".to_string(),
+        _ => path.to_string(),
+    }
 }
 
 /// Escape a path string for use inside an SBPL string literal.

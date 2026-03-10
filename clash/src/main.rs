@@ -29,8 +29,8 @@ fn main() -> Result<()> {
             }
             Commands::Fmt { check, files } => cmd::fmt::run(check, files),
             Commands::Policy(policy_cmd) => cmd::policy::run(policy_cmd),
-            Commands::Shell { command, cwd, args } => {
-                clash::shell_cmd::run_shell(command, args, cwd)
+            Commands::Shell { command, cwd, sandbox, debug, args } => {
+                clash::shell_cmd::run_shell(command, args, cwd, sandbox, debug)
             }
             Commands::Sandbox(sandbox_cmd) => run_sandbox(sandbox_cmd),
             Commands::Doctor => cmd::doctor::run(),

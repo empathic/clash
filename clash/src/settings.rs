@@ -278,6 +278,37 @@ impl ClashSettings {
         levels
     }
 
+    /// Diagnostic: reports what paths were checked for each policy level and why
+    /// they were not found. Returns a list of `(level_name, path_or_error, reason)`.
+    pub fn diagnose_missing_policies() -> Vec<(String, String, String)> {
+        let mut results = Vec::new();
+        for &level in PolicyLevel::all_by_precedence() {
+            match Self::policy_file_for_level(level) {
+                Ok(path) => {
+                    let path_str = path.display().to_string();
+                    match std::fs::metadata(&path) {
+                        Ok(m) if m.is_file() => {
+                            results.push((level.name().to_string(), path_str, "ok".to_string()));
+                        }
+                        Ok(_) => {
+                            results.push((level.name().to_string(), path_str, "path exists but is not a file".to_string()));
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            results.push((level.name().to_string(), path_str, "file does not exist".to_string()));
+                        }
+                        Err(e) => {
+                            results.push((level.name().to_string(), path_str, format!("{e}")));
+                        }
+                    }
+                }
+                Err(e) => {
+                    results.push((level.name().to_string(), "—".to_string(), format!("{e}")));
+                }
+            }
+        }
+        results
+    }
+
     /// Determine the default scope for modification commands.
     ///
     /// If a project-level policy exists, returns `Project`; else `User`.

@@ -145,6 +145,14 @@ pub enum Commands {
         #[arg(long, default_value = ".")]
         cwd: String,
 
+        /// Default sandbox name from the policy (used when no rule-specific sandbox matches)
+        #[arg(long)]
+        sandbox: Option<String>,
+
+        /// Print the sandbox policy matched for each command before execution
+        #[arg(long)]
+        debug: bool,
+
         /// Script path and arguments
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
