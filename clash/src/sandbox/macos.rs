@@ -106,7 +106,11 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
         let resolved = SandboxPolicy::resolve_path(&rule.path, cwd);
         // Strip trailing slashes — Seatbelt's `subpath` filter requires
         // paths without trailing separators (e.g. $TMPDIR ends with "/").
-        let resolved = resolved.trim_end_matches('/').to_string();
+        let resolved = if resolved.len() > 1 {
+            resolved.trim_end_matches('/').to_string()
+        } else {
+            resolved
+        };
         let canonical = if rule.path_match != PathMatch::Regex {
             canonicalize_or_keep(&resolved)
         } else {

@@ -107,7 +107,10 @@ pub fn try_load_policy(
                 path: path.to_path_buf(),
                 source: json_source.clone(),
             };
-            Some(ValidatedPolicy { json_source, loaded })
+            Some(ValidatedPolicy {
+                json_source,
+                loaded,
+            })
         }
         Err(e) => {
             error!(

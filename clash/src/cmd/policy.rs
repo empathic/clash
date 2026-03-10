@@ -233,11 +233,7 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
                         policy.rule_count()
                     );
                     for w in &warnings {
-                        eprintln!(
-                            "  {} {}",
-                            style::err_yellow("warning:"),
-                            w,
-                        );
+                        eprintln!("  {} {}", style::err_yellow("warning:"), w,);
                     }
                 }
             }
@@ -306,10 +302,7 @@ fn validate_single_file(path: &std::path::Path, json: bool) -> Result<()> {
                 if !warnings.is_empty() {
                     output["warnings"] = serde_json::json!(warnings);
                 }
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&output)?
-                );
+                println!("{}", serde_json::to_string_pretty(&output)?);
             } else {
                 println!("{} {}", style::green_bold("✓"), path.display());
                 println!(
@@ -318,11 +311,7 @@ fn validate_single_file(path: &std::path::Path, json: bool) -> Result<()> {
                     policy.rule_count()
                 );
                 for w in &warnings {
-                    eprintln!(
-                        "  {} {}",
-                        style::err_yellow("warning:"),
-                        w,
-                    );
+                    eprintln!("  {} {}", style::err_yellow("warning:"), w,);
                 }
             }
             Ok(())
