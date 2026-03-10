@@ -232,7 +232,7 @@ def _path_match(path_value, worktree = False, match_type = "literal"):
         nodes = _fs_nodes(path_pat, _read, _write)
 
         sandbox_rules = []
-        if effect == allow:
+        if effect == allow or effect == deny:
             caps = _caps_from_bools(
                 read or all_ops,
                 write or all_ops,
@@ -241,6 +241,7 @@ def _path_match(path_value, worktree = False, match_type = "literal"):
             )
             if len(caps) > 0:
                 sandbox_rules.append({
+                    "effect": "allow" if effect == allow else "deny",
                     "path_value": path_value,
                     "caps": caps,
                     "match_type": match_type,
@@ -593,7 +594,7 @@ def _sandbox_to_json(sb):
         path_str = _resolve_path_value(pv)
         caps = r.get("caps", ["read", "write", "create"])
         rules.append({
-            "effect": "allow",
+            "effect": r.get("effect", "allow"),
             "caps": caps,
             "path": path_str,
             "path_match": r.get("match_type", "subpath"),
