@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use crate::policy::match_tree::CompiledPolicy;
+use crate::policy_loader;
 use anyhow::{Context, Result};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
-use tracing::{Level, error, info, instrument, warn};
+use tracing::{Level, info, instrument, warn};
 
 use crate::audit::AuditConfig;
 use crate::notifications::NotificationConfig;
@@ -379,7 +380,7 @@ impl ClashSettings {
 
     /// Set the policy source directly (compile from policy source text).
     pub fn set_policy_source(&mut self, source: &str) {
-        match crate::policy::compile::compile_to_tree(source) {
+        match policy_loader::compile_source(source) {
             Ok(tree) => {
                 self.compiled = Some(tree);
                 self.policy_error = None;
@@ -393,8 +394,9 @@ impl ClashSettings {
         }
     }
 
-    /// Maximum policy file size (1 MiB).
-    const MAX_POLICY_SIZE: u64 = 1024 * 1024;
+    /// Maximum policy file size (1 MiB) — canonical value in [`policy_loader`].
+    #[cfg(test)]
+    const MAX_POLICY_SIZE: u64 = policy_loader::MAX_POLICY_SIZE;
 
     /// Return the pre-compiled policy tree, if one was successfully compiled.
     pub fn policy_tree(&self) -> Option<&CompiledPolicy> {
@@ -412,80 +414,13 @@ impl ClashSettings {
     /// Returns true if a policy was successfully loaded and compiled.
     #[cfg(test)]
     fn load_policy_from_path(&mut self, path: &std::path::Path) -> bool {
-        let metadata = match std::fs::metadata(path) {
-            Ok(m) => m,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
-            Err(e) => {
-                warn!(path = %path.display(), error = %e, "Failed to stat policy file");
-                self.policy_error = Some(format!(
-                    "Cannot read policy file at {}: {}",
-                    path.display(),
-                    e
-                ));
-                return false;
-            }
-        };
-
-        if metadata.is_dir() {
-            let msg = format!(
-                "{} is a directory, not a file. Remove it and run `clash init` to create a policy.",
-                path.display()
-            );
-            warn!(path = %path.display(), "policy file is a directory");
-            self.policy_error = Some(msg);
-            return false;
-        }
-
-        if metadata.len() > Self::MAX_POLICY_SIZE {
-            let msg = format!(
-                "policy file is too large ({} bytes, max {} bytes). \
-                 Check that {} is the correct file.",
-                metadata.len(),
-                Self::MAX_POLICY_SIZE,
-                path.display()
-            );
-            warn!(path = %path.display(), size = metadata.len(), "policy file exceeds size limit");
-            self.policy_error = Some(msg);
-            return false;
-        }
-
-        // Warn about overly permissive file permissions on Unix.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = metadata.permissions().mode();
-            if mode & 0o044 != 0 {
-                warn!(
-                    path = %path.display(),
-                    mode = format!("{:o}", mode),
-                    "policy file is readable by other users; consider `chmod 600`"
-                );
-            }
-        }
-
-        match evaluate_star_policy(path) {
-            Ok(json_source) => {
+        match policy_loader::load_and_compile_single(path, &mut self.policy_error) {
+            Some(tree) => {
                 self.load_notification_audit_config();
-                match crate::policy::compile::compile_to_tree(&json_source) {
-                    Ok(tree) => {
-                        info!(path = %path.display(), "Loaded policy");
-                        self.compiled = Some(tree);
-                        true
-                    }
-                    Err(e) => {
-                        let msg = format!("Failed to compile policy: {}", e);
-                        warn!(path = %path.display(), error = %e, "Failed to compile policy");
-                        self.policy_error = Some(msg);
-                        false
-                    }
-                }
+                self.compiled = Some(tree);
+                true
             }
-            Err(e) => {
-                let msg = format!("Failed to evaluate policy: {}", e);
-                warn!(path = %path.display(), error = %e, "Failed to evaluate policy");
-                self.policy_error = Some(msg);
-                false
-            }
+            None => false,
         }
     }
 
@@ -543,21 +478,27 @@ impl ClashSettings {
         // Load persistent levels (user, project) in reverse precedence order.
         for &level in PolicyLevel::all_by_precedence().iter().rev() {
             if let Ok(path) = Self::policy_file_for_level(level)
-                && let Some((source, loaded)) = this.try_load_policy_from_path(level, &path)
+                && let Some(validated) =
+                    policy_loader::try_load_policy(level, &path, &mut this.policy_error)
             {
-                level_sources.push((level, source));
-                this.loaded_policies.push(loaded);
+                if level == PolicyLevel::User {
+                    this.load_notification_audit_config();
+                }
+                level_sources.push((level, validated.json_source));
+                this.loaded_policies.push(validated.loaded);
             }
         }
 
         // Load session-level policy if session_id is provided.
         if let Some(sid) = session_id {
             let session_path = Self::session_policy_path(sid);
-            if let Some((source, loaded)) =
-                this.try_load_policy_from_path(PolicyLevel::Session, &session_path)
-            {
-                level_sources.push((PolicyLevel::Session, source));
-                this.loaded_policies.push(loaded);
+            if let Some(validated) = policy_loader::try_load_policy(
+                PolicyLevel::Session,
+                &session_path,
+                &mut this.policy_error,
+            ) {
+                level_sources.push((PolicyLevel::Session, validated.json_source));
+                this.loaded_policies.push(validated.loaded);
             }
         }
 
@@ -569,19 +510,8 @@ impl ClashSettings {
             return Ok(this);
         }
 
-        // Compile (single-level or multi-level) directly to CompiledPolicy.
-        let result = if level_sources.len() == 1 {
-            let (_, source) = &level_sources[0];
-            crate::policy::compile::compile_to_tree(source)
-        } else {
-            let level_refs: Vec<(PolicyLevel, &str)> = level_sources
-                .iter()
-                .map(|(l, s)| (*l, s.as_str()))
-                .collect();
-            crate::policy::compile::compile_multi_level_to_tree(&level_refs)
-        };
-
-        match result {
+        // Compile all discovered policies into a single tree.
+        match policy_loader::compile_policies(&level_sources) {
             Ok(tree) => {
                 this.compiled = Some(tree);
                 this.policy_error = None;
@@ -594,70 +524,6 @@ impl ClashSettings {
         }
 
         Ok(this)
-    }
-
-    /// Try to load and validate a policy file from a path, returning the source
-    /// text and a LoadedPolicy if successful.
-    fn try_load_policy_from_path(
-        &mut self,
-        level: PolicyLevel,
-        path: &std::path::Path,
-    ) -> Option<(String, LoadedPolicy)> {
-        let metadata = match std::fs::metadata(path) {
-            Ok(m) => m,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
-            Err(e) => {
-                warn!(
-                    path = %path.display(),
-                    level = %level,
-                    error = %e,
-                    "Failed to stat policy file"
-                );
-                return None;
-            }
-        };
-
-        if metadata.is_dir() || metadata.len() > Self::MAX_POLICY_SIZE {
-            return None;
-        }
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = metadata.permissions().mode();
-            if mode & 0o044 != 0 {
-                warn!(
-                    path = %path.display(),
-                    level = %level,
-                    mode = format!("{:o}", mode),
-                    "policy file is readable by other users; consider `chmod 600`"
-                );
-            }
-        }
-
-        match evaluate_star_policy(path) {
-            Ok(json_source) => {
-                if level == PolicyLevel::User {
-                    self.load_notification_audit_config();
-                }
-                let loaded = LoadedPolicy {
-                    level,
-                    path: path.to_path_buf(),
-                    source: json_source.clone(),
-                };
-                Some((json_source, loaded))
-            }
-            Err(e) => {
-                error!(
-                    path = %path.display(),
-                    level = %level,
-                    error = %e,
-                    "Failed to evaluate starlark policy"
-                );
-                self.policy_error = Some(format!("Failed to evaluate {}: {}", path.display(), e));
-                None
-            }
-        }
     }
 }
 
@@ -699,15 +565,11 @@ fn parse_audit_config(yaml_str: &str) -> AuditConfig {
 }
 
 /// Evaluate a `.star` policy file and return the compiled JSON source.
+///
+/// Delegates to [`policy_loader::evaluate_star_policy`]. This wrapper is kept
+/// for backward compatibility with callers that import from `settings`.
 pub fn evaluate_star_policy(path: &std::path::Path) -> Result<String> {
-    let source = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-
-    let base_dir = path.parent().unwrap_or(std::path::Path::new("."));
-
-    let output = clash_starlark::evaluate(&source, &path.display().to_string(), base_dir)?;
-
-    Ok(output.json)
+    policy_loader::evaluate_star_policy(path)
 }
 
 /// Find the nearest ancestor directory containing the given name.

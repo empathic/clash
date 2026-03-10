@@ -11,6 +11,7 @@
 //! - [`handlers`] — Pre-built hook handlers that wire permissions, notifications,
 //!   and session validation together.
 //! - [`settings`] — Loading and resolving clash configuration and policy files.
+//! - [`policy_loader`] — Policy file discovery, Starlark evaluation, and compilation.
 //! - [`sandbox`] — Platform-specific (Linux/macOS) sandbox enforcement backends.
 //! - [`audit`] — Structured audit logging of policy decisions.
 //! - [`notifications`] — Desktop notifications and Zulip integration.
@@ -40,6 +41,7 @@ pub mod network_hints;
 pub mod notifications;
 pub mod permissions;
 pub mod policy;
+pub mod policy_loader;
 pub mod sandbox;
 pub mod sandbox_cmd;
 pub mod sandbox_fs_hints;
