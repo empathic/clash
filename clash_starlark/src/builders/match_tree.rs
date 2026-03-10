@@ -149,14 +149,15 @@ fn set_children_on_deepest_leaf(json: &mut JsonValue, children: Vec<JsonValue>) 
 /// Create a condition node. `observe` is JSON (string or structured).
 #[allow(dead_code)]
 pub fn mt_condition(observe: JsonValue, pattern: JsonValue) -> MatchTreeNode {
-    mt_condition_with_doc(observe, pattern, None)
+    mt_condition_with_doc(observe, pattern, None, None)
 }
 
-/// Create a condition node with an optional docstring.
+/// Create a condition node with an optional docstring and source location.
 pub fn mt_condition_with_doc(
     observe: JsonValue,
     pattern: JsonValue,
     doc: Option<String>,
+    source: Option<String>,
 ) -> MatchTreeNode {
     let mut condition = json!({
         "observe": observe,
@@ -168,6 +169,12 @@ pub fn mt_condition_with_doc(
             .as_object_mut()
             .unwrap()
             .insert("doc".to_string(), json!(d));
+    }
+    if let Some(s) = source {
+        condition
+            .as_object_mut()
+            .unwrap()
+            .insert("source".to_string(), json!(s));
     }
     MatchTreeNode {
         json: json!({"condition": condition}),

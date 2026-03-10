@@ -870,6 +870,25 @@ def main():
             "tool doc should persist on condition"
         );
 
+        // Check source location is set from the Starlark call site
+        let git_source = tree[0]["condition"]["source"].as_str();
+        assert!(
+            git_source.is_some(),
+            "exe() condition should have a source location"
+        );
+        // Source should point to the user's policy file, not @clash//std.star
+        assert!(
+            !git_source.unwrap().contains("@clash//"),
+            "source should be the user's file, not stdlib, got: {}",
+            git_source.unwrap()
+        );
+        // Source should contain a line number
+        assert!(
+            git_source.unwrap().contains(':'),
+            "source should include line number, got: {}",
+            git_source.unwrap()
+        );
+
         // Check sandbox docstring
         let sandbox = &doc["sandboxes"]["dev"];
         assert_eq!(

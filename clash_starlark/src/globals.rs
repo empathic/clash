@@ -4,6 +4,7 @@
 //! Rust (typed wrappers, JSON bridge, eval context) stay here.
 
 use starlark::environment::{GlobalsBuilder, LibraryExtension};
+use starlark::eval::Evaluator;
 use starlark::starlark_module;
 use starlark::values::{Value, ValueLike};
 
@@ -16,6 +17,22 @@ pub fn clash_globals() -> starlark::environment::Globals {
     LibraryExtension::StructType.add(&mut builder);
     register_globals(&mut builder);
     builder.build()
+}
+
+/// Walk the Starlark call stack and return the source location of the first
+/// frame that isn't from the stdlib (`@clash//` prefix). This gives us the
+/// user's policy file and line number, e.g. `policy.star:3:1`.
+fn caller_source_location(eval: &Evaluator) -> Option<String> {
+    let stack = eval.call_stack();
+    for frame in &stack.frames {
+        if let Some(loc) = &frame.location {
+            let filename = loc.file.filename();
+            if !filename.starts_with("@clash//") {
+                return Some(loc.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn starlark_to_json(value: Value) -> anyhow::Result<serde_json::Value> {
@@ -45,12 +62,16 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = pos)] observe: Value<'v>,
         #[starlark(require = pos)] pattern: &MatchTreeNode,
         #[starlark(require = named)] doc: Option<&str>,
+        eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<MatchTreeNode> {
         let observe_json = starlark_to_json(observe)?;
+        // Walk the call stack to find the first non-stdlib frame (the user's policy file).
+        let source = caller_source_location(eval);
         Ok(mt::mt_condition_with_doc(
             observe_json,
             pattern.json.clone(),
             doc.map(|s| s.to_string()),
+            source,
         ))
     }
 
