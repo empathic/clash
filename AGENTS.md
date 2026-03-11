@@ -21,7 +21,7 @@
 * `clash` is an installed binary on the user's PATH. ALWAYS run it directly as `clash` (e.g., `clash status`, `clash policy list`).
 * NEVER use `cargo run --bin clash` to run clash. That is for building/testing the crate, not for invoking the tool.
 * Skills reference `clash` commands — execute them exactly as written.
-* Available CLI commands: `clash init`, `clash uninstall`, `clash status`, `clash fmt`, `clash policy list`, `clash policy validate`, `clash policy show`, `clash explain`, `clash doctor`, `clash update`, `clash launch`, `clash sandbox`.
+* Available CLI commands: `clash init`, `clash uninstall`, `clash status`, `clash fmt`, `clash policy list`, `clash policy validate`, `clash policy show`, `clash policy allow`, `clash policy deny`, `clash policy remove`, `clash explain`, `clash doctor`, `clash update`, `clash launch`, `clash sandbox exec`, `clash sandbox test`, `clash sandbox check`, `clash sandbox create`, `clash sandbox delete`, `clash sandbox list`, `clash sandbox add-rule`, `clash sandbox remove-rule`.
 
 ## Development
 
@@ -48,7 +48,7 @@
 * Policy source: `clash/src/policy/` — parse, compile, eval, IR
 * Rules are JSON objects with an `effect` and a capability matcher, e.g. `{ "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }`
 * The policy speaks in capabilities, not Claude Code tool names — the eval layer maps tools to capabilities
-* Policy files use `.json` or `.star` extension (`.star` preferred when both exist)
+* Policy files use `.json` or `.star` extension (`.json` preferred when both exist)
 * The `clash-starlark` crate evaluates `.star` files → JSON using Starlark (a Python-like config language)
 * Starlark policies define a `main()` function that returns a policy value
 

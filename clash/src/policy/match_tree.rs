@@ -279,6 +279,30 @@ fn default_effect() -> Effect {
     Effect::Ask
 }
 
+// ---------------------------------------------------------------------------
+// PolicyManifest — on-disk policy.json representation
+// ---------------------------------------------------------------------------
+
+/// On-disk `policy.json` representation. Parsed at the loader level;
+/// `includes` are resolved and merged before the inner `CompiledPolicy` is used.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyManifest {
+    /// Starlark files to include (evaluated and merged at load time).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub includes: Vec<IncludeEntry>,
+    /// The inline policy (tree, sandboxes, default_effect, etc.).
+    #[serde(flatten)]
+    pub policy: CompiledPolicy,
+}
+
+/// A single include directive in `policy.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncludeEntry {
+    /// Path to a `.star` file. `@clash//` prefix resolves to the embedded stdlib;
+    /// other paths are relative to the directory containing `policy.json`.
+    pub path: String,
+}
+
 impl CompiledPolicy {
     /// Return the number of root-level rule branches.
     pub fn rule_count(&self) -> usize {

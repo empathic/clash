@@ -57,6 +57,67 @@ pub enum PolicyCmd {
         #[arg(long)]
         scope: Option<String>,
     },
+    /// Add an allow rule for a tool or binary
+    ///
+    /// Examples:
+    ///   clash policy allow "gh pr create"
+    ///   clash policy allow --tool Read
+    ///   clash policy allow --bin grep --sandbox cwd
+    Allow {
+        /// Command to allow (e.g. "gh pr create" → bin=gh, args=[pr, create])
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+        /// Tool name (e.g. "Bash", "Read", "Write")
+        #[arg(long)]
+        tool: Option<String>,
+        /// Binary name (implies --tool Bash)
+        #[arg(long)]
+        bin: Option<String>,
+        /// Named sandbox to apply (must be defined in the policy)
+        #[arg(long)]
+        sandbox: Option<String>,
+        /// Policy scope: "user" or "project" (default: auto-detect)
+        #[arg(long)]
+        scope: Option<String>,
+    },
+    /// Add a deny rule for a tool or binary
+    ///
+    /// Examples:
+    ///   clash policy deny "rm -rf"
+    ///   clash policy deny --tool WebSearch
+    Deny {
+        /// Command to deny (e.g. "git push" → bin=git, args=[push])
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+        /// Tool name (e.g. "Bash", "Read", "Write")
+        #[arg(long)]
+        tool: Option<String>,
+        /// Binary name (implies --tool Bash)
+        #[arg(long)]
+        bin: Option<String>,
+        /// Policy scope: "user" or "project" (default: auto-detect)
+        #[arg(long)]
+        scope: Option<String>,
+    },
+    /// Remove a rule matching a tool or binary
+    ///
+    /// Examples:
+    ///   clash policy remove "gh pr create"
+    ///   clash policy remove --tool Read
+    Remove {
+        /// Command to match (e.g. "gh pr create")
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+        /// Tool name (e.g. "Bash", "Read", "Write")
+        #[arg(long)]
+        tool: Option<String>,
+        /// Binary name (implies --tool Bash)
+        #[arg(long)]
+        bin: Option<String>,
+        /// Policy scope: "user" or "project" (default: auto-detect)
+        #[arg(long)]
+        scope: Option<String>,
+    },
     // --- Hidden/power-user subcommands ---
     /// Show policy summary: active policy, default effect, rule count
     #[command(hide = true)]

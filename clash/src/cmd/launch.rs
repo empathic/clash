@@ -12,7 +12,7 @@ pub fn run(policy_path: Option<String>, args: Vec<String>) -> Result<()> {
 
     // Validate that we have a policy if one was specified
     if let Some(ref path) = policy_path {
-        let json = crate::settings::evaluate_star_policy(std::path::Path::new(path))
+        let json = crate::settings::evaluate_policy_file(std::path::Path::new(path))
             .with_context(|| format!("failed to evaluate policy file: {}", path))?;
         crate::policy::compile::compile_to_tree(&json)
             .with_context(|| format!("failed to compile policy file: {}", path))?;
