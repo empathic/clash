@@ -71,9 +71,23 @@ fn render(format: &str) -> Result<()> {
             return Ok(());
         }
     };
-    let output = format_stats(&stats, format);
+
+    let output = if crate::settings::is_allow_all() {
+        format_allow_all(&stats)
+    } else {
+        format_stats(&stats, format)
+    };
     print!("{}", output);
     Ok(())
+}
+
+/// Format status line for allow-all mode: `⚡clash allow-all ✓N`.
+fn format_allow_all(stats: &SessionStats) -> String {
+    let prefix = format!("{}clash {}", style::cyan("⚡"), style::yellow("allow-all"));
+    if stats.allowed == 0 {
+        return prefix;
+    }
+    format!("{} {}{}", prefix, style::green("✓"), stats.allowed)
 }
 
 /// Format session stats into a status line string.
@@ -324,6 +338,34 @@ mod tests {
         assert!(
             output.contains("clash"),
             "should contain 'clash' prefix, got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_allow_all_shows_count() {
+        let stats = stats_with(3, 0, 0);
+        let output = format_allow_all(&stats);
+        assert!(
+            output.contains("allow-all"),
+            "should contain 'allow-all' label, got: {output}"
+        );
+        assert!(
+            output.contains('3'),
+            "should contain allowed count, got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_allow_all_no_stats_no_ready() {
+        let stats = stats_with(0, 0, 0);
+        let output = format_allow_all(&stats);
+        assert!(
+            output.contains("allow-all"),
+            "should contain 'allow-all' label, got: {output}"
+        );
+        assert!(
+            !output.contains("ready"),
+            "should not show ready, got: {output}"
         );
     }
 }

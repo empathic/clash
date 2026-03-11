@@ -4,7 +4,7 @@ use tracing::{Level, info, instrument};
 use crate::cli::HooksCmd;
 use crate::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput, is_interactive_tool};
 use crate::permissions::check_permission;
-use crate::policy::Effect;
+use crate::policy::{DecisionTrace, Effect};
 use crate::session_policy;
 use crate::settings::{ClashSettings, HookContext};
 use crate::trace;
@@ -42,6 +42,8 @@ impl HooksCmd {
             return self.run_disabled();
         }
 
+        let allow_all = crate::settings::is_allow_all();
+
         let output = match self {
             Self::PreToolUse => {
                 let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
@@ -50,7 +52,29 @@ impl HooksCmd {
                     Some(&input.session_id),
                     Some(&hook_ctx),
                 )?;
-                let output = check_permission(&input, &settings)?;
+                let output = if allow_all {
+                    info!(
+                        tool = %input.tool_name,
+                        "CLASH_ALLOW_ALL: auto-allowing without policy evaluation"
+                    );
+                    let empty_trace = DecisionTrace {
+                        matched_rules: vec![],
+                        skipped_rules: vec![],
+                        final_resolution: "CLASH_ALLOW_ALL".into(),
+                    };
+                    crate::audit::log_decision(
+                        &settings.audit,
+                        &input.session_id,
+                        &input.tool_name,
+                        &input.tool_input,
+                        Effect::Allow,
+                        Some("CLASH_ALLOW_ALL"),
+                        &empty_trace,
+                    );
+                    HookOutput::allow(Some("CLASH_ALLOW_ALL: policy bypassed".into()), None)
+                } else {
+                    check_permission(&input, &settings)?
+                };
 
                 // Interactive tools (e.g., AskUserQuestion) require user input
                 // via Claude Code's native UI. Returning "allow" would skip that
