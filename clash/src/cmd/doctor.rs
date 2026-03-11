@@ -150,7 +150,7 @@ fn check_policy_parsing() -> CheckResult {
     let mut errors = Vec::new();
 
     for (level, path) in &levels {
-        match crate::settings::evaluate_star_policy(path) {
+        match crate::settings::evaluate_policy_file(path) {
             Ok(json) => {
                 if let Err(e) = crate::policy::compile::compile_to_tree(&json) {
                     errors.push(format!("{}: {}", level, e));

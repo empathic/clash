@@ -99,6 +99,29 @@ clash explain --json bash rm -rf /
 
 ## clash policy
 
+### clash policy allow / deny / remove
+
+Add or remove rules from your `policy.json`. Supports positional command syntax or explicit flags.
+
+```bash
+# Positional syntax — parsed as bin + args
+clash policy allow "gh pr create"
+clash policy deny "rm -rf"
+clash policy remove "gh pr create"
+
+# Explicit flags
+clash policy allow --tool Read
+clash policy deny --bin curl
+clash policy allow --bin cargo --sandbox cwd
+```
+
+| Flag | Description |
+|---|---|
+| `--tool <TOOL>` | Tool name (e.g. "Bash", "Read") |
+| `--bin <BIN>` | Binary name (implies --tool Bash) |
+| `--sandbox <SANDBOX>` | Named sandbox to apply (allow only) |
+| `--scope <SCOPE>` | "user" or "project" (default: auto-detect) |
+
 ### clash policy show
 
 Show the compiled decision tree.
@@ -126,6 +149,26 @@ clash policy list
 ---
 
 ## clash sandbox
+
+### clash sandbox create / delete / list
+
+Manage named sandbox definitions in your `policy.json`.
+
+```bash
+clash sandbox create dev --network allow --doc "Dev sandbox"
+clash sandbox delete dev
+clash sandbox list [--json]
+```
+
+### clash sandbox add-rule / remove-rule
+
+Add or remove filesystem rules within a named sandbox.
+
+```bash
+clash sandbox add-rule dev ./src --caps read
+clash sandbox add-rule dev ./target --caps read,write
+clash sandbox remove-rule dev ./target
+```
 
 ### clash sandbox check
 

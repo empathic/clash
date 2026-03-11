@@ -38,9 +38,9 @@ fn is_truthy_disable_value(value: &str) -> bool {
 /// Higher-precedence levels override lower ones: Session > Project > User.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PolicyLevel {
-    /// User-level policy: `~/.clash/policy.star`
+    /// User-level policy: `~/.clash/policy.json` (or `policy.star`)
     User = 0,
-    /// Project-level policy: `<project_root>/.clash/policy.star`
+    /// Project-level policy: `<project_root>/.clash/policy.json` (or `policy.star`)
     Project = 1,
     /// Session-level policy: `/tmp/clash-<session_id>/policy.star`
     /// Temporary rules that last only for the current Claude Code session.
@@ -177,22 +177,26 @@ impl ClashSettings {
     /// Returns the user-level policy file path.
     ///
     /// Respects `CLASH_POLICY_FILE` env var for override.
+    /// Prefers `policy.json` over `policy.star` when both exist.
     pub fn policy_file() -> Result<PathBuf> {
         if let Ok(p) = std::env::var("CLASH_POLICY_FILE") {
             return Ok(PathBuf::from(p));
         }
-        Ok(Self::settings_dir()?.join("policy.star"))
+        let dir = Self::settings_dir()?;
+        Ok(prefer_json_over_star(&dir))
     }
 
     /// Returns the policy file path for a specific level.
     ///
+    /// Prefers `policy.json` over `policy.star` when both exist.
     /// For `Session`, reads the active session ID from `~/.clash/active_session`.
     pub fn policy_file_for_level(level: PolicyLevel) -> Result<PathBuf> {
         match level {
             PolicyLevel::User => Self::policy_file(),
             PolicyLevel::Project => {
                 let root = Self::project_root()?;
-                Ok(root.join(".clash").join("policy.star"))
+                let dir = root.join(".clash");
+                Ok(prefer_json_over_star(&dir))
             }
             PolicyLevel::Session => {
                 let session_id = Self::active_session_id()?;
@@ -530,6 +534,16 @@ impl ClashSettings {
     }
 }
 
+/// Return `policy.json` if it exists in `dir`, otherwise `policy.star`.
+fn prefer_json_over_star(dir: &std::path::Path) -> PathBuf {
+    let json_path = dir.join("policy.json");
+    if json_path.exists() {
+        json_path
+    } else {
+        dir.join("policy.star")
+    }
+}
+
 /// Shorten a path by replacing the home directory prefix with `~`.
 fn tilde_path(path: &std::path::Path) -> String {
     if let Some(home) = home_dir() {
@@ -583,6 +597,18 @@ fn parse_audit_config(yaml_str: &str) -> AuditConfig {
 /// for backward compatibility with callers that import from `settings`.
 pub fn evaluate_star_policy(path: &std::path::Path) -> Result<String> {
     policy_loader::evaluate_star_policy(path)
+}
+
+/// Evaluate a policy file (`.json` or `.star`) and return the compiled JSON source.
+///
+/// Dispatches based on file extension: `.json` → [`policy_loader::load_json_policy`],
+/// `.star` (or anything else) → [`policy_loader::evaluate_star_policy`].
+pub fn evaluate_policy_file(path: &std::path::Path) -> Result<String> {
+    if path.extension().is_some_and(|ext| ext == "json") {
+        policy_loader::load_json_policy(path)
+    } else {
+        policy_loader::evaluate_star_policy(path)
+    }
 }
 
 /// Find the nearest ancestor directory containing the given name.

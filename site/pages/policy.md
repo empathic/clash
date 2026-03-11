@@ -6,7 +6,7 @@ permalink: /policy/
 ---
 
 <h1 class="page-title">Policy Language</h1>
-<p class="page-desc">Everything you need to write clash policies. Policies are written in Starlark (<code>.star</code> files) and compiled to JSON IR.</p>
+<p class="page-desc">Everything you need to write clash policies. Policies can be written in Starlark (<code>.star</code> files) or managed via <code>policy.json</code> using CLI commands.</p>
 
 ## Effects
 
@@ -227,7 +227,25 @@ def main():
 In v5, composition happens at the Starlark level — the compiled output is a flat match tree with no includes. The tree from the Starlark above would contain condition nodes for git commands (deny push/reset, ask commit, allow others) followed by the remaining rules, all flattened into a single tree array.
 </details>
 
-Starlark `load()` imports values from other `.star` files. All composition (function calls, list splicing, imports) resolves at compile time — the v5 JSON IR has no include mechanism.
+Starlark `load()` imports values from other `.star` files. All composition (function calls, list splicing, imports) resolves at compile time.
+
+### Machine-readable policy (policy.json)
+
+For CLI-driven rule management, clash supports `policy.json` — a JSON file that extends the v5 IR with an `includes` field:
+
+```json
+{
+  "schema_version": 5,
+  "default_effect": "deny",
+  "includes": [
+    { "path": "@clash//builtin.star" },
+    { "path": "team-rules.star" }
+  ],
+  "tree": []
+}
+```
+
+CLI commands (`clash policy allow/deny/remove`) operate on `policy.json`. Included `.star` files are compiled and merged at load time, with inline `tree` rules taking precedence. When both `.json` and `.star` exist at the same level, `.json` takes precedence.
 
 ### Merging policies
 

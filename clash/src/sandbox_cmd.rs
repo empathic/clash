@@ -1,5 +1,7 @@
-use crate::policy::sandbox_types::{NetworkPolicy, SandboxPolicy};
+use crate::policy::sandbox_edit;
+use crate::policy::sandbox_types::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy};
 use crate::sandbox;
+use crate::style;
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use tracing::{Level, info, instrument};
@@ -48,6 +50,79 @@ pub enum SandboxCmd {
 
     /// Check if sandboxing is supported on this platform
     Check,
+
+    /// Create a new named sandbox profile
+    Create {
+        /// Name for the sandbox
+        name: String,
+        /// Default capabilities (e.g. "read + execute")
+        #[arg(long)]
+        default: String,
+        /// Network policy: deny, allow, localhost
+        #[arg(long, default_value = "deny")]
+        network: String,
+        /// Description of the sandbox
+        #[arg(long)]
+        doc: Option<String>,
+        /// Policy scope: "user" or "project" (default: auto-detect)
+        #[arg(long)]
+        scope: Option<String>,
+    },
+
+    /// Delete a named sandbox profile
+    Delete {
+        /// Name of the sandbox to delete
+        name: String,
+        /// Policy scope: "user" or "project" (default: auto-detect)
+        #[arg(long)]
+        scope: Option<String>,
+    },
+
+    /// List all named sandbox profiles
+    #[command(name = "list")]
+    ListSandboxes {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Add a filesystem rule to a named sandbox
+    #[command(name = "add-rule")]
+    AddRule {
+        /// Name of the sandbox
+        name: String,
+        /// Allow capabilities (e.g. "read + write")
+        #[arg(long, group = "effect_group")]
+        allow: Option<String>,
+        /// Deny capabilities (e.g. "write + delete")
+        #[arg(long, group = "effect_group")]
+        deny: Option<String>,
+        /// Path the rule applies to (supports $PWD, $HOME, $TMPDIR)
+        #[arg(long)]
+        path: String,
+        /// Path matching mode: subpath, literal, regex
+        #[arg(long, default_value = "subpath")]
+        path_match: String,
+        /// Description of the rule
+        #[arg(long)]
+        doc: Option<String>,
+        /// Policy scope: "user" or "project" (default: auto-detect)
+        #[arg(long)]
+        scope: Option<String>,
+    },
+
+    /// Remove a filesystem rule from a named sandbox by path
+    #[command(name = "remove-rule")]
+    RemoveRule {
+        /// Name of the sandbox
+        name: String,
+        /// Path of the rule to remove
+        #[arg(long)]
+        path: String,
+        /// Policy scope: "user" or "project" (default: auto-detect)
+        #[arg(long)]
+        scope: Option<String>,
+    },
 }
 
 /// Resolve `--cwd` to an absolute path.
@@ -83,7 +158,7 @@ fn load_sandbox_for_profile(profile_name: &str, _cwd: &str) -> Result<SandboxPol
     use crate::settings::ClashSettings;
 
     let path = ClashSettings::policy_file()?;
-    let json = crate::settings::evaluate_star_policy(&path)
+    let json = crate::settings::evaluate_policy_file(&path)
         .with_context(|| format!("failed to evaluate {}", path.display()))?;
     let policy = crate::policy::compile::compile_to_tree(&json)
         .with_context(|| format!("failed to compile {}", path.display()))?;
@@ -164,6 +239,175 @@ pub fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
             }
             Ok(())
         }
+        SandboxCmd::Create {
+            name,
+            default,
+            network,
+            doc,
+            scope,
+        } => handle_create(&name, &default, &network, doc, scope),
+        SandboxCmd::Delete { name, scope } => handle_delete(&name, scope),
+        SandboxCmd::ListSandboxes { json } => handle_list_sandboxes(json),
+        SandboxCmd::AddRule {
+            name,
+            allow,
+            deny,
+            path,
+            path_match,
+            doc,
+            scope,
+        } => handle_add_rule(&name, allow, deny, &path, &path_match, doc, scope),
+        SandboxCmd::RemoveRule { name, path, scope } => handle_remove_rule(&name, &path, scope),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox CRUD handlers
+// ---------------------------------------------------------------------------
+
+fn handle_create(
+    name: &str,
+    default: &str,
+    network: &str,
+    doc: Option<String>,
+    scope: Option<String>,
+) -> Result<()> {
+    let path = crate::cmd::policy::resolve_manifest_path(scope)?;
+    let mut manifest = crate::policy_loader::read_manifest(&path)?;
+    let caps = Cap::parse(default).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let net = parse_network_policy(network)?;
+    sandbox_edit::create_sandbox(&mut manifest, name, caps, net, doc)?;
+    crate::policy_loader::write_manifest(&path, &manifest)?;
+    println!("{} Sandbox '{}' created", style::green_bold("✓"), name);
+    println!("  {}", style::dim(&path.display().to_string()));
+    Ok(())
+}
+
+fn handle_delete(name: &str, scope: Option<String>) -> Result<()> {
+    let path = crate::cmd::policy::resolve_manifest_path(scope)?;
+    let mut manifest = crate::policy_loader::read_manifest(&path)?;
+    sandbox_edit::delete_sandbox(&mut manifest, name)?;
+    crate::policy_loader::write_manifest(&path, &manifest)?;
+    println!("{} Sandbox '{}' deleted", style::green_bold("✓"), name);
+    println!("  {}", style::dim(&path.display().to_string()));
+    Ok(())
+}
+
+fn handle_list_sandboxes(json: bool) -> Result<()> {
+    let settings = crate::settings::ClashSettings::load_or_create()?;
+    let policy = match settings.policy_tree() {
+        Some(t) => t,
+        None => {
+            if let Some(err) = settings.policy_error() {
+                anyhow::bail!("{}", err);
+            }
+            anyhow::bail!("no policy configured — run `clash init`");
+        }
+    };
+
+    if json {
+        let output = serde_json::to_string_pretty(&policy.sandboxes)?;
+        println!("{output}");
+    } else if policy.sandboxes.is_empty() {
+        println!("No sandboxes defined.");
+    } else {
+        for (name, sb) in &policy.sandboxes {
+            println!(
+                "{} default={}, network={:?}, {} rules",
+                style::cyan(name),
+                sb.default.display(),
+                sb.network,
+                sb.rules.len(),
+            );
+            if let Some(ref doc) = sb.doc {
+                println!("  {}", style::dim(doc));
+            }
+            for rule in &sb.rules {
+                println!(
+                    "    {:?} {} in {}{}",
+                    rule.effect,
+                    rule.caps.display(),
+                    rule.path,
+                    match rule.path_match {
+                        PathMatch::Subpath => "",
+                        PathMatch::Literal => " (literal)",
+                        PathMatch::Regex => " (regex)",
+                    },
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn handle_add_rule(
+    name: &str,
+    allow: Option<String>,
+    deny: Option<String>,
+    path: &str,
+    path_match: &str,
+    doc: Option<String>,
+    scope: Option<String>,
+) -> Result<()> {
+    let (effect, caps_str) = match (allow, deny) {
+        (Some(caps), None) => (RuleEffect::Allow, caps),
+        (None, Some(caps)) => (RuleEffect::Deny, caps),
+        _ => anyhow::bail!("provide exactly one of --allow or --deny with capabilities"),
+    };
+    let caps = Cap::parse(&caps_str).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let pm = parse_path_match(path_match)?;
+
+    let manifest_path = crate::cmd::policy::resolve_manifest_path(scope)?;
+    let mut manifest = crate::policy_loader::read_manifest(&manifest_path)?;
+    let result = sandbox_edit::add_rule(&mut manifest, name, effect, caps, path.into(), pm, doc)?;
+    crate::policy_loader::write_manifest(&manifest_path, &manifest)?;
+
+    match result {
+        sandbox_edit::UpsertResult::Inserted => {
+            println!("{} Rule added to sandbox '{}'", style::green_bold("✓"), name)
+        }
+        sandbox_edit::UpsertResult::Replaced => println!(
+            "{} Rule updated in sandbox '{}'",
+            style::green_bold("✓"),
+            name
+        ),
+    }
+    println!("  {}", style::dim(&manifest_path.display().to_string()));
+    Ok(())
+}
+
+fn handle_remove_rule(name: &str, path: &str, scope: Option<String>) -> Result<()> {
+    let manifest_path = crate::cmd::policy::resolve_manifest_path(scope)?;
+    let mut manifest = crate::policy_loader::read_manifest(&manifest_path)?;
+    if sandbox_edit::remove_rule(&mut manifest, name, path)? {
+        crate::policy_loader::write_manifest(&manifest_path, &manifest)?;
+        println!(
+            "{} Rule removed from sandbox '{}'",
+            style::green_bold("✓"),
+            name
+        );
+        println!("  {}", style::dim(&manifest_path.display().to_string()));
+    } else {
+        println!("No rule matching path '{}' in sandbox '{}'", path, name);
+    }
+    Ok(())
+}
+
+fn parse_network_policy(s: &str) -> Result<NetworkPolicy> {
+    match s {
+        "deny" => Ok(NetworkPolicy::Deny),
+        "allow" => Ok(NetworkPolicy::Allow),
+        "localhost" => Ok(NetworkPolicy::Localhost),
+        other => anyhow::bail!("unknown network policy '{other}' (expected: deny, allow, localhost)"),
+    }
+}
+
+fn parse_path_match(s: &str) -> Result<PathMatch> {
+    match s {
+        "subpath" => Ok(PathMatch::Subpath),
+        "literal" => Ok(PathMatch::Literal),
+        "regex" => Ok(PathMatch::Regex),
+        other => anyhow::bail!("unknown path_match '{other}' (expected: subpath, literal, regex)"),
     }
 }
 

@@ -6,14 +6,16 @@
 pub mod compile;
 pub mod error;
 pub mod ir;
+pub mod manifest_edit;
 pub mod match_tree;
+pub mod sandbox_edit;
 pub mod path;
 pub mod sandbox_types;
 
 pub use compile::compile_multi_level_to_tree;
 pub use error::{CompileError, PolicyError, PolicyParseError};
 pub use ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
-pub use match_tree::CompiledPolicy;
+pub use match_tree::{CompiledPolicy, IncludeEntry, PolicyManifest};
 
 use std::fmt;
 

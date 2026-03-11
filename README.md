@@ -95,11 +95,11 @@ Clash supports three policy levels, each automatically included and evaluated in
 
 | Level | Location | Purpose |
 |-------|----------|---------|
-| **User** | `~/.clash/policy.star` | Your personal defaults across all projects |
-| **Project** | `<project>/.clash/policy.star` | Shared rules for a specific repository |
+| **User** | `~/.clash/policy.json` (or `.star`) | Your personal defaults across all projects |
+| **Project** | `<project>/.clash/policy.json` (or `.star`) | Shared rules for a specific repository |
 | **Session** | Created via `--scope session` | Temporary overrides for the current session |
 
-> **Note:** Both `.star` and `.json` are supported. When both exist at the same level, `.star` takes precedence.
+> **Note:** Both `.json` and `.star` are supported. When both exist at the same level, `.json` takes precedence. CLI commands (`clash policy allow/deny/remove`) operate on `policy.json`.
 
 **Layer precedence:** Session > Project > User. Higher layers can shadow rules from lower layers — for example, a project-level deny overrides a user-level allow for the same capability. Use `clash status` to see all active layers and which rules are shadowed.
 
@@ -206,13 +206,16 @@ clash init                       # set up clash with a safe default policy
 clash status                     # see all layers, rules, and enforcement status
 clash doctor                     # diagnose common setup issues
 clash update                     # update clash to the latest release
-clash update --check             # check for updates without installing
 clash explain bash "git push"    # see which rule matches a command
 clash policy list                # list all rules with level tags
 clash policy validate            # validate policy syntax
 clash policy show                # show the compiled policy
+clash policy allow "gh pr create"  # allow a command
+clash policy deny --bin rm         # deny a binary
+clash policy remove --tool Read    # remove a rule
+clash sandbox create dev           # create a named sandbox
+clash sandbox add-rule dev ./src   # add a sandbox filesystem rule
 clash launch                     # launch the agent with clash loaded
-clash sandbox                    # run a command in a sandbox
 ```
 
 For the full command reference, see the [CLI Reference](docs/cli-reference.md).
