@@ -304,6 +304,17 @@ fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookIn
         warn!(error = %e, "Failed to write active session marker");
     }
 
+    // 4c. Initialize toolpath tracing for this session.
+    if let Err(e) = crate::trace::init_trace(
+        &input.session_id,
+        &input.transcript_path,
+        &input.cwd,
+        input.model.as_deref(),
+        input.source.as_deref(),
+    ) {
+        warn!(error = %e, "Failed to initialize session trace");
+    }
+
     // 5. Session metadata
     if let Some(ref source) = input.source {
         lines.push(format!("session source: {}", source));

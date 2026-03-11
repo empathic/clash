@@ -53,6 +53,23 @@ impl SessionStartHookInput {
     }
 }
 
+/// Hook input for Stop events (conversation turn ended without a tool call)
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct StopHookInput {
+    pub session_id: String,
+    pub transcript_path: String,
+    pub cwd: String,
+    pub hook_event_name: String,
+}
+
+impl StopHookInput {
+    /// Parse from any reader (for testability)
+    #[instrument(level = Level::TRACE, skip(reader))]
+    pub fn from_reader(reader: impl Read) -> anyhow::Result<Self> {
+        Ok(serde_json::from_reader(reader)?)
+    }
+}
+
 impl HookInput {
     /// Parse from any reader (for testability)
     #[instrument(level = Level::TRACE, skip(reader))]
