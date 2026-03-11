@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 
 use crate::cmd::debug::DebugCmd;
 use crate::cmd::statusline::StatuslineCmd;
+use crate::cmd::trace::TraceCmd;
 use crate::sandbox_cmd::SandboxCmd;
 
 #[derive(Parser, Debug)]
@@ -33,6 +34,10 @@ pub enum HooksCmd {
     /// Handle SessionStart hook - called when a Claude Code session begins
     #[command(name = "session-start")]
     SessionStart,
+
+    /// Handle Stop hook - called when a conversation turn ends without a tool call
+    #[command(name = "stop")]
+    Stop,
 }
 
 #[derive(Subcommand, Debug)]
@@ -169,6 +174,10 @@ pub enum Commands {
     #[command(subcommand)]
     Debug(DebugCmd),
 
+    /// View and export session traces
+    #[command(subcommand)]
+    Trace(TraceCmd),
+
     // --- Hidden/internal commands ---
     /// Agent hook callbacks
     #[command(subcommand, hide = true)]
@@ -242,5 +251,8 @@ pub enum Commands {
         /// Include recent debug logs in the report
         #[arg(long)]
         include_logs: bool,
+        /// Include the session toolpath trace in the report
+        #[arg(long)]
+        include_trace: bool,
     },
 }

@@ -39,6 +39,7 @@ fn main() -> Result<()> {
             Commands::Sandbox(sandbox_cmd) => run_sandbox(sandbox_cmd),
             Commands::Doctor => cmd::doctor::run(),
             Commands::Debug(cmd) => cmd::debug::run(cmd),
+            Commands::Trace(cmd) => cmd::trace::run(cmd),
             Commands::Hook(hook_cmd) => {
                 if let Err(e) = hook_cmd.run() {
                     error!(cmd=?hook_cmd, "Hook error: {:?}", e);
@@ -59,7 +60,14 @@ fn main() -> Result<()> {
                 description,
                 include_config,
                 include_logs,
-            } => cmd::bug::run(title, description, include_config, include_logs),
+                include_trace,
+            } => cmd::bug::run(
+                title,
+                description,
+                include_config,
+                include_logs,
+                include_trace,
+            ),
         };
         if let Err(err) = resp {
             error!("{:?}", err);

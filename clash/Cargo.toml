@@ -43,6 +43,9 @@ which = { workspace = true }
 sha2 = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }
+chrono = { workspace = true }
+toolpath = { workspace = true }
+toolpath-claude = { workspace = true }
 
 # from the workspace
 clash_notify = { workspace = true }

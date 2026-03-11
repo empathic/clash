@@ -51,5 +51,6 @@ pub mod session_policy;
 pub mod settings;
 pub mod shell_cmd;
 pub mod style;
+pub mod trace;
 pub mod tracing_init;
 pub mod version;

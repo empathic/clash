@@ -714,6 +714,7 @@ dependencies = [
  "base64",
  "bitflags 2.11.0",
  "bytes",
+ "chrono",
  "clap",
  "clash-brush-builtins",
  "clash-brush-core",
@@ -751,6 +752,8 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
+ "toolpath",
+ "toolpath-claude",
  "tracing",
  "tracing-subscriber",
  "ureq",
@@ -4525,6 +4528,43 @@ name = "toml_write"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
+
+[[package]]
+name = "toolpath"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc57107597085b48026efe5ac3a2758988cf75aa774df851ca363bc68fb7119b"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "toolpath-claude"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97aa35c14943de10741718bcae986b7a2c8ee94618b168be1dd4c06a0717d953"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "toolpath",
+ "toolpath-convo",
+]
+
+[[package]]
+name = "toolpath-convo"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "505d6968beee47ecdeffa3937d95605255e05483a35bc766dbb3f2532155c433"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "tracing"

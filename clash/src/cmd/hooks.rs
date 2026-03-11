@@ -7,6 +7,7 @@ use crate::permissions::check_permission;
 use crate::policy::Effect;
 use crate::session_policy;
 use crate::settings::{ClashSettings, HookContext};
+use crate::trace;
 
 use claude_settings::PermissionRule;
 
@@ -84,6 +85,25 @@ impl HooksCmd {
                         );
                     }
 
+                    // Sync trace with the policy decision for this tool use.
+                    let decision = input.tool_use_id.as_ref().map(|id| {
+                        let effect_str = match extract_effect(&output) {
+                            Some(Effect::Allow) => "allow",
+                            Some(Effect::Deny) => "deny",
+                            Some(Effect::Ask) => "ask",
+                            None => "unknown",
+                        };
+                        trace::PolicyDecision {
+                            tool_use_id: id.clone(),
+                            tool_name: Some(input.tool_name.clone()),
+                            effect: effect_str.to_string(),
+                            reason: None,
+                        }
+                    });
+                    if let Err(e) = trace::sync_trace(&input.session_id, decision) {
+                        tracing::warn!(error = %e, "Failed to sync trace (PreToolUse)");
+                    }
+
                     output
                 }
             }
@@ -137,6 +157,11 @@ impl HooksCmd {
                     Some(context.join("\n\n"))
                 };
 
+                // Sync trace to pick up tool responses.
+                if let Err(e) = trace::sync_trace(&input.session_id, None) {
+                    tracing::warn!(error = %e, "Failed to sync trace (PostToolUse)");
+                }
+
                 HookOutput::post_tool_use(context)
             }
             Self::PermissionRequest => {
@@ -152,6 +177,17 @@ impl HooksCmd {
                 let input =
                     crate::hooks::SessionStartHookInput::from_reader(std::io::stdin().lock())?;
                 crate::handlers::handle_session_start(&input)?
+            }
+            Self::Stop => {
+                // Read stdin to avoid broken pipe, extract session_id.
+                let input = crate::hooks::StopHookInput::from_reader(std::io::stdin().lock())?;
+
+                // Final catch-up sync for non-tool conversation turns.
+                if let Err(e) = trace::sync_trace(&input.session_id, None) {
+                    tracing::warn!(error = %e, "Failed to sync trace (Stop)");
+                }
+
+                HookOutput::continue_execution()
             }
         };
 
