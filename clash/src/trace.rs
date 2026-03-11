@@ -127,6 +127,9 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
 
     // Map tool_use_id → derived step_id for parenting policy decisions.
     let mut tool_use_step_map = HashMap::new();
+    // For denied tool uses: the parent of the tool_use step, so we can rewind
+    // last_step_id to make the tool_use itself part of the dead end.
+    let mut denied_tool_use_parent: Option<String> = None;
 
     if !entries.is_empty() {
         // Build a temporary conversation from the new entries and derive Steps.
@@ -140,12 +143,20 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
         // derive_path generates step IDs as `step-{uuid_prefix}` from entry UUIDs.
         // This is stable public behavior of toolpath_claude — if the scheme ever
         // changes it would be a breaking change to the crate.
-        for (entry, part) in conversation.tool_uses() {
-            if let ContentPart::ToolUse { id, .. } = part {
-                let prefix: String = entry.uuid.chars().take(8).collect();
-                tool_use_step_map.insert(id.clone(), format!("step-{prefix}"));
-            }
-        }
+        let tool_use_step_ids: std::collections::HashSet<String> = conversation
+            .tool_uses()
+            .into_iter()
+            .filter_map(|(entry, part)| {
+                if let ContentPart::ToolUse { id, .. } = part {
+                    let prefix: String = entry.uuid.chars().take(8).collect();
+                    let step_id = format!("step-{prefix}");
+                    tool_use_step_map.insert(id.clone(), step_id.clone());
+                    Some(step_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         let config = DeriveConfig {
             project_path: Some(meta.cwd.clone()),
@@ -168,6 +179,9 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
                         step.step.parents.push(last_id.clone());
                     }
                 }
+            }
+            if tool_use_step_ids.contains(&step.step.id) {
+                denied_tool_use_parent = meta.state.last_step_id.clone();
             }
             meta.state.last_step_id = Some(step.step.id.clone());
             append_step(session_id, &step)?;
@@ -217,7 +231,13 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
             },
         );
 
-        meta.state.last_step_id = Some(step.step.id.clone());
+        if dec.effect == "deny" {
+            // Denials are dead ends: rewind last_step_id to the tool_use step's
+            // parent so both the tool_use and denial sit on a dead-end branch.
+            meta.state.last_step_id = denied_tool_use_parent.clone();
+        } else {
+            meta.state.last_step_id = Some(step.step.id.clone());
+        }
         append_step(session_id, &step)?;
     }
 
@@ -722,6 +742,93 @@ mod tests {
         assert_eq!(tools[0], "Read");
 
         assert!(step.meta.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Denied tool uses are dead ends in the path DAG:
+    ///
+    ///   user_msg → tool_use → deny (dead end branch)
+    ///            → next_step (continues from user_msg)
+    ///
+    /// Both the tool_use and the denial sit on the dead-end branch.
+    #[test]
+    fn test_denial_is_dead_end() {
+        let session_id = format!("trace-deadend-{}", std::process::id());
+        let dir = session_dir(&session_id);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let transcript = dir.join("conversation.jsonl");
+
+        // Turn 1: user message, then assistant tries a tool use.
+        write_jsonl(
+            &transcript,
+            &[
+                make_user_entry("u1aaaaaa", "do something"),
+                make_tool_use_entry("a1bbbbbb", "tu-denied", "Bash"),
+            ],
+        );
+        init_trace(
+            &session_id,
+            transcript.to_str().unwrap(),
+            "/tmp",
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Policy denies the tool use.
+        sync_trace(
+            &session_id,
+            Some(PolicyDecision {
+                tool_use_id: "tu-denied".into(),
+                tool_name: Some("Bash".into()),
+                effect: "deny".into(),
+                reason: Some("not allowed".into()),
+            }),
+        )
+        .unwrap();
+
+        // Turn 2: assistant responds with text (continues after denial).
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&transcript)
+                .unwrap();
+            writeln!(
+                f,
+                "{}",
+                serde_json::to_string(&make_assistant_entry("a2cccccc", "OK, I won't do that."))
+                    .unwrap()
+            )
+            .unwrap();
+        }
+        sync_trace(&session_id, None).unwrap();
+
+        let steps = load_steps(&session_id).unwrap();
+        // 4 steps: user_msg, tool_use, denial, assistant response
+        assert_eq!(steps.len(), 4);
+
+        let user_step = &steps[0];
+        let tool_use_step = &steps[1];
+        let denial_step = &steps[2];
+        let continue_step = &steps[3];
+
+        // tool_use parents to user_step.
+        assert_eq!(tool_use_step.step.parents, vec![user_step.step.id.clone()]);
+        // Denial parents to the tool_use step.
+        assert_eq!(
+            denial_step.step.parents,
+            vec![tool_use_step.step.id.clone()]
+        );
+        // The continuation parents to the user_step (not tool_use or denial).
+        // Both tool_use and denial are on a dead-end branch.
+        assert_eq!(
+            continue_step.step.parents,
+            vec![user_step.step.id.clone()],
+            "continuation should branch from user_step, not from denied tool_use"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
