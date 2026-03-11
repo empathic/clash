@@ -473,7 +473,8 @@ impl ClashSettings {
         let mut this = Self::default();
 
         // Collect policy sources from all available levels.
-        let mut level_sources: Vec<(PolicyLevel, String)> = Vec::new();
+        // Each entry: (level, json_source, display_path).
+        let mut level_sources: Vec<(PolicyLevel, String, String)> = Vec::new();
 
         // Load persistent levels (user, project) in reverse precedence order.
         for &level in PolicyLevel::all_by_precedence().iter().rev() {
@@ -484,7 +485,8 @@ impl ClashSettings {
                 if level == PolicyLevel::User {
                     this.load_notification_audit_config();
                 }
-                level_sources.push((level, validated.json_source));
+                let display_path = tilde_path(&path);
+                level_sources.push((level, validated.json_source, display_path));
                 this.loaded_policies.push(validated.loaded);
             }
         }
@@ -497,7 +499,8 @@ impl ClashSettings {
                 &session_path,
                 &mut this.policy_error,
             ) {
-                level_sources.push((PolicyLevel::Session, validated.json_source));
+                let display_path = tilde_path(&session_path);
+                level_sources.push((PolicyLevel::Session, validated.json_source, display_path));
                 this.loaded_policies.push(validated.loaded);
             }
         }
@@ -525,6 +528,16 @@ impl ClashSettings {
 
         Ok(this)
     }
+}
+
+/// Shorten a path by replacing the home directory prefix with `~`.
+fn tilde_path(path: &std::path::Path) -> String {
+    if let Some(home) = home_dir() {
+        if let Ok(rest) = path.strip_prefix(&home) {
+            return format!("~/{}", rest.display());
+        }
+    }
+    path.display().to_string()
 }
 
 /// Extract the `notifications:` section from a YAML string.

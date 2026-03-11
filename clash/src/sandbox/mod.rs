@@ -329,15 +329,18 @@ mod tests {
                     caps: Cap::all(),
                     path: "/tmp".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
                 SandboxRule {
                     effect: RuleEffect::Deny,
                     caps: Cap::READ,
                     path: "/etc/shadow".into(),
                     path_match: PathMatch::Literal,
+                    doc: None,
                 },
             ],
             network: NetworkPolicy::Deny,
+            doc: None,
         }
     }
 
@@ -386,6 +389,7 @@ mod tests {
             default: Cap::READ | Cap::EXECUTE,
             rules: vec![],
             network: NetworkPolicy::Allow,
+            doc: None,
         };
         let caps = policy.effective_caps("/any/path", "/cwd");
         assert_eq!(caps, Cap::READ | Cap::EXECUTE);
@@ -400,8 +404,10 @@ mod tests {
                 caps: Cap::WRITE,
                 path: "/tmp".into(),
                 path_match: PathMatch::Subpath,
+                doc: None,
             }],
             network: NetworkPolicy::Allow,
+            doc: None,
         };
         let caps = policy.effective_caps("/tmp/file.txt", "/cwd");
         assert_eq!(caps, Cap::READ | Cap::WRITE);
@@ -416,8 +422,10 @@ mod tests {
                 caps: Cap::WRITE | Cap::DELETE,
                 path: "/etc".into(),
                 path_match: PathMatch::Subpath,
+                doc: None,
             }],
             network: NetworkPolicy::Allow,
+            doc: None,
         };
         let caps = policy.effective_caps("/etc/passwd", "/cwd");
         // All caps minus WRITE and DELETE
@@ -437,15 +445,18 @@ mod tests {
                     caps: Cap::WRITE,
                     path: "/data".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
                 SandboxRule {
                     effect: RuleEffect::Deny,
                     caps: Cap::WRITE,
                     path: "/data/readonly".into(),
                     path_match: PathMatch::Subpath,
+                    doc: None,
                 },
             ],
             network: NetworkPolicy::Allow,
+            doc: None,
         };
         // /data/file.txt: default READ + allow WRITE = READ | WRITE
         assert_eq!(
@@ -468,8 +479,10 @@ mod tests {
                 caps: Cap::READ,
                 path: "/secret.key".into(),
                 path_match: PathMatch::Literal,
+                doc: None,
             }],
             network: NetworkPolicy::Allow,
+            doc: None,
         };
         // Exact match → denied
         assert_eq!(policy.effective_caps("/secret.key", "/cwd"), Cap::empty());
@@ -486,8 +499,10 @@ mod tests {
                 caps: Cap::all(),
                 path: "/tmp".into(),
                 path_match: PathMatch::Subpath,
+                doc: None,
             }],
             network: NetworkPolicy::Allow,
+            doc: None,
         };
         // Path outside /tmp → only default caps
         assert_eq!(

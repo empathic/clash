@@ -245,6 +245,12 @@ pub enum Node {
         pattern: Pattern,
         /// Children sorted by specificity (most specific first).
         children: Vec<Node>,
+        /// Optional docstring describing this rule's purpose.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        doc: Option<String>,
+        /// Optional source provenance (e.g. policy level name).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
     },
     /// A leaf decision.
     Decision(Decision),
@@ -333,20 +339,38 @@ fn format_tree_node(
             observe,
             pattern,
             children,
+            doc,
+            source,
         } => {
             let label = format_condition(observe, pattern);
+            let doc_suffix = doc
+                .as_deref()
+                .map(|d| format!("  # {d}"))
+                .unwrap_or_default();
+            let source_suffix = if is_root {
+                source
+                    .as_deref()
+                    .map(|s| format!("  [{s}]"))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
 
             // Single decision child → show inline: "label → effect"
-            if children.len() == 1 {
-                if let Node::Decision(d) = &children[0] {
-                    let effect = format_decision(d);
-                    lines.push(format!("{prefix}{connector}{label} → {effect}"));
-                    return;
-                }
+            if children.len() == 1
+                && let Node::Decision(d) = &children[0]
+            {
+                let effect = format_decision(d);
+                lines.push(format!(
+                    "{prefix}{connector}{label} → {effect}{doc_suffix}{source_suffix}"
+                ));
+                return;
             }
 
             // Branch — show label, then children as sub-tree
-            lines.push(format!("{prefix}{connector}{label}"));
+            lines.push(format!(
+                "{prefix}{connector}{label}{doc_suffix}{source_suffix}"
+            ));
             let new_prefix = format!("{prefix}{child_prefix}");
             let child_count = children.len();
             for (i, child) in children.iter().enumerate() {
@@ -382,14 +406,25 @@ fn format_node_flat(node: &Node, path: &mut Vec<String>, lines: &mut Vec<String>
             observe,
             pattern,
             children,
+            doc,
+            source: _,
         } => {
             let segment = format_condition(observe, pattern);
             path.push(segment);
             if children.is_empty() {
                 lines.push(format!("(no decision) {}", path.join(" → ")));
             } else {
+                // Check if this is a leaf condition (all children are decisions)
+                let is_leaf = children.iter().all(|c| matches!(c, Node::Decision(_)));
                 for child in children {
                     format_node_flat(child, path, lines);
+                }
+                // Append doc to the last line if this is the innermost condition
+                if is_leaf
+                    && let Some(doc_text) = doc
+                    && let Some(last) = lines.last_mut()
+                {
+                    last.push_str(&format!("  # {doc_text}"));
                 }
             }
             path.pop();
@@ -711,6 +746,7 @@ pub fn eval(nodes: &[Node], ctx: &QueryContext) -> Option<Decision> {
                 observe,
                 pattern,
                 children,
+                ..
             } => {
                 if matches_observable(observe, pattern, ctx) {
                     if let Some(d) = eval(children, ctx) {
@@ -737,6 +773,7 @@ pub fn eval_traced(
                 observe,
                 pattern,
                 children,
+                ..
             } => {
                 let obs_name = format!("{observe:?}");
                 let pat_desc = format!("{pattern:?}");
@@ -977,21 +1014,30 @@ impl Node {
                     observe,
                     pattern,
                     children,
+                    doc,
+                    source,
                 } => {
                     if let Some(existing) = out.iter_mut().find_map(|n| match n {
                         Node::Condition {
                             observe: o,
                             pattern: p,
                             children: c,
-                        } if *o == observe && *p == pattern => Some(c),
+                            doc: d,
+                            ..
+                        } if *o == observe && *p == pattern => Some((c, d)),
                         _ => None,
                     }) {
-                        existing.extend(children);
+                        existing.0.extend(children);
+                        if existing.1.is_none() {
+                            *existing.1 = doc;
+                        }
                     } else {
                         out.push(Node::Condition {
                             observe,
                             pattern,
                             children,
+                            doc,
+                            source,
                         });
                     }
                 }
@@ -1040,6 +1086,7 @@ fn detect_unreachable_inner(nodes: &[Node], warnings: &mut Vec<String>, path: &[
                 observe,
                 pattern,
                 children,
+                ..
             } => {
                 if seen_wildcard {
                     warnings.push(format!(
@@ -1096,6 +1143,8 @@ mod tests {
             observe: Observable::ToolName,
             pattern: Pattern::Literal(Value::Literal("Bash".into())),
             children: vec![Node::Decision(Decision::Allow(None))],
+            doc: None,
+            source: None,
         }];
         let ctx = make_ctx("Bash", "echo hello");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
@@ -1107,6 +1156,8 @@ mod tests {
             observe: Observable::ToolName,
             pattern: Pattern::Literal(Value::Literal("Read".into())),
             children: vec![Node::Decision(Decision::Allow(None))],
+            doc: None,
+            source: None,
         }];
         let ctx = make_ctx("Bash", "echo hello");
         assert_eq!(eval(&nodes, &ctx), None);
@@ -1121,7 +1172,11 @@ mod tests {
                 observe: Observable::PositionalArg(0),
                 pattern: Pattern::Literal(Value::Literal("git".into())),
                 children: vec![Node::Decision(Decision::Allow(None))],
+                doc: None,
+                source: None,
             }],
+            doc: None,
+            source: None,
         }];
         let ctx = make_ctx("Bash", "git push");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
@@ -1136,7 +1191,11 @@ mod tests {
                 observe: Observable::HasArg,
                 pattern: Pattern::Literal(Value::Literal("--force".into())),
                 children: vec![Node::Decision(Decision::Deny)],
+                doc: None,
+                source: None,
             }],
+            doc: None,
+            source: None,
         }];
         let ctx = make_ctx("Bash", "git push --force origin main");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Deny));
@@ -1151,7 +1210,11 @@ mod tests {
                 observe: Observable::HasArg,
                 pattern: Pattern::Literal(Value::Literal("--force".into())),
                 children: vec![Node::Decision(Decision::Deny)],
+                doc: None,
+                source: None,
             }],
+            doc: None,
+            source: None,
         }];
         let ctx = make_ctx("Bash", "git push origin main");
         assert_eq!(eval(&nodes, &ctx), None);
@@ -1165,11 +1228,15 @@ mod tests {
                 observe: Observable::ToolName,
                 pattern: Pattern::Wildcard,
                 children: vec![Node::Decision(Decision::Ask(None))],
+                doc: None,
+                source: None,
             },
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("Bash".into())),
                 children: vec![Node::Decision(Decision::Allow(None))],
+                doc: None,
+                source: None,
             },
         ];
         let nodes = Node::compact(nodes);
@@ -1190,12 +1257,18 @@ mod tests {
                     observe: Observable::PositionalArg(0),
                     pattern: Pattern::Literal(Value::Literal("cargo".into())),
                     children: vec![Node::Decision(Decision::Allow(None))],
+                    doc: None,
+                    source: None,
                 }],
+                doc: None,
+                source: None,
             },
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Wildcard,
                 children: vec![Node::Decision(Decision::Ask(None))],
+                doc: None,
+                source: None,
             },
         ];
         // "git push" matches Bash but not cargo, so should backtrack to wildcard
@@ -1209,6 +1282,8 @@ mod tests {
             observe: Observable::NestedField(vec!["file_path".into()]),
             pattern: Pattern::Regex(Arc::new(Regex::new(r".*\.rs$").unwrap())),
             children: vec![Node::Decision(Decision::Allow(None))],
+            doc: None,
+            source: None,
         }];
         let input = serde_json::json!({"file_path": "/src/main.rs"});
         let ctx = QueryContext::from_tool("Edit", &input);
@@ -1221,6 +1296,8 @@ mod tests {
             observe: Observable::PositionalArg(0),
             pattern: Pattern::Regex(Arc::new(Regex::new(r"^cargo").unwrap())),
             children: vec![Node::Decision(Decision::Allow(None))],
+            doc: None,
+            source: None,
         }];
         let ctx = make_ctx("Bash", "cargo-clippy check");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
@@ -1235,6 +1312,8 @@ mod tests {
                 Pattern::Literal(Value::Literal("rustc".into())),
             ]),
             children: vec![Node::Decision(Decision::Allow(None))],
+            doc: None,
+            source: None,
         }];
 
         let ctx = make_ctx("Bash", "rustc main.rs");
@@ -1250,6 +1329,8 @@ mod tests {
             observe: Observable::PositionalArg(0),
             pattern: Pattern::Not(Box::new(Pattern::Literal(Value::Literal("rm".into())))),
             children: vec![Node::Decision(Decision::Allow(None))],
+            doc: None,
+            source: None,
         }];
 
         let ctx = make_ctx("Bash", "ls -la");
@@ -1283,6 +1364,7 @@ mod tests {
                 default: crate::policy::sandbox_types::Cap::READ,
                 rules: vec![],
                 network: crate::policy::sandbox_types::NetworkPolicy::Deny,
+                doc: None,
             },
         );
         let policy = CompiledPolicy {
@@ -1312,15 +1394,23 @@ mod tests {
                                 observe: Observable::HasArg,
                                 pattern: Pattern::Literal(Value::Literal("--force".into())),
                                 children: vec![Node::Decision(Decision::Deny)],
+                                doc: None,
+                                source: None,
                             },
                             Node::Decision(Decision::Allow(None)),
                         ],
+                        doc: None,
+                        source: None,
                     }],
+                    doc: None,
+                    source: None,
                 },
                 Node::Condition {
                     observe: Observable::ToolName,
                     pattern: Pattern::Wildcard,
                     children: vec![Node::Decision(Decision::Allow(None))],
+                    doc: None,
+                    source: None,
                 },
             ],
             default_effect: Effect::Deny,
@@ -1347,11 +1437,15 @@ mod tests {
                 observe: Observable::ToolName,
                 pattern: Pattern::Wildcard,
                 children: vec![Node::Decision(Decision::Allow(None))],
+                doc: None,
+                source: None,
             },
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("Bash".into())),
                 children: vec![Node::Decision(Decision::Deny)],
+                doc: None,
+                source: None,
             },
         ];
         let warnings = detect_unreachable(&nodes);
@@ -1384,11 +1478,15 @@ mod tests {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("Read".into())),
                 children: vec![Node::Decision(Decision::Allow(None))],
+                doc: None,
+                source: None,
             },
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("Bash".into())),
                 children: vec![Node::Decision(Decision::Deny)],
+                doc: None,
+                source: None,
             },
         ];
 
@@ -1421,6 +1519,8 @@ mod tests {
             observe: Observable::NamedArg("file_path".into()),
             pattern: Pattern::Regex(Arc::new(Regex::new(r"\.env").unwrap())),
             children: vec![Node::Decision(Decision::Deny)],
+            doc: None,
+            source: None,
         }];
         let input = serde_json::json!({"file_path": "/project/.env"});
         let ctx = QueryContext::from_tool("Write", &input);
@@ -1439,7 +1539,11 @@ mod tests {
                     observe: Observable::PositionalArg(0),
                     pattern: Pattern::Literal(Value::Literal("cargo".into())),
                     children: vec![Node::Decision(Decision::Allow(None))],
+                    doc: None,
+                    source: None,
                 }],
+                doc: None,
+                source: None,
             }],
             default_effect: Effect::Deny,
             default_sandbox: None,
@@ -1478,6 +1582,8 @@ mod tests {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("Bash".into())),
                 children: vec![Node::Decision(Decision::Allow(None))],
+                doc: None,
+                source: None,
             }],
             default_effect: Effect::Deny,
             default_sandbox: None,
@@ -1763,8 +1869,10 @@ mod tests {
                         caps: Cap::WRITE,
                         path: r"/tmp/build-\d+".to_string(),
                         path_match: PathMatch::Regex,
+                        doc: None,
                     }],
                     network: NetworkPolicy::Deny,
+                    doc: None,
                 },
             )]),
             tree: vec![],
@@ -1788,6 +1896,7 @@ mod tests {
                     default: Cap::READ | Cap::EXECUTE,
                     rules: vec![],
                     network: NetworkPolicy::AllowDomains(vec!["github.com".to_string()]),
+                    doc: None,
                 },
             )]),
             tree: vec![],
@@ -1814,8 +1923,10 @@ mod tests {
                         caps: Cap::WRITE,
                         path: "/tmp".to_string(),
                         path_match: PathMatch::Subpath,
+                        doc: None,
                     }],
                     network: NetworkPolicy::Deny,
+                    doc: None,
                 },
             )]),
             tree: vec![],

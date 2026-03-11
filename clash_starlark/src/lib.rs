@@ -830,4 +830,82 @@ def main():
             fs_path["pattern"]
         );
     }
+
+    #[test]
+    fn test_docstrings_persist_in_ir() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd")
+
+def main():
+    box = sandbox(
+        name = "dev",
+        doc = "Development sandbox",
+        default = deny,
+        fs = [
+            cwd().allow(read = True, write = True, doc = "Project files"),
+        ],
+    )
+    return policy(default = deny, rules = [
+        exe("git", doc = "Version control").sandbox(box).allow(),
+        tool("WebSearch", doc = "No external searches").deny(),
+    ])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+
+        // Check rule docstrings on conditions
+        let tree = doc["tree"].as_array().unwrap();
+        // exe("git", doc="Version control") → inner positional_arg condition has the doc
+        let git_inner = &tree[0]["condition"]["children"].as_array().unwrap()[0]["condition"];
+        assert_eq!(
+            git_inner["doc"], "Version control",
+            "exe doc should persist on inner condition"
+        );
+
+        // tool("WebSearch", doc="No external searches")
+        let ws_node = &tree[1]["condition"];
+        assert_eq!(
+            ws_node["doc"], "No external searches",
+            "tool doc should persist on condition"
+        );
+
+        // Check source location is set from the Starlark call site
+        let git_source = tree[0]["condition"]["source"].as_str();
+        assert!(
+            git_source.is_some(),
+            "exe() condition should have a source location"
+        );
+        // Source should point to the user's policy file, not @clash//std.star
+        assert!(
+            !git_source.unwrap().contains("@clash//"),
+            "source should be the user's file, not stdlib, got: {}",
+            git_source.unwrap()
+        );
+        // Source should contain a line number
+        assert!(
+            git_source.unwrap().contains(':'),
+            "source should include line number, got: {}",
+            git_source.unwrap()
+        );
+
+        // Check sandbox docstring
+        let sandbox = &doc["sandboxes"]["dev"];
+        assert_eq!(
+            sandbox["doc"], "Development sandbox",
+            "sandbox doc should persist"
+        );
+
+        // Check sandbox rule docstring — find the CWD rule (not auto-injected ones)
+        let rules = sandbox["rules"].as_array().unwrap();
+        let cwd_rule = rules
+            .iter()
+            .find(|r| r["path"].as_str().map_or(false, |p| p.starts_with("$PWD")));
+        assert!(cwd_rule.is_some(), "should have a CWD rule");
+        assert_eq!(
+            cwd_rule.unwrap()["doc"],
+            "Project files",
+            "sandbox rule doc should persist"
+        );
+    }
 }

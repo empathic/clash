@@ -301,8 +301,10 @@ mod tests {
                 caps: Cap::all(),
                 path: "/tmp".into(),
                 path_match: PathMatch::Subpath,
+                doc: None,
             }],
             network: NetworkPolicy::Deny,
+            doc: None,
         };
 
         let caps = compute_notable_path_caps(&policy, "/home/user/project");

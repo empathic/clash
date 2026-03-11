@@ -1,0 +1,33 @@
+name: Deploy prod site 
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs: 
+  publish-stite:
+    runs-on: ubuntu-latest
+    environment: clash-site
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+        working-directory: site
+
+      - name: Build site
+        run: bun run build:versioned
+        working-directory: site
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy site/_site --project-name=clash-site
