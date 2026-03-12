@@ -48,10 +48,10 @@ tracing-subscriber = { version = "0.3.22", features = [
 clash_notify = { path = "clash_notify", version = "0.4.4" }
 clash_starlark = { path = "clash_starlark", version = "0.4.4" }
 claude_settings = { path = "claude_settings", version = "0.4.4" }
-clash-brush-parser = { path = "clash-brush-parser", version = "0.3.0" }
+clash-brush-parser = { path = "clash-brush-parser", version = "0.4.4" }
 clash-brush-core = { path = "clash-brush-core", version = "0.4.4" }
-clash-brush-builtins = { path = "clash-brush-builtins", version = "0.1.0" }
-clash-brush-interactive = { path = "clash-brush-interactive", version = "0.3.0", features = [
+clash-brush-builtins = { path = "clash-brush-builtins", version = "0.4.4" }
+clash-brush-interactive = { path = "clash-brush-interactive", version = "0.4.4", features = [
     "basic",
 ] }
 
