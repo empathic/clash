@@ -38,9 +38,7 @@ impl Component for SettingsView {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => Some(Msg::MoveDown),
             KeyCode::Char('k') | KeyCode::Up => Some(Msg::MoveUp),
-            KeyCode::Enter | KeyCode::Char('e') | KeyCode::Char(' ') => {
-                Some(Msg::CycleValue)
-            }
+            KeyCode::Enter | KeyCode::Char('e') | KeyCode::Char(' ') => Some(Msg::CycleValue),
             _ => None,
         }
     }

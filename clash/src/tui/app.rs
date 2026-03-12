@@ -94,13 +94,14 @@ impl App {
 
         // Resolve includes to show their rules/sandboxes as read-only
         let base_dir = path.parent().unwrap_or(std::path::Path::new("."));
-        let included = policy_loader::resolve_includes(&manifest, base_dir)
-            .unwrap_or_else(|_| CompiledPolicy {
+        let included = policy_loader::resolve_includes(&manifest, base_dir).unwrap_or_else(|_| {
+            CompiledPolicy {
                 sandboxes: std::collections::HashMap::new(),
                 tree: vec![],
                 default_effect: manifest.policy.default_effect.clone(),
                 default_sandbox: None,
-            });
+            }
+        });
 
         let tree_view = TreeView::new(&manifest, &included);
         let sandbox_view = SandboxView::new(&manifest, &included);
@@ -150,11 +151,8 @@ impl App {
                             self.rebuild_views();
                         }
                         Action::RunForm(req) => {
-                            let form = FormState::from_request(
-                                &req,
-                                &self.manifest,
-                                Some(&self.included),
-                            );
+                            let form =
+                                FormState::from_request(&req, &self.manifest, Some(&self.included));
                             self.mode = Mode::Form(form);
                         }
                         Action::Flash(s) => {
@@ -199,8 +197,7 @@ impl App {
 
             if let Some(parent_path) = add_path {
                 let req = super::tea::FormRequest::AddChild { parent_path };
-                let new_form =
-                    FormState::from_request(&req, &self.manifest, Some(&self.included));
+                let new_form = FormState::from_request(&req, &self.manifest, Some(&self.included));
                 self.mode = Mode::Form(new_form);
                 return FormHandled::Continue;
             }
@@ -402,14 +399,16 @@ impl App {
     }
 
     fn rebuild_views(&mut self) {
-        self.tree_view.rebuild_with_included(&self.manifest, &self.included);
-        self.sandbox_view.rebuild_with_included(&self.manifest, &self.included);
+        self.tree_view
+            .rebuild_with_included(&self.manifest, &self.included);
+        self.sandbox_view
+            .rebuild_with_included(&self.manifest, &self.included);
     }
 
     fn view(&self, frame: &mut Frame, area: Rect, manifest: &PolicyManifest) {
         let chunks = Layout::vertical([
             Constraint::Length(2), // title + tab bar
-            Constraint::Min(3),   // content
+            Constraint::Min(3),    // content
             Constraint::Length(1), // status bar
         ])
         .split(area);
@@ -513,8 +512,8 @@ enum FormHandled {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::match_tree::*;
     use crate::policy::Effect;
+    use crate::policy::match_tree::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::backend::TestBackend;
     use std::collections::HashMap;

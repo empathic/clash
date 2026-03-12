@@ -83,11 +83,7 @@ impl TreeView {
     }
 
     /// Update the included snapshot and rebuild.
-    pub fn rebuild_with_included(
-        &mut self,
-        manifest: &PolicyManifest,
-        included: &CompiledPolicy,
-    ) {
+    pub fn rebuild_with_included(&mut self, manifest: &PolicyManifest, included: &CompiledPolicy) {
         self.included = included.clone();
         self.rebuild_inner(manifest, included);
     }
@@ -355,8 +351,7 @@ impl Component for TreeView {
                 for i in 0..manifest.policy.tree.len() {
                     if let Node::Condition { children, .. } = &manifest.policy.tree[i] {
                         if children.len() > 1
-                            || (children.len() == 1
-                                && !matches!(&children[0], Node::Decision(_)))
+                            || (children.len() == 1 && !matches!(&children[0], Node::Decision(_)))
                         {
                             self.collapsed.insert(vec![i]);
                         }
@@ -444,9 +439,7 @@ impl Component for TreeView {
                 {
                     if matches!(tree_node, Node::Condition { .. }) {
                         // Condition node (including inline leaves) — add child
-                        return Action::RunForm(FormRequest::AddChild {
-                            parent_path: path,
-                        });
+                        return Action::RunForm(FormRequest::AddChild { parent_path: path });
                     }
                 }
                 // Bare Decision — add a sibling by targeting the parent condition
@@ -471,8 +464,9 @@ impl Component for TreeView {
                     if path.len() == 1 {
                         tree.get(idx).cloned()
                     } else {
-                        let sub_path: Vec<usize> =
-                            std::iter::once(idx).chain(path[1..].iter().copied()).collect();
+                        let sub_path: Vec<usize> = std::iter::once(idx)
+                            .chain(path[1..].iter().copied())
+                            .collect();
                         Self::get_node_at_path_ref(tree, &sub_path).cloned()
                     }
                 } else {
@@ -482,10 +476,7 @@ impl Component for TreeView {
                 match cloned {
                     Some(mut copied) => {
                         // Strip source provenance — it's now an inline rule
-                        if let Node::Condition {
-                            ref mut source, ..
-                        } = copied
-                        {
+                        if let Node::Condition { ref mut source, .. } = copied {
                             *source = None;
                         }
                         manifest.policy.tree.push(copied);
@@ -559,8 +550,7 @@ impl Component for TreeView {
                         .add_modifier(Modifier::BOLD)
                 } else if node.read_only {
                     // Included rules are dimmed
-                    decision_style(node.decision.as_ref())
-                        .add_modifier(Modifier::DIM)
+                    decision_style(node.decision.as_ref()).add_modifier(Modifier::DIM)
                 } else {
                     decision_style(node.decision.as_ref())
                 };

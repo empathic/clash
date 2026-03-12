@@ -218,20 +218,14 @@ impl Component for SandboxView {
                 }
                 match self.focus {
                     Focus::SandboxList => {
-                        if let Some(name) =
-                            self.sandbox_names.get(self.selected_sandbox).cloned()
-                        {
-                            Action::RunForm(FormRequest::EditSandbox {
-                                sandbox_name: name,
-                            })
+                        if let Some(name) = self.sandbox_names.get(self.selected_sandbox).cloned() {
+                            Action::RunForm(FormRequest::EditSandbox { sandbox_name: name })
                         } else {
                             Action::Flash("No sandbox selected".into())
                         }
                     }
                     Focus::RuleList => {
-                        if let Some(name) =
-                            self.sandbox_names.get(self.selected_sandbox).cloned()
-                        {
+                        if let Some(name) = self.sandbox_names.get(self.selected_sandbox).cloned() {
                             Action::RunForm(FormRequest::EditSandboxRule {
                                 sandbox_name: name,
                                 rule_index: self.selected_rule,

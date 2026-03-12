@@ -65,7 +65,6 @@ impl FormField {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Form state
 // ---------------------------------------------------------------------------
@@ -87,12 +86,22 @@ pub struct FormState {
 pub enum FormKind {
     AddRule,
     AddSandbox,
-    AddSandboxRule { sandbox_name: String },
+    AddSandboxRule {
+        sandbox_name: String,
+    },
     AddInclude,
-    EditCondition { path: Vec<usize> },
-    EditDecision { path: Vec<usize> },
-    AddChild { parent_path: Vec<usize> },
-    EditSandbox { sandbox_name: String },
+    EditCondition {
+        path: Vec<usize>,
+    },
+    EditDecision {
+        path: Vec<usize>,
+    },
+    AddChild {
+        parent_path: Vec<usize>,
+    },
+    EditSandbox {
+        sandbox_name: String,
+    },
     EditSandboxRule {
         sandbox_name: String,
         rule_index: usize,
@@ -131,9 +140,7 @@ impl FormState {
             }
             FormRequest::AddInclude => Self::new_add_include(),
             FormRequest::EditCondition { path } => Self::new_edit_condition(path, manifest),
-            FormRequest::EditDecision { path } => {
-                Self::new_edit_decision(path, manifest, included)
-            }
+            FormRequest::EditDecision { path } => Self::new_edit_decision(path, manifest, included),
             FormRequest::AddChild { parent_path } => {
                 Self::new_add_child(parent_path, manifest, included)
             }
@@ -151,7 +158,8 @@ impl FormState {
         manifest: &PolicyManifest,
         included: Option<&crate::policy::match_tree::CompiledPolicy>,
     ) -> Self {
-        let (sandbox_opts, sb_default) = Self::build_sandbox_options_with_included(manifest, included);
+        let (sandbox_opts, sb_default) =
+            Self::build_sandbox_options_with_included(manifest, included);
 
         let fields = vec![
             FormField::Select {
@@ -542,8 +550,7 @@ impl FormState {
         manifest: &PolicyManifest,
         included: Option<&crate::policy::match_tree::CompiledPolicy>,
     ) -> Self {
-        let (effect_idx, sandbox_name) =
-            Self::read_decision_at_path(&manifest.policy.tree, path);
+        let (effect_idx, sandbox_name) = Self::read_decision_at_path(&manifest.policy.tree, path);
         let title = Self::describe_node_at_path(&manifest.policy.tree, path);
         let tool_ctx = Self::ancestor_tool_name(&manifest.policy.tree, path);
 
@@ -557,7 +564,10 @@ impl FormState {
 
         // Use existing sandbox if set, otherwise fall back to default
         let sb_selected = if let Some(ref name) = sandbox_name {
-            sandbox_opts.iter().position(|s| s == name).unwrap_or(sb_default)
+            sandbox_opts
+                .iter()
+                .position(|s| s == name)
+                .unwrap_or(sb_default)
         } else {
             sb_default
         };
@@ -874,8 +884,7 @@ impl FormState {
             ..
         } = field
         {
-            let (new_options, new_hints) =
-                tool_registry::effect_options_for_tool(tool_name);
+            let (new_options, new_hints) = tool_registry::effect_options_for_tool(tool_name);
             if *options != new_options {
                 *options = new_options;
                 *hints = new_hints;
@@ -905,20 +914,13 @@ impl FormState {
                 // Update tool context from typed tool name
                 if rule_type == 0 {
                     let name = self.text_value(1);
-                    self.tool_context = if name.is_empty() {
-                        None
-                    } else {
-                        Some(name)
-                    };
+                    self.tool_context = if name.is_empty() { None } else { Some(name) };
                 } else {
                     self.tool_context = None;
                 }
 
                 // Rebuild effect options based on tool context
-                Self::rebuild_effect_select(
-                    &mut self.fields[4],
-                    self.tool_context.as_deref(),
-                );
+                Self::rebuild_effect_select(&mut self.fields[4], self.tool_context.as_deref());
 
                 let effect = match &self.fields[4] {
                     FormField::Select { selected, .. } => *selected,
@@ -1002,10 +1004,7 @@ impl FormState {
                     self.visible = vis;
                 } else {
                     // Decision — filter effects based on tool context
-                    Self::rebuild_effect_select(
-                        &mut self.fields[5],
-                        self.tool_context.as_deref(),
-                    );
+                    Self::rebuild_effect_select(&mut self.fields[5], self.tool_context.as_deref());
                     let effect_idx = self.select_value(5);
                     let canonical = tool_registry::filtered_effect_to_canonical(
                         self.tool_context.as_deref(),
@@ -1067,11 +1066,7 @@ impl FormState {
 
         // Field-specific key handling
         match &mut self.fields[fi] {
-            FormField::Text {
-                value,
-                cursor,
-                ..
-            } => match key.code {
+            FormField::Text { value, cursor, .. } => match key.code {
                 KeyCode::Char(c) => {
                     value.insert(*cursor, c);
                     *cursor += 1;
@@ -1134,7 +1129,11 @@ impl FormState {
                 let len = options.len();
                 match key.code {
                     KeyCode::Left | KeyCode::Char('h') => {
-                        *selected = if *selected == 0 { len - 1 } else { *selected - 1 };
+                        *selected = if *selected == 0 {
+                            len - 1
+                        } else {
+                            *selected - 1
+                        };
                         self.recompute_visible();
                     }
                     KeyCode::Right | KeyCode::Char('l') => {
@@ -1146,7 +1145,11 @@ impl FormState {
                         self.recompute_visible();
                     }
                     KeyCode::BackTab => {
-                        *selected = if *selected == 0 { len - 1 } else { *selected - 1 };
+                        *selected = if *selected == 0 {
+                            len - 1
+                        } else {
+                            *selected - 1
+                        };
                         self.recompute_visible();
                     }
                     KeyCode::Enter => {
@@ -1536,11 +1539,7 @@ impl FormState {
     }
 
     /// Build an Observable from field indices for observable-type select and param text.
-    fn build_observable(
-        &self,
-        obs_field: usize,
-        param_field: usize,
-    ) -> Result<Observable, String> {
+    fn build_observable(&self, obs_field: usize, param_field: usize) -> Result<Observable, String> {
         let obs_idx = self.select_value(obs_field);
         let param = self.text_value(param_field);
         index_to_observable(obs_idx, &param)
@@ -1598,7 +1597,13 @@ impl FormState {
         match &self.fields[field_idx] {
             FormField::MultiSelect { toggled, .. } => {
                 let mut caps = Cap::empty();
-                let all = [Cap::READ, Cap::WRITE, Cap::CREATE, Cap::DELETE, Cap::EXECUTE];
+                let all = [
+                    Cap::READ,
+                    Cap::WRITE,
+                    Cap::CREATE,
+                    Cap::DELETE,
+                    Cap::EXECUTE,
+                ];
                 for (i, &on) in toggled.iter().enumerate() {
                     if on {
                         if let Some(&cap) = all.get(i) {
@@ -1698,19 +1703,14 @@ impl FormState {
                             Span::styled(before, value_style),
                             Span::styled(
                                 cursor_char.to_string(),
-                                Style::default()
-                                    .fg(Color::Black)
-                                    .bg(Color::White),
+                                Style::default().fg(Color::Black).bg(Color::White),
                             ),
                             Span::styled(after, value_style),
                         ]));
                     } else if is_active && value.is_empty() {
                         lines.push(Line::from(vec![
                             Span::styled(format!("  {label}: "), label_style),
-                            Span::styled(
-                                " ",
-                                Style::default().fg(Color::Black).bg(Color::White),
-                            ),
+                            Span::styled(" ", Style::default().fg(Color::Black).bg(Color::White)),
                         ]));
                     } else {
                         lines.push(Line::from(vec![
@@ -1733,7 +1733,11 @@ impl FormState {
                         Style::default().fg(Color::Gray)
                     };
                     let option = &options[*selected];
-                    let arrows = if is_active { ("< ", " >") } else { ("  ", "  ") };
+                    let arrows = if is_active {
+                        ("< ", " >")
+                    } else {
+                        ("  ", "  ")
+                    };
                     let value_style = if is_active {
                         Style::default()
                             .fg(Color::Cyan)
@@ -2552,14 +2556,8 @@ mod tests {
     #[test]
     fn test_edit_sandbox_rule_prefills_and_applies() {
         let mut manifest = empty_manifest();
-        sandbox_edit::create_sandbox(
-            &mut manifest,
-            "dev",
-            Cap::READ,
-            NetworkPolicy::Deny,
-            None,
-        )
-        .unwrap();
+        sandbox_edit::create_sandbox(&mut manifest, "dev", Cap::READ, NetworkPolicy::Deny, None)
+            .unwrap();
         sandbox_edit::add_rule(
             &mut manifest,
             "dev",
