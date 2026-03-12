@@ -19,65 +19,49 @@ serde = ["dep:serde", "brush-parser/serde", "rpds/serde", "chrono/serde"]
 experimental-parser = ["brush-parser/winnow-parser"]
 
 [dependencies]
-async-recursion = "1.1.1"
-async-trait = "0.1.89"
-brush-parser = { version = "^0.3.0", path = "../clash-brush-parser", package = "clash-brush-parser" }
-bon = "3.9.0"
-cached = "0.56.0"
-cfg-if = "1.0.4"
-chrono = "0.4.44"
-clap = { version = "4.5.57", features = ["derive", "wrap_help"] }
-color-print = "0.3.7"
-fancy-regex = "0.17.0"
-futures = "0.3.32"
-inherent = "1.0.13"
-itertools = "0.14.0"
-normalize-path = "0.2.1"
-rand = "0.10.0"
-rpds = "1.2.0"
-serde = { version = "1.0.228", optional = true, features = ["derive"] }
-strum = "0.28.0"
-strum_macros = "0.28.0"
-thiserror = "2.0.18"
-tracing = "0.1.44"
+async-recursion = { workspace = true }
+async-trait = { workspace = true }
+brush-parser = { workspace = true }
+bon = { workspace = true }
+cached = { workspace = true }
+cfg-if = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+color-print = { workspace = true }
+fancy-regex = { workspace = true }
+futures = { workspace = true }
+inherent = { workspace = true }
+itertools = { workspace = true }
+normalize-path = { workspace = true }
+rand = { workspace = true }
+rpds = { workspace = true }
+serde = { workspace = true, optional = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-tokio = { version = "1.49.0", features = ["io-util", "macros", "rt", "sync"] }
+tokio = { workspace = true }
 
 [target.'cfg(any(unix, windows))'.dependencies]
-hostname = "0.4.2"
-tokio = { version = "1.49.0", features = [
-    "io-util",
-    "macros",
-    "process",
-    "rt",
-    "rt-multi-thread",
-    "signal",
-    "sync",
-] }
+hostname = { workspace = true }
+tokio = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-whoami = "2.1.1"
+whoami = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-command-fds = "0.3.2"
-libc = "0.2.180"
-nix = { version = "0.31.2", features = [
-    "fs",
-    "poll",
-    "process",
-    "resource",
-    "signal",
-    "term",
-    "user",
-] }
-terminfo = "0.9.0"
-uzers = "0.12.2"
+command-fds = { workspace = true }
+libc = { workspace = true }
+nix = { workspace = true }
+terminfo = { workspace = true }
+uzers = { workspace = true }
 
 [target.wasm32-unknown-unknown.dependencies]
-getrandom = { version = "0.4.1", features = ["wasm_js"] }
-uuid = { version = "1.21.0", features = ["js"] }
+getrandom = { workspace = true }
+uuid = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
-anyhow = "1.0.102"
-pretty_assertions = { version = "1.4.1", features = ["unstable"] }
+anyhow = { workspace = true }
+pretty_assertions = { workspace = true }

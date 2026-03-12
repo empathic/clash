@@ -749,7 +749,7 @@ dependencies = [
  "nu-ansi-term",
  "proptest",
  "ratatui",
- "reedline 0.45.0",
+ "reedline",
  "regex",
  "seccompiler",
  "semver",
@@ -775,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "clash-brush-builtins"
-version = "0.1.0"
+version = "0.4.4"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -839,7 +839,7 @@ dependencies = [
 
 [[package]]
 name = "clash-brush-interactive"
-version = "0.3.0"
+version = "0.4.4"
 dependencies = [
  "bon",
  "clash-brush-core",
@@ -849,7 +849,7 @@ dependencies = [
  "nu-ansi-term",
  "pretty_assertions",
  "radix_trie 0.3.0",
- "reedline 0.46.0",
+ "reedline",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "clash-brush-parser"
-version = "0.3.0"
+version = "0.4.4"
 dependencies = [
  "anyhow",
  "arbitrary",
@@ -3768,27 +3768,6 @@ dependencies = [
  "getrandom 0.2.17",
  "libredox",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "reedline"
-version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67478e45862a0c29fd99658e382c07b1b80b9c1b7d946ce6bd2e4a679141554b"
-dependencies = [
- "chrono",
- "crossterm",
- "fd-lock",
- "itertools 0.13.0",
- "nu-ansi-term",
- "serde",
- "strip-ansi-escapes",
- "strum 0.26.3",
- "strum_macros 0.26.4",
- "thiserror 2.0.18",
- "unicase",
- "unicode-segmentation",
- "unicode-width 0.2.2",
 ]
 
 [[package]]
