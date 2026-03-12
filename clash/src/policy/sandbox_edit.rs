@@ -96,11 +96,7 @@ pub fn add_rule(
 /// Remove a rule matching the given path from a named sandbox.
 ///
 /// Returns `true` if a rule was removed.
-pub fn remove_rule(
-    manifest: &mut PolicyManifest,
-    sandbox_name: &str,
-    path: &str,
-) -> Result<bool> {
+pub fn remove_rule(manifest: &mut PolicyManifest, sandbox_name: &str, path: &str) -> Result<bool> {
     let sandbox = manifest
         .policy
         .sandboxes
@@ -133,7 +129,14 @@ mod tests {
     #[test]
     fn create_inserts_new_sandbox() {
         let mut m = empty_manifest();
-        create_sandbox(&mut m, "dev", Cap::READ | Cap::EXECUTE, NetworkPolicy::Deny, None).unwrap();
+        create_sandbox(
+            &mut m,
+            "dev",
+            Cap::READ | Cap::EXECUTE,
+            NetworkPolicy::Deny,
+            None,
+        )
+        .unwrap();
         assert!(m.policy.sandboxes.contains_key("dev"));
         let sb = &m.policy.sandboxes["dev"];
         assert_eq!(sb.default, Cap::READ | Cap::EXECUTE);
@@ -171,9 +174,15 @@ mod tests {
         let mut m = empty_manifest();
         create_sandbox(&mut m, "dev", Cap::READ, NetworkPolicy::Deny, None).unwrap();
         let result = add_rule(
-            &mut m, "dev", RuleEffect::Allow, Cap::READ | Cap::WRITE,
-            "$PWD".into(), PathMatch::Subpath, None,
-        ).unwrap();
+            &mut m,
+            "dev",
+            RuleEffect::Allow,
+            Cap::READ | Cap::WRITE,
+            "$PWD".into(),
+            PathMatch::Subpath,
+            None,
+        )
+        .unwrap();
         assert_eq!(result, UpsertResult::Inserted);
         assert_eq!(m.policy.sandboxes["dev"].rules.len(), 1);
     }
@@ -182,11 +191,26 @@ mod tests {
     fn add_rule_replaces_same_path() {
         let mut m = empty_manifest();
         create_sandbox(&mut m, "dev", Cap::READ, NetworkPolicy::Deny, None).unwrap();
-        add_rule(&mut m, "dev", RuleEffect::Allow, Cap::READ, "$PWD".into(), PathMatch::Subpath, None).unwrap();
+        add_rule(
+            &mut m,
+            "dev",
+            RuleEffect::Allow,
+            Cap::READ,
+            "$PWD".into(),
+            PathMatch::Subpath,
+            None,
+        )
+        .unwrap();
         let result = add_rule(
-            &mut m, "dev", RuleEffect::Deny, Cap::WRITE,
-            "$PWD".into(), PathMatch::Subpath, None,
-        ).unwrap();
+            &mut m,
+            "dev",
+            RuleEffect::Deny,
+            Cap::WRITE,
+            "$PWD".into(),
+            PathMatch::Subpath,
+            None,
+        )
+        .unwrap();
         assert_eq!(result, UpsertResult::Replaced);
         assert_eq!(m.policy.sandboxes["dev"].rules.len(), 1);
         assert_eq!(m.policy.sandboxes["dev"].rules[0].effect, RuleEffect::Deny);
@@ -196,7 +220,15 @@ mod tests {
     #[test]
     fn add_rule_errors_on_missing_sandbox() {
         let mut m = empty_manifest();
-        let err = add_rule(&mut m, "nope", RuleEffect::Allow, Cap::READ, "$PWD".into(), PathMatch::Subpath, None);
+        let err = add_rule(
+            &mut m,
+            "nope",
+            RuleEffect::Allow,
+            Cap::READ,
+            "$PWD".into(),
+            PathMatch::Subpath,
+            None,
+        );
         assert!(err.is_err());
     }
 
@@ -204,7 +236,16 @@ mod tests {
     fn remove_rule_by_path() {
         let mut m = empty_manifest();
         create_sandbox(&mut m, "dev", Cap::READ, NetworkPolicy::Deny, None).unwrap();
-        add_rule(&mut m, "dev", RuleEffect::Allow, Cap::READ, "$PWD".into(), PathMatch::Subpath, None).unwrap();
+        add_rule(
+            &mut m,
+            "dev",
+            RuleEffect::Allow,
+            Cap::READ,
+            "$PWD".into(),
+            PathMatch::Subpath,
+            None,
+        )
+        .unwrap();
         assert!(remove_rule(&mut m, "dev", "$PWD").unwrap());
         assert!(m.policy.sandboxes["dev"].rules.is_empty());
     }

@@ -364,7 +364,11 @@ fn handle_add_rule(
 
     match result {
         sandbox_edit::UpsertResult::Inserted => {
-            println!("{} Rule added to sandbox '{}'", style::green_bold("✓"), name)
+            println!(
+                "{} Rule added to sandbox '{}'",
+                style::green_bold("✓"),
+                name
+            )
         }
         sandbox_edit::UpsertResult::Replaced => println!(
             "{} Rule updated in sandbox '{}'",
@@ -398,7 +402,9 @@ fn parse_network_policy(s: &str) -> Result<NetworkPolicy> {
         "deny" => Ok(NetworkPolicy::Deny),
         "allow" => Ok(NetworkPolicy::Allow),
         "localhost" => Ok(NetworkPolicy::Localhost),
-        other => anyhow::bail!("unknown network policy '{other}' (expected: deny, allow, localhost)"),
+        other => {
+            anyhow::bail!("unknown network policy '{other}' (expected: deny, allow, localhost)")
+        }
     }
 }
 

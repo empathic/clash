@@ -25,10 +25,26 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Validate { file, json } => handle_validate(file, json),
         PolicyCmd::Show { json } => handle_show(json),
-        PolicyCmd::Edit { scope } => handle_edit(scope),
-        PolicyCmd::Allow { command, tool, bin, sandbox, scope } => handle_allow(command, tool, bin, sandbox, scope),
-        PolicyCmd::Deny { command, tool, bin, scope } => handle_deny(command, tool, bin, scope),
-        PolicyCmd::Remove { command, tool, bin, scope } => handle_remove(command, tool, bin, scope),
+        PolicyCmd::Edit { scope, raw } => handle_edit(scope, raw),
+        PolicyCmd::Allow {
+            command,
+            tool,
+            bin,
+            sandbox,
+            scope,
+        } => handle_allow(command, tool, bin, sandbox, scope),
+        PolicyCmd::Deny {
+            command,
+            tool,
+            bin,
+            scope,
+        } => handle_deny(command, tool, bin, scope),
+        PolicyCmd::Remove {
+            command,
+            tool,
+            bin,
+            scope,
+        } => handle_remove(command, tool, bin, scope),
     }
 }
 
@@ -359,24 +375,31 @@ pub fn open_in_editor(path: &Path) -> Result<()> {
 }
 
 /// Handle `clash policy edit`.
-fn handle_edit(scope: Option<String>) -> Result<()> {
-    let level = match scope.as_deref() {
-        Some("user") => PolicyLevel::User,
-        Some("project") => PolicyLevel::Project,
-        Some(other) => {
-            anyhow::bail!("unknown scope: \"{other}\" (expected \"user\" or \"project\")")
+fn handle_edit(scope: Option<String>, raw: bool) -> Result<()> {
+    if raw {
+        // --raw: open in $EDITOR
+        let level = match scope.as_deref() {
+            Some("user") => PolicyLevel::User,
+            Some("project") => PolicyLevel::Project,
+            Some(other) => {
+                anyhow::bail!("unknown scope: \"{other}\" (expected \"user\" or \"project\")")
+            }
+            None => ClashSettings::default_scope(),
+        };
+        let path = ClashSettings::policy_file_for_level(level)?;
+        if !path.exists() {
+            anyhow::bail!(
+                "no policy file at {} — run `clash init {}` first",
+                path.display(),
+                level,
+            );
         }
-        None => ClashSettings::default_scope(),
-    };
-    let path = ClashSettings::policy_file_for_level(level)?;
-    if !path.exists() {
-        anyhow::bail!(
-            "no policy file at {} — run `clash init {}` first",
-            path.display(),
-            level,
-        );
+        return open_in_editor(&path);
     }
-    open_in_editor(&path)
+
+    // Interactive TUI editor
+    let path = resolve_manifest_path(scope)?;
+    crate::tui::run(&path)
 }
 
 // ---------------------------------------------------------------------------
@@ -469,7 +492,9 @@ fn build_rule_node(
     // Positional command takes priority.
     if let Some((bin_name, args)) = parse_command(command) {
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        return Ok(manifest_edit::build_exec_rule(&bin_name, &arg_refs, decision));
+        return Ok(manifest_edit::build_exec_rule(
+            &bin_name, &arg_refs, decision,
+        ));
     }
     match (tool.as_deref(), bin.as_deref()) {
         (_, Some(bin_name)) => Ok(manifest_edit::build_exec_rule(bin_name, &[], decision)),
@@ -494,7 +519,10 @@ fn handle_allow(
     match result {
         manifest_edit::UpsertResult::Inserted => println!("{} Rule added", style::green_bold("✓")),
         manifest_edit::UpsertResult::Replaced => {
-            println!("{} Rule updated (replaced existing)", style::green_bold("✓"))
+            println!(
+                "{} Rule updated (replaced existing)",
+                style::green_bold("✓")
+            )
         }
     }
     println!("  {}", style::dim(&path.display().to_string()));
@@ -515,7 +543,10 @@ fn handle_deny(
     match result {
         manifest_edit::UpsertResult::Inserted => println!("{} Rule added", style::green_bold("✓")),
         manifest_edit::UpsertResult::Replaced => {
-            println!("{} Rule updated (replaced existing)", style::green_bold("✓"))
+            println!(
+                "{} Rule updated (replaced existing)",
+                style::green_bold("✓")
+            )
         }
     }
     println!("  {}", style::dim(&path.display().to_string()));
