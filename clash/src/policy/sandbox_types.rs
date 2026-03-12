@@ -344,11 +344,20 @@ impl SandboxPolicy {
 
     /// Compute the effective capabilities for a given path by evaluating all rules.
     ///
-    /// Uses deny-overrides-allow precedence: collects all matching allows and denies,
-    /// then applies denies on top.
+    /// Uses depth-sorted last-match-wins precedence, matching macOS Seatbelt
+    /// (SBPL) evaluation semantics: rules are sorted by path depth ascending
+    /// (broadest first), with deny-before-allow at the same depth. Each rule
+    /// overrides previous decisions for the capabilities it covers, so deeper
+    /// (more specific) rules take precedence over shallower ones, and at the
+    /// same depth an allow wins over a deny.
     pub fn effective_caps(&self, path: &str, cwd: &str) -> Cap {
-        let mut allowed = self.default;
-        let mut denied = Cap::empty();
+        struct MatchedRule {
+            effect: RuleEffect,
+            caps: Cap,
+            depth: usize,
+        }
+
+        let mut matched: Vec<MatchedRule> = Vec::new();
 
         for rule in &self.rules {
             let rule_path = Self::resolve_path(&rule.path, cwd);
@@ -361,14 +370,36 @@ impl SandboxPolicy {
             };
 
             if matches {
-                match rule.effect {
-                    RuleEffect::Allow => allowed |= rule.caps,
-                    RuleEffect::Deny => denied |= rule.caps,
-                }
+                matched.push(MatchedRule {
+                    effect: rule.effect,
+                    caps: rule.caps,
+                    depth: rule_path.matches('/').count(),
+                });
             }
         }
 
-        allowed & !denied
+        // Sort by path depth ascending so broadest rules are applied first.
+        // Within the same depth, deny before allow so that allow wins via
+        // last-match-wins — matching SBPL evaluation order.
+        matched.sort_by(|a, b| {
+            a.depth.cmp(&b.depth).then_with(|| {
+                let effect_ord = |e: &RuleEffect| match e {
+                    RuleEffect::Deny => 0,
+                    RuleEffect::Allow => 1,
+                };
+                effect_ord(&a.effect).cmp(&effect_ord(&b.effect))
+            })
+        });
+
+        let mut result = self.default;
+        for rule in &matched {
+            match rule.effect {
+                RuleEffect::Allow => result |= rule.caps,
+                RuleEffect::Deny => result &= !rule.caps,
+            }
+        }
+
+        result
     }
 }
 
@@ -689,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_caps_deny_overrides_allow() {
+    fn effective_caps_allow_wins_at_same_depth() {
         let policy = SandboxPolicy {
             default: Cap::READ,
             rules: vec![
@@ -711,9 +742,9 @@ mod tests {
             network: NetworkPolicy::Deny,
             doc: None,
         };
-        // Deny write overrides allow write, but create stays
+        // At same depth, allow wins (last-match-wins, matching SBPL semantics)
         let caps = policy.effective_caps("/data/file.txt", "/ignored");
-        assert_eq!(caps, Cap::READ | Cap::CREATE);
+        assert_eq!(caps, Cap::READ | Cap::WRITE | Cap::CREATE);
     }
 
     #[test]
@@ -771,6 +802,58 @@ mod tests {
         };
         // Path that matches no rules gets default
         let caps = policy.effective_caps("/unrelated/path", "/ignored");
+        assert_eq!(caps, Cap::READ | Cap::EXECUTE);
+    }
+
+    #[test]
+    fn effective_caps_deeper_allow_overrides_shallower_deny() {
+        // Mirrors the real "cwd" sandbox: broad deny on /Users, specific allow on $PWD
+        let policy = SandboxPolicy {
+            default: Cap::EXECUTE,
+            rules: vec![
+                SandboxRule {
+                    effect: RuleEffect::Allow,
+                    caps: Cap::READ | Cap::WRITE | Cap::CREATE,
+                    path: "/Users/eliot/code/project".into(),
+                    path_match: PathMatch::Subpath,
+                    doc: None,
+                },
+                SandboxRule {
+                    effect: RuleEffect::Allow,
+                    caps: Cap::READ,
+                    path: "/Users/eliot".into(),
+                    path_match: PathMatch::Subpath,
+                    doc: None,
+                },
+                SandboxRule {
+                    effect: RuleEffect::Allow,
+                    caps: Cap::READ,
+                    path: "/".into(),
+                    path_match: PathMatch::Subpath,
+                    doc: None,
+                },
+                SandboxRule {
+                    effect: RuleEffect::Deny,
+                    caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE | Cap::EXECUTE,
+                    path: "/Users".into(),
+                    path_match: PathMatch::Subpath,
+                    doc: None,
+                },
+            ],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+
+        // Inside $PWD: the deeper allow overrides the shallower deny on /Users
+        let caps = policy.effective_caps("/Users/eliot/code/project/src/main.rs", "/ignored");
+        assert_eq!(caps, Cap::READ | Cap::WRITE | Cap::CREATE);
+
+        // Inside $HOME but outside $PWD: read from $HOME allow overrides /Users deny
+        let caps = policy.effective_caps("/Users/eliot/.config/foo", "/ignored");
+        assert_eq!(caps, Cap::READ);
+
+        // Outside /Users entirely: default + broad allow on /
+        let caps = policy.effective_caps("/etc/passwd", "/ignored");
         assert_eq!(caps, Cap::READ | Cap::EXECUTE);
     }
 }
