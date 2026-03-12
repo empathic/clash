@@ -6,7 +6,7 @@ permalink: /policy/
 ---
 
 <h1 class="page-title">Policy Language</h1>
-<p class="page-desc">Everything you need to write clash policies. Policies can be written in Starlark (<code>.star</code> files) or managed via <code>policy.json</code> using CLI commands.</p>
+<p class="page-desc">Everything you need to write clash policies. Use Starlark (<code>.star</code>) for expressive, hand-crafted policies. Use <code>policy.json</code> for CLI-driven and tool-managed rules.</p>
 
 ## Effects
 
@@ -23,7 +23,7 @@ exe("git", args = ["commit"]).ask()
 ```
 
 <details>
-<summary>JSON IR (v5 match tree)</summary>
+<summary>Compiled JSON IR</summary>
 
 ```json
 { "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } }, "children": [
@@ -36,13 +36,13 @@ exe("git", args = ["commit"]).ask()
 ```
 </details>
 
-**First match wins.** Within a capability domain, rules are evaluated in order — the first matching rule determines the effect. Put specific rules (like denies) before broad ones (like allows).
+**First match wins.** Rules are evaluated in order — the first matching rule determines the effect. Put specific rules (like denies) before broad ones (like allows).
 
 ---
 
-## Capability domains
+## Domains
 
-Clash controls three capability domains. Rules target capabilities, not tool names — a single rule can cover multiple agent tools.
+Clash matches rules across three domains. A single rule can cover multiple tools.
 
 ### Exec — shell commands
 
@@ -54,7 +54,7 @@ exe(["cargo", "rustc"]).allow()  # multiple binaries
 ```
 
 <details>
-<summary>JSON IR (v5 match tree)</summary>
+<summary>Compiled JSON IR</summary>
 
 ```json
 { "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } }, "children": [
@@ -85,7 +85,7 @@ home().child(".ssh").allow(read = True)             # read under ~/.ssh
 ```
 
 <details>
-<summary>JSON IR (v5 match tree)</summary>
+<summary>Compiled JSON IR</summary>
 
 Filesystem rules are compiled by Starlark into condition nodes that observe tool names and named arguments. The `cwd()` builder generates conditions matching Read/Write/Edit/Glob/Grep tools with path checks via `named_arg` or `nested_field` observables.
 </details>
@@ -100,7 +100,7 @@ domains({"github.com": allow, "crates.io": allow})
 ```
 
 <details>
-<summary>JSON IR (v5 match tree)</summary>
+<summary>Compiled JSON IR</summary>
 
 Network rules are compiled by Starlark into condition nodes that observe the tool name (WebFetch/WebSearch) and extract the domain via `nested_field` or `named_arg` observables.
 </details>
@@ -118,9 +118,9 @@ The tool domain matches agent tools by name. Use this for tools that don't map t
 
 ---
 
-## Patterns (v5 match tree)
+## Patterns
 
-In the v5 match tree IR, patterns are used inside condition nodes to match against observable values.
+In the compiled match tree, patterns are used inside condition nodes to match against observable values.
 
 ### Wildcard
 
@@ -188,7 +188,7 @@ exe("git").allow()
 
 If the rules were reversed, `git push` would match the allow first and the deny would never fire.
 
-When a request matches rules in multiple capability domains, deny-overrides applies across domains: deny > ask > allow.
+When a request matches rules in multiple domains, deny-overrides applies across domains: deny > ask > allow.
 
 ---
 
@@ -221,21 +221,18 @@ def main():
     ])
 ```
 
-<details>
-<summary>Compiled JSON IR (v5 match tree)</summary>
-
-In v5, composition happens at the Starlark level — the compiled output is a flat match tree with no includes. The tree from the Starlark above would contain condition nodes for git commands (deny push/reset, ask commit, allow others) followed by the remaining rules, all flattened into a single tree array.
-</details>
-
 Starlark `load()` imports values from other `.star` files. All composition (function calls, list splicing, imports) resolves at compile time.
 
-### Machine-readable policy (policy.json)
+### Two formats: `.star` for humans, `.json` for tools
 
-For CLI-driven rule management, clash supports `policy.json` — a JSON file that extends the v5 IR with an `includes` field:
+Clash supports two policy formats that serve different purposes:
+
+**Starlark (`.star`)** is for humans. Write expressive policies with functions, variables, imports, and composition. When you want to craft a nuanced policy — conditionals, shared rule sets across projects, sandbox builders — this is the format to use.
+
+**JSON (`policy.json`)** is for tools. CLI commands like `clash policy allow`, `clash policy deny`, and `clash policy remove` read and write `policy.json` directly. It's a machine-readable format designed to be mutated programmatically — by the CLI, by scripts, or by agents themselves.
 
 ```json
 {
-  "schema_version": 5,
   "default_effect": "deny",
   "includes": [
     { "path": "@clash//builtin.star" },
@@ -245,7 +242,7 @@ For CLI-driven rule management, clash supports `policy.json` — a JSON file tha
 }
 ```
 
-CLI commands (`clash policy allow/deny/remove`) operate on `policy.json`. Included `.star` files are compiled and merged at load time, with inline `tree` rules taking precedence. When both `.json` and `.star` exist at the same level, `.json` takes precedence.
+The `includes` field lets `policy.json` pull in `.star` files, so you can combine CLI-managed rules with hand-written Starlark. Included files are compiled and merged at load time, with inline `tree` rules taking precedence. When both `.json` and `.star` exist at the same level, `.json` wins.
 
 ### Merging policies
 
@@ -300,11 +297,10 @@ def main():
 Note that `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
 
 <details>
-<summary>JSON IR (v5 match tree)</summary>
+<summary>Compiled JSON IR</summary>
 
 ```json
 {
-  "schema_version": 5,
   "default_effect": "deny",
   "sandboxes": {
     "cargo-env": { "fs": [...], "net": "allow" }

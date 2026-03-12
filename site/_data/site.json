@@ -1,5 +1,5 @@
 {
   "title": "Clash",
-  "description": "Command Line Agent Safety Harness",
+  "description": "Pattern-matching sandboxes for commands you don't fully trust",
   "repo": "https://github.com/empathic/clash"
 }

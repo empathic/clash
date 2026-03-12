@@ -6,7 +6,7 @@ permalink: /policy/grammar/
 ---
 
 <h1 class="page-title">Policy Schema</h1>
-<p class="page-desc">JSON IR schema (v5) for compiled clash policies. Policies are authored as <a href="{{ version.pathPrefix }}/policy/">Starlark (.star) files</a> and compiled to this format.</p>
+<p class="page-desc">JSON IR schema for compiled clash policies. Policies are authored as <a href="{{ version.pathPrefix }}/policy/">Starlark (.star) files</a> or managed via <code>policy.json</code>, and compiled to this format.</p>
 
 ## Document structure
 
@@ -21,7 +21,7 @@ permalink: /policy/grammar/
 
 | Field | Type | Description |
 |---|---|---|
-| `schema_version` | integer | Always `5` |
+| `schema_version` | integer | Internal version identifier |
 | `default_effect` | string | Effect when no rule matches: `"allow"`, `"deny"`, or `"ask"` |
 | `sandboxes` | object | Named sandbox definitions (may be empty) |
 | `tree` | array | Root-level nodes of the match tree |
