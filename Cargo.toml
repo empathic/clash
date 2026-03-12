@@ -45,11 +45,11 @@ tracing-subscriber = { version = "0.3.22", features = [
 ] }
 
 # Workspace crates
-clash_notify = { path = "clash_notify", version = "0.4.3" }
-clash_starlark = { path = "clash_starlark", version = "0.4.3" }
-claude_settings = { path = "claude_settings", version = "0.4.3" }
+clash_notify = { path = "clash_notify", version = "0.4.4" }
+clash_starlark = { path = "clash_starlark", version = "0.4.4" }
+claude_settings = { path = "claude_settings", version = "0.4.4" }
 clash-brush-parser = { path = "clash-brush-parser", version = "0.3.0" }
-clash-brush-core = { path = "clash-brush-core", version = "0.4.3" }
+clash-brush-core = { path = "clash-brush-core", version = "0.4.4" }
 clash-brush-builtins = { path = "clash-brush-builtins", version = "0.1.0" }
 clash-brush-interactive = { path = "clash-brush-interactive", version = "0.3.0", features = [
     "basic",
