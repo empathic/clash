@@ -5,6 +5,7 @@ const Prism = require("prismjs");
 require("prismjs/components/prism-json");
 require("prismjs/components/prism-bash");
 require("prismjs/components/prism-lisp");
+require("prismjs/components/prism-python");
 
 function slugify(s) {
   return s

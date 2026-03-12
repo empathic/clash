@@ -6,90 +6,98 @@ permalink: /faq/
 ---
 
 <h1 class="page-title">FAQ</h1>
-<p class="page-desc">Common questions about Clash.</p>
+<p class="page-desc">Quick answers to common questions.</p>
+
+## Is Clash only for AI agents?
+
+No. Clash is a general-purpose sandboxing and policy engine. You can use `clash sandbox exec` to sandbox any command — build scripts, install scripts, untrusted binaries, anything. The AI agent integration is one application of the same underlying engine.
+
+---
+
+## How is this different from Docker or Firejail?
+
+Clash is lighter and more targeted. It doesn't virtualize anything — it applies Landlock (Linux) or Seatbelt (macOS) restrictions directly to a process. No container images, no namespaces, no root required. You write a few rules about which paths and network access a command should have, and the kernel enforces them. It's closer to a fine-grained `sandbox-exec` than a container runtime.
+
+---
+
+## How is this different from Claude Code's built-in permissions?
+
+Claude Code gives you per-tool toggles: allow a tool entirely, or get prompted every time. Clash gives you **pattern-matching rules within tools**: allow `git status` while denying `git push`, allow reads under your project while blocking writes to `.env`, allow network access to `github.com` while blocking everything else. Plus kernel-enforced sandboxes, policy composition, and per-project layering.
+
+---
 
 ## Which agents does Clash support?
 
-Currently, **Claude Code** is fully supported. Codex CLI, Gemini CLI, and OpenCode are planned. The policy language and capability model are agent-independent — only the integration layer (hooks) is specific to each agent. See the [agent support table]({{ version.pathPrefix }}/#agent-support) for tracking issues.
+**Claude Code** is fully supported today. Codex CLI, Gemini CLI, and OpenCode are planned. But Clash also works standalone — `clash sandbox exec` sandboxes any command, no agent required. The policy engine is agent-independent; only the hook layer is specific to each agent. See the [agent support table]({{ version.pathPrefix }}/#agent-support).
 
 ---
 
-## How is Clash different from Claude Code's built-in permissions?
+## Will it slow things down?
 
-Claude Code's built-in permission model is all-or-nothing per tool. Clash adds **granular, capability-based rules**: you can allow `git status` while denying `git push`, allow file reads under your project while denying writes to `.env`, or allow network access to `github.com` while blocking everything else. Clash also supports kernel-enforced sandboxes, policy composition, and per-project layering.
-
----
-
-## Does Clash slow down my agent?
-
-No. Clash evaluates policy rules in-process on every tool call with negligible overhead — the policy is compiled into a decision tree at load time. There's no network round-trip, no external process, and no noticeable latency.
+No. Policies compile into a decision tree at load time. Evaluation is in-process with no network round-trip. Sandbox setup adds a few milliseconds at process launch — then the kernel handles enforcement with zero runtime overhead.
 
 ---
 
-## What happens if my policy has a syntax error?
+## What happens if my policy has a bug?
 
-Clash blocks **all actions** when the policy fails to compile, rather than silently degrading. This is a safety-first design: a broken policy should never result in unintended approvals. Run `clash policy validate` to diagnose the error, or `clash init` to start fresh.
+Clash blocks **everything** when the policy fails to compile. A broken policy should never silently approve things. Run `clash policy validate` to find the error, or `clash init` to start over.
 
 ---
 
-## Can I share policies across a team?
+## Can I share policies with my team?
 
-Yes. Use a **project-level** policy at `<repo>/.clash/policy.star` and commit it to version control. Team members get shared rules automatically. Individual developers can override with user-level or session-level policies.
+Yes. Commit a **project-level** policy at `<repo>/.clash/policy.star`. Team members pick it up automatically. Individuals can still override with user-level or session-level policies.
 
 ---
 
 ## How does the kernel sandbox work?
 
-When an exec rule includes a sandbox (via `.sandbox(sb)` in Starlark, or the `"sandbox"` field in JSON IR), Clash generates OS-level restrictions:
+When a rule includes a sandbox, Clash generates OS-level restrictions:
 
-- **Linux:** Landlock LSM constrains filesystem access; seccomp + proxy handles network filtering.
-- **macOS:** Seatbelt profiles restrict filesystem and network access at the kernel level.
+- **Linux:** Landlock constrains filesystem access; seccomp + proxy filters network calls.
+- **macOS:** Seatbelt profiles restrict filesystem and network access.
 
-Sandbox restrictions are inherited by all child processes and cannot be bypassed by the sandboxed command. Run `clash sandbox check` to verify your platform supports sandboxing.
-
----
-
-## Do exec rules apply to subprocesses?
-
-No. Exec rules match only the **top-level command** the agent invokes. If an allowed command like `make deploy` internally calls `git push`, the deny rule for `git push` does not fire. However, **sandbox restrictions** on filesystem and network access *are* enforced on all child processes at the kernel level.
+Restrictions are inherited by all child processes and cannot be bypassed. Run `clash sandbox check` to verify your platform supports it.
 
 ---
 
-## How do I temporarily disable Clash?
+## Do rules apply to subprocesses?
 
-Set the `CLASH_DISABLE` environment variable:
+Exec rules match only the **top-level command**. If `make deploy` internally runs `git push`, the deny rule for `git push` won't fire. However, **sandbox restrictions** on filesystem and network access are enforced on all child processes at the kernel level — that's the whole point.
+
+---
+
+## How do I turn it off temporarily?
 
 ```bash
 CLASH_DISABLE=1 claude
 ```
 
-Clash stays installed but becomes a complete pass-through — no policy enforcement, no sandbox, no prompts. Unset the variable or set it to `0` to re-enable.
+Clash stays installed but becomes a pass-through — no enforcement, no prompts. Unset the variable to re-enable.
 
 ---
 
-## Which platforms are supported?
+## Which platforms work?
 
 - **macOS** — Apple Silicon and Intel
 - **Linux** — x86_64 and aarch64
 - **Windows** — not supported
 
-Kernel sandboxing requires Landlock (Linux 5.13+) or Seatbelt (macOS). Clash works without sandboxing on older kernels, but sandbox rules will be ignored.
+Kernel sandboxing needs Landlock (Linux 5.13+) or Seatbelt (macOS). Clash works without sandboxing on older kernels, but sandbox rules will be ignored.
 
 ---
 
-## How do I uninstall Clash?
+## How do I uninstall?
 
 ```bash
-# Remove the Claude Code plugin (stops hooks immediately)
+# Remove the agent plugin (if using one)
 claude plugin uninstall clash
 
 # Remove the binary
 cargo uninstall clash          # if installed via cargo
-rm -f ~/.local/bin/clash       # if installed via the install script
+rm -f ~/.local/bin/clash       # if installed via install script
 
-# Optional: clean up configuration
+# Optional: clean up config
 rm -rf ~/.clash                # user-level policy and logs
 rm -rf .clash                  # project-level policy
 ```
-
-After removing the plugin, Claude Code reverts to its built-in permission model immediately. Policy files are left in place so you can resume where you left off if you reinstall.
