@@ -117,9 +117,7 @@ fn patterns_equal(a: &Pattern, b: &Pattern) -> bool {
 }
 
 fn children_are_all_decisions(children: &[Node]) -> bool {
-    children
-        .iter()
-        .all(|n| matches!(n, Node::Decision(_)))
+    children.iter().all(|n| matches!(n, Node::Decision(_)))
 }
 
 /// Extract the leaf decision from a node tree (DFS to the first Decision).
@@ -245,7 +243,10 @@ mod tests {
     #[test]
     fn upsert_different_bins_are_separate() {
         let mut manifest = empty_manifest();
-        upsert_rule(&mut manifest, build_exec_rule("grep", &[], Decision::Allow(None)));
+        upsert_rule(
+            &mut manifest,
+            build_exec_rule("grep", &[], Decision::Allow(None)),
+        );
         upsert_rule(&mut manifest, build_exec_rule("rm", &[], Decision::Deny));
         // Both should exist (compacted under a shared Bash parent).
         let total_rules = count_leaf_decisions(&manifest.policy.tree);
@@ -255,7 +256,10 @@ mod tests {
     #[test]
     fn remove_existing_rule() {
         let mut manifest = empty_manifest();
-        upsert_rule(&mut manifest, build_exec_rule("grep", &[], Decision::Allow(None)));
+        upsert_rule(
+            &mut manifest,
+            build_exec_rule("grep", &[], Decision::Allow(None)),
+        );
         let target = build_exec_rule("grep", &[], Decision::Allow(None));
         assert!(remove_rule(&mut manifest, &target));
         assert!(manifest.policy.tree.is_empty());
@@ -264,7 +268,10 @@ mod tests {
     #[test]
     fn remove_nonexistent_returns_false() {
         let mut manifest = empty_manifest();
-        upsert_rule(&mut manifest, build_exec_rule("grep", &[], Decision::Allow(None)));
+        upsert_rule(
+            &mut manifest,
+            build_exec_rule("grep", &[], Decision::Allow(None)),
+        );
         let target = build_exec_rule("rm", &[], Decision::Allow(None));
         assert!(!remove_rule(&mut manifest, &target));
     }
@@ -306,8 +313,14 @@ mod tests {
     #[test]
     fn exec_rule_different_args_are_separate() {
         let mut manifest = empty_manifest();
-        upsert_rule(&mut manifest, build_exec_rule("gh", &["pr", "create"], Decision::Allow(None)));
-        upsert_rule(&mut manifest, build_exec_rule("gh", &["pr", "merge"], Decision::Deny));
+        upsert_rule(
+            &mut manifest,
+            build_exec_rule("gh", &["pr", "create"], Decision::Allow(None)),
+        );
+        upsert_rule(
+            &mut manifest,
+            build_exec_rule("gh", &["pr", "merge"], Decision::Deny),
+        );
         let total = count_leaf_decisions(&manifest.policy.tree);
         assert_eq!(total, 2);
     }

@@ -53,4 +53,5 @@ pub mod shell_cmd;
 pub mod style;
 pub mod trace;
 pub mod tracing_init;
+pub mod tui;
 pub mod version;

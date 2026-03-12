@@ -127,12 +127,57 @@ pub fn read_manifest(path: &Path) -> Result<PolicyManifest> {
     serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
 }
 
+/// Resolve includes and return the combined included policy.
+///
+/// Evaluates each include entry and merges their rules and sandboxes.
+/// Returns the merged included content (without the inline policy).
+/// Rules/sandboxes from includes should be treated as read-only in the TUI.
+pub fn resolve_includes(manifest: &PolicyManifest, base_dir: &Path) -> Result<CompiledPolicy> {
+    use std::collections::HashMap;
+
+    let mut merged = CompiledPolicy {
+        sandboxes: HashMap::new(),
+        tree: vec![],
+        default_effect: manifest.policy.default_effect.clone(),
+        default_sandbox: None,
+    };
+
+    for include in &manifest.includes {
+        match evaluate_include(&include.path, base_dir) {
+            Ok(json_source) => {
+                if let Ok(included) = serde_json::from_str::<CompiledPolicy>(&json_source) {
+                    // Stamp source provenance on root-level condition nodes
+                    for mut node in included.tree {
+                        if let crate::policy::match_tree::Node::Condition {
+                            ref mut source, ..
+                        } = node
+                        {
+                            if source.is_none() {
+                                *source = Some(include.path.clone());
+                            }
+                        }
+                        merged.tree.push(node);
+                    }
+                    for (k, v) in included.sandboxes {
+                        merged.sandboxes.entry(k).or_insert(v);
+                    }
+                }
+            }
+            Err(_) => {
+                // Silently skip failed includes — the TUI will show the include
+                // entry itself, and validation will catch errors on save.
+            }
+        }
+    }
+
+    Ok(merged)
+}
+
 /// Write a [`PolicyManifest`] to disk as pretty-printed JSON.
 pub fn write_manifest(path: &Path, manifest: &PolicyManifest) -> Result<()> {
-    let json = serde_json::to_string_pretty(manifest)
-        .context("failed to serialize policy manifest")?;
-    std::fs::write(path, json)
-        .with_context(|| format!("failed to write {}", path.display()))
+    let json =
+        serde_json::to_string_pretty(manifest).context("failed to serialize policy manifest")?;
+    std::fs::write(path, json).with_context(|| format!("failed to write {}", path.display()))
 }
 
 /// Validate a policy file's metadata (existence, type, size, permissions).

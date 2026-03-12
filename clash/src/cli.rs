@@ -56,11 +56,14 @@ pub enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Open the policy file in $EDITOR
+    /// Open the interactive policy editor (or $EDITOR with --raw)
     Edit {
         /// Policy scope to edit: "user" or "project" (default: auto-detect)
         #[arg(long)]
         scope: Option<String>,
+        /// Open in $EDITOR instead of the interactive TUI
+        #[arg(long)]
+        raw: bool,
     },
     /// Add an allow rule for a tool or binary
     ///
