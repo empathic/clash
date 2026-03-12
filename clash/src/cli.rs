@@ -228,7 +228,7 @@ pub enum Commands {
     },
 
     /// Apply sandbox restrictions and exec commands
-    #[command(subcommand)]
+    #[command(subcommand, alias = "box")]
     Sandbox(SandboxCmd),
 
     /// Diagnose common setup issues and report fix instructions

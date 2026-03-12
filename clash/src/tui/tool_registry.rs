@@ -218,10 +218,7 @@ pub fn effect_options_for_tool(tool_name: Option<&str>) -> (Vec<String>, Vec<&'s
 
 /// Map a filtered effect index back to the canonical 0/1/2 index
 /// (allow=0, deny=1, ask=2) used by apply functions.
-pub fn filtered_effect_to_canonical(
-    tool_name: Option<&str>,
-    filtered_idx: usize,
-) -> usize {
+pub fn filtered_effect_to_canonical(tool_name: Option<&str>, filtered_idx: usize) -> usize {
     let all = [EffectOption::Allow, EffectOption::Deny, EffectOption::Ask];
     match tool_name.and_then(lookup) {
         Some(info) => {
@@ -258,7 +255,10 @@ mod tests {
     #[test]
     fn test_unknown_tool_permissive() {
         assert!(is_effect_allowed("mcp__custom_tool", EffectOption::Ask));
-        assert!(is_observable_relevant("mcp__custom_tool", ObservableTag::FsPath));
+        assert!(is_observable_relevant(
+            "mcp__custom_tool",
+            ObservableTag::FsPath
+        ));
     }
 
     #[test]
@@ -289,7 +289,10 @@ mod tests {
         assert!(is_observable_relevant("Read", ObservableTag::FsPath));
         assert!(!is_observable_relevant("Read", ObservableTag::NetDomain));
 
-        assert!(is_observable_relevant("WebSearch", ObservableTag::NetDomain));
+        assert!(is_observable_relevant(
+            "WebSearch",
+            ObservableTag::NetDomain
+        ));
         assert!(!is_observable_relevant("WebSearch", ObservableTag::FsPath));
     }
 }
