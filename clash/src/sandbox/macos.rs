@@ -59,6 +59,7 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     p += "(allow sysctl-read)\n";
     p += "(allow mach-lookup)\n";
     p += "(allow mach-register)\n";
+
     // DNS resolution via mDNSResponder
     p += "(allow system-socket)\n";
 
@@ -68,26 +69,6 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     // Root directory readable (literal, not recursive) — some commands need
     // to stat "/" itself (e.g. `ls /`, path resolution).
     p += "(allow file-read* (literal \"/\"))\n";
-
-    // System paths always readable — required for dyld, shared libraries,
-    // frameworks, and basic process operation regardless of policy.
-    // dyld needs file-read* on binaries (not just process-exec) to load them.
-    for sys_path in &[
-        "/usr",
-        "/bin",
-        "/sbin",
-        "/System",
-        "/Library",
-        "/dev",
-        "/etc",
-        "/private/etc",
-        "/private/var/db/dyld",
-        "/private/var/folders",
-        "/var/select",
-        "/var/run",
-    ] {
-        p += &format!("(allow file-read* (subpath \"{}\"))\n", sys_path);
-    }
 
     // /dev/null always writable
     p += "(allow file-write* (literal \"/dev/null\"))\n";

@@ -897,7 +897,12 @@ impl CompiledPolicy {
                         "write" => Cap::WRITE | Cap::CREATE,
                         _ => Cap::empty(),
                     };
-                    let effective = sbx.effective_caps(fs_path, "");
+                    let effective = sbx.effective_caps(
+                        fs_path,
+                        &std::env::current_dir()
+                            .unwrap_or_default()
+                            .to_string_lossy(),
+                    );
                     if !effective.contains(required) {
                         effect = Effect::Deny;
                     }
