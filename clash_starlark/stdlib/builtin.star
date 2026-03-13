@@ -57,4 +57,4 @@ claude = policy(
     ],
 )
 
-base = clash.merge(claude)
+base = clash.update(claude)

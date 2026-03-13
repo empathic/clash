@@ -19,4 +19,4 @@ def main():
         python,
         rust,
     ])
-    return my_policy.merge(base)
+    return base.update(my_policy)

@@ -44,12 +44,12 @@ impl<'v> StarlarkValue<'v> for BasePolicyValue {
 
 #[starlark::starlark_module]
 fn base_policy_methods(builder: &mut starlark::environment::MethodsBuilder) {
-    /// Merge two policies together.
+    /// Update a policy with rules from another policy.
     ///
-    /// In `a.merge(b)`, `b` is merged on top: `b`'s default effect is used,
+    /// In `a.update(b)`, `b`'s default effect is used,
     /// tree nodes are concatenated (`a`'s first, then `b`'s), and sandboxes
     /// are merged (first defined wins on name conflicts).
-    fn merge(this: &BasePolicyValue, other: &BasePolicyValue) -> anyhow::Result<BasePolicyValue> {
+    fn update(this: &BasePolicyValue, other: &BasePolicyValue) -> anyhow::Result<BasePolicyValue> {
         let default_effect = other.default_effect.clone();
 
         let base_doc = match (&this.base_doc, &other.base_doc) {
@@ -95,5 +95,14 @@ fn base_policy_methods(builder: &mut starlark::environment::MethodsBuilder) {
             base_doc,
             default_effect,
         })
+    }
+
+    /// Removed — use `update()` instead.
+    fn merge(
+        this: &BasePolicyValue,
+        #[starlark(require = pos)] _other: &BasePolicyValue,
+    ) -> anyhow::Result<BasePolicyValue> {
+        let _ = this;
+        Err(anyhow::anyhow!("merge() has been renamed to update()"))
     }
 }

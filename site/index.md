@@ -144,7 +144,7 @@ def main():
         # network: GitHub only
         domains({"github.com": allow}),
     ])
-    return my_rules.merge(base)
+    return base.update(my_rules)
 ```
 
 Three effects: <span class="badge badge--allow">allow</span> auto-approves, <span class="badge badge--deny">deny</span> blocks, <span class="badge badge--ask">ask</span> prompts you. First match wins. Edits take effect immediately.
