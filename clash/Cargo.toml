@@ -46,6 +46,7 @@ tar = { workspace = true }
 chrono = { workspace = true }
 toolpath = { workspace = true }
 toolpath-claude = { workspace = true }
+toolpath-dot = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 similar = { workspace = true }

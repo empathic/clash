@@ -117,6 +117,7 @@ tokio = { version = "1", features = [
 toml = "0.8"
 toolpath = "0.1"
 toolpath-claude = { version = "0.4", default-features = false }
+toolpath-dot = "0.1"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = [
     "env-filter",

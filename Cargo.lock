@@ -766,6 +766,7 @@ dependencies = [
  "toml",
  "toolpath",
  "toolpath-claude",
+ "toolpath-dot",
  "tracing",
  "tracing-subscriber",
  "ureq",
@@ -4926,6 +4927,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "toolpath-dot"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7ed524aaf4ef28512bed7749de6862152ab50e8faf91b44f21241255450717f"
+dependencies = [
+ "toolpath",
 ]
 
 [[package]]
