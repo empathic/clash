@@ -116,12 +116,12 @@ pub fn decision_to_json(decision: &PolicyDecision) -> serde_json::Value {
 /// green and leave `" (sandbox: test)"` unstyled.  This replaces the inline
 /// reimplementation that was previously in `cmd::status::colorize_tree_line`.
 pub fn colorize_effect_prefix(text: &str) -> String {
-    if text.starts_with("allow") {
-        format!("{}{}", style::green("allow"), &text["allow".len()..])
-    } else if text.starts_with("deny") {
-        format!("{}{}", style::red("deny"), &text["deny".len()..])
-    } else if text.starts_with("ask") {
-        format!("{}{}", style::yellow("ask"), &text["ask".len()..])
+    if let Some(rest) = text.strip_prefix("allow") {
+        format!("{}{}", style::green("allow"), rest)
+    } else if let Some(rest) = text.strip_prefix("deny") {
+        format!("{}{}", style::red("deny"), rest)
+    } else if let Some(rest) = text.strip_prefix("ask") {
+        format!("{}{}", style::yellow("ask"), rest)
     } else {
         text.to_string()
     }

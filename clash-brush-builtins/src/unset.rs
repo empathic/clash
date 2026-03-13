@@ -82,10 +82,10 @@ impl builtins::Command for UnsetCommand {
             }
 
             // TODO(unset): Deal with readonly functions
-            if unspecified || self.name_interpretation.shell_functions {
-                if context.shell.undefine_func(name) {
-                    continue;
-                }
+            if (unspecified || self.name_interpretation.shell_functions)
+                && context.shell.undefine_func(name)
+            {
+                continue;
             }
         }
 

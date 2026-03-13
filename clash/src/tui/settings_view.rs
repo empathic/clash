@@ -22,6 +22,12 @@ pub enum Msg {
     CycleValue,
 }
 
+impl Default for SettingsView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SettingsView {
     pub fn new() -> Self {
         SettingsView { selected_field: 0 }

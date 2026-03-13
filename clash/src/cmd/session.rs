@@ -197,7 +197,7 @@ fn shorten_path(path: &str, max: usize) -> String {
     } else if let Some(stripped) = path.strip_prefix('/') {
         ("/", stripped)
     } else {
-        ("", path.as_ref())
+        ("", path)
     };
 
     let parts: Vec<&str> = rest.split('/').collect();
@@ -314,8 +314,7 @@ fn print_list_human(sessions: &[SessionInfo], active_id: &Option<String>) {
 
     // Header.
     println!(
-        "  {} {} {} {} {}",
-        " ",
+        "    {} {} {} {}",
         style::dim(&pad("SESSION", 36)),
         style::dim(&pad_right("LAST ACTIVE", 11)),
         style::dim(&pad("CWD", 24)),

@@ -133,27 +133,6 @@ impl HookContext {
     }
 }
 
-/// Environment resolver that provides session-level variables from [`HookContext`]
-/// in addition to standard environment variables.
-///
-/// Overrides `TRANSCRIPT_DIR` with the real value from hook context when available,
-/// otherwise falls through to [`StdEnvResolver`](crate::policy::compile::StdEnvResolver)
-/// which returns a safe sentinel.
-struct SessionEnvResolver<'a> {
-    hook_ctx: Option<&'a HookContext>,
-}
-
-impl crate::policy::compile::EnvResolver for SessionEnvResolver<'_> {
-    fn resolve(&self, name: &str) -> anyhow::Result<String> {
-        if name == "TRANSCRIPT_DIR"
-            && let Some(dir) = self.hook_ctx.and_then(|ctx| ctx.transcript_dir.clone())
-        {
-            return Ok(dir);
-        }
-        crate::policy::compile::StdEnvResolver.resolve(name)
-    }
-}
-
 /// A policy source loaded from a specific level.
 #[derive(Debug, Clone)]
 pub struct LoadedPolicy {
@@ -488,10 +467,10 @@ impl ClashSettings {
     ///
     /// Pass `hook_ctx` to inject session-specific internal policies (e.g., the
     /// transcript directory). Pass `None` for CLI commands.
-    #[instrument(level = Level::TRACE, skip(session_id, hook_ctx))]
+    #[instrument(level = Level::TRACE, skip(session_id, _hook_ctx))]
     pub fn load_or_create_with_session(
         session_id: Option<&str>,
-        hook_ctx: Option<&HookContext>,
+        _hook_ctx: Option<&HookContext>,
     ) -> Result<Self> {
         let mut this = Self::default();
 
@@ -565,10 +544,10 @@ fn prefer_json_over_star(dir: &std::path::Path) -> PathBuf {
 
 /// Shorten a path by replacing the home directory prefix with `~`.
 fn tilde_path(path: &std::path::Path) -> String {
-    if let Some(home) = home_dir() {
-        if let Ok(rest) = path.strip_prefix(&home) {
-            return format!("~/{}", rest.display());
-        }
+    if let Some(home) = home_dir()
+        && let Ok(rest) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", rest.display());
     }
     path.display().to_string()
 }
@@ -660,6 +639,7 @@ mod test {
     use super::*;
     use std::io::Write;
 
+    #[allow(dead_code)]
     struct TestEnv;
     impl crate::policy::compile::EnvResolver for TestEnv {
         fn resolve(&self, name: &str) -> anyhow::Result<String> {
@@ -845,6 +825,23 @@ mod test {
     }
 
     // --- HookContext / SessionEnvResolver tests ---
+
+    /// Environment resolver that provides session-level variables from [`HookContext`]
+    /// in addition to standard environment variables.
+    struct SessionEnvResolver<'a> {
+        hook_ctx: Option<&'a HookContext>,
+    }
+
+    impl crate::policy::compile::EnvResolver for SessionEnvResolver<'_> {
+        fn resolve(&self, name: &str) -> anyhow::Result<String> {
+            if name == "TRANSCRIPT_DIR"
+                && let Some(dir) = self.hook_ctx.and_then(|ctx| ctx.transcript_dir.clone())
+            {
+                return Ok(dir);
+            }
+            crate::policy::compile::StdEnvResolver.resolve(name)
+        }
+    }
 
     #[test]
     fn hook_context_from_transcript_path() {

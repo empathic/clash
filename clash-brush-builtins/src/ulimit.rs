@@ -477,13 +477,11 @@ impl builtins::Command for ULimitCommand {
         set_or_get(self.nproc, ResourceDescription::NPROC);
         set_or_get(self.vmem, ResourceDescription::VMEM);
 
-        if resources_to_set.is_empty() {
-            if resources_to_get.is_empty() {
-                if let Some(fsize) = self.limit {
-                    resources_to_set.push((ResourceDescription::FSIZE, fsize));
-                } else {
-                    resources_to_get.push(ResourceDescription::FSIZE);
-                }
+        if resources_to_set.is_empty() && resources_to_get.is_empty() {
+            if let Some(fsize) = self.limit {
+                resources_to_set.push((ResourceDescription::FSIZE, fsize));
+            } else {
+                resources_to_get.push(ResourceDescription::FSIZE);
             }
         }
 

@@ -1849,13 +1849,11 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
                 true
             };
 
-            if applicable {
-                if let Some(upper_char) = first_char.to_uppercase().next() {
-                    let mut result = upper_char.to_string();
-                    let rest: String = s.chars().skip(1).collect();
-                    result.push_str(&rest);
-                    return Ok(result);
-                }
+            if applicable && let Some(upper_char) = first_char.to_uppercase().next() {
+                let mut result = upper_char.to_string();
+                let rest: String = s.chars().skip(1).collect();
+                result.push_str(&rest);
+                return Ok(result);
             }
         }
 
@@ -1873,13 +1871,11 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
                 true
             };
 
-            if applicable {
-                if let Some(lower_char) = first_char.to_lowercase().next() {
-                    let mut result = lower_char.to_string();
-                    let rest: String = s.chars().skip(1).collect();
-                    result.push_str(&rest);
-                    return Ok(result);
-                }
+            if applicable && let Some(lower_char) = first_char.to_lowercase().next() {
+                let mut result = lower_char.to_string();
+                let rest: String = s.chars().skip(1).collect();
+                result.push_str(&rest);
+                return Ok(result);
             }
         }
 

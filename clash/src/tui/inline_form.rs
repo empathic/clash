@@ -752,17 +752,17 @@ impl FormState {
                 ..
             }) => {
                 // Inline leaf — show condition context + current effect
-                if children.len() == 1 {
-                    if let Node::Decision(d) = &children[0] {
-                        let what = observable_short_desc(observe);
-                        let val = short_pattern_desc(pattern);
-                        let effect = match d {
-                            Decision::Allow(_) => "allow",
-                            Decision::Deny => "deny",
-                            Decision::Ask(_) => "ask",
-                        };
-                        return format!("Edit: {what} = {val} (currently {effect})");
-                    }
+                if children.len() == 1
+                    && let Node::Decision(d) = &children[0]
+                {
+                    let what = observable_short_desc(observe);
+                    let val = short_pattern_desc(pattern);
+                    let effect = match d {
+                        Decision::Allow(_) => "allow",
+                        Decision::Deny => "deny",
+                        Decision::Ask(_) => "ask",
+                    };
+                    return format!("Edit: {what} = {val} (currently {effect})");
                 }
                 let what = observable_short_desc(observe);
                 let val = short_pattern_desc(pattern);
@@ -1605,10 +1605,8 @@ impl FormState {
                     Cap::EXECUTE,
                 ];
                 for (i, &on) in toggled.iter().enumerate() {
-                    if on {
-                        if let Some(&cap) = all.get(i) {
-                            caps |= cap;
-                        }
+                    if on && let Some(&cap) = all.get(i) {
+                        caps |= cap;
                     }
                 }
                 if caps.is_empty() {
@@ -1636,8 +1634,7 @@ impl FormState {
         let height = (self.visible.len() as u16 * 3) + 6; // fields + hint + spacing + title + footer
         let height_pct = ((height as f32 / area.height as f32) * 100.0)
             .ceil()
-            .max(30.0)
-            .min(80.0) as u16;
+            .clamp(30.0, 80.0) as u16;
 
         let popup = centered_rect(60, height_pct, area);
         frame.render_widget(Clear, popup);
@@ -1808,13 +1805,11 @@ impl FormState {
             }
 
             // Context hint for active field
-            if is_active {
-                if let Some(hint) = self.field_hint(fi) {
-                    lines.push(Line::from(Span::styled(
-                        format!("    {hint}"),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
+            if is_active && let Some(hint) = self.field_hint(fi) {
+                lines.push(Line::from(Span::styled(
+                    format!("    {hint}"),
+                    Style::default().fg(Color::DarkGray),
+                )));
             }
 
             // Spacing between fields
@@ -1917,6 +1912,7 @@ macro_rules! observable_registry {
             unreachable!("all Observable variants covered")
         }
 
+        #[allow(dead_code)]
         fn observable_hint(idx: usize) -> &'static str {
             const HINTS: &[&str] = &[ $( $hint ),* ];
             HINTS.get(idx).copied().unwrap_or("")
@@ -2110,6 +2106,7 @@ macro_rules! pattern_registry {
             vec![ $( $hint ),* ]
         }
 
+        #[allow(dead_code)]
         fn pattern_hint(idx: usize) -> &'static str {
             const HINTS: &[&str] = &[ $( $hint ),* ];
             HINTS.get(idx).copied().unwrap_or("")

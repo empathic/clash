@@ -479,7 +479,7 @@ fn format_pattern(pat: &Pattern) -> String {
         Pattern::Literal(v) => format!("\"{}\"", v.resolve()),
         Pattern::Regex(re) => format!("/{}/", re.as_str()),
         Pattern::AnyOf(pats) => {
-            let items: Vec<_> = pats.iter().map(|p| format_pattern(p)).collect();
+            let items: Vec<_> = pats.iter().map(format_pattern).collect();
             format!("[{}]", items.join(", "))
         }
         Pattern::Not(inner) => format!("!{}", format_pattern(inner)),
@@ -537,7 +537,7 @@ impl QueryContext {
                 tool_input
                     .get("file_path")
                     .and_then(|v| v.as_str())
-                    .map(|s| resolve_relative_path(s)),
+                    .map(resolve_relative_path),
             ),
             "Glob" | "Grep" => (
                 Some("read".to_string()),
@@ -545,14 +545,14 @@ impl QueryContext {
                     .get("path")
                     .or_else(|| tool_input.get("pattern"))
                     .and_then(|v| v.as_str())
-                    .map(|s| resolve_relative_path(s)),
+                    .map(resolve_relative_path),
             ),
             "Write" | "Edit" => (
                 Some("write".to_string()),
                 tool_input
                     .get("file_path")
                     .and_then(|v| v.as_str())
-                    .map(|s| resolve_relative_path(s)),
+                    .map(resolve_relative_path),
             ),
             _ => (None, None),
         };
@@ -772,10 +772,10 @@ pub fn eval(nodes: &[Node], ctx: &QueryContext) -> Option<Decision> {
                 children,
                 ..
             } => {
-                if matches_observable(observe, pattern, ctx) {
-                    if let Some(d) = eval(children, ctx) {
-                        return Some(d);
-                    }
+                if matches_observable(observe, pattern, ctx)
+                    && let Some(d) = eval(children, ctx)
+                {
+                    return Some(d);
                 }
             }
         }
@@ -979,13 +979,13 @@ impl CompiledPolicy {
         for node in nodes {
             match node {
                 Node::Decision(d) => {
-                    if let Some(sr) = d.sandbox_ref() {
-                        if !self.sandboxes.contains_key(&sr.0) {
-                            errors.push(format!(
-                                "sandbox reference '{}' not found in sandboxes map",
-                                sr.0
-                            ));
-                        }
+                    if let Some(sr) = d.sandbox_ref()
+                        && !self.sandboxes.contains_key(&sr.0)
+                    {
+                        errors.push(format!(
+                            "sandbox reference '{}' not found in sandboxes map",
+                            sr.0
+                        ));
                     }
                 }
                 Node::Condition { children, .. } => {

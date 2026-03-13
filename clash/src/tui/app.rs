@@ -98,7 +98,7 @@ impl App {
             CompiledPolicy {
                 sandboxes: std::collections::HashMap::new(),
                 tree: vec![],
-                default_effect: manifest.policy.default_effect.clone(),
+                default_effect: manifest.policy.default_effect,
                 default_sandbox: None,
             }
         });
@@ -378,10 +378,10 @@ impl App {
                 Action::None
             }
             Msg::DiffScrollDown => {
-                if let Mode::SaveReview(ref mut state) = self.mode {
-                    if state.scroll + 1 < state.lines.len() {
-                        state.scroll += 1;
-                    }
+                if let Mode::SaveReview(ref mut state) = self.mode
+                    && state.scroll + 1 < state.lines.len()
+                {
+                    state.scroll += 1;
                 }
                 Action::None
             }

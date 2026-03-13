@@ -282,10 +282,10 @@ impl FcCommand {
         let effective_count = effective_history_count(history);
 
         for idx in (0..effective_count).rev() {
-            if let Some(item) = history.get(idx) {
-                if item.command_line.starts_with(prefix) {
-                    return Ok(idx);
-                }
+            if let Some(item) = history.get(idx)
+                && item.command_line.starts_with(prefix)
+            {
+                return Ok(idx);
             }
         }
 

@@ -517,11 +517,11 @@ impl ReadCommand {
         let term_mode = self.setup_terminal_settings(&input_file)?;
 
         // Display prompt on stderr, but only if input is from a terminal (per bash behavior).
-        if let Some(prompt) = &self.prompt {
-            if input_file.is_terminal() {
-                write!(stderr_file, "{prompt}")?;
-                stderr_file.flush()?;
-            }
+        if let Some(prompt) = &self.prompt
+            && input_file.is_terminal()
+        {
+            write!(stderr_file, "{prompt}")?;
+            stderr_file.flush()?;
         }
 
         // Determine delimiter based on options.
@@ -591,15 +591,15 @@ impl ReadCommand {
         &self,
         context: &brush_core::ExecutionContext<'_, impl brush_core::ShellExtensions>,
     ) -> Result<Option<brush_core::ExecutionResult>, brush_core::Error> {
-        if let Some(timeout) = self.timeout_in_seconds {
-            if timeout < 0.0 {
-                writeln!(
-                    context.stderr(),
-                    "{}: -t: invalid timeout specification",
-                    context.command_name
-                )?;
-                return Ok(Some(brush_core::ExecutionResult::general_error()));
-            }
+        if let Some(timeout) = self.timeout_in_seconds
+            && timeout < 0.0
+        {
+            writeln!(
+                context.stderr(),
+                "{}: -t: invalid timeout specification",
+                context.command_name
+            )?;
+            return Ok(Some(brush_core::ExecutionResult::general_error()));
         }
         Ok(None)
     }

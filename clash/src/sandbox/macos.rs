@@ -220,8 +220,8 @@ fn canonicalize_or_keep(path: &str) -> String {
     ];
 
     for &(prefix, replacement) in SYMLINK_PREFIXES {
-        if path.starts_with(prefix) {
-            return format!("{}{}", replacement, &path[prefix.len()..]);
+        if let Some(rest) = path.strip_prefix(prefix) {
+            return format!("{}{}", replacement, rest);
         }
     }
 
