@@ -9,6 +9,7 @@ pub mod init;
 pub mod launch;
 pub mod policy;
 pub mod schema;
+pub mod session;
 pub mod status;
 pub mod statusline;
 pub mod trace;
