@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::cmd::debug::DebugCmd;
+use crate::cmd::session::SessionCmd;
 use crate::cmd::statusline::StatuslineCmd;
 use crate::cmd::trace::TraceCmd;
 use crate::sandbox_cmd::SandboxCmd;
@@ -241,6 +242,10 @@ pub enum Commands {
     /// View and export session traces
     #[command(subcommand)]
     Trace(TraceCmd),
+
+    /// List, inspect, and locate session directories
+    #[command(subcommand)]
+    Session(SessionCmd),
 
     // --- Hidden/internal commands ---
     /// Agent hook callbacks

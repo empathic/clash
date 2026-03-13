@@ -296,6 +296,41 @@ pub fn export_trace(session_id: &str) -> anyhow::Result<v1::Document> {
     Ok(v1::Document::Path(path))
 }
 
+/// Extract the most recent user message from a session's trace.jsonl.
+///
+/// Returns the first line of the message, truncated to 120 chars.
+pub fn last_user_message(session_id: &str) -> Option<String> {
+    use std::io::BufRead;
+
+    let trace_path = steps_path(session_id);
+    let file = std::fs::File::open(&trace_path).ok()?;
+    let reader = std::io::BufReader::new(file);
+
+    let mut last_line = None;
+    for line in reader.lines() {
+        let line = line.ok()?;
+        if line.contains("\"human:user\"") {
+            last_line = Some(line);
+        }
+    }
+
+    let entry: serde_json::Value = serde_json::from_str(&last_line?).ok()?;
+    let changes = entry.get("change")?.as_object()?;
+    for val in changes.values() {
+        if let Some(text) = val.pointer("/structural/text").and_then(|v| v.as_str()) {
+            let first_line = text.lines().next().unwrap_or(text);
+            let max_len = 120;
+            return Some(if first_line.len() > max_len {
+                let truncated = &first_line[..first_line.floor_char_boundary(max_len)];
+                format!("{truncated}...")
+            } else {
+                first_line.to_string()
+            });
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -1172,5 +1207,68 @@ mod tests {
         assert!(clash_actor.identities[0].id.starts_with("clash/"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_last_user_message() {
+        let sid = format!("trace-lastmsg-{}", std::process::id());
+        let dir = session_dir(&sid);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let transcript = dir.join("conversation.jsonl");
+        write_jsonl(
+            &transcript,
+            &[
+                make_user_entry("u1aaaaaa", "first message"),
+                make_assistant_entry("a1bbbbbb", "response"),
+                make_user_entry("u2cccccc", "second message"),
+            ],
+        );
+
+        init_trace(&sid, transcript.to_str().unwrap(), "/tmp", None, None).unwrap();
+        sync_trace(&sid, None).unwrap();
+
+        assert_eq!(last_user_message(&sid).as_deref(), Some("second message"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_last_user_message_truncates() {
+        let sid = format!("trace-lastmsg-trunc-{}", std::process::id());
+        let dir = session_dir(&sid);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let long_msg = "a".repeat(200);
+        let transcript = dir.join("conversation.jsonl");
+        write_jsonl(&transcript, &[make_user_entry("u1aaaaaa", &long_msg)]);
+
+        init_trace(&sid, transcript.to_str().unwrap(), "/tmp", None, None).unwrap();
+        sync_trace(&sid, None).unwrap();
+
+        let result = last_user_message(&sid).unwrap();
+        assert!(result.len() <= 124);
+        assert!(result.ends_with("..."));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_last_user_message_empty_trace() {
+        let sid = format!("trace-lastmsg-empty-{}", std::process::id());
+        let dir = session_dir(&sid);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(steps_path(&sid), "").unwrap();
+        assert!(last_user_message(&sid).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_last_user_message_no_trace() {
+        let sid = format!("trace-lastmsg-none-{}", std::process::id());
+        let dir = session_dir(&sid);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(last_user_message(&sid).is_none());
     }
 }

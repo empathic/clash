@@ -40,6 +40,7 @@ fn main() -> Result<()> {
             Commands::Doctor => cmd::doctor::run(),
             Commands::Debug(cmd) => cmd::debug::run(cmd),
             Commands::Trace(cmd) => cmd::trace::run(cmd),
+            Commands::Session(cmd) => cmd::session::run(cmd),
             Commands::Hook(hook_cmd) => {
                 if let Err(e) = hook_cmd.run() {
                     error!(cmd=?hook_cmd, "Hook error: {:?}", e);
