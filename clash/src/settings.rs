@@ -17,12 +17,14 @@ use crate::notifications::NotificationConfig;
 /// This is naturally session-scoped when set in the shell that launches Claude Code.
 pub const CLASH_DISABLE_ENV: &str = "CLASH_DISABLE";
 
-/// The environment variable that auto-allows all tool uses without policy evaluation.
+/// The environment variable that enables passthrough mode.
 ///
-/// Unlike [`CLASH_DISABLE`](CLASH_DISABLE_ENV), tracing, audit logging, and all other
-/// systems remain active — only the policy engine is bypassed.
-/// If both `CLASH_DISABLE` and `CLASH_ALLOW_ALL` are set, `CLASH_DISABLE` takes priority.
-pub const CLASH_ALLOW_ALL_ENV: &str = "CLASH_ALLOW_ALL";
+/// When set, clash defers all permission decisions to Claude Code's native permission
+/// system — hooks return `continue_execution()` ("no opinion") instead of evaluating policy.
+/// Tracing still syncs conversation turns, but there are no policy decisions, audit logs,
+/// or session stats (since clash doesn't know what Claude decided).
+/// If both `CLASH_DISABLE` and `CLASH_PASSTHROUGH` are set, `CLASH_DISABLE` takes priority.
+pub const CLASH_PASSTHROUGH_ENV: &str = "CLASH_PASSTHROUGH";
 
 /// Check whether clash is disabled via the [`CLASH_DISABLE`](CLASH_DISABLE_ENV) environment variable.
 ///
@@ -33,12 +35,12 @@ pub fn is_disabled() -> bool {
         .is_some_and(|v| is_truthy_disable_value(&v))
 }
 
-/// Check whether clash is in allow-all mode via the [`CLASH_ALLOW_ALL`](CLASH_ALLOW_ALL_ENV)
+/// Check whether clash is in passthrough mode via the [`CLASH_PASSTHROUGH`](CLASH_PASSTHROUGH_ENV)
 /// environment variable.
 ///
 /// Returns `true` when the variable is set to any non-empty value except `"0"` or `"false"`.
-pub fn is_allow_all() -> bool {
-    std::env::var(CLASH_ALLOW_ALL_ENV)
+pub fn is_passthrough() -> bool {
+    std::env::var(CLASH_PASSTHROUGH_ENV)
         .ok()
         .is_some_and(|v| is_truthy_disable_value(&v))
 }

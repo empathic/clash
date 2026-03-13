@@ -72,8 +72,8 @@ fn render(format: &str) -> Result<()> {
         }
     };
 
-    let output = if crate::settings::is_allow_all() {
-        format_allow_all(&stats)
+    let output = if crate::settings::is_passthrough() {
+        format_passthrough()
     } else {
         format_stats(&stats, format)
     };
@@ -81,13 +81,13 @@ fn render(format: &str) -> Result<()> {
     Ok(())
 }
 
-/// Format status line for allow-all mode: `⚡clash allow-all ✓N`.
-fn format_allow_all(stats: &SessionStats) -> String {
-    let prefix = format!("{}clash {}", style::cyan("⚡"), style::yellow("allow-all"));
-    if stats.allowed == 0 {
-        return prefix;
-    }
-    format!("{} {}{}", prefix, style::green("✓"), stats.allowed)
+/// Format status line for passthrough mode: `⚡clash passthrough`.
+fn format_passthrough() -> String {
+    format!(
+        "{}clash {}",
+        style::cyan("⚡"),
+        style::yellow("passthrough")
+    )
 }
 
 /// Format session stats into a status line string.
@@ -342,30 +342,15 @@ mod tests {
     }
 
     #[test]
-    fn test_allow_all_shows_count() {
-        let stats = stats_with(3, 0, 0);
-        let output = format_allow_all(&stats);
+    fn test_passthrough_shows_label() {
+        let output = format_passthrough();
         assert!(
-            output.contains("allow-all"),
-            "should contain 'allow-all' label, got: {output}"
+            output.contains("passthrough"),
+            "should contain 'passthrough' label, got: {output}"
         );
         assert!(
-            output.contains('3'),
-            "should contain allowed count, got: {output}"
-        );
-    }
-
-    #[test]
-    fn test_allow_all_no_stats_no_ready() {
-        let stats = stats_with(0, 0, 0);
-        let output = format_allow_all(&stats);
-        assert!(
-            output.contains("allow-all"),
-            "should contain 'allow-all' label, got: {output}"
-        );
-        assert!(
-            !output.contains("ready"),
-            "should not show ready, got: {output}"
+            output.contains("clash"),
+            "should contain 'clash' prefix, got: {output}"
         );
     }
 }

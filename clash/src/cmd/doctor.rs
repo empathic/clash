@@ -65,7 +65,7 @@ pub fn run() -> Result<()> {
 
     let checks = vec![
         ("Disabled", check_disabled()),
-        ("Allow all", check_allow_all()),
+        ("Passthrough", check_passthrough()),
         ("Policy files", check_policy_files()),
         ("Policy parsing", check_policy_parsing()),
         ("Plugin installed", check_plugin_installed()),
@@ -124,13 +124,13 @@ fn check_disabled() -> CheckResult {
     }
 }
 
-/// Check: Is CLASH_ALLOW_ALL set?
-fn check_allow_all() -> CheckResult {
-    if crate::settings::is_allow_all() {
+/// Check: Is CLASH_PASSTHROUGH set?
+fn check_passthrough() -> CheckResult {
+    if crate::settings::is_passthrough() {
         CheckResult::Warn(format!(
-            "{} is set — all tool uses are auto-allowed. Policy enforcement is bypassed \
-             but tracing and audit logging remain active. Unset to re-enable.",
-            crate::settings::CLASH_ALLOW_ALL_ENV,
+            "{} is set — permission decisions are deferred to Claude Code's native system. \
+             Unset to re-enable policy enforcement.",
+            crate::settings::CLASH_PASSTHROUGH_ENV,
         ))
     } else {
         CheckResult::Pass("Policy enforcement is active.".into())

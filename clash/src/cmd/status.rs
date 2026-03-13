@@ -38,17 +38,16 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
         );
         println!("  Unset the variable to re-enable clash.");
         return Ok(());
-    } else if crate::settings::is_allow_all() {
+    } else if crate::settings::is_passthrough() {
         println!(
             "  {} Clash is in {} mode",
             style::yellow_bold("!"),
-            style::yellow_bold("ALLOW ALL")
+            style::yellow_bold("PASSTHROUGH")
         );
         println!(
-            "  {} is set — all tool uses are auto-allowed without policy evaluation.",
-            style::cyan("CLASH_ALLOW_ALL")
+            "  {} is set — permission decisions are deferred to Claude Code's native permission system.",
+            style::cyan("CLASH_PASSTHROUGH")
         );
-        println!("  Tracing and audit logging remain active.");
         println!("  Unset the variable to re-enable policy enforcement.");
         println!();
     }
