@@ -459,7 +459,7 @@ fn build_fs_hint(blocked: &[BlockedPath]) -> String {
 
     for bp in blocked {
         lines.push(format!(
-            "  (allow (fs (or read write create) (subpath \"{}\")))",
+            "  path(\"{}\").allow(read=True, write=True, create=True)",
             bp.suggested_dir
         ));
     }

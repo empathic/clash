@@ -320,13 +320,13 @@ mod tests {
             exit_code: None,
             no_decision: None,
             reason_contains: None,
-            stdout_contains: Some("(allow".into()),
+            stdout_contains: Some("allow".into()),
             stderr_contains: None,
         };
         let result = HookResult {
             exit_code: 0,
             output: None,
-            stdout: "(allow (exec \"git\" *))".into(),
+            stdout: "exe(\"git\").allow()".into(),
             stderr: String::new(),
         };
 
@@ -341,13 +341,13 @@ mod tests {
             exit_code: None,
             no_decision: None,
             reason_contains: None,
-            stdout_contains: Some("(allow".into()),
+            stdout_contains: Some("allow".into()),
             stderr_contains: None,
         };
         let result = HookResult {
             exit_code: 0,
             output: None,
-            stdout: "(deny (exec \"git\" *))".into(),
+            stdout: "exe(\"git\").deny()".into(),
             stderr: String::new(),
         };
 
