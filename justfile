@@ -1,3 +1,5 @@
+set unstable
+set script-interpreter := ['uv', 'run', '--script']
 
 plugin_target := "./target/clash-dev"
 plugin_dir := plugin_target + "/clash-plugin/"
@@ -73,66 +75,86 @@ clash *ARGS:
 
 # Prepare a release: bump versions, freeze site docs, commit on a release branch.
 # Usage: just release 0.4.0
+[script]
 release VERSION:
-    #!/usr/bin/env bash
-    set -euo pipefail
+    import re, subprocess, sys, tomllib
+    from pathlib import Path
 
-    version="{{VERSION}}"
-    # Strip leading 'v' if provided
-    version="${version#v}"
-    tag="v${version}"
-    branch="release/${tag}"
+    new_version = "{{VERSION}}".lstrip("v")
+    tag = f"v{new_version}"
+    branch = f"release/{tag}"
+    root = Path(".")
+    root_toml = root / "Cargo.toml"
 
-    # Ensure were on a clean working tree
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-        echo "Error: working tree is not clean" >&2
-        exit 1
-    fi
+    # Ensure we're on a clean working tree
+    if subprocess.run(["git", "diff", "--quiet"]).returncode != 0 \
+       or subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
+        print("Error: working tree is not clean", file=sys.stderr)
+        sys.exit(1)
 
     # Create release branch from current HEAD
-    git checkout -b "$branch"
+    subprocess.run(["git", "checkout", "-b", branch], check=True)
 
-    # Bump version in all workspace Cargo.toml files
-    old_version=$(grep -m1 '^version = ' clash/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-    echo "Bumping ${old_version} → ${version}"
+    # Read workspace members
+    root_data = tomllib.loads(root_toml.read_text())
+    members = root_data["workspace"]["members"]
 
-    for toml in **/Cargo.toml; do
-        sed -i '' "s/^version = \"${old_version}\"/version = \"${version}\"/" "$toml"
-    done
+    # Bump each member's [package] version
+    old_version = None
+    for member in members:
+        member_toml = root / member / "Cargo.toml"
+        if not member_toml.exists():
+            continue
+        data = tomllib.loads(member_toml.read_text())
+        ver = data.get("package", {}).get("version")
+        if ver is None or ver == new_version:
+            continue
+        if old_version is None:
+            old_version = ver
+        text = member_toml.read_text()
+        new_text = re.sub(
+            r'^(version\s*=\s*)"' + re.escape(ver) + r'"',
+            rf'\g<1>"{new_version}"',
+            text, count=1, flags=re.MULTILINE,
+        )
+        if new_text != text:
+            member_toml.write_text(new_text)
+            print(f"  {member}: {ver} → {new_version}")
+
+    if old_version is None:
+        print("No versions changed — already up to date?", file=sys.stderr)
+        sys.exit(1)
 
     # Bump workspace dependency versions in root Cargo.toml
-    sed -i '' "s/version = \"${old_version}\" }/version = \"${version}\" }/" Cargo.toml
+    text = root_toml.read_text()
+    root_toml.write_text(text.replace(
+        f'version = "{old_version}"',
+        f'version = "{new_version}"',
+    ))
+    print(f"  workspace deps: {old_version} → {new_version}")
 
-    # Freeze site docs for this version
-    cd site && bun run freeze "${tag}" && cd ..
+    # Validate
+    result = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version=1"],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        print("cargo metadata failed!", file=sys.stderr)
+        print(result.stderr.decode(), file=sys.stderr)
+        sys.exit(1)
 
-    # Commit everything
-    git add -A
-    git commit -m "chore: release ${tag}"
+    # Freeze site docs
+    subprocess.run(["bun", "run", "freeze", tag], cwd="site", check=True)
 
-    echo ""
-    echo "Release branch '${branch}' ready."
-    echo "Next steps:"
-    echo "  git push -u origin ${branch}"
-    echo "  gh pr create --title 'chore: release ${tag}' --body 'Version bump and frozen docs for ${tag}'"
-    echo ""
-    echo "After the PR is merged, tag from main:"
-    echo "  just tag ${version}"
-
-# Tag and push a release after the release PR has been merged.
-# Usage: just tag 0.4.0
-tag VERSION:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    version="{{VERSION}}"
-    version="${version#v}"
-    tag="v${version}"
-
-    git fetch origin main
-    git tag "${tag}" origin/main
-    echo "Tagged ${tag} at origin/main"
-    echo "Run 'git push origin ${tag}' to trigger the release workflows."
+    # Commit, push, and create PR
+    subprocess.run(["git", "add", "-A"], check=True)
+    subprocess.run(["git", "commit", "-m", f"chore: release {tag}"], check=True)
+    subprocess.run(["git", "push", "-u", "origin", branch], check=True)
+    subprocess.run([
+        "gh", "pr", "create",
+        "--title", f"chore: release {tag}",
+        "--body", f"Version bump and frozen docs for {tag}",
+    ], check=True)
 
 fix:
     cargo fix --allow-dirty
