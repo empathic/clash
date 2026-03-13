@@ -658,7 +658,7 @@ mod tests {
                 tool_use_id: "tu-123".into(),
                 tool_name: Some("Bash".into()),
                 effect: "allow".into(),
-                reason: Some("matched rule: (allow (exec *))".into()),
+                reason: Some("matched rule: exe(\"*\").allow()".into()),
             }),
         )
         .unwrap();
@@ -945,7 +945,7 @@ mod tests {
                 tool_use_id: "tu-bash-1".into(),
                 tool_name: Some("Bash".into()),
                 effect: "allow".into(),
-                reason: Some("matched rule: (allow (exec *))".into()),
+                reason: Some("matched rule: exe(\"*\").allow()".into()),
             }),
         )
         .unwrap();

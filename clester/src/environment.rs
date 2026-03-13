@@ -275,45 +275,45 @@ mod tests {
     #[test]
     fn test_project_policy_star_file_written() {
         let config = SettingsConfig::default();
-        let user_sexpr = r#"(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))"#;
-        let project_sexpr = r#"(default deny "proj")
-(policy "proj"
-  (deny (exec "git" "push" *)))"#;
+        let user_star = r#"load("@clash//std.star", "exe", "policy")
+def main():
+    return policy(default=deny, rules=[exe("git").allow()])"#;
+        let project_star = r#"load("@clash//std.star", "exe", "policy")
+def main():
+    return policy(default=deny, rules=[exe("git", args=["push"]).deny()])"#;
         let clash = ClashConfig {
             policy: None,
             policy_raw: None,
-            policy_star: Some(user_sexpr.to_string()),
-            project_policy_star: Some(project_sexpr.to_string()),
+            policy_star: Some(user_star.to_string()),
+            project_policy_star: Some(project_star.to_string()),
         };
 
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
         let user_content =
             std::fs::read_to_string(env.home_dir.join(".clash/policy.star")).unwrap();
-        assert!(user_content.contains("(allow (exec"));
+        assert!(user_content.contains("exe(\"git\").allow()"));
 
         let project_content =
             std::fs::read_to_string(env.project_dir.join(".clash/policy.star")).unwrap();
-        assert!(project_content.contains("(deny (exec"));
+        assert!(project_content.contains("exe(\"git\""));
     }
 
     #[test]
     fn test_policy_star_file_written() {
         let config = SettingsConfig::default();
-        let sexpr = r#"(default deny "main")
-(policy "main"
-  (allow (exec "git" *)))"#;
+        let star = r#"load("@clash//std.star", "exe", "policy")
+def main():
+    return policy(default=deny, rules=[exe("git").allow()])"#;
         let clash = ClashConfig {
             policy: None,
             policy_raw: None,
-            policy_star: Some(sexpr.to_string()),
+            policy_star: Some(star.to_string()),
             project_policy_star: None,
         };
 
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
         let content = std::fs::read_to_string(env.home_dir.join(".clash/policy.star")).unwrap();
-        assert!(content.contains("(default deny"));
-        assert!(content.contains("(allow (exec"));
+        assert!(content.contains("default=deny"));
+        assert!(content.contains("exe(\"git\").allow()"));
     }
 }

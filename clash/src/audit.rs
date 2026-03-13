@@ -378,7 +378,7 @@ fn deduplicated_suggestions(violations: &[SandboxViolation]) -> Vec<String> {
         let dir = parent_dir_suggestion(&v.path);
         if seen_dirs.insert(dir.clone()) {
             suggestions.push(format!(
-                "(allow (fs (or read write create) (subpath \"{}\")))",
+                "path(\"{}\").allow(read=True, write=True, create=True)",
                 dir
             ));
         }
