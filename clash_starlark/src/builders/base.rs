@@ -46,11 +46,11 @@ impl<'v> StarlarkValue<'v> for BasePolicyValue {
 fn base_policy_methods(builder: &mut starlark::environment::MethodsBuilder) {
     /// Merge two policies together.
     ///
-    /// In `a.merge(b)`, `b` is merged on top: `b`'s default effect is used,
+    /// In `a.merge(b)`, `a`'s default effect is used,
     /// tree nodes are concatenated (`a`'s first, then `b`'s), and sandboxes
     /// are merged (first defined wins on name conflicts).
     fn merge(this: &BasePolicyValue, other: &BasePolicyValue) -> anyhow::Result<BasePolicyValue> {
-        let default_effect = other.default_effect.clone();
+        let default_effect = this.default_effect.clone();
 
         let base_doc = match (&this.base_doc, &other.base_doc) {
             (Some(left), Some(right)) => {
