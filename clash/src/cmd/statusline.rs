@@ -71,9 +71,23 @@ fn render(format: &str) -> Result<()> {
             return Ok(());
         }
     };
-    let output = format_stats(&stats, format);
+
+    let output = if crate::settings::is_passthrough() {
+        format_passthrough()
+    } else {
+        format_stats(&stats, format)
+    };
     print!("{}", output);
     Ok(())
+}
+
+/// Format status line for passthrough mode: `⚡clash passthrough`.
+fn format_passthrough() -> String {
+    format!(
+        "{}clash {}",
+        style::cyan("⚡"),
+        style::yellow("passthrough")
+    )
 }
 
 /// Format session stats into a status line string.
@@ -321,6 +335,19 @@ mod tests {
     fn test_prefix_contains_clash() {
         let stats = stats_with(1, 0, 0);
         let output = format_stats(&stats, "compact");
+        assert!(
+            output.contains("clash"),
+            "should contain 'clash' prefix, got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_passthrough_shows_label() {
+        let output = format_passthrough();
+        assert!(
+            output.contains("passthrough"),
+            "should contain 'passthrough' label, got: {output}"
+        );
         assert!(
             output.contains("clash"),
             "should contain 'clash' prefix, got: {output}"

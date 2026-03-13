@@ -17,11 +17,30 @@ use crate::notifications::NotificationConfig;
 /// This is naturally session-scoped when set in the shell that launches Claude Code.
 pub const CLASH_DISABLE_ENV: &str = "CLASH_DISABLE";
 
+/// The environment variable that enables passthrough mode.
+///
+/// When set, clash defers all permission decisions to Claude Code's native permission
+/// system — hooks return `continue_execution()` ("no opinion") instead of evaluating policy.
+/// Tracing still syncs conversation turns, but there are no policy decisions, audit logs,
+/// or session stats (since clash doesn't know what Claude decided).
+/// If both `CLASH_DISABLE` and `CLASH_PASSTHROUGH` are set, `CLASH_DISABLE` takes priority.
+pub const CLASH_PASSTHROUGH_ENV: &str = "CLASH_PASSTHROUGH";
+
 /// Check whether clash is disabled via the [`CLASH_DISABLE`](CLASH_DISABLE_ENV) environment variable.
 ///
 /// Returns `true` when the variable is set to any non-empty value except `"0"` or `"false"`.
 pub fn is_disabled() -> bool {
     std::env::var(CLASH_DISABLE_ENV)
+        .ok()
+        .is_some_and(|v| is_truthy_disable_value(&v))
+}
+
+/// Check whether clash is in passthrough mode via the [`CLASH_PASSTHROUGH`](CLASH_PASSTHROUGH_ENV)
+/// environment variable.
+///
+/// Returns `true` when the variable is set to any non-empty value except `"0"` or `"false"`.
+pub fn is_passthrough() -> bool {
+    std::env::var(CLASH_PASSTHROUGH_ENV)
         .ok()
         .is_some_and(|v| is_truthy_disable_value(&v))
 }

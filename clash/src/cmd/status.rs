@@ -9,22 +9,6 @@ use crate::style;
 /// Show policy status: layers, rules, and potential issues.
 #[instrument(level = Level::TRACE)]
 pub fn run(_json: bool, verbose: bool) -> Result<()> {
-    if crate::settings::is_disabled() {
-        println!("{}", style::banner());
-        println!();
-        println!(
-            "  {} Clash is {}",
-            style::yellow_bold("!"),
-            style::yellow_bold("DISABLED")
-        );
-        println!(
-            "  {} is set — all hooks are pass-through, no policy enforcement is active.",
-            style::cyan("CLASH_DISABLE")
-        );
-        println!("  Unset the variable to re-enable clash.");
-        return Ok(());
-    }
-
     let settings = ClashSettings::load_or_create()?;
     let policy = match settings.policy_tree() {
         Some(t) => t,
@@ -41,6 +25,32 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     // Banner
     println!("{}", style::banner());
     println!();
+
+    if crate::settings::is_disabled() {
+        println!(
+            "  {} Clash is {}",
+            style::yellow_bold("!"),
+            style::yellow_bold("DISABLED")
+        );
+        println!(
+            "  {} is set — all hooks are pass-through, no policy enforcement is active.",
+            style::cyan("CLASH_DISABLE")
+        );
+        println!("  Unset the variable to re-enable clash.");
+        return Ok(());
+    } else if crate::settings::is_passthrough() {
+        println!(
+            "  {} Clash is in {} mode",
+            style::yellow_bold("!"),
+            style::yellow_bold("PASSTHROUGH")
+        );
+        println!(
+            "  {} is set — permission decisions are deferred to Claude Code's native permission system.",
+            style::cyan("CLASH_PASSTHROUGH")
+        );
+        println!("  Unset the variable to re-enable policy enforcement.");
+        println!();
+    }
 
     // Policy version
     println!(
