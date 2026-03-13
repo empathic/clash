@@ -65,7 +65,7 @@ impl SandboxView {
             &CompiledPolicy {
                 sandboxes: std::collections::HashMap::new(),
                 tree: vec![],
-                default_effect: manifest.policy.default_effect.clone(),
+                default_effect: manifest.policy.default_effect,
                 default_sandbox: None,
             },
         );
@@ -252,25 +252,24 @@ impl Component for SandboxView {
                 }
                 match self.focus {
                     Focus::SandboxList => {
-                        if let Some(name) = self.sandbox_names.get(self.selected_sandbox).cloned() {
-                            if crate::policy::sandbox_edit::delete_sandbox(manifest, &name).is_ok()
-                            {
-                                self.rebuild(manifest);
-                                return Action::Modified;
-                            }
+                        if let Some(name) = self.sandbox_names.get(self.selected_sandbox).cloned()
+                            && crate::policy::sandbox_edit::delete_sandbox(manifest, &name).is_ok()
+                        {
+                            self.rebuild(manifest);
+                            return Action::Modified;
                         }
                     }
                     Focus::RuleList => {
-                        if let Some((name, sb)) = self.current_sandbox() {
-                            if let Some(rule) = sb.rules.get(self.selected_rule) {
-                                let path = rule.path.clone();
-                                let name = name.to_string();
-                                if crate::policy::sandbox_edit::remove_rule(manifest, &name, &path)
-                                    .unwrap_or(false)
-                                {
-                                    self.selected_rule = self.selected_rule.saturating_sub(1);
-                                    return Action::Modified;
-                                }
+                        if let Some((name, sb)) = self.current_sandbox()
+                            && let Some(rule) = sb.rules.get(self.selected_rule)
+                        {
+                            let path = rule.path.clone();
+                            let name = name.to_string();
+                            if crate::policy::sandbox_edit::remove_rule(manifest, &name, &path)
+                                .unwrap_or(false)
+                            {
+                                self.selected_rule = self.selected_rule.saturating_sub(1);
+                                return Action::Modified;
                             }
                         }
                     }

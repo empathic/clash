@@ -26,6 +26,12 @@ pub enum Msg {
     MoveItemDown,
 }
 
+impl Default for IncludesView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IncludesView {
     pub fn new() -> Self {
         IncludesView { selected: 0 }

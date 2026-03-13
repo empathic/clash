@@ -333,21 +333,21 @@ impl<'a, IB: InputBackend, SE: brush_core::ShellExtensions> InteractiveShell<'a,
         shell.check_for_completed_jobs()?;
 
         // If there's a variable called PROMPT_COMMAND, then run it first.
-        if options.run_prompt_command {
-            if let Some(prompt_cmd_var) = shell.env_var("PROMPT_COMMAND") {
-                match prompt_cmd_var.value() {
-                    brush_core::ShellValue::String(cmd_str) => {
-                        Self::run_pre_prompt_command(shell, cmd_str.to_owned()).await?;
-                    }
-                    brush_core::ShellValue::IndexedArray(values) => {
-                        let owned_values: Vec<_> = values.values().cloned().collect();
-                        for cmd_str in owned_values {
-                            Self::run_pre_prompt_command(shell, cmd_str).await?;
-                        }
-                    }
-                    // Other types are ignored.
-                    _ => (),
+        if options.run_prompt_command
+            && let Some(prompt_cmd_var) = shell.env_var("PROMPT_COMMAND")
+        {
+            match prompt_cmd_var.value() {
+                brush_core::ShellValue::String(cmd_str) => {
+                    Self::run_pre_prompt_command(shell, cmd_str.to_owned()).await?;
                 }
+                brush_core::ShellValue::IndexedArray(values) => {
+                    let owned_values: Vec<_> = values.values().cloned().collect();
+                    for cmd_str in owned_values {
+                        Self::run_pre_prompt_command(shell, cmd_str).await?;
+                    }
+                }
+                // Other types are ignored.
+                _ => (),
             }
         }
 

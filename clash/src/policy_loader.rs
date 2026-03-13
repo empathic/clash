@@ -138,7 +138,7 @@ pub fn resolve_includes(manifest: &PolicyManifest, base_dir: &Path) -> Result<Co
     let mut merged = CompiledPolicy {
         sandboxes: HashMap::new(),
         tree: vec![],
-        default_effect: manifest.policy.default_effect.clone(),
+        default_effect: manifest.policy.default_effect,
         default_sandbox: None,
     };
 
@@ -148,13 +148,11 @@ pub fn resolve_includes(manifest: &PolicyManifest, base_dir: &Path) -> Result<Co
                 if let Ok(included) = serde_json::from_str::<CompiledPolicy>(&json_source) {
                     // Stamp source provenance on root-level condition nodes
                     for mut node in included.tree {
-                        if let crate::policy::match_tree::Node::Condition {
-                            ref mut source, ..
-                        } = node
+                        if let crate::policy::match_tree::Node::Condition { ref mut source, .. } =
+                            node
+                            && source.is_none()
                         {
-                            if source.is_none() {
-                                *source = Some(include.path.clone());
-                            }
+                            *source = Some(include.path.clone());
                         }
                         merged.tree.push(node);
                     }

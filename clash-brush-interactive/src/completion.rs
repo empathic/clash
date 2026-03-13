@@ -111,10 +111,11 @@ fn postprocess_completion_candidate(
             candidate = escape::quote_if_needed(&candidate, quote_mode).to_string();
         }
     }
-    if completing_end_of_line && !options.no_trailing_space_at_end_of_line {
-        if !options.treat_as_filenames || !candidate.ends_with(std::path::MAIN_SEPARATOR) {
-            candidate.push(' ');
-        }
+    if completing_end_of_line
+        && !options.no_trailing_space_at_end_of_line
+        && (!options.treat_as_filenames || !candidate.ends_with(std::path::MAIN_SEPARATOR))
+    {
+        candidate.push(' ');
     }
 
     candidate

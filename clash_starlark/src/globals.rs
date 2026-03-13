@@ -123,30 +123,30 @@ fn register_globals(builder: &mut GlobalsBuilder) {
 
         // Collect sandbox definitions
         let mut sandbox_map = serde_json::Map::new();
-        if let Some(sb_val) = sandboxes {
-            if let Some(list) = starlark::values::list::ListRef::from_value(sb_val) {
-                for item in list.iter() {
-                    let sb_json = starlark_to_json(item)?;
-                    if let Some(name) = sb_json.get("name").and_then(|n| n.as_str()) {
-                        sandbox_map.insert(name.to_string(), sb_json);
-                    }
+        if let Some(sb_val) = sandboxes
+            && let Some(list) = starlark::values::list::ListRef::from_value(sb_val)
+        {
+            for item in list.iter() {
+                let sb_json = starlark_to_json(item)?;
+                if let Some(name) = sb_json.get("name").and_then(|n| n.as_str()) {
+                    sandbox_map.insert(name.to_string(), sb_json);
                 }
             }
         }
 
         // Collect rule nodes
         let mut tree_nodes = Vec::new();
-        if let Some(rules_val) = rules {
-            if let Some(list) = starlark::values::list::ListRef::from_value(rules_val) {
-                for item in list.iter() {
-                    if let Some(node) = item.downcast_ref::<MatchTreeNode>() {
-                        tree_nodes.push(node.json.clone());
-                    } else {
-                        anyhow::bail!(
-                            "match tree policy rules must be MatchTreeNode values, got {}",
-                            item.get_type()
-                        );
-                    }
+        if let Some(rules_val) = rules
+            && let Some(list) = starlark::values::list::ListRef::from_value(rules_val)
+        {
+            for item in list.iter() {
+                if let Some(node) = item.downcast_ref::<MatchTreeNode>() {
+                    tree_nodes.push(node.json.clone());
+                } else {
+                    anyhow::bail!(
+                        "match tree policy rules must be MatchTreeNode values, got {}",
+                        item.get_type()
+                    );
                 }
             }
         }
@@ -156,11 +156,10 @@ fn register_globals(builder: &mut GlobalsBuilder) {
             Some(val) if !val.is_none() => {
                 let sb_json = starlark_to_json(val)?;
                 // Extract the sandbox name to reference it
-                if let Some(name) = sb_json.get("name").and_then(|n| n.as_str()) {
-                    Some(json!(name))
-                } else {
-                    None
-                }
+                sb_json
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .map(|name| json!(name))
             }
             _ => None,
         };

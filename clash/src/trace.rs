@@ -165,20 +165,19 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
         let derived = derive_path(&conversation, &config);
 
         // Merge actors from derive output.
-        if let Some(ref path_meta) = derived.meta {
-            if let Some(ref actors) = path_meta.actors {
-                meta.actors.extend(actors.clone());
-            }
+        if let Some(ref path_meta) = derived.meta
+            && let Some(ref actors) = path_meta.actors
+        {
+            meta.actors.extend(actors.clone());
         }
 
         // Append derived steps, chaining the first to the previous sync's last step.
         for (i, mut step) in derived.steps.into_iter().enumerate() {
-            if i == 0 {
-                if let Some(ref last_id) = meta.state.last_step_id {
-                    if step.step.parents.is_empty() {
-                        step.step.parents.push(last_id.clone());
-                    }
-                }
+            if i == 0
+                && let Some(ref last_id) = meta.state.last_step_id
+                && step.step.parents.is_empty()
+            {
+                step.step.parents.push(last_id.clone());
             }
             if tool_use_step_ids.contains(&step.step.id) {
                 denied_tool_use_parent = meta.state.last_step_id.clone();

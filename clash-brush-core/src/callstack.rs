@@ -328,17 +328,17 @@ impl CallStack {
 
             color_print::cwrite!(f, " (<dim>{}</dim>", frame.frame_type)?;
 
-            if options.show_entry_points {
-                if let Some(entry) = &frame.entry {
-                    let entry_si = frame.pos_as_source_info(Some(entry));
-                    if let Some(entry_start) = &entry_si.start {
-                        color_print::cwrite!(
-                            f,
-                            " <dim>entered at {}:{}</dim>",
-                            entry_si.source,
-                            entry_start
-                        )?;
-                    }
+            if options.show_entry_points
+                && let Some(entry) = &frame.entry
+            {
+                let entry_si = frame.pos_as_source_info(Some(entry));
+                if let Some(entry_start) = &entry_si.start {
+                    color_print::cwrite!(
+                        f,
+                        " <dim>entered at {}:{}</dim>",
+                        entry_si.source,
+                        entry_start
+                    )?;
                 }
             }
 

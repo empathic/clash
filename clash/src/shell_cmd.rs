@@ -336,7 +336,7 @@ async fn run_interactive(cwd: &str, hook: clash_brush_core::ExternalCommandHook)
 
     let shell_ref = std::sync::Arc::new(tokio::sync::Mutex::new(shell));
 
-    let mut input = clash_brush_interactive::BasicInputBackend::default();
+    let mut input = clash_brush_interactive::BasicInputBackend;
 
     let options = clash_brush_interactive::InteractiveOptions::default();
 

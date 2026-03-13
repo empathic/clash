@@ -226,12 +226,11 @@ impl TreeView {
         }
         let parent_path = &path[..path.len() - 1];
         let child_idx = *path.last().unwrap();
-        if let Some(parent) = Self::get_node_at_path_mut(tree, parent_path) {
-            if let Node::Condition { children, .. } = parent {
-                if child_idx < children.len() {
-                    children.remove(child_idx);
-                }
-            }
+        if let Some(parent) = Self::get_node_at_path_mut(tree, parent_path)
+            && let Node::Condition { children, .. } = parent
+            && child_idx < children.len()
+        {
+            children.remove(child_idx);
         }
     }
 
@@ -314,11 +313,11 @@ impl Component for TreeView {
                 Action::None
             }
             Msg::Collapse => {
-                if let Some(node) = self.flat_nodes.get(self.selected) {
-                    if node.has_children {
-                        self.collapsed.insert(node.node_path.clone());
-                        self.rebuild_preserve_selection(manifest);
-                    }
+                if let Some(node) = self.flat_nodes.get(self.selected)
+                    && node.has_children
+                {
+                    self.collapsed.insert(node.node_path.clone());
+                    self.rebuild_preserve_selection(manifest);
                 }
                 Action::None
             }
@@ -349,12 +348,11 @@ impl Component for TreeView {
             Msg::CollapseAll => {
                 // Collapse all condition nodes that have expandable children
                 for i in 0..manifest.policy.tree.len() {
-                    if let Node::Condition { children, .. } = &manifest.policy.tree[i] {
-                        if children.len() > 1
-                            || (children.len() == 1 && !matches!(&children[0], Node::Decision(_)))
-                        {
-                            self.collapsed.insert(vec![i]);
-                        }
+                    if let Node::Condition { children, .. } = &manifest.policy.tree[i]
+                        && (children.len() > 1
+                            || (children.len() == 1 && !matches!(&children[0], Node::Decision(_))))
+                    {
+                        self.collapsed.insert(vec![i]);
                     }
                 }
                 self.rebuild_preserve_selection(manifest);
@@ -403,21 +401,16 @@ impl Component for TreeView {
                     let child_idx = *path.last().unwrap();
                     if let Some(parent) =
                         Self::get_node_at_path_mut(&mut manifest.policy.tree, parent_path)
+                        && let Node::Condition { children, .. } = parent
+                        && child_idx < children.len()
                     {
-                        if let Node::Condition { children, .. } = parent {
-                            if child_idx < children.len() {
-                                children.remove(child_idx);
-                                // If parent has no children left, remove the parent too
-                                if children.is_empty() {
-                                    Self::remove_node_at_path(
-                                        &mut manifest.policy.tree,
-                                        parent_path,
-                                    );
-                                }
-                                self.rebuild(manifest);
-                                return Action::Modified;
-                            }
+                        children.remove(child_idx);
+                        // If parent has no children left, remove the parent too
+                        if children.is_empty() {
+                            Self::remove_node_at_path(&mut manifest.policy.tree, parent_path);
                         }
+                        self.rebuild(manifest);
+                        return Action::Modified;
                     }
                 }
                 Action::None
@@ -436,11 +429,10 @@ impl Component for TreeView {
                 let path = node.node_path.clone();
                 if let Some(tree_node) =
                     Self::get_node_at_path_mut(&mut manifest.policy.tree, &path)
+                    && matches!(tree_node, Node::Condition { .. })
                 {
-                    if matches!(tree_node, Node::Condition { .. }) {
-                        // Condition node (including inline leaves) — add child
-                        return Action::RunForm(FormRequest::AddChild { parent_path: path });
-                    }
+                    // Condition node (including inline leaves) — add child
+                    return Action::RunForm(FormRequest::AddChild { parent_path: path });
                 }
                 // Bare Decision — add a sibling by targeting the parent condition
                 if path.len() >= 2 {
@@ -582,10 +574,10 @@ impl TreeView {
             .map(|n| n.node_path.clone());
         self.rebuild(manifest);
         // Try to find the same path
-        if let Some(path) = old_path {
-            if let Some(pos) = self.flat_nodes.iter().position(|n| n.node_path == path) {
-                self.selected = pos;
-            }
+        if let Some(path) = old_path
+            && let Some(pos) = self.flat_nodes.iter().position(|n| n.node_path == path)
+        {
+            self.selected = pos;
         }
     }
 }
@@ -623,7 +615,7 @@ fn format_pattern(pat: &Pattern) -> String {
         Pattern::Literal(v) => format!("\"{}\"", v.resolve()),
         Pattern::Regex(re) => format!("/{}/", re.as_str()),
         Pattern::AnyOf(pats) => {
-            let items: Vec<_> = pats.iter().map(|p| format_pattern(p)).collect();
+            let items: Vec<_> = pats.iter().map(format_pattern).collect();
             format!("[{}]", items.join(", "))
         }
         Pattern::Not(inner) => format!("!{}", format_pattern(inner)),

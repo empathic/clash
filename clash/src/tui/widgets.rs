@@ -73,7 +73,7 @@ pub fn render_status_bar(
                     s.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
                 }
                 s.push(Span::styled(
-                    format!("{key}"),
+                    key.to_string(),
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),

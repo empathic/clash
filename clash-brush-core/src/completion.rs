@@ -1136,20 +1136,19 @@ impl Config {
             } else {
                 if let Some(spec) = shell.completion_config().commands.get(command_name) {
                     found_spec = Some(spec);
-                } else if let Some(file_name) = PathBuf::from(command_name).file_name() {
-                    if let Some(spec) = shell
+                } else if let Some(file_name) = PathBuf::from(command_name).file_name()
+                    && let Some(spec) = shell
                         .completion_config()
                         .commands
                         .get(&file_name.to_string_lossy().to_string())
-                    {
-                        found_spec = Some(spec);
-                    }
+                {
+                    found_spec = Some(spec);
                 }
 
-                if found_spec.is_none() {
-                    if let Some(spec) = &self.default {
-                        found_spec = Some(spec);
-                    }
+                if found_spec.is_none()
+                    && let Some(spec) = &self.default
+                {
+                    found_spec = Some(spec);
                 }
             }
         } else {
@@ -1412,11 +1411,9 @@ fn simple_tokenize_by_delimiters<'a>(
                     word_is_delimiters = false;
                 }
 
-                if !c.is_ascii_whitespace() {
-                    if word_start.is_none() {
-                        word_start = Some(i);
-                        word_is_delimiters = true;
-                    }
+                if !c.is_ascii_whitespace() && word_start.is_none() {
+                    word_start = Some(i);
+                    word_is_delimiters = true;
                 }
             } else if !c.is_ascii_whitespace() {
                 // Non-whitespace delimiter: start or continue delimiter sequence
@@ -1427,15 +1424,13 @@ fn simple_tokenize_by_delimiters<'a>(
             }
         } else {
             // Regular character (not a delimiter). Finish any delimiter sequence.
-            if word_is_delimiters {
-                if let Some(start) = word_start {
-                    tokens.push(CompletionToken {
-                        text: &input[start..i],
-                        start,
-                    });
-                    word_start = None;
-                    word_is_delimiters = false;
-                }
+            if word_is_delimiters && let Some(start) = word_start {
+                tokens.push(CompletionToken {
+                    text: &input[start..i],
+                    start,
+                });
+                word_start = None;
+                word_is_delimiters = false;
             }
 
             // Start or continue a word

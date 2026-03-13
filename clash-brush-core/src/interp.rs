@@ -502,10 +502,10 @@ async fn spawn_pipeline_processes(
             .await?;
 
         // Update the process group ID if something was spawned.
-        if let ExecutionSpawnResult::StartedProcess(child) = &spawn_result {
-            if process_group_id.is_none() {
-                process_group_id = child.pgid();
-            }
+        if let ExecutionSpawnResult::StartedProcess(child) = &spawn_result
+            && process_group_id.is_none()
+        {
+            process_group_id = child.pgid();
         }
 
         spawn_results.push_back(spawn_result);
@@ -560,10 +560,10 @@ async fn wait_for_pipeline_processes_and_update_status(
     }
 
     // Apply pipefail semantics if enabled
-    if shell.options().return_last_failure_from_pipeline {
-        if let Some(failure_exit_code) = last_failure_exit_code {
-            result.exit_code = failure_exit_code;
-        }
+    if shell.options().return_last_failure_from_pipeline
+        && let Some(failure_exit_code) = last_failure_exit_code
+    {
+        result.exit_code = failure_exit_code;
     }
 
     if shell.options().interactive {
@@ -1133,38 +1133,36 @@ impl<SE: extensions::ShellExtensions> ExecuteInPipeline<SE> for ast::SimpleComma
                         expansion::full_expand_and_split_word(&mut context.shell, &params, arg)
                             .await?;
 
-                    if args.is_empty() {
-                        if let Some(cmd_name) = next_args.first() {
-                            if let Some(alias_value) =
-                                context.shell.aliases().get(cmd_name.as_str())
-                            {
-                                //
-                                // TODO(#57): This is a total hack; aliases are supposed to be
-                                // handled much earlier in the process.
-                                //
-                                let mut alias_pieces: Vec<_> = alias_value
-                                    .split_ascii_whitespace()
-                                    .map(|i| i.to_owned())
-                                    .collect();
+                    if args.is_empty()
+                        && let Some(cmd_name) = next_args.first()
+                    {
+                        if let Some(alias_value) = context.shell.aliases().get(cmd_name.as_str()) {
+                            //
+                            // TODO(#57): This is a total hack; aliases are supposed to be
+                            // handled much earlier in the process.
+                            //
+                            let mut alias_pieces: Vec<_> = alias_value
+                                .split_ascii_whitespace()
+                                .map(|i| i.to_owned())
+                                .collect();
 
-                                next_args.remove(0);
-                                alias_pieces.append(&mut next_args);
+                            next_args.remove(0);
+                            alias_pieces.append(&mut next_args);
 
-                                next_args = alias_pieces;
-                            }
+                            next_args = alias_pieces;
+                        }
 
-                            let first_arg = next_args[0].as_str();
+                        let first_arg = next_args[0].as_str();
 
-                            // Check if we're going to be invoking a special declaration builtin.
-                            // That will change how we parse and process args.
-                            if context
-                                .shell
-                                .builtins()
-                                .get(first_arg)
-                                .is_some_and(|r| !r.disabled && r.declaration_builtin)
-                            {
-                                command_takes_assignments = true;
-                            }
+                        // Check if we're going to be invoking a special declaration builtin.
+                        // That will change how we parse and process args.
+                        if context
+                            .shell
+                            .builtins()
+                            .get(first_arg)
+                            .is_some_and(|r| !r.disabled && r.declaration_builtin)
+                        {
+                            command_takes_assignments = true;
                         }
                     }
 
@@ -1461,35 +1459,34 @@ async fn apply_assignment(
     // See if we can find an existing value associated with the variable.
     if let Some((existing_value_scope, existing_value)) =
         shell.env_mut().get_mut(variable_name.as_str())
+        && (required_scope.is_none() || Some(existing_value_scope) == required_scope)
     {
-        if required_scope.is_none() || Some(existing_value_scope) == required_scope {
-            if let Some(array_index) = array_index {
-                match new_value {
-                    ShellValueLiteral::Scalar(s) => {
-                        existing_value.assign_at_index(array_index, s, assignment.append)?;
-                    }
-                    ShellValueLiteral::Array(_) => {
-                        return error::unimp("replacing an array item with an array");
-                    }
+        if let Some(array_index) = array_index {
+            match new_value {
+                ShellValueLiteral::Scalar(s) => {
+                    existing_value.assign_at_index(array_index, s, assignment.append)?;
                 }
-            } else {
-                if !export
-                    && export_variables_on_modification
-                    && !matches!(new_value, ShellValueLiteral::Array(_))
-                {
-                    export = true;
+                ShellValueLiteral::Array(_) => {
+                    return error::unimp("replacing an array item with an array");
                 }
-
-                existing_value.assign(new_value, assignment.append)?;
+            }
+        } else {
+            if !export
+                && export_variables_on_modification
+                && !matches!(new_value, ShellValueLiteral::Array(_))
+            {
+                export = true;
             }
 
-            if export {
-                existing_value.export();
-            }
-
-            // That's it!
-            return Ok(());
+            existing_value.assign(new_value, assignment.append)?;
         }
+
+        if export {
+            existing_value.export();
+        }
+
+        // That's it!
+        return Ok(());
     }
 
     // If we fell down here, then we need to add it.

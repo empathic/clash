@@ -122,23 +122,23 @@ fn set_children(node: &MatchTreeNode, children: Vec<JsonValue>) -> anyhow::Resul
 
 /// Recursively find the deepest condition node with empty children and set its children.
 fn set_children_on_deepest_leaf(json: &mut JsonValue, children: Vec<JsonValue>) {
-    if let Some(obj) = json.as_object_mut() {
-        if let Some(cond) = obj.get_mut("condition").and_then(|c| c.as_object_mut()) {
-            if let Some(existing) = cond.get_mut("children").and_then(|c| c.as_array_mut()) {
-                if existing.is_empty() {
-                    // This is the leaf — set children here
-                    *existing = children;
-                    return;
-                }
-                // If there's exactly one child that is a condition, recurse into it
-                if existing.len() == 1 && existing[0].get("condition").is_some() {
-                    set_children_on_deepest_leaf(&mut existing[0], children);
-                    return;
-                }
+    if let Some(obj) = json.as_object_mut()
+        && let Some(cond) = obj.get_mut("condition").and_then(|c| c.as_object_mut())
+    {
+        if let Some(existing) = cond.get_mut("children").and_then(|c| c.as_array_mut()) {
+            if existing.is_empty() {
+                // This is the leaf — set children here
+                *existing = children;
+                return;
             }
-            // Fallback: set children directly
-            cond.insert("children".into(), serde_json::json!(children));
+            // If there's exactly one child that is a condition, recurse into it
+            if existing.len() == 1 && existing[0].get("condition").is_some() {
+                set_children_on_deepest_leaf(&mut existing[0], children);
+                return;
+            }
         }
+        // Fallback: set children directly
+        cond.insert("children".into(), serde_json::json!(children));
     }
 }
 
@@ -198,12 +198,11 @@ pub fn pattern_to_json<'v>(value: Value<'v>, heap: &'v Heap) -> anyhow::Result<J
         return Ok(json!({"any_of": items?}));
     }
     // Check for regex struct
-    if value.get_type() == "struct" {
-        if let Ok(Some(regex_val)) = value.get_attr("_regex", heap) {
-            if let Some(s) = regex_val.unpack_str() {
-                return Ok(json!({"regex": s}));
-            }
-        }
+    if value.get_type() == "struct"
+        && let Ok(Some(regex_val)) = value.get_attr("_regex", heap)
+        && let Some(s) = regex_val.unpack_str()
+    {
+        return Ok(json!({"regex": s}));
     }
     anyhow::bail!(
         "cannot convert {} to a match tree pattern",
@@ -217,17 +216,17 @@ pub fn path_value_to_json<'v>(value: Value<'v>, heap: &'v Heap) -> anyhow::Resul
         return Ok(json!({"literal": s}));
     }
     if value.get_type() == "struct" {
-        if let Ok(Some(env_val)) = value.get_attr("_env", heap) {
-            if let Some(env_name) = env_val.unpack_str() {
-                return Ok(json!({"env": env_name}));
-            }
+        if let Ok(Some(env_val)) = value.get_attr("_env", heap)
+            && let Some(env_name) = env_val.unpack_str()
+        {
+            return Ok(json!({"env": env_name}));
         }
-        if let Ok(Some(join_val)) = value.get_attr("_join", heap) {
-            if let Some(list) = ListRef::from_value(join_val) {
-                let parts: Result<Vec<_>, _> =
-                    list.iter().map(|v| path_value_to_json(v, heap)).collect();
-                return Ok(json!({"path": parts?}));
-            }
+        if let Ok(Some(join_val)) = value.get_attr("_join", heap)
+            && let Some(list) = ListRef::from_value(join_val)
+        {
+            let parts: Result<Vec<_>, _> =
+                list.iter().map(|v| path_value_to_json(v, heap)).collect();
+            return Ok(json!({"path": parts?}));
         }
     }
     anyhow::bail!("cannot convert {} to a path value", value.get_type())
