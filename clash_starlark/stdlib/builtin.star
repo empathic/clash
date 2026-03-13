@@ -46,4 +46,4 @@ claude = policy(default = deny, rules = [
     ]).sandbox(_claude_fs).allow(),
 ])
 
-base = clash.merge(claude)
+base = clash.update(claude)

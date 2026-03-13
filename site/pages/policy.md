@@ -244,9 +244,9 @@ Clash supports two policy formats that serve different purposes:
 
 The `includes` field lets `policy.json` pull in `.star` files, so you can combine CLI-managed rules with hand-written Starlark. Included files are compiled and merged at load time, with inline `tree` rules taking precedence. When both `.json` and `.star` exist at the same level, `.json` wins.
 
-### Merging policies
+### Updating policies
 
-The `merge()` method combines two policies. In `a.merge(b)`, `b` is merged on top: `b`'s default effect is used, tree nodes from both are concatenated (`a`'s rules first, then `b`'s), and sandboxes are merged (first defined wins on name conflicts).
+The `update()` method combines two policies. In `a.update(b)`, `b`'s default effect is used, tree nodes from both are concatenated (`a`'s first, then `b`'s), and sandboxes are merged (first defined wins on name conflicts).
 
 ```python
 load("@clash//builtin.star", "base")
@@ -258,7 +258,7 @@ def main():
         exe("git").allow(),
         domains({"github.com": allow}),
     ])
-    return my_policy.merge(base)
+    return base.update(my_policy)
 ```
 
 ### Built-in policy (`@clash//builtin.star`)

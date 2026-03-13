@@ -197,9 +197,9 @@ def main():
 
 You can also use `load()` to import from other `.star` files.
 
-### Merging Policies
+### Updating Policies
 
-The `merge()` method combines two policies. In `a.merge(b)`, `b` is merged on top of `a`: `b`'s default effect is used, tree nodes from both are concatenated (`a`'s rules first, then `b`'s), and sandboxes are merged (first defined wins on name conflicts).
+The `update()` method combines two policies. In `a.update(b)`, `b`'s default effect is used, tree nodes from both are concatenated (`a`'s first, then `b`'s), and sandboxes are merged (first defined wins on name conflicts).
 
 ```python
 load("@clash//builtin.star", "base")
@@ -211,10 +211,10 @@ def main():
         exe("git").allow(),
         domains({"github.com": allow}),
     ])
-    return my_policy.merge(base)
+    return base.update(my_policy)
 ```
 
-The `base` policy from `@clash//builtin.star` includes built-in rules for clash CLI commands and Claude Code interactive tools (Agent, Skill, etc.). Merging with `base` ensures these tools work correctly alongside your custom rules.
+The `base` policy from `@clash//builtin.star` includes built-in rules for clash CLI commands and Claude Code interactive tools (Agent, Skill, etc.). Updating `base` with your policy ensures these tools work correctly alongside your custom rules.
 
 ### Built-in Policy (`@clash//builtin.star`)
 
@@ -223,13 +223,13 @@ The `@clash//builtin.star` module exports a `base` policy that bundles rules for
 - **Clash CLI** — allows `clash status`, `clash policy list`, `clash policy show`, `clash explain`, and `clash bug` with appropriate sandboxes
 - **Claude Code tools** — allows interactive tools (`Agent`, `AskUserQuestion`, `EnterPlanMode`, `Skill`, `ToolSearch`, etc.) with a sandbox scoped to `~/.claude`
 
-Load and merge it into your policy to get sensible defaults for these tools:
+Load and update it with your policy to get sensible defaults for these tools:
 
 ```python
 load("@clash//builtin.star", "base")
 ```
 
-If you don't merge with `base`, you'll need to write your own rules for clash CLI commands and Claude Code interactive tools.
+If you don't use `base`, you'll need to write your own rules for clash CLI commands and Claude Code interactive tools.
 
 ---
 

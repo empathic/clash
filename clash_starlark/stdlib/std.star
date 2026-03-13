@@ -431,17 +431,17 @@ def _make_sandbox(name, default, fs_rules, net_policy, net_domain_names=None, do
     if net_domain_names == None:
         net_domain_names = []
 
-    def _merge(other):
-        merged_default = default if other._default == None else other._default
-        merged_domains = net_domain_names + (
+    def _update(other):
+        updated_default = default if other._default == None else other._default
+        updated_domains = net_domain_names + (
             other._net_domain_names if hasattr(other, "_net_domain_names") else []
         )
         return _make_sandbox(
             name,
-            merged_default,
+            updated_default,
             fs_rules + other._fs_rules,
             net_policy or other._net_policy,
-            merged_domains,
+            updated_domains,
             doc=doc,
         )
 
@@ -453,7 +453,7 @@ def _make_sandbox(name, default, fs_rules, net_policy, net_domain_names=None, do
         _net_domain_names=net_domain_names,
         _is_sandbox=True,
         _doc=doc,
-        merge=_merge,
+        update=_update,
     )
 
 
