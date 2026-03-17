@@ -908,4 +908,79 @@ def main():
             "sandbox rule doc should persist"
         );
     }
+
+    #[test]
+    fn test_sandbox_merge_via_varargs() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "home", "tempdir", "domains")
+
+fs_box = sandbox(
+    name = "fs",
+    default = deny,
+    fs = [
+        cwd().allow(read = True, write = True),
+    ],
+)
+
+net_box = sandbox(
+    name = "net",
+    default = deny,
+    net = [
+        domains({"github.com": allow}),
+    ],
+)
+
+extra_fs = sandbox(
+    name = "extra",
+    default = deny,
+    fs = [
+        home().child(".cargo").allow(read = True),
+        tempdir().allow(),
+    ],
+)
+
+def main():
+    return policy(
+        default = deny,
+        rules = [
+            exe("cargo").sandbox(fs_box, net_box, extra_fs).allow(),
+        ],
+    )
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+
+        // Should produce exactly one merged sandbox (named after the first: "fs")
+        let sandboxes = doc["sandboxes"].as_object().unwrap();
+        assert_eq!(sandboxes.len(), 1, "should have exactly 1 merged sandbox");
+        assert!(
+            sandboxes.contains_key("fs"),
+            "merged sandbox should keep first name"
+        );
+
+        let sb = &sandboxes["fs"];
+
+        // Should have network config from net_box
+        assert_ne!(
+            sb["network"], "deny",
+            "merged sandbox should have network from net_box"
+        );
+
+        // Should have fs rules from all three sandboxes (cwd + home/.cargo + tempdir + auto-injected)
+        let rules = sb["rules"].as_array().unwrap();
+        let paths: Vec<&str> = rules.iter().filter_map(|r| r["path"].as_str()).collect();
+        assert!(
+            paths.iter().any(|p| p.starts_with("$PWD")),
+            "should have cwd rule"
+        );
+        assert!(
+            paths.iter().any(|p| p.contains(".cargo")),
+            "should have .cargo rule"
+        );
+        assert!(
+            paths.iter().any(|p| p.starts_with("$TMPDIR")),
+            "should have tmpdir rule"
+        );
+    }
 }

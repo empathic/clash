@@ -535,6 +535,16 @@ def _expand_children(children):
     return expanded
 
 
+def _merge_sandboxes(*sandboxes):
+    """Merge multiple sandboxes into one, combining fs rules and net policies."""
+    if len(sandboxes) == 0:
+        fail("sandbox() requires at least one sandbox argument")
+    merged = sandboxes[0]
+    for i in range(1, len(sandboxes)):
+        merged = merged.update(sandboxes[i])
+    return merged
+
+
 def _with_sandbox_support(node):
     """Wrap a match tree node with .sandbox(), .on(), and decision support."""
 
@@ -550,8 +560,8 @@ def _with_sandbox_support(node):
         result = node.ask()
         return struct(_node=result, _sandbox=None)
 
-    def _set_sandbox(sb):
-        return _with_sandbox_and_node(node, sb)
+    def _set_sandbox(*sandboxes):
+        return _with_sandbox_and_node(node, _merge_sandboxes(*sandboxes))
 
     def _on(children):
         expanded = _expand_children(children)
@@ -584,8 +594,8 @@ def _with_sandbox_and_node(node, sb):
         result = node.ask(sandbox=sb._name)
         return struct(_node=result, _sandbox=sb)
 
-    def _set_sandbox(new_sb):
-        return _with_sandbox_and_node(node, new_sb)
+    def _set_sandbox(*sandboxes):
+        return _with_sandbox_and_node(node, _merge_sandboxes(*sandboxes))
 
     def _on(children):
         expanded = _expand_children(children)
