@@ -5,6 +5,7 @@ use crate::display;
 use crate::policy::Effect;
 use crate::settings::{ClashSettings, PolicyLevel};
 use crate::style;
+use crate::ui;
 
 /// Show policy status: layers, rules, and potential issues.
 #[instrument(level = Level::TRACE)]
@@ -22,9 +23,7 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
         }
     };
 
-    // Banner
-    println!("{}", style::banner());
-    println!();
+    ui::banner();
 
     if crate::settings::is_disabled() {
         println!(
@@ -70,8 +69,7 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
             .map(|lp| lp.path.display().to_string())
     };
 
-    println!("{}", style::header("Policy layers"));
-    println!("{}", style::dim("─────────────"));
+    ui::section("Policy layers");
     for &level in &[
         PolicyLevel::User,
         PolicyLevel::Project,
@@ -136,11 +134,10 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     if policy.sandboxes.is_empty() {
         println!("  {}", style::dim("(no sandboxes defined)"));
     } else {
-        print_sandbox_table(&policy.sandboxes);
+        ui::print_sandbox_table(&policy.sandboxes);
     }
 
-    println!("{}", style::header("Potential issues"));
-    println!("{}", style::dim("────────────────"));
+    ui::section("Potential issues");
 
     let mut issues = Vec::new();
 
@@ -157,141 +154,6 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Right-pad a (possibly ANSI-colored) string to `width` visible characters.
-fn rpad(s: &str, width: usize) -> String {
-    console::pad_str(s, width, console::Alignment::Left, None).into_owned()
-}
-
-/// Left-pad a (possibly ANSI-colored) string to `width` visible characters.
-fn lpad(s: &str, width: usize) -> String {
-    console::pad_str(s, width, console::Alignment::Right, None).into_owned()
-}
-
-/// Print sandboxes as a compact matrix: paths down the left, sandbox names across the top.
-fn print_sandbox_table(
-    sandboxes: &std::collections::HashMap<String, crate::policy::sandbox_types::SandboxPolicy>,
-) {
-    use crate::policy::sandbox_types::{NetworkPolicy, RuleEffect};
-
-    let mut names: Vec<&str> = sandboxes.keys().map(|s| s.as_str()).collect();
-    names.sort();
-
-    // Collect unique path labels, then sort by specificity (general first).
-    let mut paths: Vec<String> = Vec::new();
-    for name in &names {
-        for rule in &sandboxes[*name].rules {
-            let suffix = match rule.path_match {
-                crate::policy::sandbox_types::PathMatch::Subpath => "/**",
-                crate::policy::sandbox_types::PathMatch::Literal => "",
-                crate::policy::sandbox_types::PathMatch::Regex => " (re)",
-            };
-            let key = format!("{}{}", rule.path, suffix);
-            if !paths.contains(&key) {
-                paths.push(key);
-            }
-        }
-    }
-    paths.sort_by_key(|p| {
-        let stripped = p.strip_suffix("/**").unwrap_or(p);
-        stripped.matches('/').count() + stripped.matches('$').count()
-    });
-
-    // Collect unique network domains across sandboxes.
-    let mut domains: Vec<String> = Vec::new();
-    for name in &names {
-        if let NetworkPolicy::AllowDomains(ds) = &sandboxes[*name].network {
-            for d in ds {
-                if !domains.contains(d) {
-                    domains.push(d.clone());
-                }
-            }
-        }
-    }
-
-    let col_w = names.iter().map(|n| n.len()).max().unwrap_or(5).max(5);
-    let domain_max = domains.iter().map(|d| d.len()).max().unwrap_or(0);
-    let path_w = paths
-        .iter()
-        .map(|p| p.len())
-        .max()
-        .unwrap_or(7)
-        .max(domain_max)
-        .max(7);
-
-    // Header row.
-    let hdr: Vec<String> = names.iter().map(|n| lpad(&style::cyan(n), col_w)).collect();
-    println!("  {} {}", rpad("", path_w), hdr.join(" "));
-
-    // Default row.
-    let def: Vec<String> = names
-        .iter()
-        .map(|n| lpad(&style::dim(&sandboxes[*n].default.short()), col_w))
-        .collect();
-    println!("  {} {}", rpad(&style::dim("default"), path_w), def.join(" "));
-
-    // Network row.
-    let net: Vec<String> = names
-        .iter()
-        .map(|n| {
-            let s = match &sandboxes[*n].network {
-                NetworkPolicy::Deny => style::red("deny"),
-                NetworkPolicy::Allow => style::green("allow"),
-                NetworkPolicy::Localhost => style::yellow("localhost"),
-                NetworkPolicy::AllowDomains(_) => style::yellow("proxy"),
-            };
-            lpad(&s, col_w)
-        })
-        .collect();
-    println!("  {} {}", rpad(&style::dim("net"), path_w), net.join(" "));
-
-    // Domain rows.
-    for domain in &domains {
-        let cells: Vec<String> = names
-            .iter()
-            .map(|n| {
-                let cell = match &sandboxes[*n].network {
-                    NetworkPolicy::Allow => style::green("allow"),
-                    NetworkPolicy::AllowDomains(ds) if ds.iter().any(|d| d == domain) => {
-                        style::green("allow")
-                    }
-                    _ => style::dim("·····"),
-                };
-                lpad(&cell, col_w)
-            })
-            .collect();
-        println!("  {} {}", rpad(&style::dim(domain), path_w), cells.join(" "));
-    }
-
-    // Path rows.
-    for path in &paths {
-        let cells: Vec<String> = names
-            .iter()
-            .map(|n| {
-                let matched = sandboxes[*n].rules.iter().find(|r| {
-                    let suffix = match r.path_match {
-                        crate::policy::sandbox_types::PathMatch::Subpath => "/**",
-                        crate::policy::sandbox_types::PathMatch::Literal => "",
-                        crate::policy::sandbox_types::PathMatch::Regex => " (re)",
-                    };
-                    format!("{}{}", r.path, suffix) == *path
-                });
-                let cell = match matched {
-                    Some(r) => {
-                        let s = r.caps.short();
-                        match r.effect {
-                            RuleEffect::Allow => style::green(&s),
-                            RuleEffect::Deny => style::red(&s),
-                        }
-                    }
-                    None => style::dim("·····"),
-                };
-                lpad(&cell, col_w)
-            })
-            .collect();
-        println!("  {} {}", rpad(&style::dim(path), path_w), cells.join(" "));
-    }
 }
 
 /// Colorize a tree line by highlighting the effect after the `→` separator.

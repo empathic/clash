@@ -5,6 +5,7 @@ use crate::debug::replay;
 use crate::display;
 use crate::settings::ClashSettings;
 use crate::style;
+use crate::ui;
 
 /// Explain which policy rule would match a given tool invocation.
 ///
@@ -41,17 +42,15 @@ pub fn run(json_output: bool, tool: String, input_args: String) -> Result<()> {
         let output = display::decision_to_json(&decision);
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        let mut lines = display::format_tool_header("Input:", &tool_name, &tool_input);
-        lines.push(String::new());
-        lines.extend(display::format_decision(&decision));
+        ui::print_tool_header("Input:", &tool_name, &tool_input);
+        println!();
+        ui::print_decision(&decision);
 
         if let Some(ref sandbox) = decision.sandbox {
-            lines.push(String::new());
-            lines.push(style::header("Sandbox policy:").to_string());
-            lines.extend(display::format_sandbox_summary(sandbox));
+            println!();
+            println!("{}", style::header("Sandbox policy:"));
+            ui::print_sandbox_summary(sandbox);
         }
-
-        println!("{}", lines.join("\n"));
     }
 
     Ok(())
