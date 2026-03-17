@@ -1,17 +1,16 @@
-load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "domains", "exe", "path")
+load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "exe", "path")
 
 rust_sandbox = sandbox(
     name = "rust_dev",
     default = deny,
     fs = [
-        cwd(follow_worktrees=True).recurse().allow(),
-        cwd().child("target").recurse().allow(),
-        home().child(".cargo").recurse().allow(),
-        home().child(".rustup").recurse().allow(),
-        tempdir().recurse().allow(),
-        path("/").allow(),
+        cwd(follow_worktrees = True).allow(),
+        home().child(".cargo").allow(),
+        home().child(".rustup").allow(),
+        tempdir().allow(),
     ],
     net = "allow",
+    doc = "Rust development: project + cargo/rustup toolchains, full network",
 )
 
 

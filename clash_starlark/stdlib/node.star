@@ -16,6 +16,7 @@ node_sandbox = sandbox(
             "github.com": allow,
         }),
     ],
+    doc = "Node.js development: project + npm cache, npm registry network",
 )
 
 node = exe(["node", "bun", "deno"]).sandbox(node_sandbox).allow()
