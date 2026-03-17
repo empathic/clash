@@ -135,42 +135,59 @@ fn resolve_via_desktop_then_continue(
     }
 }
 
+/// Build a [`notifications::PermissionRequest`] from a tool use hook input.
+fn build_permission_request(input: &ToolUseHookInput) -> notifications::PermissionRequest {
+    notifications::PermissionRequest {
+        tool_name: input.tool_name.clone(),
+        tool_input: input.tool_input.clone(),
+        session_id: input.session_id.clone(),
+        cwd: input.cwd.clone(),
+    }
+}
+
+/// Map a Zulip resolution result to a [`HookOutput`].
+///
+/// Returns `Some(output)` for a definitive approve/deny, or `None` when the
+/// resolution timed out or failed (caller should fall through to the next strategy).
+fn zulip_result_to_output(
+    result: anyhow::Result<Option<notifications::PermissionResponse>>,
+) -> Option<HookOutput> {
+    match result {
+        Ok(Some(notifications::PermissionResponse::Approve)) => {
+            Some(HookOutput::approve_permission(None))
+        }
+        Ok(Some(notifications::PermissionResponse::Deny(reason))) => {
+            Some(HookOutput::deny_permission(reason, false))
+        }
+        Ok(None) => None,
+        Err(_) => None,
+    }
+}
+
 fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
     let Some(ref zulip_config) = settings.notifications.zulip else {
         return;
     };
 
-    let request = notifications::PermissionRequest {
-        tool_name: input.tool_name.clone(),
-        tool_input: input.tool_input.clone(),
-        session_id: input.session_id.clone(),
-        cwd: input.cwd.clone(),
-    };
-
+    let request = build_permission_request(input);
     let config = zulip_config.clone();
 
     std::thread::spawn(move || {
         let client = notifications::ZulipClient::new(&config);
-        match client.resolve_permission(&request) {
+        let result = client.resolve_permission(&request);
+        match &result {
             Ok(Some(notifications::PermissionResponse::Approve)) => {
                 info!("Permission approved via Zulip (background), exiting hook");
-                let output = HookOutput::approve_permission(None);
-                if output.write_stdout().is_ok() {
-                    std::process::exit(0);
-                }
             }
-            Ok(Some(notifications::PermissionResponse::Deny(reason))) => {
+            Ok(Some(notifications::PermissionResponse::Deny(_))) => {
                 info!("Permission denied via Zulip (background), exiting hook");
-                let output = HookOutput::deny_permission(reason, false);
-                if output.write_stdout().is_ok() {
-                    std::process::exit(0);
-                }
             }
-            Ok(None) => {
-                info!("Zulip resolution timed out (background)");
-            }
-            Err(e) => {
-                warn!(error = %e, "Zulip resolution failed (background)");
+            Ok(None) => info!("Zulip resolution timed out (background)"),
+            Err(e) => warn!(error = %e, "Zulip resolution failed (background)"),
+        }
+        if let Some(output) = zulip_result_to_output(result) {
+            if output.write_stdout().is_ok() {
+                std::process::exit(0);
             }
         }
     });
@@ -182,30 +199,14 @@ fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSetti
         return HookOutput::continue_execution();
     };
 
-    let request = notifications::PermissionRequest {
-        tool_name: input.tool_name.clone(),
-        tool_input: input.tool_input.clone(),
-        session_id: input.session_id.clone(),
-        cwd: input.cwd.clone(),
-    };
-
     let client = notifications::ZulipClient::new(zulip_config);
-    match client.resolve_permission(&request) {
-        Ok(Some(notifications::PermissionResponse::Approve)) => {
-            HookOutput::approve_permission(None)
-        }
-        Ok(Some(notifications::PermissionResponse::Deny(reason))) => {
-            HookOutput::deny_permission(reason, false)
-        }
-        Ok(None) => {
-            info!("Zulip resolution timed out, falling through to terminal");
-            HookOutput::continue_execution()
-        }
-        Err(e) => {
-            warn!(error = %e, "Zulip resolution failed, falling through to terminal");
-            HookOutput::continue_execution()
-        }
+    let result = client.resolve_permission(&build_permission_request(input));
+
+    if result.is_err() || matches!(result, Ok(None)) {
+        info!("Zulip resolution timed out or failed, falling through to terminal");
     }
+
+    zulip_result_to_output(result).unwrap_or_else(HookOutput::continue_execution)
 }
 
 /// Handle a session start event — validate policy/settings and report status to Claude.

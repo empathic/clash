@@ -5,6 +5,7 @@
 
 pub mod compile;
 pub mod error;
+pub mod format;
 pub mod ir;
 pub mod manifest_edit;
 pub mod match_tree;

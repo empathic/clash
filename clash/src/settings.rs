@@ -144,8 +144,9 @@ pub struct SandboxPreset {
 /// then evaluates the Starlark source and returns pretty-printed JSON.
 pub fn compile_default_policy_to_json_with_preset(preset: &str) -> Result<String> {
     let source = DEFAULT_POLICY_TEMPLATE.replace("{preset}", preset);
-    let output = clash_starlark::evaluate(&source, "<default_policy>", std::path::Path::new("."))
-        .with_context(|| format!("failed to compile default policy with preset '{preset}'"))?;
+    let output =
+        clash_starlark::evaluate(&source, "<default_policy>", std::path::Path::new("."))
+            .with_context(|| format!("failed to compile default policy with preset '{preset}'"))?;
     let value: serde_json::Value =
         serde_json::from_str(&output.json).context("default policy produced invalid JSON")?;
     serde_json::to_string_pretty(&value).context("failed to pretty-print default policy JSON")
@@ -714,11 +715,8 @@ mod test {
     #[test]
     fn default_policy_compiles() -> anyhow::Result<()> {
         let source = DEFAULT_POLICY_TEMPLATE.replace("{preset}", "dev");
-        let output = clash_starlark::evaluate(
-            &source,
-            "default_policy.star",
-            std::path::Path::new("."),
-        )?;
+        let output =
+            clash_starlark::evaluate(&source, "default_policy.star", std::path::Path::new("."))?;
         let tree = crate::policy::compile::compile_to_tree(&output.json)?;
         let _ = tree;
         Ok(())

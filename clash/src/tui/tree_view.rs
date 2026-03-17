@@ -10,9 +10,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::tea::{Action, Component, FormRequest};
-use crate::policy::match_tree::{
-    CompiledPolicy, Decision, Node, Observable, Pattern, PolicyManifest,
-};
+use crate::policy::format::{format_condition, format_decision};
+use crate::policy::match_tree::{CompiledPolicy, Decision, Node, PolicyManifest};
 
 /// A flattened node in the tree for display purposes.
 pub struct FlatNode {
@@ -579,47 +578,6 @@ impl TreeView {
         {
             self.selected = pos;
         }
-    }
-}
-
-fn format_decision(d: &Decision) -> String {
-    match d {
-        Decision::Allow(Some(sb)) => format!("allow [{}]", sb.0),
-        Decision::Allow(None) => "allow".to_string(),
-        Decision::Deny => "deny".to_string(),
-        Decision::Ask(Some(sb)) => format!("ask [{}]", sb.0),
-        Decision::Ask(None) => "ask".to_string(),
-    }
-}
-
-fn format_condition(obs: &Observable, pat: &Pattern) -> String {
-    let obs_str = match obs {
-        Observable::ToolName => "tool".to_string(),
-        Observable::HookType => "hook".to_string(),
-        Observable::AgentName => "agent".to_string(),
-        Observable::PositionalArg(n) => format!("arg[{n}]"),
-        Observable::HasArg => "has_arg".to_string(),
-        Observable::NamedArg(name) => format!("named({name})"),
-        Observable::NestedField(path) => format!("field({})", path.join(".")),
-        Observable::FsOp => "fs_op".to_string(),
-        Observable::FsPath => "fs_path".to_string(),
-        Observable::NetDomain => "net_domain".to_string(),
-    };
-    let pat_str = format_pattern(pat);
-    format!("{obs_str}={pat_str}")
-}
-
-fn format_pattern(pat: &Pattern) -> String {
-    match pat {
-        Pattern::Wildcard => "*".to_string(),
-        Pattern::Literal(v) => format!("\"{}\"", v.resolve()),
-        Pattern::Regex(re) => format!("/{}/", re.as_str()),
-        Pattern::AnyOf(pats) => {
-            let items: Vec<_> = pats.iter().map(format_pattern).collect();
-            format!("[{}]", items.join(", "))
-        }
-        Pattern::Not(inner) => format!("!{}", format_pattern(inner)),
-        Pattern::Prefix(v) => format!("{}/**", v.resolve()),
     }
 }
 

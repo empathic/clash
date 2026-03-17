@@ -152,15 +152,8 @@ pub fn resolve_includes(
         match evaluate_include(&include.path, base_dir) {
             Ok(json_source) => match serde_json::from_str::<CompiledPolicy>(&json_source) {
                 Ok(included) => {
-                    // Stamp source provenance on root-level condition nodes
                     for mut node in included.tree {
-                        if let crate::policy::match_tree::Node::Condition {
-                            ref mut source, ..
-                        } = node
-                            && source.is_none()
-                        {
-                            *source = Some(include.path.clone());
-                        }
+                        node.stamp_source(&include.path);
                         merged.tree.push(node);
                     }
                     for (k, v) in included.sandboxes {
@@ -197,39 +190,96 @@ pub fn write_manifest(path: &Path, manifest: &PolicyManifest) -> Result<()> {
 /// Returns `None` when the file is missing, is a directory, or exceeds the
 /// size limit.
 fn validate_policy_file(path: &Path, level: PolicyLevel) -> Option<std::fs::Metadata> {
+    match validate_policy_file_with_diagnostics(path) {
+        Ok(metadata) => {
+            #[cfg(unix)]
+            check_permissions_warning(path, level, &metadata);
+            Some(metadata)
+        }
+        Err(ValidationError::NotFound) => None,
+        Err(e) => {
+            warn!(path = %path.display(), level = %level, "Policy file invalid: {e}");
+            None
+        }
+    }
+}
+
+/// Validate a policy file with rich diagnostic messages suitable for user display.
+///
+/// Returns `Ok(metadata)` when the file is suitable for loading, or a
+/// [`ValidationError`] describing exactly what is wrong.
+fn validate_policy_file_with_diagnostics(
+    path: &Path,
+) -> Result<std::fs::Metadata, ValidationError> {
     let metadata = match std::fs::metadata(path) {
         Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(ValidationError::NotFound);
+        }
         Err(e) => {
-            warn!(
-                path = %path.display(),
-                level = %level,
-                error = %e,
-                "Failed to stat policy file"
-            );
-            return None;
+            return Err(ValidationError::IoError(format!(
+                "Cannot read policy file at {}: {}",
+                path.display(),
+                e
+            )));
         }
     };
 
-    if metadata.is_dir() || metadata.len() > MAX_POLICY_SIZE {
-        return None;
+    if metadata.is_dir() {
+        return Err(ValidationError::IsDirectory(format!(
+            "{} is a directory, not a file. Remove it and run `clash init` to create a policy.",
+            path.display()
+        )));
     }
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = metadata.permissions().mode();
-        if mode & 0o044 != 0 {
-            warn!(
-                path = %path.display(),
-                level = %level,
-                mode = format!("{:o}", mode),
-                "policy file is readable by other users; consider `chmod 600`"
-            );
+    if metadata.len() > MAX_POLICY_SIZE {
+        return Err(ValidationError::TooLarge(format!(
+            "policy file is too large ({} bytes, max {} bytes). Check that {} is the correct file.",
+            metadata.len(),
+            MAX_POLICY_SIZE,
+            path.display()
+        )));
+    }
+
+    Ok(metadata)
+}
+
+/// Emit a warning if the policy file is readable by other users.
+#[cfg(unix)]
+fn check_permissions_warning(path: &Path, level: PolicyLevel, metadata: &std::fs::Metadata) {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = metadata.permissions().mode();
+    if mode & 0o044 != 0 {
+        warn!(
+            path = %path.display(),
+            level = %level,
+            mode = format!("{:o}", mode),
+            "policy file is readable by other users; consider `chmod 600`"
+        );
+    }
+}
+
+/// Reason a policy file failed metadata validation.
+enum ValidationError {
+    /// File does not exist (not an error — just absent).
+    NotFound,
+    /// I/O error reading metadata.
+    IoError(String),
+    /// Path is a directory, not a file.
+    IsDirectory(String),
+    /// File exceeds the size limit.
+    TooLarge(String),
+}
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValidationError::NotFound => write!(f, "file not found"),
+            ValidationError::IoError(msg)
+            | ValidationError::IsDirectory(msg)
+            | ValidationError::TooLarge(msg) => write!(f, "{msg}"),
         }
     }
-
-    Some(metadata)
 }
 
 /// Try to load and validate a policy file, returning the evaluated JSON source
@@ -302,63 +352,27 @@ pub fn compile_source(source: &str) -> Result<CompiledPolicy> {
 
 /// Validate and load a policy file with full diagnostics, then compile it.
 ///
-/// Unlike [`try_load_policy`], this function produces detailed error messages
-/// for directory files and oversized files, suitable for surfacing to users.
+/// Produces detailed error messages suitable for surfacing to users.
 /// Used by the test-only `load_policy_from_path` in settings.
 #[cfg(test)]
 pub fn load_and_compile_single(
     path: &Path,
     policy_error: &mut Option<String>,
 ) -> Option<CompiledPolicy> {
-    let metadata = match std::fs::metadata(path) {
+    let metadata = match validate_policy_file_with_diagnostics(path) {
         Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(ValidationError::NotFound) => return None,
         Err(e) => {
-            warn!(path = %path.display(), error = %e, "Failed to stat policy file");
-            *policy_error = Some(format!(
-                "Cannot read policy file at {}: {}",
-                path.display(),
-                e
-            ));
+            warn!(path = %path.display(), "Policy file invalid: {e}");
+            *policy_error = Some(e.to_string());
             return None;
         }
     };
 
-    if metadata.is_dir() {
-        let msg = format!(
-            "{} is a directory, not a file. Remove it and run `clash init` to create a policy.",
-            path.display()
-        );
-        warn!(path = %path.display(), "policy file is a directory");
-        *policy_error = Some(msg);
-        return None;
-    }
-
-    if metadata.len() > MAX_POLICY_SIZE {
-        let msg = format!(
-            "policy file is too large ({} bytes, max {} bytes). \
-             Check that {} is the correct file.",
-            metadata.len(),
-            MAX_POLICY_SIZE,
-            path.display()
-        );
-        warn!(path = %path.display(), size = metadata.len(), "policy file exceeds size limit");
-        *policy_error = Some(msg);
-        return None;
-    }
-
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = metadata.permissions().mode();
-        if mode & 0o044 != 0 {
-            warn!(
-                path = %path.display(),
-                mode = format!("{:o}", mode),
-                "policy file is readable by other users; consider `chmod 600`"
-            );
-        }
-    }
+    check_permissions_warning(path, PolicyLevel::User, &metadata);
+    #[cfg(not(unix))]
+    let _ = metadata;
 
     let is_json = path.extension().is_some_and(|ext| ext == "json");
     let eval_result = if is_json {

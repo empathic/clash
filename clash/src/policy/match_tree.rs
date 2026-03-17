@@ -256,6 +256,21 @@ pub enum Node {
     Decision(Decision),
 }
 
+impl Node {
+    /// Stamp source provenance on a root-level Condition node if it has none.
+    ///
+    /// Leaves (`Decision`) and already-stamped nodes are left unchanged.
+    pub fn stamp_source(&mut self, source: &str) {
+        if let Node::Condition {
+            source: slot @ None,
+            ..
+        } = self
+        {
+            *slot = Some(source.to_string());
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CompiledPolicy
 // ---------------------------------------------------------------------------
@@ -311,179 +326,12 @@ impl CompiledPolicy {
 
     /// Format rules as human-readable lines for display (flat, denormalized).
     pub fn format_rules(&self) -> Vec<String> {
-        let mut lines = Vec::new();
-        for node in &self.tree {
-            format_node_flat(node, &mut Vec::new(), &mut lines);
-        }
-        lines
+        super::format::format_rules(self)
     }
 
     /// Format rules as a tree with box-drawing characters.
-    /// Merges duplicate condition nodes to show shared structure.
     pub fn format_tree(&self) -> Vec<String> {
-        let mut lines = Vec::new();
-        let len = self.tree.len();
-        for (i, node) in self.tree.iter().enumerate() {
-            let is_last = i == len - 1;
-            format_tree_node(node, "", is_last, true, &mut lines);
-        }
-        lines
-    }
-}
-
-/// Recursively render a node as tree lines with box-drawing characters.
-fn format_tree_node(
-    node: &Node,
-    prefix: &str,
-    is_last: bool,
-    is_root: bool,
-    lines: &mut Vec<String>,
-) {
-    let connector = if is_root {
-        ""
-    } else if is_last {
-        "└── "
-    } else {
-        "├── "
-    };
-    let child_prefix = if is_root {
-        ""
-    } else if is_last {
-        "    "
-    } else {
-        "│   "
-    };
-
-    match node {
-        Node::Decision(d) => {
-            let effect = format_decision(d);
-            lines.push(format!("{prefix}{connector}{effect}"));
-        }
-        Node::Condition {
-            observe,
-            pattern,
-            children,
-            doc,
-            source,
-        } => {
-            let label = format_condition(observe, pattern);
-            let doc_suffix = doc
-                .as_deref()
-                .map(|d| format!("  # {d}"))
-                .unwrap_or_default();
-            let source_suffix = if is_root {
-                source
-                    .as_deref()
-                    .map(|s| format!("  [{s}]"))
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-
-            // Single decision child → show inline: "label → effect"
-            if children.len() == 1
-                && let Node::Decision(d) = &children[0]
-            {
-                let effect = format_decision(d);
-                lines.push(format!(
-                    "{prefix}{connector}{label} → {effect}{doc_suffix}{source_suffix}"
-                ));
-                return;
-            }
-
-            // Branch — show label, then children as sub-tree
-            lines.push(format!(
-                "{prefix}{connector}{label}{doc_suffix}{source_suffix}"
-            ));
-            let new_prefix = format!("{prefix}{child_prefix}");
-            let child_count = children.len();
-            for (i, child) in children.iter().enumerate() {
-                let child_is_last = i == child_count - 1;
-                format_tree_node(child, &new_prefix, child_is_last, false, lines);
-            }
-        }
-    }
-}
-
-fn format_decision(d: &Decision) -> String {
-    match d {
-        Decision::Allow(Some(sb)) => format!("allow [sandbox: {}]", sb.0),
-        Decision::Allow(None) => "allow".to_string(),
-        Decision::Deny => "deny".to_string(),
-        Decision::Ask(Some(sb)) => format!("ask [sandbox: {}]", sb.0),
-        Decision::Ask(None) => "ask".to_string(),
-    }
-}
-
-/// Recursively format a node as a flat, denormalized rule line.
-fn format_node_flat(node: &Node, path: &mut Vec<String>, lines: &mut Vec<String>) {
-    match node {
-        Node::Decision(d) => {
-            let effect = format_decision(d);
-            if path.is_empty() {
-                lines.push(format!("{effect} *"));
-            } else {
-                lines.push(format!("{effect} {}", path.join(" → ")));
-            }
-        }
-        Node::Condition {
-            observe,
-            pattern,
-            children,
-            doc,
-            source: _,
-        } => {
-            let segment = format_condition(observe, pattern);
-            path.push(segment);
-            if children.is_empty() {
-                lines.push(format!("(no decision) {}", path.join(" → ")));
-            } else {
-                // Check if this is a leaf condition (all children are decisions)
-                let is_leaf = children.iter().all(|c| matches!(c, Node::Decision(_)));
-                for child in children {
-                    format_node_flat(child, path, lines);
-                }
-                // Append doc to the last line if this is the innermost condition
-                if is_leaf
-                    && let Some(doc_text) = doc
-                    && let Some(last) = lines.last_mut()
-                {
-                    last.push_str(&format!("  # {doc_text}"));
-                }
-            }
-            path.pop();
-        }
-    }
-}
-
-fn format_condition(obs: &Observable, pat: &Pattern) -> String {
-    let obs_str = match obs {
-        Observable::ToolName => "tool".to_string(),
-        Observable::HookType => "hook".to_string(),
-        Observable::AgentName => "agent".to_string(),
-        Observable::PositionalArg(n) => format!("arg[{n}]"),
-        Observable::HasArg => "has_arg".to_string(),
-        Observable::NamedArg(name) => format!("named({name})"),
-        Observable::NestedField(path) => format!("field({})", path.join(".")),
-        Observable::FsOp => "fs_op".to_string(),
-        Observable::FsPath => "fs_path".to_string(),
-        Observable::NetDomain => "net_domain".to_string(),
-    };
-    let pat_str = format_pattern(pat);
-    format!("{obs_str}={pat_str}")
-}
-
-fn format_pattern(pat: &Pattern) -> String {
-    match pat {
-        Pattern::Wildcard => "*".to_string(),
-        Pattern::Literal(v) => format!("\"{}\"", v.resolve()),
-        Pattern::Regex(re) => format!("/{}/", re.as_str()),
-        Pattern::AnyOf(pats) => {
-            let items: Vec<_> = pats.iter().map(format_pattern).collect();
-            format!("{{{}}}", items.join("|"))
-        }
-        Pattern::Not(inner) => format!("!{}", format_pattern(inner)),
-        Pattern::Prefix(v) => format!("{}/**", v.resolve()),
+        super::format::format_tree(self)
     }
 }
 
@@ -941,12 +789,9 @@ impl CompiledPolicy {
                         .to_string();
                     if let Some(explanation) = sbx.explain_denial(fs_path, &cwd, required) {
                         effect = Effect::Deny;
-                        let sandbox_name = d
-                            .sandbox_ref()
-                            .map(|sr| sr.0.as_str())
-                            .unwrap_or("unnamed");
-                        sandbox_denial =
-                            Some(format!("sandbox '{sandbox_name}': {explanation}"));
+                        let sandbox_name =
+                            d.sandbox_ref().map(|sr| sr.0.as_str()).unwrap_or("unnamed");
+                        sandbox_denial = Some(format!("sandbox '{sandbox_name}': {explanation}"));
                     }
                 }
 

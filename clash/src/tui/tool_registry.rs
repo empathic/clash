@@ -112,9 +112,7 @@ pub const TOOLS: &[ToolTuiInfo] = &[
 
 /// Look up TUI info by tool name (case-insensitive). Returns `None` for unknown/MCP tools.
 pub fn lookup(name: &str) -> Option<&'static ToolTuiInfo> {
-    TOOLS
-        .iter()
-        .find(|t| t.def.name.eq_ignore_ascii_case(name))
+    TOOLS.iter().find(|t| t.def.name.eq_ignore_ascii_case(name))
 }
 
 /// Check whether an effect is allowed for a tool. Unknown tools allow all effects.
