@@ -16,6 +16,7 @@ python_sandbox = sandbox(
             "github.com": allow,
         }),
     ],
+    doc = "Python development: project + pip cache, PyPI/GitHub network",
 )
 
 python = exe(regex("python3?")).sandbox(python_sandbox).allow()

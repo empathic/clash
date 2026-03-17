@@ -1,16 +1,6 @@
 load("@clash//builtin.star", "base")
-load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home", "tempdir")
-
-# Default sandbox for all Bash commands
-_default_box = sandbox(
-    name = "default",
-    default = deny,
-    fs = [
-        cwd(follow_worktrees = True).allow(read = True, write = True, execute = True),
-        tempdir().allow(),
-        home().allow(read = True, execute = True),
-    ],
-)
+load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home")
+load("@clash//sandboxes.star", "dev")
 
 # Tighter sandbox for Claude fs tools (no execute, scoped to cwd + ~/.claude)
 _fs_box = sandbox(
@@ -24,7 +14,7 @@ _fs_box = sandbox(
 def main():
     my_policy = policy(
         default = ask,
-        default_sandbox = _default_box,
+        default_sandbox = dev,
         rules = [
             # Claude fs tools
             tool(["Read", "Glob", "Grep"]).sandbox(_fs_box).allow(),
@@ -39,7 +29,7 @@ def main():
             exe("git", args=["reset", "--hard"]).deny(),
 
             # All other commands — sandboxed
-            exe().sandbox(_default_box).allow(),
+            exe().sandbox(dev).allow(),
         ],
     )
     return base.update(my_policy)

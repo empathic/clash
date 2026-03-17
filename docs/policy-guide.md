@@ -272,7 +272,30 @@ When `cargo build` matches the exec rule, the `cargo_env` sandbox defines the re
 
 Note: `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
 
-### Pre-built sandboxes
+### Sandbox presets
+
+Intent-based sandbox presets express what you trust a command to do:
+
+| Preset | Filesystem | Network | Use case |
+|---|---|---|---|
+| `restricted` | Read-only project | Deny | Untrusted scripts |
+| `read_only` | Read project + home, write temp | Deny | Linters, analyzers |
+| `dev` | Read+write project, read home | Deny | Build tools, git |
+| `dev_network` | Read+write project, read home | Allow | Package managers, gh |
+| `unrestricted` | Full project + home access | Allow | Fully trusted tools |
+
+```python
+load("@clash//sandboxes.star", "dev", "dev_network")
+
+def main():
+    return policy(default = deny, rules = [
+        exe("gh").sandbox(dev_network).allow(),
+        exe("git").sandbox(dev).allow(),
+        exe().sandbox(dev).allow(),
+    ])
+```
+
+### Language-specific sandboxes
 
 Load pre-built sandbox configurations for common toolchains:
 
@@ -590,6 +613,7 @@ clash policy show
 
 - `@clash//std.star` -- built-in standard library (loaded via `load()` in policy files)
 - `@clash//builtin.star` -- built-in policy for clash CLI and Claude Code tools (exports `base`)
-- `@clash//rust.star`, `@clash//python.star` -- pre-built sandbox configurations for common toolchains
+- `@clash//sandboxes.star` -- intent-based sandbox presets: `restricted`, `read_only`, `dev`, `dev_network`, `unrestricted`
+- `@clash//rust.star`, `@clash//python.star`, `@clash//node.star` -- pre-built sandbox configurations for common toolchains
 - [Policy Semantics](./policy-semantics.md) -- compilation pipeline and evaluation algorithm
 - [CLI Reference](./cli-reference.md) -- full command documentation
