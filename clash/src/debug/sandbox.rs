@@ -68,7 +68,7 @@ impl SandboxReport {
                         lines.push(format!(
                             "    {} {} in {} ({})",
                             eff,
-                            rule.caps.display(),
+                            rule.caps.short(),
                             rule.path,
                             format!("{:?}", rule.path_match).to_lowercase(),
                         ));
@@ -83,7 +83,7 @@ impl SandboxReport {
                         let caps_str = if caps.is_empty() {
                             style::red("none")
                         } else {
-                            caps.display()
+                            caps.short()
                         };
                         lines.push(format!("  {:<40}  {}", path, caps_str));
                     }
@@ -133,7 +133,7 @@ impl SandboxReport {
             "effective_caps": self.path_caps.iter().map(|(path, caps)| {
                 serde_json::json!({
                     "path": path,
-                    "caps": caps.display(),
+                    "caps": caps.short(),
                 })
             }).collect::<Vec<_>>(),
         });

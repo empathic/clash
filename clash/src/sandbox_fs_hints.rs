@@ -446,7 +446,7 @@ fn build_fs_hint(blocked: &[BlockedPath]) -> String {
         let caps_display = if bp.current_caps.is_empty() {
             "none".to_string()
         } else {
-            bp.current_caps.display()
+            bp.current_caps.short()
         };
         lines.push(format!(
             "  - {} (sandbox grants: {})",
@@ -668,7 +668,7 @@ mod tests {
         assert!(hint.contains("SANDBOX_FS_HINT"));
         assert!(hint.contains("/Users/user/.fly/perms.123"));
         assert!(hint.contains("/Users/user/.fly"));
-        assert!(hint.contains("read + execute"));
+        assert!(hint.contains("r---x"));
         assert!(hint.contains("/clash:edit"));
         assert!(hint.contains("Do NOT retry"));
     }

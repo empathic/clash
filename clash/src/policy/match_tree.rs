@@ -480,7 +480,7 @@ fn format_pattern(pat: &Pattern) -> String {
         Pattern::Regex(re) => format!("/{}/", re.as_str()),
         Pattern::AnyOf(pats) => {
             let items: Vec<_> = pats.iter().map(format_pattern).collect();
-            format!("[{}]", items.join(", "))
+            format!("{{{}}}", items.join("|"))
         }
         Pattern::Not(inner) => format!("!{}", format_pattern(inner)),
         Pattern::Prefix(v) => format!("{}/**", v.resolve()),

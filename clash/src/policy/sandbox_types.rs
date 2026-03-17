@@ -126,6 +126,22 @@ impl Cap {
         }
         parts.join(" + ")
     }
+
+    /// Compact `ls -l`-style capability string: `rwcdx`.
+    ///
+    /// Each position is the capability letter when set, or `-` when absent:
+    /// `r`ead `w`rite `c`reate `d`elete e`x`ecute.
+    ///
+    /// Examples: `rwcdx` (all), `rw---` (read+write), `r---x` (read+exec).
+    pub fn short(&self) -> String {
+        let mut s = String::with_capacity(5);
+        s.push(if self.contains(Cap::READ) { 'r' } else { '-' });
+        s.push(if self.contains(Cap::WRITE) { 'w' } else { '-' });
+        s.push(if self.contains(Cap::CREATE) { 'c' } else { '-' });
+        s.push(if self.contains(Cap::DELETE) { 'd' } else { '-' });
+        s.push(if self.contains(Cap::EXECUTE) { 'x' } else { '-' });
+        s
+    }
 }
 
 impl Serialize for Cap {
@@ -503,6 +519,15 @@ mod tests {
             Cap::parse("all-write").unwrap(),
             Cap::READ | Cap::CREATE | Cap::DELETE | Cap::EXECUTE
         );
+    }
+
+    #[test]
+    fn test_cap_short() {
+        assert_eq!(Cap::READ.short(), "r----");
+        assert_eq!((Cap::READ | Cap::WRITE).short(), "rw---");
+        assert_eq!((Cap::READ | Cap::EXECUTE).short(), "r---x");
+        assert_eq!(Cap::all().short(), "rwcdx");
+        assert_eq!(Cap::empty().short(), "-----");
     }
 
     #[test]
