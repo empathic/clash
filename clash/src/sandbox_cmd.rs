@@ -208,12 +208,7 @@ pub fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
             eprintln!("  default: {}", sandbox_policy.default.display());
             eprintln!("  network: {:?}", sandbox_policy.network);
             for rule in &sandbox_policy.rules {
-                eprintln!(
-                    "  {:?} {} in {}",
-                    rule.effect,
-                    rule.caps.short(),
-                    rule.path
-                );
+                eprintln!("  {:?} {} in {}", rule.effect, rule.caps.short(), rule.path);
             }
             eprintln!("  command: {:?}", command);
             eprintln!("---");

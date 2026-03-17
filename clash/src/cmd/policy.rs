@@ -401,6 +401,63 @@ fn handle_edit(scope: Option<String>, raw: bool) -> Result<()> {
 // Allow / Deny / Remove handlers
 // ---------------------------------------------------------------------------
 
+/// The mutation to apply to a policy rule.
+enum PolicyMutation {
+    Allow { sandbox: Option<String> },
+    Deny,
+    Remove,
+}
+
+/// Shared pipeline for allow / deny / remove: resolve path, build node, mutate, write, report.
+fn apply_mutation(
+    command: Vec<String>,
+    tool: Option<String>,
+    bin: Option<String>,
+    scope: Option<String>,
+    mutation: PolicyMutation,
+) -> Result<()> {
+    let path = resolve_manifest_path(scope)?;
+    let mut manifest = crate::policy_loader::read_manifest(&path)?;
+
+    // For Remove we only need the observable chain — Decision::Deny is a dummy.
+    let dummy_decision = Decision::Deny;
+    let decision = match &mutation {
+        PolicyMutation::Allow { sandbox } => Decision::Allow(
+            sandbox
+                .as_deref()
+                .map(|s| crate::policy::match_tree::SandboxRef(s.to_string())),
+        ),
+        PolicyMutation::Deny | PolicyMutation::Remove => dummy_decision,
+    };
+
+    let node = build_rule_node(&command, tool, bin, decision)?;
+
+    let result_str = match mutation {
+        PolicyMutation::Remove => {
+            if manifest_edit::remove_rule(&mut manifest, &node) {
+                crate::policy_loader::write_manifest(&path, &manifest)?;
+                println!("{} Rule removed", style::green_bold("✓"));
+                println!("  {}", style::dim(&path.display().to_string()));
+            } else {
+                println!("No matching rule found");
+            }
+            return Ok(());
+        }
+        _ => {
+            let result = manifest_edit::upsert_rule(&mut manifest, node);
+            crate::policy_loader::write_manifest(&path, &manifest)?;
+            match result {
+                manifest_edit::UpsertResult::Inserted => "Rule added",
+                manifest_edit::UpsertResult::Replaced => "Rule updated (replaced existing)",
+            }
+        }
+    };
+
+    println!("{} {}", style::green_bold("✓"), result_str);
+    println!("  {}", style::dim(&path.display().to_string()));
+    Ok(())
+}
+
 /// Resolve the policy.json path for the given scope, creating it if needed.
 pub(crate) fn resolve_manifest_path(scope: Option<String>) -> Result<PathBuf> {
     let level = match scope.as_deref() {
@@ -505,23 +562,7 @@ fn handle_allow(
     sandbox: Option<String>,
     scope: Option<String>,
 ) -> Result<()> {
-    let path = resolve_manifest_path(scope)?;
-    let mut manifest = crate::policy_loader::read_manifest(&path)?;
-    let sandbox_ref = sandbox.map(crate::policy::match_tree::SandboxRef);
-    let node = build_rule_node(&command, tool, bin, Decision::Allow(sandbox_ref))?;
-    let result = manifest_edit::upsert_rule(&mut manifest, node);
-    crate::policy_loader::write_manifest(&path, &manifest)?;
-    match result {
-        manifest_edit::UpsertResult::Inserted => println!("{} Rule added", style::green_bold("✓")),
-        manifest_edit::UpsertResult::Replaced => {
-            println!(
-                "{} Rule updated (replaced existing)",
-                style::green_bold("✓")
-            )
-        }
-    }
-    println!("  {}", style::dim(&path.display().to_string()));
-    Ok(())
+    apply_mutation(command, tool, bin, scope, PolicyMutation::Allow { sandbox })
 }
 
 fn handle_deny(
@@ -530,22 +571,7 @@ fn handle_deny(
     bin: Option<String>,
     scope: Option<String>,
 ) -> Result<()> {
-    let path = resolve_manifest_path(scope)?;
-    let mut manifest = crate::policy_loader::read_manifest(&path)?;
-    let node = build_rule_node(&command, tool, bin, Decision::Deny)?;
-    let result = manifest_edit::upsert_rule(&mut manifest, node);
-    crate::policy_loader::write_manifest(&path, &manifest)?;
-    match result {
-        manifest_edit::UpsertResult::Inserted => println!("{} Rule added", style::green_bold("✓")),
-        manifest_edit::UpsertResult::Replaced => {
-            println!(
-                "{} Rule updated (replaced existing)",
-                style::green_bold("✓")
-            )
-        }
-    }
-    println!("  {}", style::dim(&path.display().to_string()));
-    Ok(())
+    apply_mutation(command, tool, bin, scope, PolicyMutation::Deny)
 }
 
 fn handle_remove(
@@ -554,18 +580,7 @@ fn handle_remove(
     bin: Option<String>,
     scope: Option<String>,
 ) -> Result<()> {
-    let path = resolve_manifest_path(scope)?;
-    let mut manifest = crate::policy_loader::read_manifest(&path)?;
-    // Decision doesn't matter for removal — only the observable chain is compared.
-    let node = build_rule_node(&command, tool, bin, Decision::Deny)?;
-    if manifest_edit::remove_rule(&mut manifest, &node) {
-        crate::policy_loader::write_manifest(&path, &manifest)?;
-        println!("{} Rule removed", style::green_bold("✓"));
-        println!("  {}", style::dim(&path.display().to_string()));
-    } else {
-        println!("No matching rule found");
-    }
-    Ok(())
+    apply_mutation(command, tool, bin, scope, PolicyMutation::Remove)
 }
 
 /// Extract a help hint from an anyhow error chain.
