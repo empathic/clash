@@ -12,15 +12,17 @@ impl TerminalControl {
     pub fn acquire() -> Result<Self, error::Error> {
         let prev_fg_pid = sys::terminal::get_foreground_pid();
 
+        // Mask SIGTTOU before any process-group manipulation. After
+        // lead_new_process_group() we are in a background group, so the
+        // subsequent tcsetpgrp in move_self_to_foreground() would deliver
+        // SIGTTOU and stop the process if the signal is not already ignored.
+        sys::signal::mask_sigttou()?;
+
         // Break out into new process group.
-        // TODO(jobs): Investigate why this sometimes fails with EPERM.
         let _ = sys::signal::lead_new_process_group();
 
-        // Take ownership.
+        // Take ownership of the terminal foreground.
         sys::terminal::move_self_to_foreground()?;
-
-        // Mask out SIGTTOU.
-        sys::signal::mask_sigttou()?;
 
         Ok(Self { prev_fg_pid })
     }
