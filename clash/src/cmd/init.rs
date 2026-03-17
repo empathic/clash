@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use tracing::{Level, error, info, instrument, warn};
 
-use crate::settings::{ClashSettings, DEFAULT_POLICY};
+use crate::settings::{ClashSettings, compile_default_policy_to_json};
 use crate::style;
 
 /// GitHub repository used to install the clash plugin marketplace.
@@ -74,31 +74,35 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
         warn!(error = %e, "Could not set enabledPlugins in Claude Code settings");
     }
 
-    let policy_path = ClashSettings::policy_file()?;
+    // Resolve the existing policy path (prefers .json over .star).
+    let existing_path = ClashSettings::policy_file()?;
+    // Always write the compiled JSON variant.
+    let policy_path = existing_path.with_extension("json");
 
-    if policy_path.exists() && policy_path.is_dir() {
+    if existing_path.exists() && existing_path.is_dir() {
         if dialoguer::Confirm::new()
             .with_prompt(format!(
                 "{} is a directory. Remove it and continue onboarding?",
-                policy_path.to_string_lossy(),
+                existing_path.to_string_lossy(),
             ))
             .interact()
             .context("confirm removal of dir at policy path")?
         {
-            std::fs::remove_dir_all(&policy_path)?;
+            std::fs::remove_dir_all(&existing_path)?;
         } else {
             anyhow::bail!(
                 "{} is a directory. Remove it first, then run `clash init user`.",
-                policy_path.display()
+                existing_path.display()
             );
         }
     }
 
-    if policy_path.exists()
+    // Check if any policy file already exists (.json or .star).
+    if existing_path.exists()
         && !dialoguer::Confirm::new()
             .with_prompt(format!(
                 "A policy already exists at {}. Reconfigure existing policy?",
-                policy_path.to_string_lossy()
+                existing_path.to_string_lossy()
             ))
             .interact()
             .unwrap_or_default()
@@ -106,9 +110,11 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
         return Ok(());
     }
 
-    // Fresh install — write default policy.
+    // Fresh install — compile default policy to JSON and write it.
     std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
-    std::fs::write(&policy_path, DEFAULT_POLICY)?;
+    let json = compile_default_policy_to_json()
+        .context("failed to compile default policy to JSON")?;
+    std::fs::write(&policy_path, &json)?;
 
     // Install the Claude Code plugin from GitHub.
     let plugin_installed = match install_plugin() {
