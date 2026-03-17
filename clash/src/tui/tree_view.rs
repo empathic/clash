@@ -44,6 +44,8 @@ pub struct TreeView {
     collapsed: HashSet<Vec<usize>>,
     /// Snapshot of included rules for rebuild after collapse/expand.
     included: CompiledPolicy,
+    /// Optional path to highlight (from builder evaluation).
+    highlight_path: Option<Vec<usize>>,
 }
 
 #[derive(Debug)]
@@ -71,9 +73,16 @@ impl TreeView {
             scroll_offset: 0,
             collapsed: HashSet::new(),
             included: included.clone(),
+            highlight_path: None,
         };
         view.rebuild(manifest);
         view
+    }
+
+    /// Set the highlight path (from builder evaluation match).
+    /// Pass `None` to clear highlighting.
+    pub fn set_highlight(&mut self, path: Option<Vec<usize>>) {
+        self.highlight_path = path;
     }
 
     /// Rebuild the flat node list from the manifest's tree.
@@ -531,10 +540,21 @@ impl Component for TreeView {
                     "  "
                 };
 
+                // Check if this node is on the highlighted match path
+                let is_highlighted = self.highlight_path.as_ref().is_some_and(|hp| {
+                    !node.node_path.is_empty()
+                        && node.node_path.len() <= hp.len()
+                        && node.node_path == hp[..node.node_path.len()]
+                });
+
                 let style = if i == self.selected {
                     Style::default()
                         .bg(Color::DarkGray)
                         .fg(Color::White)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_highlighted {
+                    Style::default()
+                        .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD)
                 } else if node.is_root {
                     Style::default()

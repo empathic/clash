@@ -107,6 +107,20 @@ impl std::str::FromStr for PolicyLevel {
 /// Default policy source embedded at compile time.
 pub const DEFAULT_POLICY: &str = include_str!("default_policy.star");
 
+/// Compile the embedded default policy Starlark source to JSON.
+///
+/// Used by `ensure_policy_at` and `init` to write a pre-compiled `policy.json`
+/// instead of the raw `.star` source.
+pub fn compile_default_policy_to_json() -> Result<String> {
+    let output = clash_starlark::evaluate(DEFAULT_POLICY, "<default_policy>", std::path::Path::new("."))
+        .context("failed to compile default policy")?;
+    // Pretty-print the JSON for readability.
+    let value: serde_json::Value = serde_json::from_str(&output.json)
+        .context("default policy produced invalid JSON")?;
+    serde_json::to_string_pretty(&value)
+        .context("failed to pretty-print default policy JSON")
+}
+
 /// Session-level context from Claude Code hook input.
 ///
 /// Carries runtime values that aren't available as standard environment
@@ -343,13 +357,20 @@ impl ClashSettings {
         Self::ensure_policy_at(path)
     }
 
-    /// Write the default policy to `path` if it doesn't already exist.
+    /// Write the compiled default policy JSON to `path` if no policy exists.
+    ///
+    /// The path passed in may point to `policy.star` (from `prefer_json_over_star`
+    /// when no file exists yet). We always write `policy.json` instead, compiling
+    /// the embedded Starlark source to JSON at runtime.
     fn ensure_policy_at(path: PathBuf) -> Result<Option<PathBuf>> {
         if path.exists() {
             return Ok(None);
         }
 
-        if let Some(parent) = path.parent() {
+        // Always write the compiled JSON variant, even if `path` ends in `.star`.
+        let json_path = path.with_extension("json");
+
+        if let Some(parent) = json_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create directory {}", parent.display()))?;
 
@@ -361,18 +382,20 @@ impl ClashSettings {
             }
         }
 
-        std::fs::write(&path, DEFAULT_POLICY)
-            .with_context(|| format!("failed to write default policy to {}", path.display()))?;
+        let json = compile_default_policy_to_json()
+            .context("failed to compile default policy to JSON")?;
+        std::fs::write(&json_path, &json)
+            .with_context(|| format!("failed to write default policy to {}", json_path.display()))?;
 
         // Restrict file permissions on unix (owner-only read/write).
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            let _ = std::fs::set_permissions(&json_path, std::fs::Permissions::from_mode(0o600));
         }
 
-        info!(path = %path.display(), "Created default user policy");
-        Ok(Some(path))
+        info!(path = %json_path.display(), "Created default user policy");
+        Ok(Some(json_path))
     }
 
     /// Return the policy parse/compile error, if any.
@@ -776,17 +799,21 @@ mod test {
     }
 
     #[test]
-    fn ensure_policy_creates_file_when_missing() {
+    fn ensure_policy_creates_json_file_when_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join(".clash").join("policy.star");
+        // Pass a .star path — ensure_policy_at should write .json instead.
+        let star_path = dir.path().join(".clash").join("policy.star");
+        let json_path = dir.path().join(".clash").join("policy.json");
 
-        let result = ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
+        let result = ClashSettings::ensure_policy_at(star_path).unwrap();
         assert!(result.is_some(), "should have created the file");
-        assert_eq!(result.unwrap(), policy_path);
-        assert!(policy_path.exists(), "policy file should exist on disk");
+        assert_eq!(result.unwrap(), json_path);
+        assert!(json_path.exists(), "policy.json should exist on disk");
 
-        let contents = std::fs::read_to_string(&policy_path).unwrap();
-        assert_eq!(contents, DEFAULT_POLICY, "should contain default policy");
+        let contents = std::fs::read_to_string(&json_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents)
+            .expect("written file should be valid JSON");
+        assert!(parsed.get("tree").is_some(), "JSON should contain a tree field");
     }
 
     #[test]
@@ -813,10 +840,11 @@ mod test {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let policy_path = dir.path().join(".clash").join("policy.star");
+        let star_path = dir.path().join(".clash").join("policy.star");
+        let json_path = dir.path().join(".clash").join("policy.json");
 
-        ClashSettings::ensure_policy_at(policy_path.clone()).unwrap();
-        let mode = std::fs::metadata(&policy_path)
+        ClashSettings::ensure_policy_at(star_path).unwrap();
+        let mode = std::fs::metadata(&json_path)
             .unwrap()
             .permissions()
             .mode()

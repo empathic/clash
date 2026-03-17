@@ -838,6 +838,29 @@ pub fn eval_traced(
     None
 }
 
+/// Walk the tree and return the index path to the first matching decision.
+fn find_match_path_dfs(nodes: &[Node], ctx: &QueryContext) -> Option<Vec<usize>> {
+    for (i, node) in nodes.iter().enumerate() {
+        match node {
+            Node::Decision(_) => return Some(vec![i]),
+            Node::Condition {
+                observe,
+                pattern,
+                children,
+                ..
+            } => {
+                if matches_observable(observe, pattern, ctx) {
+                    if let Some(mut child_path) = find_match_path_dfs(children, ctx) {
+                        child_path.insert(0, i);
+                        return Some(child_path);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Test whether an observable matches a pattern in the given context.
 fn matches_observable(obs: &Observable, pattern: &Pattern, ctx: &QueryContext) -> bool {
     match obs {
@@ -866,6 +889,19 @@ impl CompiledPolicy {
     pub fn evaluate(&self, tool_name: &str, tool_input: &serde_json::Value) -> PolicyDecision {
         let ctx = QueryContext::from_tool(tool_name, tool_input);
         self.evaluate_ctx(&ctx)
+    }
+
+    /// Find the index path through the tree to the first matching decision.
+    ///
+    /// Returns `Some(vec![root_idx, child_idx, ...])` if a rule matched,
+    /// or `None` if no rule matched (default effect applies).
+    pub fn find_match_path(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> Option<Vec<usize>> {
+        let ctx = QueryContext::from_tool(tool_name, tool_input);
+        find_match_path_dfs(&self.tree, &ctx)
     }
 
     /// Evaluate this policy against a prepared query context.
