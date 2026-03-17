@@ -72,7 +72,7 @@ pub fn format_sandbox_summary(sandbox: &SandboxPolicy) -> Vec<String> {
     lines.push(format!(
         "  {}: {}",
         style::cyan("default"),
-        sandbox.default.display()
+        sandbox.default.short()
     ));
     lines.push(format!(
         "  {}: {:?}",
@@ -83,7 +83,7 @@ pub fn format_sandbox_summary(sandbox: &SandboxPolicy) -> Vec<String> {
         lines.push(format!(
             "  {:?} {} in {}",
             rule.effect,
-            rule.caps.display(),
+            rule.caps.short(),
             rule.path
         ));
     }

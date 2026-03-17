@@ -444,7 +444,7 @@ impl SandboxView {
                 lines.push(Line::from(Span::styled(
                     format!(
                         "    {effect_str} {} in {} ({})",
-                        rule.caps.display(),
+                        rule.caps.short(),
                         rule.path,
                         format!("{:?}", rule.path_match).to_lowercase()
                     ),

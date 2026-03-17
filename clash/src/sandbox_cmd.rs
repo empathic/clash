@@ -211,7 +211,7 @@ pub fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
                 eprintln!(
                     "  {:?} {} in {}",
                     rule.effect,
-                    rule.caps.display(),
+                    rule.caps.short(),
                     rule.path
                 );
             }
@@ -326,7 +326,7 @@ fn handle_list_sandboxes(json: bool) -> Result<()> {
                 println!(
                     "    {:?} {} in {}{}",
                     rule.effect,
-                    rule.caps.display(),
+                    rule.caps.short(),
                     rule.path,
                     match rule.path_match {
                         PathMatch::Subpath => "",
