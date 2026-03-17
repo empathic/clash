@@ -921,11 +921,13 @@ impl CompiledPolicy {
 
                 // For non-Bash tools with file operations, enforce sandbox fs
                 // rules at policy level (there's no OS sandbox wrapper for these).
+                let mut sandbox_denial: Option<String> = None;
                 if effect == Effect::Allow
                     && ctx.tool_name != "Bash"
                     && let Some(ref sbx) = sandbox
                     && let Some(ref fs_op) = ctx.fs_op
                     && let Some(ref fs_path) = ctx.fs_path
+                    && fs_path.starts_with('/')
                 {
                     use crate::policy::sandbox_types::Cap;
                     let required = match fs_op.as_str() {
@@ -933,18 +935,25 @@ impl CompiledPolicy {
                         "write" => Cap::WRITE | Cap::CREATE,
                         _ => Cap::empty(),
                     };
-                    let effective = sbx.effective_caps(
-                        fs_path,
-                        &std::env::current_dir()
-                            .unwrap_or_default()
-                            .to_string_lossy(),
-                    );
-                    if !effective.contains(required) {
+                    let cwd = std::env::current_dir()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    if let Some(explanation) = sbx.explain_denial(fs_path, &cwd, required) {
                         effect = Effect::Deny;
+                        let sandbox_name = d
+                            .sandbox_ref()
+                            .map(|sr| sr.0.as_str())
+                            .unwrap_or("unnamed");
+                        sandbox_denial =
+                            Some(format!("sandbox '{sandbox_name}': {explanation}"));
                     }
                 }
 
-                let resolution = format!("result: {effect}");
+                let resolution = match sandbox_denial {
+                    Some(ref detail) => format!("result: {effect} ({detail})"),
+                    None => format!("result: {effect}"),
+                };
 
                 PolicyDecision {
                     effect,

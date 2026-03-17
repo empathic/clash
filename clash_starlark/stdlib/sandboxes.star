@@ -12,57 +12,57 @@
 load("@clash//std.star", "sandbox", "cwd", "home", "tempdir")
 
 restricted = sandbox(
-    name = "restricted",
-    default = deny,
-    fs = [
-        cwd().allow(read = True, execute = True),
-        tempdir().allow(read = True, execute = True),
+    name="restricted",
+    default=deny,
+    fs=[
+        cwd().allow(read=True, execute=True),
+        tempdir().allow(read=True, execute=True),
     ],
-    doc = "Minimal access: read-only project files, no network",
+    doc="Minimal access: read-only project files, no network",
 )
 
 read_only = sandbox(
-    name = "read_only",
-    default = deny,
-    fs = [
-        cwd(follow_worktrees = True).allow(read = True, execute = True),
-        home().allow(read = True, execute = True),
+    name="read_only",
+    default=deny,
+    fs=[
+        cwd(follow_worktrees=True).allow(read=True, execute=True),
+        home().allow(read=True, execute=True),
         tempdir().allow(),
     ],
-    doc = "Read project and home, write only to temp, no network",
+    doc="Read project and home, write only to temp, no network",
 )
 
 dev = sandbox(
-    name = "dev",
-    default = deny,
-    fs = [
-        cwd(follow_worktrees = True).allow(read = True, write = True, execute = True),
-        home().allow(read = True, execute = True),
-        tempdir().allow(),
+    name="dev",
+    default=deny,
+    fs=[
+        cwd(follow_worktrees=True).recurse().allow(read=True, write=True, execute=True),
+        home().recurse().allow(read=True, execute=True),
+        tempdir().recurse().allow(),
     ],
-    doc = "Development: read+write project, read home, no network",
+    doc="Development: read+write project, read home, no network",
 )
 
 dev_network = sandbox(
-    name = "dev_network",
-    default = deny,
-    fs = [
-        cwd(follow_worktrees = True).allow(read = True, write = True, execute = True),
-        home().allow(read = True, execute = True),
+    name="dev_network",
+    default=deny,
+    fs=[
+        cwd(follow_worktrees=True).allow(read=True, write=True, execute=True),
+        home().allow(read=True, execute=True),
         tempdir().allow(),
     ],
-    net = "allow",
-    doc = "Development with network: read+write project, full network",
+    net="allow",
+    doc="Development with network: read+write project, full network",
 )
 
 unrestricted = sandbox(
-    name = "unrestricted",
-    default = deny,
-    fs = [
-        cwd(follow_worktrees = True).allow(),
+    name="unrestricted",
+    default=deny,
+    fs=[
+        cwd(follow_worktrees=True).allow(),
         home().allow(),
         tempdir().allow(),
     ],
-    net = "allow",
-    doc = "Full access: all filesystem operations, full network",
+    net="allow",
+    doc="Full access: all filesystem operations, full network",
 )

@@ -125,8 +125,6 @@ pub fn check_permission(
         );
     }
 
-    let verb_str = tool_to_verb_str(&input.tool_name);
-
     Ok(match decision.effect {
         Effect::Allow => {
             let mut output = HookOutput::allow(
@@ -144,13 +142,10 @@ pub fn check_permission(
             output
         }
         Effect::Deny => {
-            let denial_count = count_session_denials(&input.session_id);
             let deny_context = build_deny_context(
                 &input.tool_name,
-                &verb_str,
-                &noun,
                 decision.reason.as_deref(),
-                denial_count,
+                &input.tool_input,
             );
             HookOutput::deny(
                 decision.reason.unwrap_or_else(|| "policy: denied".into()),
@@ -235,24 +230,54 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Count the number of deny decisions in the current session's audit log.
-fn count_session_denials(session_id: &str) -> usize {
-    let log_path = crate::audit::session_dir(session_id).join("audit.jsonl");
-    let content = match std::fs::read_to_string(&log_path) {
-        Ok(c) => c,
-        Err(_) => return 0,
-    };
-    content
-        .lines()
-        .filter(|line| line.contains("\"decision\":\"deny\""))
-        .count()
+/// Suggest the most specific `clash policy allow` command for a denied tool use.
+///
+/// Prefers precise commands (e.g., `clash policy allow "git status"`) over broad
+/// ones (e.g., `clash policy allow --tool Bash`).
+fn suggest_allow_command_specific(tool_name: &str, tool_input: &serde_json::Value) -> String {
+    match tool_name {
+        "Bash" => {
+            // Extract the command and suggest allowing the specific binary (+ first arg if present).
+            if let Some(cmd) = tool_input.get("command").and_then(|v| v.as_str()) {
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                match parts.len() {
+                    0 => "clash policy allow --tool Bash".into(),
+                    1 => format!("clash policy allow \"{}\"", parts[0]),
+                    _ => {
+                        // Include binary + first arg for specificity
+                        format!("clash policy allow \"{} {}\"", parts[0], parts[1])
+                    }
+                }
+            } else {
+                "clash policy allow --tool Bash".into()
+            }
+        }
+        "Read" | "Glob" | "Grep" => format!("clash policy allow --tool {tool_name}"),
+        "Write" | "Edit" => format!("clash policy allow --tool {tool_name}"),
+        "WebFetch" | "WebSearch" => format!("clash policy allow --tool {tool_name}"),
+        _ => format!("clash policy allow --tool {tool_name}"),
+    }
 }
 
-/// Suggest a `clash allow` command for a denied verb.
+/// Suggest a broad `clash policy allow` command for a denied verb (used in stderr).
 fn suggest_allow_command(verb_str: &str) -> String {
     match verb_str {
-        "edit" | "bash" | "read" | "web" | "tool" => format!("clash allow {verb_str}"),
-        _ => format!("clash allow '{verb_str}'"),
+        "edit" | "bash" | "read" | "web" | "tool" => {
+            format!("clash policy allow --tool {}", verb_str_to_tool(verb_str))
+        }
+        _ => format!("clash policy allow '{verb_str}'"),
+    }
+}
+
+/// Map verb strings back to canonical tool names.
+fn verb_str_to_tool(verb_str: &str) -> &'static str {
+    match verb_str {
+        "bash" => "Bash",
+        "edit" => "Edit",
+        "read" => "Read",
+        "web" => "WebFetch",
+        "tool" => "Skill",
+        _ => "Bash",
     }
 }
 
@@ -279,46 +304,24 @@ fn truncate_noun(noun: &str, max_len: usize) -> String {
 /// Build structured agent context for a Deny decision.
 fn build_deny_context(
     tool_name: &str,
-    verb_str: &str,
-    noun: &str,
     reason: Option<&str>,
-    denial_count: usize,
+    tool_input: &serde_json::Value,
 ) -> String {
-    let truncated_noun = truncate_noun(noun, 80);
-
     let is_explicit_deny = reason.is_some_and(|r| r.contains("denied") || r.contains("deny"));
-    let reason_code = if is_explicit_deny {
-        "explicit-deny"
-    } else {
-        "default-deny"
-    };
 
-    let suggested = suggest_allow_command(verb_str);
+    let suggested = suggest_allow_command_specific(tool_name, tool_input);
 
-    let mut lines = vec![format!(
-        "BLOCKED: {reason_code} tool={tool_name} input={truncated_noun}"
-    )];
+    let mut lines = Vec::new();
 
     if is_explicit_deny {
-        lines.push("This action is explicitly blocked by the user's clash policy.".into());
-    } else {
         lines.push(format!(
-            "{} Suggested action: {}",
-            denial_explanation(verb_str),
-            suggested,
+            "BLOCKED by explicit deny rule. To allow: {suggested}"
         ));
+    } else {
+        lines.push(format!("BLOCKED by default deny. To allow: {suggested}"));
     }
 
-    lines.push(String::new());
-    lines.push("Agent instructions:".into());
-    lines.push(format!(
-        "- Tell the user this was blocked by clash and suggest: {suggested}"
-    ));
-    lines.push("- Do NOT retry the same tool call".into());
-    lines.push("- Do NOT attempt workarounds (e.g., curl instead of WebFetch)".into());
-    if denial_count <= 2 && !is_explicit_deny {
-        lines.push("- The user may be new to clash — be brief and reassuring".into());
-    }
+    lines.push("Do NOT retry this tool call — it will be blocked again.".into());
 
     lines.join("\n")
 }
@@ -699,18 +702,30 @@ mod tests {
     // --- suggest/deny tests ---
 
     #[test]
-    fn test_suggest_allow_command_edit() {
-        assert_eq!(suggest_allow_command("edit"), "clash allow edit");
+    fn test_suggest_allow_specific_bash_command() {
+        let input = json!({"command": "git status"});
+        assert_eq!(
+            suggest_allow_command_specific("Bash", &input),
+            "clash policy allow \"git status\""
+        );
     }
 
     #[test]
-    fn test_suggest_allow_command_bash() {
-        assert_eq!(suggest_allow_command("bash"), "clash allow bash");
+    fn test_suggest_allow_specific_bash_single_binary() {
+        let input = json!({"command": "ls"});
+        assert_eq!(
+            suggest_allow_command_specific("Bash", &input),
+            "clash policy allow \"ls\""
+        );
     }
 
     #[test]
-    fn test_suggest_allow_command_web() {
-        assert_eq!(suggest_allow_command("web"), "clash allow web");
+    fn test_suggest_allow_specific_tool() {
+        let input = json!({"file_path": "/tmp/test.txt"});
+        assert_eq!(
+            suggest_allow_command_specific("Read", &input),
+            "clash policy allow --tool Read"
+        );
     }
 
     #[test]
@@ -727,11 +742,12 @@ mod tests {
     }
 
     #[test]
-    fn test_build_deny_context_contains_tool_name() {
-        let ctx = build_deny_context("Bash", "bash", "ls -la", None, 1);
-        assert!(ctx.contains("Bash"));
-        assert!(ctx.contains("BLOCKED:"));
-        assert!(ctx.contains("Agent instructions"));
+    fn test_build_deny_context_contains_allow_command() {
+        let input = json!({"command": "ls -la"});
+        let ctx = build_deny_context("Bash", None, &input);
+        assert!(ctx.contains("BLOCKED"));
+        assert!(ctx.contains("clash policy allow \"ls -la\""));
+        assert!(ctx.contains("Do NOT retry"));
     }
 
     #[test]
@@ -749,7 +765,7 @@ mod tests {
             Some(claude_settings::PermissionRule::Deny),
         );
         let ctx = get_additional_context(&result).expect("deny should have additional_context");
-        assert!(ctx.contains("BLOCKED:"), "got: {ctx}");
+        assert!(ctx.contains("BLOCKED"), "got: {ctx}");
         Ok(())
     }
 }

@@ -104,21 +104,56 @@ impl std::str::FromStr for PolicyLevel {
     }
 }
 
-/// Default policy source embedded at compile time.
-pub const DEFAULT_POLICY: &str = include_str!("default_policy.star");
+/// Default policy source template embedded at compile time.
+/// Contains `{preset}` placeholders for the sandbox preset name.
+pub const DEFAULT_POLICY_TEMPLATE: &str = include_str!("default_policy.star");
 
-/// Compile the embedded default policy Starlark source to JSON.
+/// Available sandbox presets for `clash init`.
+pub const SANDBOX_PRESETS: &[SandboxPreset] = &[
+    SandboxPreset {
+        name: "dev",
+        description: "Build tools, git — read+write project, read home, no network",
+    },
+    SandboxPreset {
+        name: "dev_network",
+        description: "Package managers, gh — read+write project, full network",
+    },
+    SandboxPreset {
+        name: "read_only",
+        description: "Linters, analyzers — read project + home, no writes outside temp",
+    },
+    SandboxPreset {
+        name: "restricted",
+        description: "Untrusted scripts — read-only project, no network",
+    },
+    SandboxPreset {
+        name: "unrestricted",
+        description: "Fully trusted — all filesystem + network access",
+    },
+];
+
+/// A sandbox preset that can be selected during `clash init`.
+pub struct SandboxPreset {
+    pub name: &'static str,
+    pub description: &'static str,
+}
+
+/// Compile the default policy with the given sandbox preset to JSON.
 ///
-/// Used by `ensure_policy_at` and `init` to write a pre-compiled `policy.json`
-/// instead of the raw `.star` source.
+/// Substitutes `{preset}` in the template with the chosen preset name,
+/// then evaluates the Starlark source and returns pretty-printed JSON.
+pub fn compile_default_policy_to_json_with_preset(preset: &str) -> Result<String> {
+    let source = DEFAULT_POLICY_TEMPLATE.replace("{preset}", preset);
+    let output = clash_starlark::evaluate(&source, "<default_policy>", std::path::Path::new("."))
+        .with_context(|| format!("failed to compile default policy with preset '{preset}'"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&output.json).context("default policy produced invalid JSON")?;
+    serde_json::to_string_pretty(&value).context("failed to pretty-print default policy JSON")
+}
+
+/// Compile the default policy with the `dev` preset (used for auto-creation).
 pub fn compile_default_policy_to_json() -> Result<String> {
-    let output = clash_starlark::evaluate(DEFAULT_POLICY, "<default_policy>", std::path::Path::new("."))
-        .context("failed to compile default policy")?;
-    // Pretty-print the JSON for readability.
-    let value: serde_json::Value = serde_json::from_str(&output.json)
-        .context("default policy produced invalid JSON")?;
-    serde_json::to_string_pretty(&value)
-        .context("failed to pretty-print default policy JSON")
+    compile_default_policy_to_json_with_preset("dev")
 }
 
 /// Session-level context from Claude Code hook input.
@@ -382,10 +417,11 @@ impl ClashSettings {
             }
         }
 
-        let json = compile_default_policy_to_json()
-            .context("failed to compile default policy to JSON")?;
-        std::fs::write(&json_path, &json)
-            .with_context(|| format!("failed to write default policy to {}", json_path.display()))?;
+        let json =
+            compile_default_policy_to_json().context("failed to compile default policy to JSON")?;
+        std::fs::write(&json_path, &json).with_context(|| {
+            format!("failed to write default policy to {}", json_path.display())
+        })?;
 
         // Restrict file permissions on unix (owner-only read/write).
         #[cfg(unix)]
@@ -677,13 +713,41 @@ mod test {
 
     #[test]
     fn default_policy_compiles() -> anyhow::Result<()> {
+        let source = DEFAULT_POLICY_TEMPLATE.replace("{preset}", "dev");
         let output = clash_starlark::evaluate(
-            DEFAULT_POLICY,
+            &source,
             "default_policy.star",
             std::path::Path::new("."),
         )?;
         let tree = crate::policy::compile::compile_to_tree(&output.json)?;
         let _ = tree;
+        Ok(())
+    }
+
+    #[test]
+    fn default_policy_compiles_all_presets() -> anyhow::Result<()> {
+        for preset in SANDBOX_PRESETS {
+            compile_default_policy_to_json_with_preset(preset.name)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn default_policy_cwd_sandbox_uses_subpath() -> anyhow::Result<()> {
+        let json_str = compile_default_policy_to_json_with_preset("dev")?;
+        let policy: serde_json::Value = serde_json::from_str(&json_str)?;
+        let cwd_sandbox = &policy["sandboxes"]["cwd"];
+        let rules = cwd_sandbox["rules"].as_array().unwrap();
+        // The $PWD rule should be subpath (from .recurse()), not literal.
+        let pwd_rule = rules
+            .iter()
+            .find(|r| r["path"].as_str() == Some("$PWD"))
+            .expect("should have a $PWD rule");
+        assert_eq!(
+            pwd_rule["path_match"].as_str(),
+            Some("subpath"),
+            "cwd() with .recurse() should produce subpath match, got: {pwd_rule}"
+        );
         Ok(())
     }
 
@@ -811,9 +875,12 @@ mod test {
         assert!(json_path.exists(), "policy.json should exist on disk");
 
         let contents = std::fs::read_to_string(&json_path).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&contents)
-            .expect("written file should be valid JSON");
-        assert!(parsed.get("tree").is_some(), "JSON should contain a tree field");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&contents).expect("written file should be valid JSON");
+        assert!(
+            parsed.get("tree").is_some(),
+            "JSON should contain a tree field"
+        );
     }
 
     #[test]
@@ -844,11 +911,7 @@ mod test {
         let json_path = dir.path().join(".clash").join("policy.json");
 
         ClashSettings::ensure_policy_at(star_path).unwrap();
-        let mode = std::fs::metadata(&json_path)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
+        let mode = std::fs::metadata(&json_path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "policy file should be owner-only read/write");
     }
 
