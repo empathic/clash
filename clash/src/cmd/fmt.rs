@@ -6,6 +6,7 @@ use tracing::{Level, debug, instrument};
 
 use crate::settings::ClashSettings;
 use crate::style;
+use crate::ui;
 
 /// Handle `clash fmt`.
 #[instrument(level = Level::TRACE)]
@@ -65,7 +66,7 @@ pub fn run(check: bool, files: Vec<PathBuf>) -> Result<()> {
 
     if !check {
         for target in &targets {
-            println!("{} {}", style::green_bold("✓"), target.display());
+            ui::success(&target.display().to_string());
         }
     }
     Ok(())

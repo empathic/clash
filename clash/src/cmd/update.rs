@@ -3,7 +3,9 @@ use sha2::{Digest, Sha256};
 use std::io::Read;
 use tracing::{Level, debug, instrument};
 
+use crate::dialog;
 use crate::style;
+use crate::ui;
 
 const GITHUB_REPO: &str = "empathic/clash";
 
@@ -28,11 +30,7 @@ pub fn run(check: bool, yes: bool, version: Option<String>) -> Result<()> {
         .with_context(|| format!("failed to parse release version '{}'", release_version))?;
 
     if current >= latest && version.is_none() {
-        println!(
-            "{} clash is up to date (v{})",
-            style::green_bold("✓"),
-            current_version,
-        );
+        ui::success(&format!("clash is up to date (v{})", current_version));
         return Ok(());
     }
 
@@ -87,12 +85,7 @@ pub fn run(check: bool, yes: bool, version: Option<String>) -> Result<()> {
             "Update available: v{} → v{}",
             current_version, release_version,
         );
-        let confirmed = dialoguer::Confirm::new()
-            .with_prompt("Install update?")
-            .default(true)
-            .interact()
-            .context("failed to read confirmation")?;
-        if !confirmed {
+        if !dialog::confirm("Install update?", false)? {
             println!("Update cancelled.");
             return Ok(());
         }
@@ -107,10 +100,7 @@ pub fn run(check: bool, yes: bool, version: Option<String>) -> Result<()> {
         verify_checksum(&tarball, &expected)?;
         debug!("checksum verified");
     } else {
-        eprintln!(
-            "{} No checksum available for this release — skipping integrity verification",
-            style::yellow("warning:"),
-        );
+        ui::warn("No checksum available for this release — skipping integrity verification");
     }
 
     let binary = extract_binary(&tarball).context("failed to extract clash binary from archive")?;
@@ -121,12 +111,10 @@ pub fn run(check: bool, yes: bool, version: Option<String>) -> Result<()> {
 
     replace_binary(&current_exe, &binary).context("failed to replace binary")?;
 
-    println!(
-        "{} Updated clash v{} → v{}",
-        style::green_bold("✓"),
-        current_version,
-        release_version,
-    );
+    ui::success(&format!(
+        "Updated clash v{} → v{}",
+        current_version, release_version,
+    ));
     Ok(())
 }
 

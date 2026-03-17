@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use tracing::{Level, error, info, instrument, warn};
 
+use crate::dialog;
 use crate::settings::{ClashSettings, SANDBOX_PRESETS, compile_default_policy_to_json_with_preset};
-use crate::style;
+use crate::ui;
 
 /// GitHub repository used to install the clash plugin marketplace.
 const GITHUB_MARKETPLACE: &str = "empathic/clash";
@@ -31,33 +32,21 @@ pub fn run(no_bypass: Option<bool>, scope: Option<String>) -> Result<()> {
 }
 
 /// Interactively ask which scope to initialize.
-///
-/// Presents a clear description of each option so new users understand the
-/// difference between user-level and project-level policies.
 fn prompt_scope() -> Result<&'static str> {
     let items = &[
-        format!(
-            "{}  {} {}",
-            style::bold("User"),
-            style::dim("(global)"),
-            style::dim("— default policy for all your projects (~/.clash/)"),
+        (
+            "User",
+            "(global) — default policy for all your projects (~/.clash/)",
         ),
-        format!(
-            "{}  {} {}",
-            style::bold("Project"),
-            style::dim("(this repo)"),
-            style::dim("— policy scoped to the current repository (.clash/)"),
+        (
+            "Project",
+            "(this repo) — policy scoped to the current repository (.clash/)",
         ),
     ];
 
-    let sel = dialoguer::Select::new()
-        .with_prompt("Initialize clash at which scope?")
-        .items(items)
-        .default(0)
-        .interact()
-        .context("failed to read scope selection (hint: pass 'user' or 'project' as an argument in non-interactive mode)")?;
-
-    match sel {
+    match dialog::select("Initialize clash at which scope?", items)
+        .context("failed to read scope selection (hint: pass 'user' or 'project' as an argument in non-interactive mode)")?
+    {
         0 => Ok("user"),
         1 => Ok("project"),
         _ => unreachable!(),
@@ -65,26 +54,13 @@ fn prompt_scope() -> Result<&'static str> {
 }
 
 /// Interactively ask which sandbox preset to use for Bash commands.
-///
-/// Sandbox presets control what filesystem and network access commands get
-/// inside the sandbox. The choice determines the default trust level.
 fn prompt_preset() -> Result<&'static str> {
-    let items: Vec<String> = SANDBOX_PRESETS
+    let items: Vec<(&str, &str)> = SANDBOX_PRESETS
         .iter()
-        .map(|p| {
-            format!(
-                "{}  {}",
-                style::bold(p.name),
-                style::dim(&format!("— {}", p.description)),
-            )
-        })
+        .map(|p| (p.name, p.description))
         .collect();
 
-    let sel = dialoguer::Select::new()
-        .with_prompt("Default sandbox for Bash commands")
-        .items(&items)
-        .default(0)
-        .interact()
+    let sel = dialog::select("Default sandbox for Bash commands", &items)
         .context("failed to read preset selection")?;
 
     Ok(SANDBOX_PRESETS[sel].name)
@@ -93,8 +69,6 @@ fn prompt_preset() -> Result<&'static str> {
 /// Initialize or reconfigure the user-level policy at `~/.clash/policy.star`.
 fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     // Always ensure settings.json records clash as an enabled plugin.
-    // The `claude plugin install` command updates Claude Code's internal registry
-    // but does not write to the settings JSON that `clash doctor` inspects.
     let claude = claude_settings::ClaudeSettings::new();
     if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true) {
         warn!(error = %e, "Could not set enabledPlugins in Claude Code settings");
@@ -106,13 +80,14 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     let policy_path = existing_path.with_extension("json");
 
     if existing_path.exists() && existing_path.is_dir() {
-        if dialoguer::Confirm::new()
-            .with_prompt(format!(
+        if dialog::confirm(
+            &format!(
                 "{} is a directory. Remove it and continue onboarding?",
                 existing_path.to_string_lossy(),
-            ))
-            .interact()
-            .context("confirm removal of dir at policy path")?
+            ),
+            false,
+        )
+        .context("confirm removal of dir at policy path")?
         {
             std::fs::remove_dir_all(&existing_path)?;
         } else {
@@ -125,13 +100,14 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
 
     // Check if any policy file already exists (.json or .star).
     if existing_path.exists()
-        && !dialoguer::Confirm::new()
-            .with_prompt(format!(
+        && !dialog::confirm(
+            &format!(
                 "A policy already exists at {}. Reconfigure existing policy?",
                 existing_path.to_string_lossy()
-            ))
-            .interact()
-            .unwrap_or_default()
+            ),
+            false,
+        )
+        .unwrap_or_default()
     {
         return Ok(());
     }
@@ -150,13 +126,12 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
         Ok(()) => true,
         Err(e) => {
             error!(error = %e, "Could not install clash plugin");
-            eprintln!(
-                "{} Could not install the clash plugin: {e}\n  \
+            ui::warn(&format!(
+                "Could not install the clash plugin: {e}\n  \
                  You can install it manually later:\n    \
                  claude plugin marketplace add {GITHUB_MARKETPLACE}\n    \
-                 claude plugin install clash",
-                style::yellow("!"),
-            );
+                 claude plugin install clash"
+            ));
             false
         }
     };
@@ -164,13 +139,12 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     if plugin_installed {
         // Plugin is installed, so bypassPermissions is safe.
         let skip_bypass = no_bypass.unwrap_or_else(|| {
-            !dialoguer::Confirm::new()
-                .with_prompt(
-                    "Use clash as your default permissions provider in Claude Code? \
-                     (This sets bypassPermissions so clash handles all permission decisions)",
-                )
-                .interact()
-                .unwrap_or(true)
+            !dialog::confirm(
+                "Use clash as your default permissions provider in Claude Code? \
+                 (This sets bypassPermissions so clash handles all permission decisions)",
+                false,
+            )
+            .unwrap_or(true)
         });
 
         if !skip_bypass && let Err(e) = set_bypass_permissions() {
@@ -181,10 +155,7 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
             );
         }
     } else {
-        eprintln!(
-            "{} Skipping bypassPermissions — the clash plugin must be installed first.",
-            style::dim("·"),
-        );
+        ui::skip("Skipping bypassPermissions — the clash plugin must be installed first.");
     }
 
     // Install the status line so the user gets ambient policy visibility.
@@ -192,11 +163,7 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
         warn!(error = %e, "Could not install status line");
     }
 
-    println!(
-        "{} Clash initialized at {}\n",
-        style::green_bold("✓"),
-        policy_path.display()
-    );
+    ui::success(&format!("Clash initialized at {}\n", policy_path.display()));
 
     Ok(())
 }
@@ -210,11 +177,10 @@ fn run_init_project() -> Result<()> {
     let policy_path = clash_dir.join("policy.star");
 
     if policy_path.exists() {
-        println!(
-            "{} Project policy already exists at {}",
-            style::dim("·"),
+        ui::skip(&format!(
+            "Project policy already exists at {}",
             policy_path.display()
-        );
+        ));
         return Ok(());
     }
 
@@ -225,41 +191,29 @@ fn run_init_project() -> Result<()> {
     std::fs::write(&policy_path, project_policy)
         .with_context(|| format!("failed to write {}", policy_path.display()))?;
 
-    println!(
-        "{} Project policy initialized at {}",
-        style::green_bold("✓"),
+    ui::success(&format!(
+        "Project policy initialized at {}",
         policy_path.display()
-    );
+    ));
     Ok(())
 }
 
 /// Configure Claude Code to let Clash handle all permission decisions.
-///
-/// Sets both `bypassPermissions: true` (legacy) and
-/// `permissions.defaultMode: "bypassPermissions"` in user-level settings
-/// so Clash becomes the sole permission handler, avoiding double-prompting.
 fn set_bypass_permissions() -> Result<()> {
     let claude = claude_settings::ClaudeSettings::new();
     claude.set_bypass_permissions(claude_settings::SettingsLevel::User, true)?;
     claude
         .set_default_permission_mode(claude_settings::SettingsLevel::User, "bypassPermissions")?;
-    println!(
-        "{} Configured Claude Code to use clash as the sole permission handler.",
-        style::green_bold("✓")
-    );
+    ui::success("Configured Claude Code to use clash as the sole permission handler.");
     Ok(())
 }
 
 /// Install the clash plugin into Claude Code from the GitHub marketplace.
-///
-/// Registers the `empathic/clash` GitHub repo as a marketplace, then installs
-/// the `clash` plugin from it. Idempotent — safe to run if already installed.
 fn install_plugin() -> Result<()> {
-    println!(
-        "{} Installing clash plugin from {}...",
-        style::cyan("~"),
+    ui::progress(&format!(
+        "Installing clash plugin from {}...",
         GITHUB_MARKETPLACE,
-    );
+    ));
 
     // Register the marketplace.
     let add_output = std::process::Command::new("claude")
@@ -291,9 +245,6 @@ fn install_plugin() -> Result<()> {
         info!("plugin already installed");
     }
 
-    println!(
-        "{} Clash plugin installed in Claude Code.",
-        style::green_bold("✓"),
-    );
+    ui::success("Clash plugin installed in Claude Code.");
     Ok(())
 }

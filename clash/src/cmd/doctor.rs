@@ -4,6 +4,7 @@ use tracing::{Level, instrument};
 use crate::sandbox;
 use crate::settings::ClashSettings;
 use crate::style;
+use crate::ui;
 
 /// Outcome of a single diagnostic check.
 enum CheckResult {
@@ -57,11 +58,7 @@ impl CheckResult {
 /// Run all diagnostic checks and report results.
 #[instrument(level = Level::TRACE)]
 pub fn run() -> Result<()> {
-    println!("{}", style::banner());
-    println!();
-    println!("{}", style::header("Doctor"));
-    println!("{}", style::dim("──────"));
-    println!();
+    ui::banner_section("Doctor");
 
     let checks = vec![
         ("Disabled", check_disabled()),
