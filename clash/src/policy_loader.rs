@@ -154,9 +154,8 @@ pub fn resolve_includes(
                 Ok(included) => {
                     // Stamp source provenance on root-level condition nodes
                     for mut node in included.tree {
-                        if let crate::policy::match_tree::Node::Condition {
-                            ref mut source, ..
-                        } = node
+                        if let crate::policy::match_tree::Node::Condition { ref mut source, .. } =
+                            node
                             && source.is_none()
                         {
                             *source = Some(include.path.clone());

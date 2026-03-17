@@ -229,7 +229,11 @@ fn print_sandbox_table(
         .iter()
         .map(|n| lpad(&style::dim(&sandboxes[*n].default.short()), col_w))
         .collect();
-    println!("  {} {}", rpad(&style::dim("default"), path_w), def.join(" "));
+    println!(
+        "  {} {}",
+        rpad(&style::dim("default"), path_w),
+        def.join(" ")
+    );
 
     // Network row.
     let net: Vec<String> = names
@@ -261,7 +265,11 @@ fn print_sandbox_table(
                 lpad(&cell, col_w)
             })
             .collect();
-        println!("  {} {}", rpad(&style::dim(domain), path_w), cells.join(" "));
+        println!(
+            "  {} {}",
+            rpad(&style::dim(domain), path_w),
+            cells.join(" ")
+        );
     }
 
     // Path rows.

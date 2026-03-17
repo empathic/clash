@@ -644,10 +644,7 @@ pub fn is_known(name: &str) -> bool {
 /// Auto-approving these would skip the interaction, so non-deny
 /// decisions are converted to passthrough.
 pub fn is_interactive(name: &str) -> bool {
-    matches!(
-        name,
-        "AskUserQuestion" | "EnterPlanMode" | "ExitPlanMode"
-    )
+    matches!(name, "AskUserQuestion" | "EnterPlanMode" | "ExitPlanMode")
 }
 
 // ---------------------------------------------------------------------------

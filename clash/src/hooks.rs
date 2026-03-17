@@ -135,9 +135,7 @@ impl ToolUseHookInput {
 
 // Typed tool input structs live in crate::claude::tools.
 // Re-export for backwards compatibility.
-pub use crate::claude::tools::{
-    BashInput, EditInput, ReadInput, ToolInput, WriteInput,
-};
+pub use crate::claude::tools::{BashInput, EditInput, ReadInput, ToolInput, WriteInput};
 
 /// Hook-specific output for PreToolUse
 #[derive(Debug, Clone, Serialize, PartialEq)]
