@@ -20,12 +20,8 @@ fn main() -> Result<()> {
             Commands::Status { json } => cmd::status::run(json, cli.verbose),
             Commands::ShowCommands { json, all } => cmd::commands::run(json, all),
             Commands::Explain { json, tool, args } => {
-                let input = if args.is_empty() {
-                    None
-                } else {
-                    Some(args.join(" "))
-                };
-                cmd::explain::run(json, Some(tool), input)
+                let input = args.join(" ");
+                cmd::explain::run(json, tool, input)
             }
             Commands::Fmt { check, files } => cmd::fmt::run(check, files),
             Commands::Policy(policy_cmd) => cmd::policy::run(policy_cmd),

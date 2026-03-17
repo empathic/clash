@@ -94,19 +94,34 @@ impl App {
 
         // Resolve includes to show their rules/sandboxes as read-only
         let base_dir = path.parent().unwrap_or(std::path::Path::new("."));
-        let included = policy_loader::resolve_includes(&manifest, base_dir).unwrap_or_else(|_| {
-            CompiledPolicy {
-                sandboxes: std::collections::HashMap::new(),
-                tree: vec![],
-                default_effect: manifest.policy.default_effect,
-                default_sandbox: None,
-            }
-        });
+        let (included, include_warnings) =
+            match policy_loader::resolve_includes(&manifest, base_dir) {
+                Ok((cp, warnings)) => (cp, warnings),
+                Err(e) => (
+                    CompiledPolicy {
+                        sandboxes: std::collections::HashMap::new(),
+                        tree: vec![],
+                        default_effect: manifest.policy.default_effect,
+                        default_sandbox: None,
+                    },
+                    vec![format!("{e}")],
+                ),
+            };
 
         let tree_view = TreeView::new(&manifest, &included);
         let sandbox_view = SandboxView::new(&manifest, &included);
         let includes_view = IncludesView::new();
         let settings_view = SettingsView::new();
+
+        // Surface include errors loudly
+        let flash = if !include_warnings.is_empty() {
+            Some((
+                format!("Include errors: {}", include_warnings.join("; ")),
+                Instant::now(),
+            ))
+        } else {
+            None
+        };
 
         Ok(App {
             manifest,
@@ -120,7 +135,7 @@ impl App {
             settings_view,
             mode: Mode::Normal,
             dirty: false,
-            flash: None,
+            flash,
         })
     }
 

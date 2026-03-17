@@ -127,12 +127,16 @@ pub fn read_manifest(path: &Path) -> Result<PolicyManifest> {
     serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
 }
 
-/// Resolve includes and return the combined included policy.
+/// Resolve includes and return the combined included policy plus any warnings.
 ///
 /// Evaluates each include entry and merges their rules and sandboxes.
-/// Returns the merged included content (without the inline policy).
+/// Returns the merged included content (without the inline policy) and a list
+/// of warnings for includes that failed to evaluate or parse.
 /// Rules/sandboxes from includes should be treated as read-only in the TUI.
-pub fn resolve_includes(manifest: &PolicyManifest, base_dir: &Path) -> Result<CompiledPolicy> {
+pub fn resolve_includes(
+    manifest: &PolicyManifest,
+    base_dir: &Path,
+) -> Result<(CompiledPolicy, Vec<String>)> {
     use std::collections::HashMap;
 
     let mut merged = CompiledPolicy {
@@ -142,14 +146,17 @@ pub fn resolve_includes(manifest: &PolicyManifest, base_dir: &Path) -> Result<Co
         default_sandbox: None,
     };
 
+    let mut warnings = Vec::new();
+
     for include in &manifest.includes {
         match evaluate_include(&include.path, base_dir) {
-            Ok(json_source) => {
-                if let Ok(included) = serde_json::from_str::<CompiledPolicy>(&json_source) {
+            Ok(json_source) => match serde_json::from_str::<CompiledPolicy>(&json_source) {
+                Ok(included) => {
                     // Stamp source provenance on root-level condition nodes
                     for mut node in included.tree {
-                        if let crate::policy::match_tree::Node::Condition { ref mut source, .. } =
-                            node
+                        if let crate::policy::match_tree::Node::Condition {
+                            ref mut source, ..
+                        } = node
                             && source.is_none()
                         {
                             *source = Some(include.path.clone());
@@ -160,15 +167,21 @@ pub fn resolve_includes(manifest: &PolicyManifest, base_dir: &Path) -> Result<Co
                         merged.sandboxes.entry(k).or_insert(v);
                     }
                 }
-            }
-            Err(_) => {
-                // Silently skip failed includes — the TUI will show the include
-                // entry itself, and validation will catch errors on save.
+                Err(e) => {
+                    warnings.push(format!("{}: parse error: {e}", include.path));
+                }
+            },
+            Err(e) => {
+                warnings.push(format!("{}: {e:#}", include.path));
             }
         }
     }
 
-    Ok(merged)
+    if !warnings.is_empty() {
+        tracing::warn!("include resolution warnings: {}", warnings.join("; "));
+    }
+
+    Ok((merged, warnings))
 }
 
 /// Write a [`PolicyManifest`] to disk as pretty-printed JSON.

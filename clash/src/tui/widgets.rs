@@ -106,7 +106,7 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect) {
         )),
         Line::from(""),
         Line::from(vec![
-            Span::styled("1-4    ", Style::default().fg(Color::Yellow)),
+            Span::styled("1-5    ", Style::default().fg(Color::Yellow)),
             Span::raw("Switch tabs"),
         ]),
         Line::from(vec![

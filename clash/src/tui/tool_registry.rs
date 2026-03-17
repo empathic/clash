@@ -1,10 +1,12 @@
-//! Well-known Claude Code tool metadata for the TUI policy editor.
+//! TUI-specific tool metadata for the policy editor.
 //!
-//! Provides contextual hints, effect filtering, and observable relevance
-//! based on the tool being configured. Unknown/MCP tools get permissive
-//! defaults (all effects allowed, all observables relevant).
+//! Provides effect filtering and observable relevance on top of the canonical
+//! tool definitions in [`crate::claude::tools`]. Unknown/MCP tools get
+//! permissive defaults (all effects allowed, all observables relevant).
 
-/// Which effects are valid for a tool.
+use crate::claude::tools as ct;
+
+/// Which effects are valid for a tool in policy rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectOption {
     Allow,
@@ -27,149 +29,92 @@ pub enum ObservableTag {
     NetDomain,
 }
 
-/// Metadata for a well-known Claude Code tool.
-pub struct ToolInfo {
-    /// Tool name as Claude sees it, e.g. "Bash", "Read".
-    pub name: &'static str,
+/// TUI-layer metadata that extends a [`ct::ToolDef`] with effect and
+/// observable constraints specific to the policy editor.
+pub struct ToolTuiInfo {
+    /// Reference to the canonical tool definition.
+    pub def: &'static ct::ToolDef,
     /// Which effects are valid for rules targeting this tool.
     pub allowed_effects: &'static [EffectOption],
     /// Which observables are useful when adding child conditions.
     pub relevant_observables: &'static [ObservableTag],
-    /// Hint shown when this tool is the target of a rule.
-    pub description: &'static str,
-    /// Named arguments this tool accepts, for autocomplete/hints.
-    pub args: &'static [(&'static str, &'static str)], // (name, description)
 }
 
 const ALL_EFFECTS: &[EffectOption] = &[EffectOption::Allow, EffectOption::Deny, EffectOption::Ask];
 const NO_ASK: &[EffectOption] = &[EffectOption::Allow, EffectOption::Deny];
 
-/// The registry of well-known Claude Code tools.
-pub const TOOLS: &[ToolInfo] = &[
-    ToolInfo {
-        name: "Bash",
+/// TUI metadata for well-known Claude Code tools.
+///
+/// Tool names, descriptions, and parameter lists come from
+/// [`crate::claude::tools`]; this table only adds the TUI-specific
+/// effect and observable constraints.
+pub const TOOLS: &[ToolTuiInfo] = &[
+    ToolTuiInfo {
+        def: &ct::BASH,
         allowed_effects: NO_ASK,
         relevant_observables: &[
             ObservableTag::PositionalArg,
             ObservableTag::HasArg,
             ObservableTag::NamedArg,
         ],
-        description: "Execute shell commands",
-        args: &[
-            ("command", "The shell command to run"),
-            ("description", "What the command does"),
-            ("timeout", "Timeout in milliseconds"),
-        ],
     },
-    ToolInfo {
-        name: "Read",
+    ToolTuiInfo {
+        def: &ct::READ,
         allowed_effects: ALL_EFFECTS,
         relevant_observables: &[ObservableTag::FsPath, ObservableTag::FsOp],
-        description: "Read files from the filesystem",
-        args: &[
-            ("file_path", "Absolute path to the file"),
-            ("offset", "Line number to start reading from"),
-            ("limit", "Number of lines to read"),
-        ],
     },
-    ToolInfo {
-        name: "Write",
+    ToolTuiInfo {
+        def: &ct::WRITE,
         allowed_effects: ALL_EFFECTS,
         relevant_observables: &[ObservableTag::FsPath, ObservableTag::FsOp],
-        description: "Write/create files on the filesystem",
-        args: &[
-            ("file_path", "Absolute path to the file"),
-            ("content", "Content to write"),
-        ],
     },
-    ToolInfo {
-        name: "Edit",
+    ToolTuiInfo {
+        def: &ct::EDIT,
         allowed_effects: ALL_EFFECTS,
         relevant_observables: &[ObservableTag::FsPath, ObservableTag::FsOp],
-        description: "Edit files with string replacements",
-        args: &[
-            ("file_path", "Absolute path to the file"),
-            ("old_string", "Text to find"),
-            ("new_string", "Replacement text"),
-        ],
     },
-    ToolInfo {
-        name: "MultiEdit",
+    ToolTuiInfo {
+        def: &ct::MULTI_EDIT,
         allowed_effects: ALL_EFFECTS,
         relevant_observables: &[ObservableTag::FsPath, ObservableTag::FsOp],
-        description: "Apply multiple edits to a file",
-        args: &[
-            ("file_path", "Absolute path to the file"),
-            ("edits", "Array of {old_string, new_string} edits"),
-        ],
     },
-    ToolInfo {
-        name: "Glob",
+    ToolTuiInfo {
+        def: &ct::GLOB,
         allowed_effects: ALL_EFFECTS,
         relevant_observables: &[ObservableTag::FsPath, ObservableTag::FsOp],
-        description: "Search for files by glob pattern",
-        args: &[
-            ("pattern", "Glob pattern, e.g. **/*.ts"),
-            ("path", "Directory to search in"),
-        ],
     },
-    ToolInfo {
-        name: "Grep",
+    ToolTuiInfo {
+        def: &ct::GREP,
         allowed_effects: ALL_EFFECTS,
         relevant_observables: &[ObservableTag::FsPath, ObservableTag::FsOp],
-        description: "Search file contents by regex",
-        args: &[
-            ("pattern", "Regex to search for"),
-            ("path", "File or directory to search"),
-        ],
     },
-    ToolInfo {
-        name: "WebFetch",
+    ToolTuiInfo {
+        def: &ct::WEB_FETCH,
         allowed_effects: ALL_EFFECTS,
         relevant_observables: &[ObservableTag::NetDomain],
-        description: "Fetch content from a URL",
-        args: &[
-            ("url", "The URL to fetch"),
-            ("prompt", "Prompt to run on fetched content"),
-        ],
     },
-    ToolInfo {
-        name: "WebSearch",
+    ToolTuiInfo {
+        def: &ct::WEB_SEARCH,
         allowed_effects: ALL_EFFECTS,
         relevant_observables: &[ObservableTag::NetDomain],
-        description: "Search the web",
-        args: &[
-            ("query", "Search query"),
-            ("allowed_domains", "Restrict to these domains"),
-            ("blocked_domains", "Exclude these domains"),
-        ],
     },
-    ToolInfo {
-        name: "Agent",
+    ToolTuiInfo {
+        def: &ct::AGENT,
         allowed_effects: ALL_EFFECTS,
         relevant_observables: &[ObservableTag::AgentName, ObservableTag::NamedArg],
-        description: "Spawn a sub-agent",
-        args: &[
-            ("description", "Short description of the task"),
-            ("prompt", "The task for the agent"),
-        ],
     },
-    ToolInfo {
-        name: "NotebookEdit",
+    ToolTuiInfo {
+        def: &ct::NOTEBOOK_EDIT,
         allowed_effects: ALL_EFFECTS,
         relevant_observables: &[ObservableTag::FsPath],
-        description: "Edit Jupyter notebook cells",
-        args: &[
-            ("notebook_path", "Path to the notebook"),
-            ("cell_number", "Cell index (0-based)"),
-            ("new_source", "New cell content"),
-        ],
     },
 ];
 
-/// Look up a tool by name (case-insensitive). Returns None for unknown/MCP tools.
-pub fn lookup(name: &str) -> Option<&'static ToolInfo> {
-    TOOLS.iter().find(|t| t.name.eq_ignore_ascii_case(name))
+/// Look up TUI info by tool name (case-insensitive). Returns `None` for unknown/MCP tools.
+pub fn lookup(name: &str) -> Option<&'static ToolTuiInfo> {
+    TOOLS
+        .iter()
+        .find(|t| t.def.name.eq_ignore_ascii_case(name))
 }
 
 /// Check whether an effect is allowed for a tool. Unknown tools allow all effects.
@@ -294,5 +239,17 @@ mod tests {
             ObservableTag::NetDomain
         ));
         assert!(!is_observable_relevant("WebSearch", ObservableTag::FsPath));
+    }
+
+    #[test]
+    fn tui_tools_reference_canonical_defs() {
+        // Verify TUI entries are backed by the canonical registry
+        for tui_info in TOOLS {
+            assert!(
+                ct::lookup(tui_info.def.name).is_some(),
+                "TUI tool {:?} not found in canonical registry",
+                tui_info.def.name
+            );
+        }
     }
 }
