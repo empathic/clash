@@ -305,6 +305,7 @@ fn paths_from_audit(
 
 /// A filesystem path that was blocked by the sandbox.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct BlockedPath {
     /// The actual file path from the error message.
     path: String,
@@ -435,44 +436,18 @@ fn suggest_parent_directory(path: &str) -> String {
 
 /// Build advisory context for Claude when a sandbox blocks filesystem access.
 fn build_fs_hint(blocked: &[BlockedPath]) -> String {
-    let mut lines = vec![
-        "SANDBOX_FS_HINT: This command failed with filesystem permission errors.".into(),
-        "The clash sandbox is blocking access to paths outside its allowed directories.".into(),
-        String::new(),
-        "Blocked paths:".into(),
-    ];
+    let mut lines =
+        vec!["SANDBOX_FS_HINT: Command failed — sandbox is blocking filesystem access.".into()];
 
-    for bp in blocked {
-        let caps_display = if bp.current_caps.is_empty() {
-            "none".to_string()
-        } else {
-            bp.current_caps.short()
-        };
-        lines.push(format!(
-            "  - {} (sandbox grants: {})",
-            bp.path, caps_display
-        ));
-    }
-
-    lines.push(String::new());
-    lines.push("How to fix — add filesystem access to the policy:".into());
-
+    // Generate specific `clash sandbox add-rule` commands for each blocked path.
     for bp in blocked {
         lines.push(format!(
-            "  path(\"{}\").allow(read=True, write=True, create=True)",
+            "To allow: clash sandbox add-rule --name <SANDBOX> --path \"{}\" --allow \"read + write + create\"",
             bp.suggested_dir
         ));
     }
 
-    lines.extend([
-        String::new(),
-        "Or use `/clash:edit` to modify the policy interactively.".into(),
-        String::new(),
-        "Agent instructions:".into(),
-        "- Tell the user the filesystem error is caused by the clash sandbox".into(),
-        "- Suggest adding the rules above to their sandbox or policy".into(),
-        "- Do NOT retry the command — it will fail again until the policy is updated".into(),
-    ]);
+    lines.push("Do NOT retry — it will fail again until the policy is updated.".into());
 
     lines.join("\n")
 }
@@ -666,10 +641,8 @@ mod tests {
         }];
         let hint = build_fs_hint(&blocked);
         assert!(hint.contains("SANDBOX_FS_HINT"));
-        assert!(hint.contains("/Users/user/.fly/perms.123"));
         assert!(hint.contains("/Users/user/.fly"));
-        assert!(hint.contains("r---x"));
-        assert!(hint.contains("/clash:edit"));
+        assert!(hint.contains("clash sandbox add-rule"));
         assert!(hint.contains("Do NOT retry"));
     }
 
@@ -681,7 +654,9 @@ mod tests {
             current_caps: Cap::empty(),
         }];
         let hint = build_fs_hint(&blocked);
-        assert!(hint.contains("none"));
+        assert!(hint.contains("SANDBOX_FS_HINT"));
+        assert!(hint.contains("/secret"));
+        assert!(hint.contains("clash sandbox add-rule"));
     }
 
     // --- paths_from_audit ---

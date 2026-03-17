@@ -135,24 +135,9 @@ fn contains_network_error(text: &str) -> bool {
 /// Build advisory context for Claude when a sandbox blocks network access.
 fn build_network_hint() -> String {
     [
-        "SANDBOX_NETWORK_HINT: This command failed with what appears to be a network error.",
-        "This is likely because the command ran inside a clash sandbox that blocks network access by default.",
-        "",
-        "How to fix:",
-        "- Add `net = allow` to the relevant sandbox() in the policy file",
-        "- Or run: `clash allow web` to broadly enable network access",
-        "- Use `/clash:edit` to help the user modify their policy interactively",
-        "",
-        "Example sandbox policy with network enabled:",
-        "  my_sandbox = sandbox(",
-        "    fs = [cwd().allow(read=True)],",
-        "    net = allow,",
-        "  )",
-        "",
-        "Agent instructions:",
-        "- Tell the user the network error is likely caused by the clash sandbox",
-        "- Suggest the fix above and offer to help edit the policy",
-        "- Do NOT retry the command — it will fail again until the policy is updated",
+        "SANDBOX_NETWORK_HINT: Command failed — sandbox is blocking network access.",
+        "To fix: add `net = allow` to the sandbox in the policy, or run `clash sandbox add-rule`.",
+        "Do NOT retry — it will fail again until the policy is updated.",
     ]
     .join("\n")
 }
@@ -235,8 +220,6 @@ mod tests {
         let hint = build_network_hint();
         assert!(hint.contains("SANDBOX_NETWORK_HINT"));
         assert!(hint.contains("net = allow"));
-        assert!(hint.contains("clash allow web"));
-        assert!(hint.contains("/clash:edit"));
         assert!(hint.contains("Do NOT retry"));
     }
 

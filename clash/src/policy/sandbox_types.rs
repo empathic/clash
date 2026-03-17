@@ -139,7 +139,11 @@ impl Cap {
         s.push(if self.contains(Cap::WRITE) { 'w' } else { '-' });
         s.push(if self.contains(Cap::CREATE) { 'c' } else { '-' });
         s.push(if self.contains(Cap::DELETE) { 'd' } else { '-' });
-        s.push(if self.contains(Cap::EXECUTE) { 'x' } else { '-' });
+        s.push(if self.contains(Cap::EXECUTE) {
+            'x'
+        } else {
+            '-'
+        });
         s
     }
 }
@@ -416,6 +420,64 @@ impl SandboxPolicy {
         }
 
         result
+    }
+
+    /// Explain why a path lacks the required capabilities.
+    ///
+    /// Returns the most specific deny rule that covers the required caps,
+    /// formatted like `"deny rwcdx in /Users (subpath)"`.
+    /// Returns `None` if the path has the required capabilities.
+    pub fn explain_denial(&self, path: &str, cwd: &str, required: Cap) -> Option<String> {
+        let effective = self.effective_caps(path, cwd);
+        if effective.contains(required) {
+            return None;
+        }
+
+        // Find the deepest (most specific) deny rule that matches this path
+        // and covers at least one of the required capabilities.
+        let mut best: Option<(&SandboxRule, String)> = None;
+        let mut best_depth: usize = 0;
+
+        for rule in &self.rules {
+            if rule.effect != RuleEffect::Deny {
+                continue;
+            }
+            // Does this deny cover any of the required caps?
+            if (rule.caps & required).is_empty() {
+                continue;
+            }
+            let rule_path = Self::resolve_path(&rule.path, cwd);
+            let matches = match rule.path_match {
+                PathMatch::Subpath => path.starts_with(&rule_path) || path == rule_path,
+                PathMatch::Literal => path == rule_path,
+                PathMatch::Regex => regex::Regex::new(&rule_path)
+                    .map(|re| re.is_match(path))
+                    .unwrap_or(false),
+            };
+            if matches {
+                let depth = rule_path.matches('/').count();
+                if best.is_none() || depth >= best_depth {
+                    best_depth = depth;
+                    best = Some((rule, rule_path));
+                }
+            }
+        }
+
+        if let Some((rule, resolved_path)) = best {
+            let match_type = match rule.path_match {
+                PathMatch::Subpath => "subpath",
+                PathMatch::Literal => "literal",
+                PathMatch::Regex => "regex",
+            };
+            Some(format!(
+                "deny {} in {} ({})",
+                rule.caps.short(),
+                resolved_path,
+                match_type,
+            ))
+        } else {
+            Some("no allow rule grants access to this path".to_string())
+        }
     }
 }
 

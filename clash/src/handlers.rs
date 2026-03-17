@@ -224,7 +224,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
         lines.push(format!(
             "Welcome to Clash! A default policy has been created at {}. \
              It starts with deny-all and allows reading files in your project. \
-             Use /clash:status to see what's allowed, or /clash:edit to customize.",
+             Run `clash status` to see what's allowed, or edit the policy file to customize.",
             path.display()
         ));
     }

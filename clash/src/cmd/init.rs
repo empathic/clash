@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use tracing::{Level, error, info, instrument, warn};
 
-use crate::settings::{ClashSettings, compile_default_policy_to_json};
+use crate::settings::{ClashSettings, SANDBOX_PRESETS, compile_default_policy_to_json_with_preset};
 use crate::style;
 
 /// GitHub repository used to install the clash plugin marketplace.
@@ -64,6 +64,32 @@ fn prompt_scope() -> Result<&'static str> {
     }
 }
 
+/// Interactively ask which sandbox preset to use for Bash commands.
+///
+/// Sandbox presets control what filesystem and network access commands get
+/// inside the sandbox. The choice determines the default trust level.
+fn prompt_preset() -> Result<&'static str> {
+    let items: Vec<String> = SANDBOX_PRESETS
+        .iter()
+        .map(|p| {
+            format!(
+                "{}  {}",
+                style::bold(p.name),
+                style::dim(&format!("— {}", p.description)),
+            )
+        })
+        .collect();
+
+    let sel = dialoguer::Select::new()
+        .with_prompt("Default sandbox for Bash commands")
+        .items(&items)
+        .default(0)
+        .interact()
+        .context("failed to read preset selection")?;
+
+    Ok(SANDBOX_PRESETS[sel].name)
+}
+
 /// Initialize or reconfigure the user-level policy at `~/.clash/policy.star`.
 fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     // Always ensure settings.json records clash as an enabled plugin.
@@ -110,9 +136,12 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
         return Ok(());
     }
 
+    // Ask which sandbox preset to use for Bash commands.
+    let preset = prompt_preset()?;
+
     // Fresh install — compile default policy to JSON and write it.
     std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
-    let json = compile_default_policy_to_json()
+    let json = compile_default_policy_to_json_with_preset(preset)
         .context("failed to compile default policy to JSON")?;
     std::fs::write(&policy_path, &json)?;
 
