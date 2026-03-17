@@ -11,7 +11,6 @@ use super::app::Tab;
 /// Render the tab bar at the top of the screen.
 pub fn render_tab_bar(frame: &mut Frame, area: Rect, active_tab: &Tab, dirty: bool) {
     let tabs = [
-        (Tab::Builder, "Builder"),
         (Tab::Tree, "Tree"),
         (Tab::Sandboxes, "Sandboxes"),
         (Tab::Includes, "Includes"),

@@ -15,12 +15,7 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
     match cmd {
         PolicyCmd::Schema { json } => super::schema::run(json),
         PolicyCmd::Explain { json, tool, args } => {
-            let input = if args.is_empty() {
-                None
-            } else {
-                Some(args.join(" "))
-            };
-            super::explain::run(json, tool, input)
+            super::explain::run(json, tool.unwrap_or_default(), args.join(" "))
         }
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Validate { file, json } => handle_validate(file, json),

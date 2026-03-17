@@ -9,11 +9,15 @@ use crate::policy::sandbox_types::SandboxPolicy;
 use crate::style;
 
 /// Format the "Input:" header block (tool + noun).
-pub fn format_tool_header(title: &str, tool_name: &str, noun: &str) -> Vec<String> {
+pub fn format_tool_header(
+    title: &str,
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> Vec<String> {
     vec![
         style::bold(title).to_string(),
         format!("  {}   {}", style::cyan("tool:"), tool_name),
-        format!("  {}   {}", style::cyan("noun:"), noun),
+        format!("  {}   {}", style::cyan("arguments:"), arguments),
     ]
 }
 

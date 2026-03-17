@@ -17,7 +17,6 @@ use similar::TextDiff;
 use crate::policy::match_tree::{CompiledPolicy, Node, PolicyManifest};
 use crate::policy_loader;
 
-use super::builder_view::{BuilderFocus, BuilderView};
 use super::includes_view::IncludesView;
 use super::inline_form::{FormEvent, FormState};
 use super::sandbox_view::SandboxView;
@@ -29,7 +28,6 @@ use super::widgets::{self, DiffLine};
 /// Which tab is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
-    Builder,
     Tree,
     Sandboxes,
     Includes,
@@ -68,7 +66,6 @@ pub enum Msg {
     ConfirmNo,
     DiffScrollDown,
     DiffScrollUp,
-    BuilderMsg(<BuilderView as Component>::Msg),
     TreeMsg(<TreeView as Component>::Msg),
     SandboxMsg(<SandboxView as Component>::Msg),
     IncludesMsg(<IncludesView as Component>::Msg),
@@ -82,7 +79,6 @@ pub struct App {
     original_json: String,
     path: PathBuf,
     active_tab: Tab,
-    builder_view: BuilderView,
     tree_view: TreeView,
     sandbox_view: SandboxView,
     includes_view: IncludesView,
@@ -112,13 +108,10 @@ impl App {
                 ),
             };
 
-        let mut builder_view = BuilderView::new();
         let tree_view = TreeView::new(&manifest, &included);
         let sandbox_view = SandboxView::new(&manifest, &included);
         let includes_view = IncludesView::new();
         let settings_view = SettingsView::new();
-
-        builder_view.re_evaluate(&manifest, &included);
 
         // Surface include errors loudly
         let flash = if !include_warnings.is_empty() {
@@ -135,8 +128,7 @@ impl App {
             included,
             original_json,
             path,
-            active_tab: Tab::Builder,
-            builder_view,
+            active_tab: Tab::Tree,
             tree_view,
             sandbox_view,
             includes_view,
@@ -153,16 +145,6 @@ impl App {
         terminal: &mut Terminal<B>,
     ) -> Result<()> {
         loop {
-            // Update tree highlight for builder tab
-            if self.active_tab == Tab::Builder {
-                let highlight = self
-                    .builder_view
-                    .current_match_path(self.manifest.policy.tree.len());
-                self.tree_view.set_highlight(highlight);
-            } else {
-                self.tree_view.set_highlight(None);
-            }
-
             // Clone manifest for view to avoid borrow issues
             let manifest_snapshot = self.manifest.clone();
             terminal.draw(|frame| self.view(frame, frame.area(), &manifest_snapshot))?;
@@ -173,55 +155,6 @@ impl App {
                 if matches!(self.mode, Mode::Form(_)) {
                     let FormHandled::Continue = self.handle_form_key(key);
                     continue;
-                }
-
-                // Builder tab: route keys based on which pane has focus
-                if self.active_tab == Tab::Builder && matches!(self.mode, Mode::Normal) {
-                    match self.builder_view.focus {
-                        BuilderFocus::Examples => {
-                            if self.builder_view.handle_key_direct(key) {
-                                self.builder_view
-                                    .re_evaluate(&self.manifest, &self.included);
-                                continue;
-                            }
-                            // Falls through to global handler + Component::handle_key
-                        }
-                        BuilderFocus::Tree => {
-                            // Tab or h switches back to examples pane
-                            if key.code == KeyCode::Tab
-                                || (key.code == KeyCode::Char('h')
-                                    && key.modifiers == KeyModifiers::NONE)
-                            {
-                                self.builder_view.focus = BuilderFocus::Examples;
-                                continue;
-                            }
-                            // Delegate to tree view (same as Tree tab)
-                            if let Some(msg) = self.tree_view.handle_key(key) {
-                                let action = self.tree_view.update(msg, &mut self.manifest);
-                                match action {
-                                    Action::Quit => break,
-                                    Action::Modified => {
-                                        self.dirty = true;
-                                        self.rebuild_views();
-                                    }
-                                    Action::RunForm(req) => {
-                                        let form = FormState::from_request(
-                                            &req,
-                                            &self.manifest,
-                                            Some(&self.included),
-                                        );
-                                        self.mode = Mode::Form(form);
-                                    }
-                                    Action::Flash(s) => {
-                                        self.flash = Some((s, Instant::now()));
-                                    }
-                                    Action::None => {}
-                                }
-                                continue;
-                            }
-                            // Fall through to global keys (q, s, ?, number keys)
-                        }
-                    }
                 }
 
                 if let Some(msg) = self.handle_key(key) {
@@ -344,11 +277,10 @@ impl App {
             KeyCode::Char('q') => return Some(Msg::Quit),
             KeyCode::Char('s') => return Some(Msg::Save),
             KeyCode::Char('?') => return Some(Msg::ToggleHelp),
-            KeyCode::Char('1') => return Some(Msg::SwitchTab(Tab::Builder)),
-            KeyCode::Char('2') => return Some(Msg::SwitchTab(Tab::Tree)),
-            KeyCode::Char('3') => return Some(Msg::SwitchTab(Tab::Sandboxes)),
-            KeyCode::Char('4') => return Some(Msg::SwitchTab(Tab::Includes)),
-            KeyCode::Char('5') => return Some(Msg::SwitchTab(Tab::Settings)),
+            KeyCode::Char('1') => return Some(Msg::SwitchTab(Tab::Tree)),
+            KeyCode::Char('2') => return Some(Msg::SwitchTab(Tab::Sandboxes)),
+            KeyCode::Char('3') => return Some(Msg::SwitchTab(Tab::Includes)),
+            KeyCode::Char('4') => return Some(Msg::SwitchTab(Tab::Settings)),
             KeyCode::Tab if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 return Some(Msg::PrevTab);
             }
@@ -359,7 +291,6 @@ impl App {
 
         // Delegate to active tab
         match self.active_tab {
-            Tab::Builder => self.builder_view.handle_key(key).map(Msg::BuilderMsg),
             Tab::Tree => self.tree_view.handle_key(key).map(Msg::TreeMsg),
             Tab::Sandboxes => self.sandbox_view.handle_key(key).map(Msg::SandboxMsg),
             Tab::Includes => self.includes_view.handle_key(key).map(Msg::IncludesMsg),
@@ -376,18 +307,16 @@ impl App {
             }
             Msg::NextTab => {
                 self.active_tab = match self.active_tab {
-                    Tab::Builder => Tab::Tree,
                     Tab::Tree => Tab::Sandboxes,
                     Tab::Sandboxes => Tab::Includes,
                     Tab::Includes => Tab::Settings,
-                    Tab::Settings => Tab::Builder,
+                    Tab::Settings => Tab::Tree,
                 };
                 Action::None
             }
             Msg::PrevTab => {
                 self.active_tab = match self.active_tab {
-                    Tab::Builder => Tab::Settings,
-                    Tab::Tree => Tab::Builder,
+                    Tab::Tree => Tab::Settings,
                     Tab::Sandboxes => Tab::Tree,
                     Tab::Includes => Tab::Sandboxes,
                     Tab::Settings => Tab::Includes,
@@ -477,7 +406,6 @@ impl App {
                 }
                 Action::None
             }
-            Msg::BuilderMsg(m) => self.builder_view.update(m, &mut self.manifest),
             Msg::TreeMsg(m) => self.tree_view.update(m, &mut self.manifest),
             Msg::SandboxMsg(m) => self.sandbox_view.update(m, &mut self.manifest),
             Msg::IncludesMsg(m) => self.includes_view.update(m, &mut self.manifest),
@@ -486,8 +414,6 @@ impl App {
     }
 
     fn rebuild_views(&mut self) {
-        self.builder_view
-            .re_evaluate(&self.manifest, &self.included);
         self.tree_view
             .rebuild_with_included(&self.manifest, &self.included);
         self.sandbox_view
@@ -530,15 +456,6 @@ impl App {
 
         // Content area — delegate to active tab
         match self.active_tab {
-            Tab::Builder => {
-                let builder_chunks = Layout::horizontal([
-                    Constraint::Percentage(55),
-                    Constraint::Percentage(45),
-                ])
-                .split(chunks[1]);
-                self.builder_view.view(frame, builder_chunks[0], manifest);
-                self.tree_view.view(frame, builder_chunks[1], manifest);
-            }
             Tab::Tree => self.tree_view.view(frame, chunks[1], manifest),
             Tab::Sandboxes => self.sandbox_view.view(frame, chunks[1], manifest),
             Tab::Includes => self.includes_view.view(frame, chunks[1], manifest),
@@ -555,22 +472,6 @@ impl App {
         });
 
         let hints: &[(&str, &str)] = match self.active_tab {
-            Tab::Builder => match self.builder_view.focus {
-                BuilderFocus::Examples => &[
-                    ("type", "add example"),
-                    ("Tab", "focus tree"),
-                    ("C-a", "apply fix"),
-                    ("Esc", "quit"),
-                ],
-                BuilderFocus::Tree => &[
-                    ("j/k", "move"),
-                    ("e", "edit"),
-                    ("a", "add"),
-                    ("d", "delete"),
-                    ("Tab/h", "focus examples"),
-                    ("s", "save"),
-                ],
-            },
             Tab::Tree => &[
                 ("j/k", "move"),
                 ("h/l", "collapse/expand"),
@@ -654,17 +555,6 @@ mod tests {
         // Handle key
         if matches!(app.mode, Mode::Form(_)) {
             let FormHandled::Continue = app.handle_form_key(key_event);
-        } else if app.active_tab == Tab::Builder
-            && matches!(app.mode, Mode::Normal)
-            && app.builder_view.handle_key_direct(key_event)
-        {
-            app.builder_view.re_evaluate(&app.manifest, &app.included);
-            // Render
-            let manifest_snapshot = app.manifest.clone();
-            terminal
-                .draw(|frame| app.view(frame, frame.area(), &manifest_snapshot))
-                .unwrap();
-            return;
         } else if let Some(msg) = app.handle_key(key_event) {
             let action = app.update_msg(msg);
             match action {
@@ -698,9 +588,6 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        // Switch to Tree tab first (Builder is now the default)
-        app.active_tab = Tab::Tree;
-
         // Initial render
         let snap = app.manifest.clone();
         terminal
@@ -722,9 +609,6 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        // Switch to Tree tab first
-        app.active_tab = Tab::Tree;
-
         let snap = app.manifest.clone();
         terminal
             .draw(|frame| app.view(frame, frame.area(), &snap))
@@ -740,9 +624,6 @@ mod tests {
         let mut app = App::new(PathBuf::from("/tmp/test.json"), manifest).unwrap();
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-
-        // Switch to Tree tab first
-        app.active_tab = Tab::Tree;
 
         let snap = app.manifest.clone();
         terminal

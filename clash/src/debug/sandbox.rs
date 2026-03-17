@@ -17,8 +17,8 @@ use crate::style;
 pub struct SandboxReport {
     /// The tool name evaluated.
     pub tool_name: String,
-    /// Human-readable subject.
-    pub noun: String,
+    /// The full tool input arguments.
+    pub tool_input: serde_json::Value,
     /// The sandbox policy (if the command would be sandboxed).
     pub sandbox: Option<SandboxPolicy>,
     /// Platform-specific compiled profile (SBPL on macOS).
@@ -33,7 +33,7 @@ impl SandboxReport {
     /// Render as human-readable text.
     pub fn format_human(&self) -> String {
         let mut lines =
-            display::format_tool_header("Sandbox inspection:", &self.tool_name, &self.noun);
+            display::format_tool_header("Sandbox inspection:", &self.tool_name, &self.tool_input);
         lines.push(format!(
             "  {} {}",
             style::cyan("effect:"),
@@ -126,7 +126,7 @@ impl SandboxReport {
     pub fn format_json(&self) -> Result<String> {
         let output = serde_json::json!({
             "tool_name": self.tool_name,
-            "noun": self.noun,
+            "tool_input": self.tool_input,
             "effect": format!("{}", self.effect),
             "sandbox": self.sandbox.as_ref().map(|s| serde_json::to_value(s).ok()),
             "compiled_profile": self.compiled_profile,
@@ -209,7 +209,6 @@ pub fn inspect(tool: &str, input: Option<&str>) -> Result<SandboxReport> {
         .ok_or_else(|| anyhow::anyhow!("no compiled policy available — run `clash init`"))?;
 
     let decision = tree.evaluate(&tool_name, &tool_input);
-    let noun = crate::permissions::extract_noun(&tool_name, &tool_input);
 
     let sandbox = decision.sandbox.clone();
     let cwd_path = Path::new(&cwd);
@@ -228,7 +227,7 @@ pub fn inspect(tool: &str, input: Option<&str>) -> Result<SandboxReport> {
 
     Ok(SandboxReport {
         tool_name,
-        noun,
+        tool_input,
         sandbox,
         compiled_profile,
         path_caps,

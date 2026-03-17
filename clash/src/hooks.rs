@@ -123,71 +123,21 @@ impl ToolUseHookInput {
         Ok(serde_json::from_reader(reader)?)
     }
 
-    /// Get typed tool input based on tool_name
+    /// Get typed tool input based on tool_name.
+    ///
+    /// Delegates to [`crate::claude::tools::ToolInput::parse`] for the
+    /// canonical tool-name → typed-struct mapping.
     #[instrument(level = Level::TRACE, skip(self))]
-    pub fn typed_tool_input(&self) -> ToolInput {
-        match self.tool_name.as_str() {
-            "Bash" => serde_json::from_value(self.tool_input.clone())
-                .map(ToolInput::Bash)
-                .unwrap_or_else(|_| ToolInput::Unknown(self.tool_input.clone())),
-            "Write" => serde_json::from_value(self.tool_input.clone())
-                .map(ToolInput::Write)
-                .unwrap_or_else(|_| ToolInput::Unknown(self.tool_input.clone())),
-            "Edit" => serde_json::from_value(self.tool_input.clone())
-                .map(ToolInput::Edit)
-                .unwrap_or_else(|_| ToolInput::Unknown(self.tool_input.clone())),
-            "Read" => serde_json::from_value(self.tool_input.clone())
-                .map(ToolInput::Read)
-                .unwrap_or_else(|_| ToolInput::Unknown(self.tool_input.clone())),
-            _ => ToolInput::Unknown(self.tool_input.clone()),
-        }
+    pub fn typed_tool_input(&self) -> crate::claude::tools::ToolInput {
+        crate::claude::tools::ToolInput::parse(&self.tool_name, self.tool_input.clone())
     }
 }
 
-/// Tool-specific input variants
-#[derive(Debug, Clone)]
-pub enum ToolInput {
-    Bash(BashInput),
-    Write(WriteInput),
-    Edit(EditInput),
-    Read(ReadInput),
-    Unknown(serde_json::Value),
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct BashInput {
-    pub command: String,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub timeout: Option<u64>,
-    #[serde(default)]
-    pub run_in_background: Option<bool>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct WriteInput {
-    pub file_path: String,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct EditInput {
-    pub file_path: String,
-    pub old_string: String,
-    pub new_string: String,
-    #[serde(default)]
-    pub replace_all: Option<bool>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ReadInput {
-    pub file_path: String,
-    #[serde(default)]
-    pub offset: Option<u64>,
-    #[serde(default)]
-    pub limit: Option<u64>,
-}
+// Typed tool input structs live in crate::claude::tools.
+// Re-export for backwards compatibility.
+pub use crate::claude::tools::{
+    BashInput, EditInput, ReadInput, ToolInput, WriteInput,
+};
 
 /// Hook-specific output for PreToolUse
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -410,15 +360,8 @@ impl HookOutput {
 /// Tools that require user interaction via Claude Code's native UI.
 /// Auto-approving these would skip the interaction, so non-deny
 /// decisions are converted to passthrough.
-///
-/// - `AskUserQuestion`: prompts the user for input
-/// - `EnterPlanMode`: requires user consent to enter plan mode
-/// - `ExitPlanMode`: requires user review/approval of the plan before implementation
 pub fn is_interactive_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "AskUserQuestion" | "EnterPlanMode" | "ExitPlanMode"
-    )
+    crate::claude::tools::is_interactive(tool_name)
 }
 
 /// Exit codes for hook responses

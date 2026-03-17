@@ -4,7 +4,6 @@
 //! Uses the Elm Architecture (TEA) pattern: `Model -> update(Msg) -> view(Model)`.
 
 pub mod app;
-pub mod builder_view;
 pub mod includes_view;
 pub mod inline_form;
 pub mod sandbox_view;
