@@ -3,6 +3,8 @@
 //! These types define a platform-agnostic sandbox policy that compiles to
 //! Landlock+seccomp on Linux or Seatbelt SBPL on macOS.
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 bitflags::bitflags! {
@@ -233,6 +235,11 @@ pub struct SandboxRule {
     #[serde(default)]
     pub path_match: PathMatch,
 
+    /// When true, also grant this rule's access to the git worktree's
+    /// shared directories (`.git/worktrees/<name>` and the main `.git/`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub follow_worktrees: bool,
+
     /// Optional docstring describing this rule's purpose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
@@ -360,6 +367,46 @@ impl SandboxPolicy {
             .unwrap_or_default();
         let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
         super::path::PathResolver::new(cwd, home, tmpdir).resolve_env_vars(path)
+    }
+
+    /// Expand rules that have `follow_worktrees` set by detecting if `cwd` is
+    /// inside a git worktree and adding rules for the worktree's git directories.
+    ///
+    /// In a worktree, git data lives outside the working directory (in the main
+    /// repo's `.git/`), so sandboxed processes need access to those paths for
+    /// git operations to work.
+    pub fn expand_worktree_rules(&self, cwd: &Path) -> SandboxPolicy {
+        let has_worktree_rules = self.rules.iter().any(|r| r.follow_worktrees);
+        if !has_worktree_rules {
+            return self.clone();
+        }
+
+        let wt_paths = crate::git::worktree_sandbox_paths(cwd);
+        if wt_paths.is_empty() {
+            return self.clone();
+        }
+
+        let mut expanded = self.rules.clone();
+        for rule in &self.rules {
+            if !rule.follow_worktrees {
+                continue;
+            }
+            for path in &wt_paths {
+                expanded.push(SandboxRule {
+                    effect: rule.effect,
+                    caps: rule.caps,
+                    path: path.clone(),
+                    path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
+                    doc: None,
+                });
+            }
+        }
+
+        SandboxPolicy {
+            rules: expanded,
+            ..self.clone()
+        }
     }
 
     /// Compute the effective capabilities for a given path by evaluating all rules.
@@ -518,6 +565,7 @@ pub fn parse_sandbox_rule(s: &str) -> Result<SandboxRule, String> {
         caps,
         path,
         path_match: PathMatch::Subpath,
+        follow_worktrees: false,
         doc: None,
     })
 }
@@ -645,6 +693,7 @@ mod tests {
                     caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE,
                     path: "/project".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -652,6 +701,7 @@ mod tests {
                     caps: Cap::WRITE | Cap::DELETE | Cap::CREATE,
                     path: "/project/.git".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
             ],
@@ -692,6 +742,7 @@ mod tests {
                 caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE,
                 path: "$PWD".into(),
                 path_match: PathMatch::Subpath,
+                follow_worktrees: false,
                 doc: None,
             }],
             network: NetworkPolicy::Deny,
@@ -770,6 +821,7 @@ mod tests {
                 caps: Cap::WRITE,
                 path: r"/project/.*\.rs$".into(),
                 path_match: PathMatch::Regex,
+                follow_worktrees: false,
                 doc: None,
             }],
             network: NetworkPolicy::Deny,
@@ -792,6 +844,7 @@ mod tests {
                 caps: Cap::WRITE,
                 path: "/etc/hosts".into(),
                 path_match: PathMatch::Literal,
+                follow_worktrees: false,
                 doc: None,
             }],
             network: NetworkPolicy::Deny,
@@ -816,6 +869,7 @@ mod tests {
                     caps: Cap::WRITE | Cap::CREATE,
                     path: "/data".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -823,6 +877,7 @@ mod tests {
                     caps: Cap::WRITE,
                     path: "/data".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
             ],
@@ -844,6 +899,7 @@ mod tests {
                     caps: Cap::all(),
                     path: "/project".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -851,6 +907,7 @@ mod tests {
                     caps: Cap::DELETE,
                     path: "/project/.git".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -858,6 +915,7 @@ mod tests {
                     caps: Cap::WRITE | Cap::CREATE,
                     path: "/project/.git".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
             ],
@@ -882,6 +940,7 @@ mod tests {
                 caps: Cap::WRITE,
                 path: "/specific/path".into(),
                 path_match: PathMatch::Subpath,
+                follow_worktrees: false,
                 doc: None,
             }],
             network: NetworkPolicy::Deny,
@@ -903,6 +962,7 @@ mod tests {
                     caps: Cap::READ | Cap::WRITE | Cap::CREATE,
                     path: "/Users/eliot/code/project".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -910,6 +970,7 @@ mod tests {
                     caps: Cap::READ,
                     path: "/Users/eliot".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -917,6 +978,7 @@ mod tests {
                     caps: Cap::READ,
                     path: "/".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -924,6 +986,7 @@ mod tests {
                     caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE | Cap::EXECUTE,
                     path: "/Users".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
             ],
@@ -942,5 +1005,144 @@ mod tests {
         // Outside /Users entirely: default + broad allow on /
         let caps = policy.effective_caps("/etc/passwd", "/ignored");
         assert_eq!(caps, Cap::READ | Cap::EXECUTE);
+    }
+
+    // -----------------------------------------------------------------------
+    // SandboxPolicy::expand_worktree_rules tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn expand_worktree_no_worktree_rules_unchanged() {
+        let policy = SandboxPolicy {
+            default: Cap::READ | Cap::EXECUTE,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::WRITE,
+                path: "$PWD".into(),
+                path_match: PathMatch::Subpath,
+                follow_worktrees: false,
+                doc: None,
+            }],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+        // No follow_worktrees rules → policy unchanged regardless of cwd
+        let expanded = policy.expand_worktree_rules(Path::new("/any/path"));
+        assert_eq!(expanded.rules.len(), 1);
+    }
+
+    #[test]
+    fn expand_worktree_not_in_worktree_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("normal-repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+
+        let policy = SandboxPolicy {
+            default: Cap::READ | Cap::EXECUTE,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::WRITE,
+                path: "$PWD".into(),
+                path_match: PathMatch::Subpath,
+                follow_worktrees: true,
+                doc: None,
+            }],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+        // Normal repo (not a worktree) → no expansion
+        let expanded = policy.expand_worktree_rules(&repo);
+        assert_eq!(expanded.rules.len(), 1);
+    }
+
+    #[test]
+    fn expand_worktree_adds_git_dir_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Set up a fake worktree structure
+        let main_repo = tmp.path().join("main-repo");
+        let git_dir = main_repo.join(".git");
+        let wt_git = git_dir.join("worktrees").join("feature");
+        std::fs::create_dir_all(&wt_git).unwrap();
+        std::fs::write(wt_git.join("commondir"), "../..").unwrap();
+        std::fs::write(wt_git.join("HEAD"), "ref: refs/heads/feature\n").unwrap();
+
+        let worktree = tmp.path().join("feature-worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}", wt_git.display()),
+        )
+        .unwrap();
+
+        let policy = SandboxPolicy {
+            default: Cap::READ | Cap::EXECUTE,
+            rules: vec![
+                SandboxRule {
+                    effect: RuleEffect::Allow,
+                    caps: Cap::READ | Cap::WRITE,
+                    path: "$PWD".into(),
+                    path_match: PathMatch::Subpath,
+                    follow_worktrees: true,
+                    doc: None,
+                },
+                SandboxRule {
+                    effect: RuleEffect::Deny,
+                    caps: Cap::DELETE,
+                    path: "/etc".into(),
+                    path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
+                    doc: None,
+                },
+            ],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+
+        let expanded = policy.expand_worktree_rules(&worktree);
+
+        // Original 2 rules + 2 new rules (git_dir + common_dir) for the
+        // follow_worktrees rule
+        assert_eq!(expanded.rules.len(), 4);
+
+        // New rules should be subpath allows with the same caps
+        let new_rules: Vec<_> = expanded.rules[2..].to_vec();
+        for rule in &new_rules {
+            assert_eq!(rule.effect, RuleEffect::Allow);
+            assert_eq!(rule.caps, Cap::READ | Cap::WRITE);
+            assert_eq!(rule.path_match, PathMatch::Subpath);
+            assert!(!rule.follow_worktrees);
+        }
+
+        // The non-follow_worktrees rule should NOT generate extra rules
+        assert_eq!(expanded.rules[1].path, "/etc");
+    }
+
+    #[test]
+    fn expand_worktree_follow_worktrees_not_serialized_when_false() {
+        let rule = SandboxRule {
+            effect: RuleEffect::Allow,
+            caps: Cap::READ,
+            path: "$PWD".into(),
+            path_match: PathMatch::Subpath,
+            follow_worktrees: false,
+            doc: None,
+        };
+        let json = serde_json::to_string(&rule).unwrap();
+        assert!(!json.contains("follow_worktrees"));
+    }
+
+    #[test]
+    fn expand_worktree_follow_worktrees_serialized_when_true() {
+        let rule = SandboxRule {
+            effect: RuleEffect::Allow,
+            caps: Cap::READ,
+            path: "$PWD".into(),
+            path_match: PathMatch::Subpath,
+            follow_worktrees: true,
+            doc: None,
+        };
+        let json = serde_json::to_string(&rule).unwrap();
+        assert!(json.contains("\"follow_worktrees\":true"));
     }
 }

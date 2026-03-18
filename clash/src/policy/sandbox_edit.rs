@@ -87,6 +87,7 @@ pub fn add_rule(
             caps,
             path,
             path_match,
+            follow_worktrees: false,
             doc,
         });
         Ok(UpsertResult::Inserted)
