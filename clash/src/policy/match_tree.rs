@@ -251,6 +251,10 @@ pub enum Node {
         /// Optional source provenance (e.g. policy level name).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<String>,
+        /// When true, asserts that no more positional args exist after this one.
+        /// Analogous to `$` in regex — the match is exhaustive.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        terminal: bool,
     },
     /// A leaf decision.
     Decision(Decision),
@@ -618,9 +622,10 @@ pub fn eval(nodes: &[Node], ctx: &QueryContext) -> Option<Decision> {
                 observe,
                 pattern,
                 children,
+                terminal,
                 ..
             } => {
-                if matches_observable(observe, pattern, ctx)
+                if matches_observable(observe, pattern, *terminal, ctx)
                     && let Some(d) = eval(children, ctx)
                 {
                     return Some(d);
@@ -645,6 +650,7 @@ pub fn eval_traced(
                 observe,
                 pattern,
                 children,
+                terminal,
                 ..
             } => {
                 let obs_name = format!("{observe:?}");
@@ -652,7 +658,7 @@ pub fn eval_traced(
                 let values = ctx.extract(observe);
                 let tested = values.as_ref().map(|vs| vs.join(", "));
 
-                if matches_observable(observe, pattern, ctx) {
+                if matches_observable(observe, pattern, *terminal, ctx) {
                     path.push(obs_name.clone());
                     if let Some(d) = eval_traced(children, ctx, trace, path) {
                         trace.matched.push(TraceEntry {
@@ -695,13 +701,14 @@ fn find_match_path_dfs(nodes: &[Node], ctx: &QueryContext) -> Option<Vec<usize>>
                 observe,
                 pattern,
                 children,
+                terminal,
                 ..
             } => {
-                if matches_observable(observe, pattern, ctx) {
-                    if let Some(mut child_path) = find_match_path_dfs(children, ctx) {
-                        child_path.insert(0, i);
-                        return Some(child_path);
-                    }
+                if matches_observable(observe, pattern, *terminal, ctx)
+                    && let Some(mut child_path) = find_match_path_dfs(children, ctx)
+                {
+                    child_path.insert(0, i);
+                    return Some(child_path);
                 }
             }
         }
@@ -710,11 +717,27 @@ fn find_match_path_dfs(nodes: &[Node], ctx: &QueryContext) -> Option<Vec<usize>>
 }
 
 /// Test whether an observable matches a pattern in the given context.
-fn matches_observable(obs: &Observable, pattern: &Pattern, ctx: &QueryContext) -> bool {
+///
+/// When `terminal` is true and the observable is a `PositionalArg(i)`,
+/// additionally asserts that no more positional args exist after index `i`.
+/// This is analogous to `$` in regex — the match is exhaustive.
+fn matches_observable(
+    obs: &Observable,
+    pattern: &Pattern,
+    terminal: bool,
+    ctx: &QueryContext,
+) -> bool {
     match obs {
         Observable::HasArg => {
             // HasArg: true if ANY arg matches the pattern
             ctx.args.iter().any(|arg| pattern.matches(arg))
+        }
+        Observable::PositionalArg(i) if terminal => {
+            let idx = *i as usize;
+            match ctx.args.get(idx) {
+                Some(val) if pattern.matches(val) => ctx.args.len() == idx + 1,
+                _ => false,
+            }
         }
         _ => {
             // For all other observables, extract the value and match
@@ -935,6 +958,7 @@ impl Node {
                     children,
                     doc,
                     source,
+                    terminal,
                 } => {
                     if let Some(existing) = out.iter_mut().find_map(|n| match n {
                         Node::Condition {
@@ -957,6 +981,7 @@ impl Node {
                             children,
                             doc,
                             source,
+                            terminal,
                         });
                     }
                 }
@@ -1064,6 +1089,7 @@ mod tests {
             children: vec![Node::Decision(Decision::Allow(None))],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let ctx = make_ctx("Bash", "echo hello");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
@@ -1077,9 +1103,91 @@ mod tests {
             children: vec![Node::Decision(Decision::Allow(None))],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let ctx = make_ctx("Bash", "echo hello");
         assert_eq!(eval(&nodes, &ctx), None);
+    }
+
+    #[test]
+    fn terminal_exact_match() {
+        // terminal: true on arg[1] means "git commit" matches but "git commit --amend" does not
+        let nodes = vec![Node::Condition {
+            observe: Observable::ToolName,
+            pattern: Pattern::Literal(Value::Literal("Bash".into())),
+            children: vec![Node::Condition {
+                observe: Observable::PositionalArg(0),
+                pattern: Pattern::Literal(Value::Literal("git".into())),
+                children: vec![Node::Condition {
+                    observe: Observable::PositionalArg(1),
+                    pattern: Pattern::Literal(Value::Literal("commit".into())),
+                    children: vec![Node::Decision(Decision::Deny)],
+                    doc: None,
+                    source: None,
+                    terminal: true,
+                }],
+                doc: None,
+                source: None,
+                terminal: false,
+            }],
+            doc: None,
+            source: None,
+            terminal: false,
+        }];
+
+        // Exact match: "git commit" → deny
+        let ctx = make_ctx("Bash", "git commit");
+        assert_eq!(eval(&nodes, &ctx), Some(Decision::Deny));
+
+        // Extra args: "git commit --amend" → no match (terminal blocks it)
+        let ctx = make_ctx("Bash", "git commit --amend");
+        assert_eq!(eval(&nodes, &ctx), None);
+
+        // Different subcommand: "git push" → no match
+        let ctx = make_ctx("Bash", "git push");
+        assert_eq!(eval(&nodes, &ctx), None);
+    }
+
+    #[test]
+    fn terminal_single_binary() {
+        // terminal: true on arg[0] means "ls" matches but "ls -la" does not
+        let nodes = vec![Node::Condition {
+            observe: Observable::PositionalArg(0),
+            pattern: Pattern::Literal(Value::Literal("ls".into())),
+            children: vec![Node::Decision(Decision::Allow(None))],
+            doc: None,
+            source: None,
+            terminal: true,
+        }];
+
+        let ctx = make_ctx("Bash", "ls");
+        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
+
+        let ctx = make_ctx("Bash", "ls -la");
+        assert_eq!(eval(&nodes, &ctx), None);
+    }
+
+    #[test]
+    fn non_terminal_allows_extra_args() {
+        // terminal: false (default) means "git commit --amend" still matches "git commit"
+        let nodes = vec![Node::Condition {
+            observe: Observable::PositionalArg(0),
+            pattern: Pattern::Literal(Value::Literal("git".into())),
+            children: vec![Node::Condition {
+                observe: Observable::PositionalArg(1),
+                pattern: Pattern::Literal(Value::Literal("commit".into())),
+                children: vec![Node::Decision(Decision::Allow(None))],
+                doc: None,
+                source: None,
+                terminal: false,
+            }],
+            doc: None,
+            source: None,
+            terminal: false,
+        }];
+
+        let ctx = make_ctx("Bash", "git commit --amend");
+        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
     }
 
     #[test]
@@ -1093,9 +1201,11 @@ mod tests {
                 children: vec![Node::Decision(Decision::Allow(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             }],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let ctx = make_ctx("Bash", "git push");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
@@ -1112,9 +1222,11 @@ mod tests {
                 children: vec![Node::Decision(Decision::Deny)],
                 doc: None,
                 source: None,
+                terminal: false,
             }],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let ctx = make_ctx("Bash", "git push --force origin main");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Deny));
@@ -1131,9 +1243,11 @@ mod tests {
                 children: vec![Node::Decision(Decision::Deny)],
                 doc: None,
                 source: None,
+                terminal: false,
             }],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let ctx = make_ctx("Bash", "git push origin main");
         assert_eq!(eval(&nodes, &ctx), None);
@@ -1149,6 +1263,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Ask(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             },
             Node::Condition {
                 observe: Observable::ToolName,
@@ -1156,6 +1271,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Allow(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             },
         ];
         let nodes = Node::compact(nodes);
@@ -1178,9 +1294,11 @@ mod tests {
                     children: vec![Node::Decision(Decision::Allow(None))],
                     doc: None,
                     source: None,
+                    terminal: false,
                 }],
                 doc: None,
                 source: None,
+                terminal: false,
             },
             Node::Condition {
                 observe: Observable::ToolName,
@@ -1188,6 +1306,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Ask(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             },
         ];
         // "git push" matches Bash but not cargo, so should backtrack to wildcard
@@ -1203,6 +1322,7 @@ mod tests {
             children: vec![Node::Decision(Decision::Allow(None))],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let input = serde_json::json!({"file_path": "/src/main.rs"});
         let ctx = QueryContext::from_tool("Edit", &input);
@@ -1217,6 +1337,7 @@ mod tests {
             children: vec![Node::Decision(Decision::Allow(None))],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let ctx = make_ctx("Bash", "cargo-clippy check");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
@@ -1233,6 +1354,7 @@ mod tests {
             children: vec![Node::Decision(Decision::Allow(None))],
             doc: None,
             source: None,
+            terminal: false,
         }];
 
         let ctx = make_ctx("Bash", "rustc main.rs");
@@ -1250,6 +1372,7 @@ mod tests {
             children: vec![Node::Decision(Decision::Allow(None))],
             doc: None,
             source: None,
+            terminal: false,
         }];
 
         let ctx = make_ctx("Bash", "ls -la");
@@ -1315,14 +1438,17 @@ mod tests {
                                 children: vec![Node::Decision(Decision::Deny)],
                                 doc: None,
                                 source: None,
+                                terminal: false,
                             },
                             Node::Decision(Decision::Allow(None)),
                         ],
                         doc: None,
                         source: None,
+                        terminal: false,
                     }],
                     doc: None,
                     source: None,
+                    terminal: false,
                 },
                 Node::Condition {
                     observe: Observable::ToolName,
@@ -1330,6 +1456,7 @@ mod tests {
                     children: vec![Node::Decision(Decision::Allow(None))],
                     doc: None,
                     source: None,
+                    terminal: false,
                 },
             ],
             default_effect: Effect::Deny,
@@ -1358,6 +1485,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Allow(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             },
             Node::Condition {
                 observe: Observable::ToolName,
@@ -1365,6 +1493,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Deny)],
                 doc: None,
                 source: None,
+                terminal: false,
             },
         ];
         let warnings = detect_unreachable(&nodes);
@@ -1399,6 +1528,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Allow(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             },
             Node::Condition {
                 observe: Observable::ToolName,
@@ -1406,6 +1536,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Deny)],
                 doc: None,
                 source: None,
+                terminal: false,
             },
         ];
 
@@ -1440,6 +1571,7 @@ mod tests {
             children: vec![Node::Decision(Decision::Deny)],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let input = serde_json::json!({"file_path": "/project/.env"});
         let ctx = QueryContext::from_tool("Write", &input);
@@ -1460,9 +1592,11 @@ mod tests {
                     children: vec![Node::Decision(Decision::Allow(None))],
                     doc: None,
                     source: None,
+                    terminal: false,
                 }],
                 doc: None,
                 source: None,
+                terminal: false,
             }],
             default_effect: Effect::Deny,
             default_sandbox: None,
@@ -1503,6 +1637,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Allow(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             }],
             default_effect: Effect::Deny,
             default_sandbox: None,

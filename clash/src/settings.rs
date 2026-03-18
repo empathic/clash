@@ -138,6 +138,18 @@ pub struct SandboxPreset {
     pub description: &'static str,
 }
 
+impl crate::dialog::SelectItem for SandboxPreset {
+    fn label(&self) -> &str {
+        self.name
+    }
+    fn description(&self) -> &str {
+        self.description
+    }
+    fn variants() -> &'static [Self] {
+        SANDBOX_PRESETS
+    }
+}
+
 /// Compile the default policy with the given sandbox preset to JSON.
 ///
 /// Substitutes `{preset}` in the template with the chosen preset name,
@@ -216,7 +228,13 @@ pub struct ClashSettings {
 }
 
 impl ClashSettings {
+    /// Returns the clash settings directory (`~/.clash/`).
+    ///
+    /// Respects `CLASH_HOME` env var for override, otherwise defaults to `$HOME/.clash`.
     pub fn settings_dir() -> Result<PathBuf> {
+        if let Ok(p) = std::env::var("CLASH_HOME") {
+            return Ok(PathBuf::from(p));
+        }
         home_dir()
             .map(|h| h.join(".clash"))
             .ok_or_else(|| anyhow::anyhow!("$HOME is not set; cannot determine settings directory"))

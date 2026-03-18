@@ -68,6 +68,7 @@ pub fn format_tree_node(
             children,
             doc,
             source,
+            ..
         } => {
             let label = format_condition(observe, pattern);
             let doc_suffix = doc
@@ -124,7 +125,7 @@ fn format_node_flat(node: &Node, path: &mut Vec<String>, lines: &mut Vec<String>
             pattern,
             children,
             doc,
-            source: _,
+            ..
         } => {
             let segment = format_condition(observe, pattern);
             path.push(segment);

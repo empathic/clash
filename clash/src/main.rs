@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use tracing::{debug_span, error, info};
+use tracing::{debug_span, error};
 
 use clash::cli::{Cli, Commands};
 use clash::cmd;
@@ -11,7 +11,6 @@ use clash::tracing_init::init_tracing;
 fn main() -> Result<()> {
     init_tracing();
     let cli = Cli::parse();
-    info!(args = ?std::env::args(), "clash started");
 
     debug_span!("main", cmd = ?cli.command).in_scope(|| {
         let resp = match cli.command {

@@ -43,6 +43,11 @@ pub fn progress(msg: &str) {
     println!("{} {}", style::cyan("~"), msg);
 }
 
+/// Plain informational text — no glyph, no styling.
+pub fn info(msg: &str) {
+    println!("{msg}");
+}
+
 // ---------------------------------------------------------------------------
 // Structure
 // ---------------------------------------------------------------------------

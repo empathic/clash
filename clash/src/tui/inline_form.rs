@@ -1500,6 +1500,7 @@ impl FormState {
                 children: vec![Node::Decision(Decision::Ask(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             }
         } else {
             // Decision
