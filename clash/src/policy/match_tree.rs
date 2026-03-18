@@ -704,11 +704,11 @@ fn find_match_path_dfs(nodes: &[Node], ctx: &QueryContext) -> Option<Vec<usize>>
                 terminal,
                 ..
             } => {
-                if matches_observable(observe, pattern, *terminal, ctx) {
-                    if let Some(mut child_path) = find_match_path_dfs(children, ctx) {
-                        child_path.insert(0, i);
-                        return Some(child_path);
-                    }
+                if matches_observable(observe, pattern, *terminal, ctx)
+                    && let Some(mut child_path) = find_match_path_dfs(children, ctx)
+                {
+                    child_path.insert(0, i);
+                    return Some(child_path);
                 }
             }
         }

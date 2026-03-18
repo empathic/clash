@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::claude::tools;
-use crate::dialog::{self, form_only, select, SelectItem};
+use crate::dialog::{self, SelectItem, form_only, select};
 use crate::policy::compile;
 use crate::settings::{self, ClashSettings, SandboxPreset};
 use crate::style;
@@ -54,8 +54,6 @@ select_enum! {
         Agent     => ("Agent",     "Spawn a sub-agent"),
     }
 }
-
-
 
 // ---------------------------------------------------------------------------
 // Specificity levels — static data per tool category
@@ -140,7 +138,10 @@ fn bash_specificity(args: &[String]) -> Vec<SpecLevel> {
         let first_arg = &all_args[0];
         levels.push(SpecLevel {
             label: format!("Any `{} {}` command", bin, first_arg),
-            description: format!("Matches `{} {}` with any additional arguments", bin, first_arg),
+            description: format!(
+                "Matches `{} {}` with any additional arguments",
+                bin, first_arg
+            ),
             examples: vec![
                 format!("{} {}", bin, first_arg),
                 format!("{} {} --flag", bin, first_arg),
@@ -180,11 +181,7 @@ fn bash_specificity(args: &[String]) -> Vec<SpecLevel> {
     levels.push(SpecLevel {
         label: "Any Bash command".into(),
         description: "Matches every shell command".into(),
-        examples: vec![
-            "git push".into(),
-            "npm install".into(),
-            "rm -rf /".into(),
-        ],
+        examples: vec!["git push".into(), "npm install".into(), "rm -rf /".into()],
         caveat: "This is very broad — consider restricting by binary".into(),
         nodes: vec![], // no inner conditions, just tool_name + decision
     });
@@ -202,11 +199,7 @@ fn fs_specificity(tool_name: &str, path: &str) -> Vec<SpecLevel> {
         description: format!("Only matches {} on `{}`", tool_name, path),
         examples: vec![format!("{} {}", tool_name, path)],
         caveat: "Won't match any other file path".into(),
-        nodes: vec![condition(
-            json!("fs_path"),
-            literal(path),
-            vec![],
-        )],
+        nodes: vec![condition(json!("fs_path"), literal(path), vec![])],
     });
 
     // Level: directory prefix (if path has a parent)
@@ -264,11 +257,7 @@ fn net_specificity(tool_name: &str, url: &str) -> Vec<SpecLevel> {
         description: format!("Only matches requests to `{}`", url),
         examples: vec![url.to_string()],
         caveat: "Won't match different URLs on the same domain".into(),
-        nodes: vec![condition(
-            json!("net_domain"),
-            literal(domain),
-            vec![],
-        )],
+        nodes: vec![condition(json!("net_domain"), literal(domain), vec![])],
     });
 
     // Level: any URL on this domain
@@ -281,11 +270,7 @@ fn net_specificity(tool_name: &str, url: &str) -> Vec<SpecLevel> {
                 format!("https://{}/other/path", domain),
             ],
             caveat: "Won't match other domains".into(),
-            nodes: vec![condition(
-                json!("net_domain"),
-                literal(domain),
-                vec![],
-            )],
+            nodes: vec![condition(json!("net_domain"), literal(domain), vec![])],
         });
     }
 
@@ -364,10 +349,7 @@ fn specificity_levels(tool_name: &str, tool_input: &serde_json::Value) -> Vec<Sp
             search_specificity(tool_name, pattern)
         }
         "WebFetch" => {
-            let url = tool_input
-                .get("url")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let url = tool_input.get("url").and_then(|v| v.as_str()).unwrap_or("");
             net_specificity(tool_name, url)
         }
         "WebSearch" => {
@@ -432,7 +414,9 @@ fn condition_terminal(
         "children": children
     });
     if terminal {
-        cond.as_object_mut().unwrap().insert("terminal".into(), json!(true));
+        cond.as_object_mut()
+            .unwrap()
+            .insert("terminal".into(), json!(true));
     }
     json!({ "condition": cond })
 }
@@ -484,19 +468,17 @@ fn insert_decision(nodes: &mut Vec<serde_json::Value>, decision_node: serde_json
         return;
     }
     // Find the deepest condition's children
-    if let Some(last) = nodes.last_mut() {
-        if let Some(cond) = last.get_mut("condition") {
-            if let Some(children) = cond.get_mut("children") {
-                if let Some(arr) = children.as_array_mut() {
-                    if arr.is_empty() {
-                        arr.push(decision_node);
-                    } else {
-                        insert_decision(arr, decision_node);
-                    }
-                    return;
-                }
-            }
+    if let Some(last) = nodes.last_mut()
+        && let Some(cond) = last.get_mut("condition")
+        && let Some(children) = cond.get_mut("children")
+        && let Some(arr) = children.as_array_mut()
+    {
+        if arr.is_empty() {
+            arr.push(decision_node);
+        } else {
+            insert_decision(arr, decision_node);
         }
+        return;
     }
     nodes.push(decision_node);
 }
@@ -534,12 +516,24 @@ pub fn wiz() -> Result<()> {
             });
             std::fs::write(&policy_path, serde_json::to_string_pretty(&policy)?)?;
 
-            ui::success(&format!("Blank policy written to {}", policy_path.display()));
+            ui::success(&format!(
+                "Blank policy written to {}",
+                policy_path.display()
+            ));
             ui::info("");
             ui::info("Edit it directly or use these commands:");
-            ui::info(&format!("  {} — add allow/deny rules", style::bold("clash policy allow/deny")));
-            ui::info(&format!("  {} — validate your policy", style::bold("clash policy validate")));
-            ui::info(&format!("  {} — test a command against your policy", style::bold("clash explain")));
+            ui::info(&format!(
+                "  {} — add allow/deny rules",
+                style::bold("clash policy allow/deny")
+            ));
+            ui::info(&format!(
+                "  {} — validate your policy",
+                style::bold("clash policy validate")
+            ));
+            ui::info(&format!(
+                "  {} — test a command against your policy",
+                style::bold("clash explain")
+            ));
             Ok(())
         }
         Start::Guided => guided(),
@@ -554,7 +548,9 @@ fn guided() -> Result<()> {
     ui::info("");
     ui::section("How Clash Works");
     ui::info("Clash evaluates every tool call Claude makes against your policy.");
-    ui::info("You'll build your policy by providing example commands and deciding what should happen.\n");
+    ui::info(
+        "You'll build your policy by providing example commands and deciding what should happen.\n",
+    );
 
     // Step 1: Default effect
     ui::section("Step 1: Default Behavior");
@@ -606,8 +602,7 @@ fn guided() -> Result<()> {
     let policy_path = ClashSettings::policy_file()?;
     let policy_path = policy_path.with_extension("json");
     let dir = policy_path.parent().unwrap();
-    std::fs::create_dir_all(dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
     let tree: Vec<serde_json::Value> = rules.into_iter().map(|r| r.node).collect();
 
@@ -627,9 +622,18 @@ fn guided() -> Result<()> {
     ui::success(&format!("Policy written to {}", policy_path.display()));
     ui::info("");
     ui::info("Next steps:");
-    ui::info(&format!("  {} — see your policy in action", style::bold("clash status")));
-    ui::info(&format!("  {} — test a command", style::bold("clash explain bash \"git push\"")));
-    ui::info(&format!("  {} — add more rules later", style::bold("clash policy allow/deny")));
+    ui::info(&format!(
+        "  {} — see your policy in action",
+        style::bold("clash status")
+    ));
+    ui::info(&format!(
+        "  {} — test a command",
+        style::bold("clash explain bash \"git push\"")
+    ));
+    ui::info(&format!(
+        "  {} — add more rules later",
+        style::bold("clash policy allow/deny")
+    ));
 
     Ok(())
 }
@@ -688,7 +692,10 @@ fn build_rule(default_sandbox: &str) -> Result<Option<WizardRule>> {
     // Add special options at the end
     let mut all_items = items;
     let custom_idx = all_items.len();
-    all_items.push(("Custom pattern".into(), "Write your own regex or advanced pattern".into()));
+    all_items.push((
+        "Custom pattern".into(),
+        "Write your own regex or advanced pattern".into(),
+    ));
     let back_idx = all_items.len();
     all_items.push(("Back".into(), "Go back and pick a different tool".into()));
 
@@ -863,7 +870,9 @@ fn step2_sandbox_interactive() -> Result<SandboxResult> {
     // Show what we built
     ui::info("");
     ui::section("Sandbox preview");
-    match serde_json::from_value::<crate::policy::sandbox_types::SandboxPolicy>(sandbox_json.clone()) {
+    match serde_json::from_value::<crate::policy::sandbox_types::SandboxPolicy>(
+        sandbox_json.clone(),
+    ) {
         Ok(sandbox) => {
             let mut map = std::collections::HashMap::new();
             map.insert(name.clone(), sandbox);
@@ -891,10 +900,8 @@ fn preview_all_sandbox_presets() {
         match settings::compile_default_policy_to_json_with_preset(preset.label()) {
             Ok(json) => match compile::compile_to_tree(&json) {
                 Ok(compiled) => {
-                    for (_name, sandbox) in compiled.sandboxes {
-                        // Use the preset name as the column header, not the internal sandbox name
-                        all_sandboxes.insert(preset.label().to_string(), sandbox.clone());
-                        break; // Only take the default/first sandbox from each preset
+                    if let Some((_name, sandbox)) = compiled.sandboxes.into_iter().next() {
+                        all_sandboxes.insert(preset.label().to_string(), sandbox);
                     }
                 }
                 Err(e) => ui::warn(&format!("Could not compile {}: {e}", preset.label())),

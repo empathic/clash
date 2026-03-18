@@ -3,8 +3,7 @@ use tracing::{Level, error, info, instrument, warn};
 
 use crate::cmd::wizard;
 use crate::dialog;
-use crate::select_enum;
-use crate::settings::{ClashSettings, SandboxPreset, compile_default_policy_to_json_with_preset};
+use crate::settings::ClashSettings;
 use crate::ui;
 
 /// GitHub repository used to install the clash plugin marketplace.
@@ -13,98 +12,25 @@ const GITHUB_MARKETPLACE: &str = "empathic/clash";
 /// Initialize clash at the chosen scope.
 ///
 /// When `scope` is provided ("user" or "project"), initializes that scope
-/// directly. When omitted, an interactive prompt asks the user to choose.
+/// directly. When omitted, runs the interactive wizard.
 /// Only one scope is initialized per invocation.
 #[instrument(level = Level::TRACE)]
 pub fn run(no_bypass: Option<bool>, scope: Option<String>) -> Result<()> {
-    // let scope = match scope.as_deref() {
-    //     Some("user") => "user",
-    //     Some("project") => "project",
-    //     Some(other) => {
-    //         anyhow::bail!("unknown scope: \"{other}\" (expected \"user\" or \"project\")")
-    //     }
-    //     None => prompt_scope()?,
-    // };
-    run_init_user(no_bypass)
-}
-
-select_enum! {
-    Scope {
-        User    => ("user",    "(global) — default policy for all your projects (~/.clash/)"),
-        Project => ("project", "(this repo) — policy scoped to the current repository (.clash/)"),
+    match scope.as_deref() {
+        Some("project") => run_init_project(),
+        _ => run_init_user(no_bypass),
     }
 }
 
-/// Interactively ask which scope to initialize.
-fn prompt_scope() -> Result<&'static str> {
-    dialog::select::<Scope>("Initialize clash at which scope?")
-        .map(|s| s.label())
-        .context("failed to read scope selection (hint: pass 'user' or 'project' as an argument in non-interactive mode)")
-}
-
-/// Interactively ask which sandbox preset to use for Bash commands.
-fn prompt_preset() -> Result<&'static str> {
-    dialog::select::<SandboxPreset>("Default sandbox for Bash commands")
-        .map(|p| p.name)
-        .context("failed to read preset selection")
-}
-
-/// Initialize or reconfigure the user-level policy at `~/.clash/policy.star`.
+/// Initialize or reconfigure the user-level policy via the wizard.
 fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     wizard::wiz()?;
-    return Ok(());
+
     // Always ensure settings.json records clash as an enabled plugin.
     let claude = claude_settings::ClaudeSettings::new();
     if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true) {
         warn!(error = %e, "Could not set enabledPlugins in Claude Code settings");
     }
-
-    // Resolve the existing policy path (prefers .json over .star).
-    let existing_path = ClashSettings::policy_file()?;
-    // Always write the compiled JSON variant.
-    let policy_path = existing_path.with_extension("json");
-
-    if existing_path.exists() && existing_path.is_dir() {
-        if dialog::confirm(
-            &format!(
-                "{} is a directory. Remove it and continue onboarding?",
-                existing_path.to_string_lossy(),
-            ),
-            false,
-        )
-        .context("confirm removal of dir at policy path")?
-        {
-            std::fs::remove_dir_all(&existing_path)?;
-        } else {
-            anyhow::bail!(
-                "{} is a directory. Remove it first, then run `clash init user`.",
-                existing_path.display()
-            );
-        }
-    }
-
-    // Check if any policy file already exists (.json or .star).
-    if existing_path.exists()
-        && !dialog::confirm(
-            &format!(
-                "A policy already exists at {}. Reconfigure existing policy?",
-                existing_path.to_string_lossy()
-            ),
-            false,
-        )
-        .unwrap_or_default()
-    {
-        return Ok(());
-    }
-
-    // Ask which sandbox preset to use for Bash commands.
-    let preset = prompt_preset()?;
-
-    // Fresh install — compile default policy to JSON and write it.
-    std::fs::create_dir_all(ClashSettings::settings_dir()?)?;
-    let json = compile_default_policy_to_json_with_preset(preset)
-        .context("failed to compile default policy to JSON")?;
-    std::fs::write(&policy_path, &json)?;
 
     // Install the Claude Code plugin from GitHub.
     let plugin_installed = match install_plugin() {
@@ -147,8 +73,6 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     if let Err(e) = super::statusline::install() {
         warn!(error = %e, "Could not install status line");
     }
-
-    ui::success(&format!("Clash initialized at {}\n", policy_path.display()));
 
     Ok(())
 }
