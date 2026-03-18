@@ -137,16 +137,16 @@ landlock = "0.4"
 seccompiler = "0.4"
 
 # Workspace crates
-clash-brush-builtins = { path = "clash-brush-builtins", version = "0.4.5" }
-clash_notify = { path = "clash_notify", version = "0.4.5" }
-clash_starlark = { path = "clash_starlark", version = "0.4.5" }
-claude_settings = { path = "claude_settings", version = "0.4.5" }
-clash-brush-parser = { path = "clash-brush-parser", version = "0.4.5" }
-clash-brush-core = { path = "clash-brush-core", version = "0.4.5" }
-clash-brush-interactive = { path = "clash-brush-interactive", version = "0.4.5", features = [
+clash-brush-builtins = { path = "clash-brush-builtins", version = "0.5.0" }
+clash_notify = { path = "clash_notify", version = "0.5.0" }
+clash_starlark = { path = "clash_starlark", version = "0.5.0" }
+claude_settings = { path = "claude_settings", version = "0.5.0" }
+clash-brush-parser = { path = "clash-brush-parser", version = "0.5.0" }
+clash-brush-core = { path = "clash-brush-core", version = "0.5.0" }
+clash-brush-interactive = { path = "clash-brush-interactive", version = "0.5.0", features = [
     "basic",
 ] }
 
 # Workspace crate aliases (used by brush crates internally under original brush-* names)
-brush-parser = { path = "clash-brush-parser", version = "0.4.5", package = "clash-brush-parser" }
-brush-core = { path = "clash-brush-core", version = "0.4.5", package = "clash-brush-core" }
+brush-parser = { path = "clash-brush-parser", version = "0.5.0", package = "clash-brush-parser" }
+brush-core = { path = "clash-brush-core", version = "0.5.0", package = "clash-brush-core" }
