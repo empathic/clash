@@ -434,6 +434,7 @@ mod tests {
                     caps: Cap::READ | Cap::WRITE,
                     path: "/Users/eliot".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -441,6 +442,7 @@ mod tests {
                     caps: Cap::READ | Cap::WRITE | Cap::CREATE | Cap::DELETE | Cap::EXECUTE,
                     path: "/Users".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
             ],
@@ -475,6 +477,7 @@ mod tests {
                     caps: Cap::WRITE,
                     path: "/data".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -482,6 +485,7 @@ mod tests {
                     caps: Cap::WRITE,
                     path: "/data".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
             ],
@@ -512,6 +516,7 @@ mod tests {
                     caps: Cap::READ,
                     path: "/Users/eliot".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -519,6 +524,7 @@ mod tests {
                     caps: Cap::READ,
                     path: "/Users".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -526,6 +532,7 @@ mod tests {
                     caps: Cap::READ,
                     path: "/Users/eliot/.ssh".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
             ],

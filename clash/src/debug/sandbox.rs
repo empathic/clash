@@ -300,6 +300,7 @@ mod tests {
                 caps: Cap::all(),
                 path: "/tmp".into(),
                 path_match: PathMatch::Subpath,
+                follow_worktrees: false,
                 doc: None,
             }],
             network: NetworkPolicy::Deny,

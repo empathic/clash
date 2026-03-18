@@ -284,7 +284,37 @@ def main():
         assert_eq!(doc["schema_version"], 5);
         let tree = doc["tree"].as_array().unwrap();
         assert_eq!(tree.len(), 1);
-        assert!(!doc["sandboxes"].as_object().unwrap().is_empty());
+        let sandboxes = doc["sandboxes"].as_object().unwrap();
+        assert!(!sandboxes.is_empty());
+
+        // Verify follow_worktrees is emitted in the sandbox rule
+        let test_sandbox = &sandboxes["test"];
+        let rules = test_sandbox["rules"].as_array().unwrap();
+        assert!(!rules.is_empty());
+        assert_eq!(rules[0]["follow_worktrees"], true);
+    }
+
+    #[test]
+    fn test_cwd_without_worktree_omits_field() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
+
+def main():
+    box = sandbox(
+        name = "test",
+        default = deny,
+        fs = [cwd().allow(read = True, write = True)],
+    )
+    return policy(default = deny, rules = [exe("git").sandbox(box).allow()])
+"#,
+        );
+        let sandboxes = doc["sandboxes"].as_object().unwrap();
+        let test_sandbox = &sandboxes["test"];
+        let rules = test_sandbox["rules"].as_array().unwrap();
+        assert!(!rules.is_empty());
+        // follow_worktrees should not be present when False
+        assert!(rules[0].get("follow_worktrees").is_none());
     }
 
     #[test]
