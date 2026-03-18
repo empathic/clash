@@ -185,10 +185,10 @@ fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
             Ok(None) => info!("Zulip resolution timed out (background)"),
             Err(e) => warn!(error = %e, "Zulip resolution failed (background)"),
         }
-        if let Some(output) = zulip_result_to_output(result) {
-            if output.write_stdout().is_ok() {
-                std::process::exit(0);
-            }
+        if let Some(output) = zulip_result_to_output(result)
+            && output.write_stdout().is_ok()
+        {
+            std::process::exit(0);
         }
     });
 }
