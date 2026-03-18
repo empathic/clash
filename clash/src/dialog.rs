@@ -55,7 +55,9 @@ pub fn input(prompt: &str) -> Result<String> {
     dialoguer::Input::new()
         .with_prompt(prompt)
         .interact_text()
-        .context("failed to read input (hint: pass the value as an argument for non-interactive mode)")
+        .context(
+            "failed to read input (hint: pass the value as an argument for non-interactive mode)",
+        )
 }
 
 /// Yes/no confirmation prompt.
@@ -111,7 +113,11 @@ pub fn select<T: SelectItem>(prompt: &str) -> Result<&'static T> {
 /// Params whose names appear in `skip` are silently excluded from the form.
 pub fn form_with_skip(tool: &ToolDef, skip: &[&str]) -> Result<serde_json::Value> {
     let mut map = serde_json::Map::new();
-    for param in tool.params.iter().filter(|p| p.required && !skip.contains(&p.name)) {
+    for param in tool
+        .params
+        .iter()
+        .filter(|p| p.required && !skip.contains(&p.name))
+    {
         let prompt = format!(
             "{}  {}",
             style::bold(param.name),
