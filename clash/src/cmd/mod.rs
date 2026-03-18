@@ -15,3 +15,4 @@ pub mod statusline;
 pub mod trace;
 pub mod uninstall;
 pub mod update;
+pub mod wizard;

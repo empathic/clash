@@ -161,6 +161,7 @@ pub fn build_exec_rule(bin: &str, args: &[&str], decision: Decision) -> Node {
             children: vec![current],
             doc: None,
             source: None,
+            terminal: false,
         };
     }
 
@@ -171,6 +172,7 @@ pub fn build_exec_rule(bin: &str, args: &[&str], decision: Decision) -> Node {
         children: vec![current],
         doc: None,
         source: None,
+        terminal: false,
     };
 
     // Outermost: tool_name = "Bash".
@@ -180,6 +182,7 @@ pub fn build_exec_rule(bin: &str, args: &[&str], decision: Decision) -> Node {
         children: vec![current],
         doc: None,
         source: None,
+        terminal: false,
     }
 }
 
@@ -191,6 +194,7 @@ pub fn build_tool_rule(tool_name: &str, decision: Decision) -> Node {
         children: vec![Node::Decision(decision)],
         doc: None,
         source: None,
+        terminal: false,
     }
 }
 

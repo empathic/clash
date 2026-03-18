@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use tracing::{Level, error, info, instrument, warn};
 
+use crate::cmd::wizard;
 use crate::dialog;
-use crate::settings::{ClashSettings, SANDBOX_PRESETS, compile_default_policy_to_json_with_preset};
+use crate::select_enum;
+use crate::settings::{ClashSettings, SandboxPreset, compile_default_policy_to_json_with_preset};
 use crate::ui;
 
 /// GitHub repository used to install the clash plugin marketplace.
@@ -15,59 +17,42 @@ const GITHUB_MARKETPLACE: &str = "empathic/clash";
 /// Only one scope is initialized per invocation.
 #[instrument(level = Level::TRACE)]
 pub fn run(no_bypass: Option<bool>, scope: Option<String>) -> Result<()> {
-    let scope = match scope.as_deref() {
-        Some("user") => "user",
-        Some("project") => "project",
-        Some(other) => {
-            anyhow::bail!("unknown scope: \"{other}\" (expected \"user\" or \"project\")")
-        }
-        None => prompt_scope()?,
-    };
+    // let scope = match scope.as_deref() {
+    //     Some("user") => "user",
+    //     Some("project") => "project",
+    //     Some(other) => {
+    //         anyhow::bail!("unknown scope: \"{other}\" (expected \"user\" or \"project\")")
+    //     }
+    //     None => prompt_scope()?,
+    // };
+    run_init_user(no_bypass)
+}
 
-    match scope {
-        "user" => run_init_user(no_bypass),
-        "project" => run_init_project(),
-        _ => unreachable!(),
+select_enum! {
+    Scope {
+        User    => ("user",    "(global) — default policy for all your projects (~/.clash/)"),
+        Project => ("project", "(this repo) — policy scoped to the current repository (.clash/)"),
     }
 }
 
 /// Interactively ask which scope to initialize.
 fn prompt_scope() -> Result<&'static str> {
-    let items = &[
-        (
-            "User",
-            "(global) — default policy for all your projects (~/.clash/)",
-        ),
-        (
-            "Project",
-            "(this repo) — policy scoped to the current repository (.clash/)",
-        ),
-    ];
-
-    match dialog::select("Initialize clash at which scope?", items)
-        .context("failed to read scope selection (hint: pass 'user' or 'project' as an argument in non-interactive mode)")?
-    {
-        0 => Ok("user"),
-        1 => Ok("project"),
-        _ => unreachable!(),
-    }
+    dialog::select::<Scope>("Initialize clash at which scope?")
+        .map(|s| s.label())
+        .context("failed to read scope selection (hint: pass 'user' or 'project' as an argument in non-interactive mode)")
 }
 
 /// Interactively ask which sandbox preset to use for Bash commands.
 fn prompt_preset() -> Result<&'static str> {
-    let items: Vec<(&str, &str)> = SANDBOX_PRESETS
-        .iter()
-        .map(|p| (p.name, p.description))
-        .collect();
-
-    let sel = dialog::select("Default sandbox for Bash commands", &items)
-        .context("failed to read preset selection")?;
-
-    Ok(SANDBOX_PRESETS[sel].name)
+    dialog::select::<SandboxPreset>("Default sandbox for Bash commands")
+        .map(|p| p.name)
+        .context("failed to read preset selection")
 }
 
 /// Initialize or reconfigure the user-level policy at `~/.clash/policy.star`.
 fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
+    wizard::wiz()?;
+    return Ok(());
     // Always ensure settings.json records clash as an enabled plugin.
     let claude = claude_settings::ClaudeSettings::new();
     if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true) {
