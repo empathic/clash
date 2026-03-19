@@ -5,7 +5,9 @@
 
 use std::path::Path;
 
-use crate::policy::sandbox_types::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy};
+use crate::policy::sandbox_types::{
+    Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy, canonicalize_macos_symlinks,
+};
 use tracing::{Level, instrument};
 
 use super::{SandboxError, SupportLevel};
@@ -103,7 +105,7 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
             resolved
         };
         let canonical = if rule.path_match != PathMatch::Regex {
-            canonicalize_or_keep(&resolved)
+            canonicalize_macos_symlinks(&resolved)
         } else {
             resolved.clone()
         };
@@ -199,39 +201,6 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     }
 
     p
-}
-
-/// Resolve symlinks for Seatbelt matching, but avoid resolving firmlinks.
-///
-/// macOS firmlinks (e.g. `/Users` → `/System/Volumes/Data/Users`) are
-/// transparent to Seatbelt — it evaluates against the firmlink path, not
-/// the underlying volume path.  `std::fs::canonicalize` resolves firmlinks,
-/// which produces paths that Seatbelt never sees, causing rules to silently
-/// fail.
-///
-/// Instead we only resolve the well-known macOS symlinks that Seatbelt
-/// *does* follow (`/var` → `/private/var`, `/tmp` → `/private/tmp`, etc.).
-fn canonicalize_or_keep(path: &str) -> String {
-    // Well-known macOS symlinks that Seatbelt resolves.
-    static SYMLINK_PREFIXES: &[(&str, &str)] = &[
-        ("/var/", "/private/var/"),
-        ("/tmp/", "/private/tmp/"),
-        ("/etc/", "/private/etc/"),
-    ];
-
-    for &(prefix, replacement) in SYMLINK_PREFIXES {
-        if let Some(rest) = path.strip_prefix(prefix) {
-            return format!("{}{}", replacement, rest);
-        }
-    }
-
-    // Exact matches (no trailing slash)
-    match path {
-        "/var" => "/private/var".to_string(),
-        "/tmp" => "/private/tmp".to_string(),
-        "/etc" => "/private/etc".to_string(),
-        _ => path.to_string(),
-    }
 }
 
 /// Escape a path string for use inside an SBPL string literal.

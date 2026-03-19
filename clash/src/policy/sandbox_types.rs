@@ -355,6 +355,37 @@ impl<'de> Deserialize<'de> for NetworkPolicy {
     }
 }
 
+/// Canonicalize well-known macOS symlinks for Seatbelt matching.
+///
+/// On macOS, `/var`, `/tmp`, and `/etc` are symlinks to `/private/var`,
+/// `/private/tmp`, and `/private/etc`. Seatbelt inconsistently resolves
+/// these, so both forms must be considered when matching paths.
+///
+/// This avoids `std::fs::canonicalize()` because it resolves firmlinks
+/// (e.g. `/Users` → `/System/Volumes/Data/Users`) which are transparent
+/// to Seatbelt and would produce paths that never match.
+pub(crate) fn canonicalize_macos_symlinks(path: &str) -> String {
+    static SYMLINK_PREFIXES: &[(&str, &str)] = &[
+        ("/var/", "/private/var/"),
+        ("/tmp/", "/private/tmp/"),
+        ("/etc/", "/private/etc/"),
+    ];
+
+    for &(prefix, replacement) in SYMLINK_PREFIXES {
+        if let Some(rest) = path.strip_prefix(prefix) {
+            return format!("{}{}", replacement, rest);
+        }
+    }
+
+    // Exact matches (no trailing slash)
+    match path {
+        "/var" => "/private/var".to_string(),
+        "/tmp" => "/private/tmp".to_string(),
+        "/etc" => "/private/etc".to_string(),
+        _ => path.to_string(),
+    }
+}
+
 impl SandboxPolicy {
     /// Resolve a path, expanding environment variables ($PWD, $HOME, $TMPDIR).
     ///
@@ -426,11 +457,18 @@ impl SandboxPolicy {
 
         let mut matched: Vec<MatchedRule> = Vec::new();
 
+        // Canonicalize the query path so that /var/foo and /private/var/foo
+        // are treated identically when matching against rules.
+        let canonical_path = canonicalize_macos_symlinks(path);
+
         for rule in &self.rules {
             let rule_path = Self::resolve_path(&rule.path, cwd);
+            let canonical_rule = canonicalize_macos_symlinks(&rule_path);
             let matches = match rule.path_match {
-                PathMatch::Subpath => path.starts_with(&rule_path) || path == rule_path,
-                PathMatch::Literal => path == rule_path,
+                PathMatch::Subpath => {
+                    canonical_path.starts_with(&canonical_rule) || canonical_path == canonical_rule
+                }
+                PathMatch::Literal => canonical_path == canonical_rule,
                 PathMatch::Regex => regex::Regex::new(&rule_path)
                     .map(|re| re.is_match(path))
                     .unwrap_or(false),
@@ -485,6 +523,9 @@ impl SandboxPolicy {
         let mut best: Option<(&SandboxRule, String)> = None;
         let mut best_depth: usize = 0;
 
+        // Canonicalize query path for consistent matching across symlink forms.
+        let canonical_path = canonicalize_macos_symlinks(path);
+
         for rule in &self.rules {
             if rule.effect != RuleEffect::Deny {
                 continue;
@@ -494,9 +535,12 @@ impl SandboxPolicy {
                 continue;
             }
             let rule_path = Self::resolve_path(&rule.path, cwd);
+            let canonical_rule = canonicalize_macos_symlinks(&rule_path);
             let matches = match rule.path_match {
-                PathMatch::Subpath => path.starts_with(&rule_path) || path == rule_path,
-                PathMatch::Literal => path == rule_path,
+                PathMatch::Subpath => {
+                    canonical_path.starts_with(&canonical_rule) || canonical_path == canonical_rule
+                }
+                PathMatch::Literal => canonical_path == canonical_rule,
                 PathMatch::Regex => regex::Regex::new(&rule_path)
                     .map(|re| re.is_match(path))
                     .unwrap_or(false),
@@ -1144,5 +1188,175 @@ mod tests {
         };
         let json = serde_json::to_string(&rule).unwrap();
         assert!(json.contains("\"follow_worktrees\":true"));
+    }
+
+    // -----------------------------------------------------------------------
+    // canonicalize_macos_symlinks tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn canonicalize_var_prefix() {
+        assert_eq!(
+            canonicalize_macos_symlinks("/var/folders/xx"),
+            "/private/var/folders/xx"
+        );
+    }
+
+    #[test]
+    fn canonicalize_tmp_prefix() {
+        assert_eq!(
+            canonicalize_macos_symlinks("/tmp/build"),
+            "/private/tmp/build"
+        );
+    }
+
+    #[test]
+    fn canonicalize_etc_prefix() {
+        assert_eq!(
+            canonicalize_macos_symlinks("/etc/hosts"),
+            "/private/etc/hosts"
+        );
+    }
+
+    #[test]
+    fn canonicalize_exact_match() {
+        assert_eq!(canonicalize_macos_symlinks("/var"), "/private/var");
+        assert_eq!(canonicalize_macos_symlinks("/tmp"), "/private/tmp");
+        assert_eq!(canonicalize_macos_symlinks("/etc"), "/private/etc");
+    }
+
+    #[test]
+    fn canonicalize_already_private() {
+        assert_eq!(
+            canonicalize_macos_symlinks("/private/var/folders"),
+            "/private/var/folders"
+        );
+    }
+
+    #[test]
+    fn canonicalize_unrelated_path() {
+        assert_eq!(
+            canonicalize_macos_symlinks("/usr/local/bin"),
+            "/usr/local/bin"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // macOS symlink duality in effective_caps / explain_denial
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn effective_caps_symlink_rule_matches_private_query() {
+        // Rule uses /var/folders, query uses /private/var/folders
+        let policy = SandboxPolicy {
+            default: Cap::READ,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::WRITE,
+                path: "/var/folders".into(),
+                path_match: PathMatch::Subpath,
+                follow_worktrees: false,
+                doc: None,
+            }],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+        let caps = policy.effective_caps("/private/var/folders/xx/data", "/ignored");
+        assert!(
+            caps.contains(Cap::WRITE),
+            "rule on /var/folders should match query for /private/var/folders/xx/data"
+        );
+    }
+
+    #[test]
+    fn effective_caps_private_rule_matches_symlink_query() {
+        // Rule uses /private/tmp, query uses /tmp
+        let policy = SandboxPolicy {
+            default: Cap::READ,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::WRITE,
+                path: "/private/tmp".into(),
+                path_match: PathMatch::Subpath,
+                follow_worktrees: false,
+                doc: None,
+            }],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+        let caps = policy.effective_caps("/tmp/scratch", "/ignored");
+        assert!(
+            caps.contains(Cap::WRITE),
+            "rule on /private/tmp should match query for /tmp/scratch"
+        );
+    }
+
+    #[test]
+    fn effective_caps_symlink_deny_matches_private_query() {
+        // Deny rule on /etc should also deny /private/etc
+        let policy = SandboxPolicy {
+            default: Cap::READ | Cap::WRITE,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Deny,
+                caps: Cap::WRITE,
+                path: "/etc".into(),
+                path_match: PathMatch::Subpath,
+                follow_worktrees: false,
+                doc: None,
+            }],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+        let caps = policy.effective_caps("/private/etc/hosts", "/ignored");
+        assert!(
+            !caps.contains(Cap::WRITE),
+            "deny on /etc should apply to /private/etc/hosts"
+        );
+    }
+
+    #[test]
+    fn effective_caps_literal_symlink_duality() {
+        let policy = SandboxPolicy {
+            default: Cap::READ,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::WRITE,
+                path: "/tmp/specific-file".into(),
+                path_match: PathMatch::Literal,
+                follow_worktrees: false,
+                doc: None,
+            }],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+        // Query with /private/tmp should match literal rule on /tmp
+        let caps = policy.effective_caps("/private/tmp/specific-file", "/ignored");
+        assert!(
+            caps.contains(Cap::WRITE),
+            "literal rule on /tmp/specific-file should match /private/tmp/specific-file"
+        );
+    }
+
+    #[test]
+    fn explain_denial_symlink_duality() {
+        let policy = SandboxPolicy {
+            default: Cap::READ,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Deny,
+                caps: Cap::READ,
+                path: "/var/secrets".into(),
+                path_match: PathMatch::Subpath,
+                follow_worktrees: false,
+                doc: None,
+            }],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+        // Query with /private/var should find the deny rule on /var
+        let explanation = policy.explain_denial("/private/var/secrets/key", "/ignored", Cap::READ);
+        assert!(
+            explanation.is_some(),
+            "deny on /var/secrets should explain denial for /private/var/secrets/key"
+        );
     }
 }
