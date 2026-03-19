@@ -80,8 +80,8 @@ release VERSION:
     set -euo pipefail
 
     new_version="${{ VERSION }}"
-    tag="v${new_version}"
-    branch="release/${tag}"
+    tag="v$new_version"
+    branch="release/$tag"
 
     # Ensure clean working tree
     git diff --quiet && git diff --cached --quiet || { echo "Error: working tree is not clean" >&2; exit 1; }
