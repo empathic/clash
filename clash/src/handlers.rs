@@ -341,6 +341,16 @@ fn finish_session_start(lines: Vec<String>) -> anyhow::Result<HookOutput> {
 mod tests {
     use super::*;
 
+    fn session_start_context(input: &SessionStartHookInput) -> String {
+        let output = handle_session_start(input).expect("session start should succeed");
+        match &output.hook_specific_output {
+            Some(HookSpecificOutput::SessionStart(s)) => {
+                s.additional_context.clone().expect("should have context")
+            }
+            _ => panic!("expected SessionStart output"),
+        }
+    }
+
     fn default_session_start_input() -> SessionStartHookInput {
         SessionStartHookInput {
             session_id: "test-session".into(),
@@ -355,13 +365,7 @@ mod tests {
 
     #[test]
     fn test_session_start_reports_sandbox_support() {
-        let input = default_session_start_input();
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = session_start_context(&default_session_start_input());
         assert!(
             ctx.contains("sandbox:"),
             "should report sandbox status, got: {ctx}"
@@ -370,13 +374,7 @@ mod tests {
 
     #[test]
     fn test_session_start_reports_session_metadata() {
-        let input = default_session_start_input();
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = session_start_context(&default_session_start_input());
         assert!(ctx.contains("session source: startup"), "got: {ctx}");
         assert!(
             ctx.contains("model: claude-sonnet-4-20250514"),
@@ -386,13 +384,7 @@ mod tests {
 
     #[test]
     fn test_session_start_recommends_skip_permissions_in_default_mode() {
-        let input = default_session_start_input();
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = session_start_context(&default_session_start_input());
         assert!(
             ctx.contains("--dangerously-skip-permissions"),
             "should recommend --dangerously-skip-permissions when not in skip mode, got: {ctx}"
@@ -403,12 +395,7 @@ mod tests {
     fn test_session_start_no_recommendation_when_skip_permissions() {
         let mut input = default_session_start_input();
         input.permission_mode = Some("dangerously-skip-permissions".into());
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = session_start_context(&input);
         assert!(
             !ctx.contains("NOTE: Clash is managing permissions"),
             "should NOT recommend when already in skip mode, got: {ctx}"
@@ -419,12 +406,7 @@ mod tests {
     fn test_session_start_injects_instructions_when_skip_permissions() {
         let mut input = default_session_start_input();
         input.permission_mode = Some("dangerously-skip-permissions".into());
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = session_start_context(&input);
         assert!(ctx.contains("policy enforcement is DISABLED"), "got: {ctx}");
         assert!(ctx.contains("Filesystem sandboxing"), "got: {ctx}");
     }
