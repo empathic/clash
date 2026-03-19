@@ -16,7 +16,7 @@ use super::{SandboxError, SupportLevel};
 /// `exec_sandboxed()` in `mod.rs`. Modern macOS does not support the SBPL
 /// `(trace)` directive or the `sandbox-exec -t` flag, so tracing is a no-op.
 /// Sandbox violation detection relies on stderr heuristics in PostToolUse
-/// (`sandbox_fs_hints`).
+/// (`sandbox_hints`).
 #[instrument(level = Level::TRACE, skip(policy))]
 pub fn exec_sandboxed(
     policy: &SandboxPolicy,
