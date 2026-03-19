@@ -147,7 +147,7 @@ pub fn suggest_rule_description(
 }
 
 fn pending_dir(session_id: &str) -> PathBuf {
-    crate::audit::session_dir(session_id).join(PENDING_DIR)
+    crate::session_dir::SessionDir::new(session_id).root().join(PENDING_DIR)
 }
 
 fn sanitize_id(id: &str) -> String {

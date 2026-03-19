@@ -12,6 +12,7 @@ use tracing::{Level, instrument, warn};
 
 use crate::policy::Effect;
 use crate::policy::ir::DecisionTrace;
+use crate::session_dir::SessionDir;
 
 /// A single audit log entry.
 #[derive(Debug, Serialize)]
@@ -80,12 +81,12 @@ pub struct SessionStats {
 
 /// Return the session-specific temp directory for the given session ID.
 pub fn session_dir(session_id: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("clash-{}", session_id))
+    SessionDir::new(session_id).root().to_path_buf()
 }
 
 /// Path to the session stats sidecar file.
 fn stats_path(session_id: &str) -> PathBuf {
-    session_dir(session_id).join("stats.json")
+    SessionDir::new(session_id).stats()
 }
 
 /// Errors that can occur when reading session stats.
@@ -168,7 +169,7 @@ pub fn update_session_stats(
 /// Persist stats atomically to prevent partial reads by concurrent renders.
 fn write_session_stats(session_id: &str, stats: &SessionStats) {
     let path = stats_path(session_id);
-    let tmp_path = session_dir(session_id).join(".stats.json.tmp");
+    let tmp_path = SessionDir::new(session_id).root().join(".stats.json.tmp");
 
     let json = match serde_json::to_string(stats) {
         Ok(j) => j,
@@ -264,7 +265,7 @@ pub fn log_decision(
     }
 
     // Always write to session-specific audit log so `clash debug log` has data.
-    let session_log = session_dir(session_id).join("audit.jsonl");
+    let session_log = SessionDir::new(session_id).audit_log();
     if let Err(e) = append_entry(&session_log, &entry) {
         warn!(error = %e, path = %session_log.display(), "Failed to write session audit entry");
     }
@@ -321,7 +322,7 @@ pub fn log_sandbox_violations(
         suggested_rules,
     };
 
-    let session_log = session_dir(session_id).join("audit.jsonl");
+    let session_log = SessionDir::new(session_id).audit_log();
     if let Some(parent) = session_log.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -346,7 +347,7 @@ pub fn log_sandbox_violations(
 /// Returns the violations array from the most recent `sandbox_violation` entry
 /// matching the given tool_use_id.
 pub fn read_sandbox_violations(session_id: &str, tool_use_id: &str) -> Vec<SandboxViolation> {
-    let session_log = session_dir(session_id).join("audit.jsonl");
+    let session_log = SessionDir::new(session_id).audit_log();
     let content = match std::fs::read_to_string(&session_log) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
