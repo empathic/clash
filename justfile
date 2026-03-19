@@ -88,7 +88,7 @@ release VERSION:
     git diff --quiet && git diff --cached --quiet || { echo "Error: working tree is not clean" >&2; exit 1; }
 
     # Create release branch
-    echo "$branch"
+    echo "$tag $branch"
     exit 0
     git checkout -b "$branch"
 
