@@ -8,18 +8,30 @@
 //!
 //! This is the filesystem counterpart to [`crate::network_hints`], which handles
 //! network sandbox violations.
+//!
+//! # Submodules
+//!
+//! - [`audit_source`] — Reads sandbox violations from the session audit log.
+//! - [`stderr_source`] — Parses stderr for filesystem error patterns.
+//! - [`formatter`] — Builds the advisory hint message for Claude.
+
+mod audit_source;
+pub(crate) mod formatter;
+mod stderr_source;
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use regex::Regex;
-use tracing::{Level, info, instrument, warn};
+use tracing::{Level, info, instrument};
 
-use crate::audit;
 use crate::hooks::ToolUseHookInput;
 use crate::network_hints::extract_response_text;
-use crate::policy::sandbox_types::{Cap, RuleEffect, SandboxPolicy};
+use crate::policy::sandbox_types::{Cap, SandboxPolicy};
 use crate::settings::ClashSettings;
+
+use audit_source::{paths_from_audit, read_audit_violations};
+use formatter::build_fs_hint;
+use stderr_source::{contains_fs_error, extract_blocked_paths, extract_paths_from_errors};
 
 /// Filesystem error patterns that indicate a process had access blocked.
 ///
@@ -144,6 +156,8 @@ pub fn check_for_sandbox_fs_hint(
     Some(build_fs_hint(&blocked_paths))
 }
 
+// ── Shared helpers ───────────────────────────────────────────────────────
+
 /// Try to recover the sandbox policy for this tool invocation.
 ///
 /// 1. Re-evaluate the policy (works when PostToolUse gets the original command).
@@ -217,14 +231,6 @@ fn extract_policy_json(command: &str) -> Option<SandboxPolicy> {
     serde_json::from_str(&json_str[..end]).ok()
 }
 
-/// Check if text contains filesystem error patterns (case-insensitive).
-fn contains_fs_error(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    FS_ERROR_PATTERNS
-        .iter()
-        .any(|pattern| lower.contains(pattern))
-}
-
 /// Filter out sandbox noise paths that aren't user-visible errors.
 fn is_noise_path(path: &str) -> bool {
     NOISE_PATH_PREFIXES
@@ -246,167 +252,6 @@ fn operation_to_required_caps(operation: &str) -> Option<Cap> {
         op if op.starts_with("file-write-") => Some(Cap::WRITE),
         _ => None,
     }
-}
-
-// ── Audit log reading ────────────────────────────────────────────────────
-
-/// Read sandbox violations from the session audit log.
-///
-/// `clash sandbox exec` captures violations from the macOS unified log after
-/// the sandboxed process exits and writes them to the session `audit.jsonl`.
-/// This function reads them back by `tool_use_id`.
-fn read_audit_violations(input: &ToolUseHookInput) -> Vec<audit::SandboxViolation> {
-    if input.session_id.is_empty() {
-        return Vec::new();
-    }
-    let tool_use_id = match input.tool_use_id.as_deref() {
-        Some(id) => id,
-        None => return Vec::new(),
-    };
-    audit::read_sandbox_violations(&input.session_id, tool_use_id)
-}
-
-/// Convert audit-derived violations into `BlockedPath` entries.
-fn paths_from_audit(
-    violations: &[audit::SandboxViolation],
-    sandbox: &SandboxPolicy,
-    cwd: &str,
-) -> Vec<BlockedPath> {
-    let mut blocked = Vec::new();
-    let mut seen_dirs = BTreeSet::new();
-
-    for v in violations {
-        if is_noise_path(&v.path) {
-            continue;
-        }
-        // If the sandbox policy already grants the caps this operation needs,
-        // this violation is from another sandboxed process (noise), not ours.
-        if let Some(required) = operation_to_required_caps(&v.operation) {
-            let granted = sandbox.effective_caps(&v.path, cwd);
-            if granted.contains(required) {
-                continue;
-            }
-        }
-        let dir = suggest_parent_directory(&v.path);
-        if seen_dirs.insert(dir.clone()) {
-            blocked.push(BlockedPath {
-                current_caps: sandbox.effective_caps(&v.path, cwd),
-                path: v.path.clone(),
-                suggested_dir: dir,
-            });
-        }
-        if blocked.len() >= MAX_REPORTED_PATHS {
-            break;
-        }
-    }
-
-    blocked
-}
-
-/// A filesystem path that was blocked by the sandbox.
-#[derive(Debug)]
-#[allow(dead_code)]
-struct BlockedPath {
-    /// The actual file path from the error message.
-    path: String,
-    /// The parent directory to suggest allowing access to.
-    suggested_dir: String,
-    /// What capabilities the sandbox currently grants for this path.
-    current_caps: Cap,
-}
-
-/// Extract file paths from error messages and verify they're restricted by the sandbox.
-fn extract_blocked_paths(text: &str, sandbox: &SandboxPolicy, cwd: &str) -> Vec<BlockedPath> {
-    let paths = extract_paths_from_errors(text);
-    let mut blocked = Vec::new();
-    let mut seen_dirs = BTreeSet::new();
-
-    for path in paths {
-        if is_noise_path(&path) || !is_likely_sandbox_violation(&path, sandbox, cwd) {
-            continue;
-        }
-
-        let dir = suggest_parent_directory(&path);
-        // Deduplicate by suggested directory — multiple files in the same dir
-        // should produce one suggestion, not many.
-        if seen_dirs.insert(dir.clone()) {
-            blocked.push(BlockedPath {
-                current_caps: sandbox.effective_caps(&path, cwd),
-                path,
-                suggested_dir: dir,
-            });
-        }
-
-        if blocked.len() >= MAX_REPORTED_PATHS {
-            break;
-        }
-    }
-
-    blocked
-}
-
-/// Determine if a permission error on this path is likely caused by the sandbox.
-///
-/// Checks two conditions to reduce false positives:
-/// 1. The sandbox doesn't grant write+create for this path (most common cause)
-/// 2. The path is not under any explicitly allowed subpath (it's "foreign" to the sandbox)
-fn is_likely_sandbox_violation(path: &str, sandbox: &SandboxPolicy, cwd: &str) -> bool {
-    let caps = sandbox.effective_caps(path, cwd);
-    let missing_write_or_create = !caps.contains(Cap::WRITE) || !caps.contains(Cap::CREATE);
-
-    let under_explicit_allow = sandbox.rules.iter().any(|rule| {
-        if rule.effect != RuleEffect::Allow {
-            return false;
-        }
-        let resolved = SandboxPolicy::resolve_path(&rule.path, cwd);
-        path.starts_with(&resolved)
-    });
-
-    missing_write_or_create && !under_explicit_allow
-}
-
-/// Extract file paths from error text using regex patterns.
-///
-/// Handles common error formats from Go, Python, Node.js, Rust, and shell tools.
-fn extract_paths_from_errors(text: &str) -> Vec<String> {
-    // Compile patterns on each call — this runs only in PostToolUse (not hot path).
-    let patterns = [
-        // "open /path: operation not permitted" (Go, C, generic syscall wrappers)
-        r"(?:open|stat|read|write|mkdir|access|unlink|rename|chmod|chown|lstat|readlink|creat|opendir)\s+(/[^\s:]+):\s*(?i:operation not permitted|permission denied)",
-        // "Operation not permitted: '/path'" or "Permission denied: '/path'" (Python)
-        r"(?i:operation not permitted|permission denied):\s*'(/[^']+)'",
-        // "'/path': Operation not permitted" or "'/path': Permission denied" (Ruby, others)
-        r"'(/[^']+)':\s*(?i:operation not permitted|permission denied)",
-        // "EACCES: permission denied, open '/path'" (Node.js)
-        r"(?i:EACCES|EPERM):\s*(?:permission denied|operation not permitted),?\s*\w+\s*'([^']+)'",
-        // "/path: Permission denied" or "/path: Operation not permitted" (shell, coreutils)
-        // Must start with / to avoid matching non-path text.
-        r"(/(?:[^\s:])+):\s*(?:Permission denied|Operation not permitted)",
-    ];
-
-    let mut paths = Vec::new();
-    let mut seen = BTreeSet::new();
-
-    for pattern in &patterns {
-        let re = match Regex::new(pattern) {
-            Ok(re) => re,
-            Err(e) => {
-                warn!(pattern = pattern, error = %e, "Failed to compile path extraction regex");
-                continue;
-            }
-        };
-        for cap in re.captures_iter(text) {
-            if let Some(m) = cap.get(1) {
-                let path = m.as_str().to_string();
-                // Only include absolute paths, deduplicate
-                if path.starts_with('/') && seen.insert(path.clone()) {
-                    paths.push(path);
-                }
-            }
-        }
-    }
-
-    paths
 }
 
 /// Find a useful parent directory to suggest for a blocked path.
@@ -434,30 +279,17 @@ fn suggest_parent_directory(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// Build advisory context for Claude when a sandbox blocks filesystem access.
-fn build_fs_hint(blocked: &[BlockedPath]) -> String {
-    let mut lines =
-        vec!["SANDBOX_FS_HINT: Command failed — sandbox is blocking filesystem access.".into()];
-
-    // Generate specific `clash sandbox add-rule` commands for each blocked path.
-    for bp in blocked {
-        lines.push(format!(
-            "To allow: clash sandbox add-rule --name <SANDBOX> --path \"{}\" --allow \"read + write + create\"",
-            bp.suggested_dir
-        ));
-    }
-
-    lines.push("Do NOT retry — it will fail again until the policy is updated.".into());
-
-    lines.join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
-    use crate::policy::sandbox_types::{NetworkPolicy, PathMatch, SandboxRule};
+    use crate::policy::sandbox_types::{NetworkPolicy, PathMatch, RuleEffect, SandboxRule};
+
+    use formatter::BlockedPath;
+    use stderr_source::{
+        contains_fs_error, extract_paths_from_errors, is_likely_sandbox_violation,
+    };
 
     // --- contains_fs_error ---
 
@@ -585,7 +417,7 @@ mod tests {
             network: NetworkPolicy::Deny,
             doc: None,
         };
-        // Path outside /project → likely violation
+        // Path outside /project -> likely violation
         assert!(is_likely_sandbox_violation(
             "/Users/user/.fly/config",
             &sandbox,
@@ -608,7 +440,7 @@ mod tests {
             network: NetworkPolicy::Deny,
             doc: None,
         };
-        // Path inside /project with full caps → not a violation
+        // Path inside /project with full caps -> not a violation
         assert!(!is_likely_sandbox_violation(
             "/project/src/main.rs",
             &sandbox,
@@ -624,7 +456,7 @@ mod tests {
             network: NetworkPolicy::Deny,
             doc: None,
         };
-        // Default grants write+create → not a violation even for foreign paths
+        // Default grants write+create -> not a violation even for foreign paths
         assert!(!is_likely_sandbox_violation(
             "/Users/user/.fly/config",
             &sandbox,
@@ -675,6 +507,7 @@ mod tests {
 
     #[test]
     fn test_paths_from_audit_filters_noise() {
+        use audit_source::paths_from_audit;
         let sandbox = SandboxPolicy {
             default: Cap::READ | Cap::EXECUTE,
             rules: vec![],
@@ -682,11 +515,11 @@ mod tests {
             doc: None,
         };
         let violations = vec![
-            audit::SandboxViolation {
+            crate::audit::SandboxViolation {
                 operation: "file-read-data".into(),
                 path: "/dev/dtracehelper".into(),
             },
-            audit::SandboxViolation {
+            crate::audit::SandboxViolation {
                 operation: "file-write-create".into(),
                 path: "/Users/user/.fly/config".into(),
             },
@@ -698,6 +531,7 @@ mod tests {
 
     #[test]
     fn test_paths_from_audit_deduplicates_by_dir() {
+        use audit_source::paths_from_audit;
         let sandbox = SandboxPolicy {
             default: Cap::READ | Cap::EXECUTE,
             rules: vec![],
@@ -705,11 +539,11 @@ mod tests {
             doc: None,
         };
         let violations = vec![
-            audit::SandboxViolation {
+            crate::audit::SandboxViolation {
                 operation: "file-write-create".into(),
                 path: "/Users/user/.fly/perms.123".into(),
             },
-            audit::SandboxViolation {
+            crate::audit::SandboxViolation {
                 operation: "file-write-data".into(),
                 path: "/Users/user/.fly/config.json".into(),
             },
@@ -724,7 +558,7 @@ mod tests {
 
     #[test]
     fn test_operation_to_required_caps() {
-        // file-read-* → READ
+        // file-read-* -> READ
         assert_eq!(
             operation_to_required_caps("file-read-data"),
             Some(Cap::READ)
@@ -734,19 +568,19 @@ mod tests {
             Some(Cap::READ)
         );
 
-        // file-write-create → WRITE | CREATE
+        // file-write-create -> WRITE | CREATE
         assert_eq!(
             operation_to_required_caps("file-write-create"),
             Some(Cap::WRITE | Cap::CREATE)
         );
 
-        // file-write-unlink → WRITE | DELETE
+        // file-write-unlink -> WRITE | DELETE
         assert_eq!(
             operation_to_required_caps("file-write-unlink"),
             Some(Cap::WRITE | Cap::DELETE)
         );
 
-        // file-write-* (other) → WRITE
+        // file-write-* (other) -> WRITE
         assert_eq!(
             operation_to_required_caps("file-write-data"),
             Some(Cap::WRITE)
@@ -756,7 +590,7 @@ mod tests {
             Some(Cap::WRITE)
         );
 
-        // Unknown → None (keep conservatively)
+        // Unknown -> None (keep conservatively)
         assert_eq!(operation_to_required_caps("network-outbound"), None);
         assert_eq!(operation_to_required_caps("process-exec"), None);
     }
@@ -765,6 +599,7 @@ mod tests {
 
     #[test]
     fn test_paths_from_audit_filters_granted_read() {
+        use audit_source::paths_from_audit;
         // Sandbox grants READ (via default caps) — a file-read-data violation
         // on that path must be from another process, so it should be filtered.
         let sandbox = SandboxPolicy {
@@ -773,7 +608,7 @@ mod tests {
             network: NetworkPolicy::Deny,
             doc: None,
         };
-        let violations = vec![audit::SandboxViolation {
+        let violations = vec![crate::audit::SandboxViolation {
             operation: "file-read-data".into(),
             path: "/Applications/LM Studio.app/Contents/Info.plist".into(),
         }];
@@ -786,6 +621,7 @@ mod tests {
 
     #[test]
     fn test_paths_from_audit_keeps_denied_write() {
+        use audit_source::paths_from_audit;
         // Sandbox only grants READ+EXECUTE by default — a file-write-create
         // violation is a real sandbox denial and should be kept.
         let sandbox = SandboxPolicy {
@@ -794,7 +630,7 @@ mod tests {
             network: NetworkPolicy::Deny,
             doc: None,
         };
-        let violations = vec![audit::SandboxViolation {
+        let violations = vec![crate::audit::SandboxViolation {
             operation: "file-write-create".into(),
             path: "/Users/user/Desktop/testfile".into(),
         }];
@@ -891,7 +727,7 @@ mod tests {
 
     #[test]
     fn test_check_returns_none_when_path_is_allowed() {
-        // Sandbox allows read+write+create under the .fly path → not a sandbox violation
+        // Sandbox allows read+write+create under the .fly path -> not a sandbox violation
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
             r#"{"schema_version":5,"default_effect":"deny",
@@ -920,7 +756,7 @@ mod tests {
 
     #[test]
     fn test_check_returns_hint_with_explicit_sandbox() {
-        // Explicit sandbox only allows read under /project → .fly access denied
+        // Explicit sandbox only allows read under /project -> .fly access denied
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
             r#"{"schema_version":5,"default_effect":"deny",
