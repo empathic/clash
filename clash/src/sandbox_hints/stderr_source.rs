@@ -105,11 +105,7 @@ pub(crate) fn extract_blocked_paths(
 /// Checks two conditions to reduce false positives:
 /// 1. The sandbox doesn't grant write+create for this path (most common cause)
 /// 2. The path is not under any explicitly allowed subpath (it's "foreign" to the sandbox)
-pub(crate) fn is_likely_sandbox_violation(
-    path: &str,
-    sandbox: &SandboxPolicy,
-    cwd: &str,
-) -> bool {
+pub(crate) fn is_likely_sandbox_violation(path: &str, sandbox: &SandboxPolicy, cwd: &str) -> bool {
     let caps = sandbox.effective_caps(path, cwd);
     let missing_write_or_create = !caps.contains(Cap::WRITE) || !caps.contains(Cap::CREATE);
 

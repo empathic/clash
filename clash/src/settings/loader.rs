@@ -4,15 +4,15 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use dirs::home_dir;
-use tracing::{info, instrument, Level, warn};
+use tracing::{Level, info, instrument, warn};
 
 use crate::policy::match_tree::CompiledPolicy;
 use crate::policy_loader;
 
 use super::discovery::{
-    self, find_ancestor_with, parse_audit_config, parse_notification_config,
-    prefer_json_over_star, session_policy_file, settings_dir, tilde_path,
-    compile_default_policy_to_json, PolicyLevel,
+    self, PolicyLevel, compile_default_policy_to_json, find_ancestor_with, parse_audit_config,
+    parse_notification_config, prefer_json_over_star, session_policy_file, settings_dir,
+    tilde_path,
 };
 use super::{ClashSettings, HookContext, LoadedPolicy};
 
