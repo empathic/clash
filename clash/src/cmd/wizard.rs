@@ -511,6 +511,7 @@ pub fn wiz() -> Result<()> {
             let policy = json!({
                 "schema_version": 5,
                 "default_effect": "ask",
+                "includes": [{"path": "@clash//builtin.star"}],
                 "sandboxes": {},
                 "tree": []
             });
@@ -610,6 +611,7 @@ fn guided() -> Result<()> {
         "schema_version": 5,
         "default_effect": default_effect.label(),
         "default_sandbox": &sandbox_result.name,
+        "includes": [{"path": "@clash//builtin.star"}],
         "sandboxes": {
             (&sandbox_result.name): &sandbox_result.sandbox_json,
         },
