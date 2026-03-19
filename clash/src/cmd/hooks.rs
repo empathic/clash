@@ -99,19 +99,14 @@ impl HooksCmd {
                         }
 
                         // Sync trace with the policy decision for this tool use.
-                        let decision = input.tool_use_id.as_ref().map(|id| {
-                            let effect_str = match extract_effect(&output) {
-                                Some(Effect::Allow) => "allow",
-                                Some(Effect::Deny) => "deny",
-                                Some(Effect::Ask) => "ask",
-                                None => "unknown",
-                            };
-                            trace::PolicyDecision {
+                        let decision = input.tool_use_id.as_ref().and_then(|id| {
+                            let effect = extract_effect(&output)?;
+                            Some(trace::PolicyDecision {
                                 tool_use_id: id.clone(),
                                 tool_name: Some(input.tool_name.clone()),
-                                effect: effect_str.to_string(),
+                                effect,
                                 reason: None,
-                            }
+                            })
                         });
                         if let Err(e) = trace::sync_trace(&input.session_id, decision) {
                             tracing::warn!(error = %e, "Failed to sync trace (PreToolUse)");
