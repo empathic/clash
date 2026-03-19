@@ -366,6 +366,8 @@ impl<'de> Deserialize<'de> for NetworkPolicy {
 /// Falls back to the original path if resolution fails (e.g. path does
 /// not exist on the current system).
 pub(crate) fn resolve_symlinks(path: &str) -> String {
+    use std::collections::VecDeque;
+    use std::ffi::OsString;
     use std::path::{Component, Path, PathBuf};
 
     let path = Path::new(path);
@@ -373,24 +375,48 @@ pub(crate) fn resolve_symlinks(path: &str) -> String {
         return path.to_string_lossy().into_owned();
     }
 
-    let mut resolved = PathBuf::from("/");
+    // Collect path components into a work queue so that symlink targets
+    // can be spliced in for further resolution.
+    let mut pending: VecDeque<OsString> = path
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => Some(s.to_owned()),
+            _ => None,
+        })
+        .collect();
 
-    for component in path.components() {
-        match component {
-            Component::RootDir => continue,
-            Component::Normal(c) => {
-                resolved.push(c);
-                if let Ok(target) = std::fs::read_link(&resolved) {
-                    if target.is_absolute() {
-                        resolved = target;
-                    } else {
-                        resolved.pop();
-                        resolved.push(target);
-                    }
-                }
+    let mut resolved = PathBuf::from("/");
+    let mut symlink_depth: usize = 0;
+    const MAX_SYMLINK_DEPTH: usize = 40;
+
+    while let Some(component) = pending.pop_front() {
+        resolved.push(&component);
+
+        if let Ok(target) = std::fs::read_link(&resolved) {
+            symlink_depth += 1;
+            if symlink_depth > MAX_SYMLINK_DEPTH {
+                return path.to_string_lossy().into_owned();
             }
-            // Pass through CurDir, ParentDir, Prefix as-is
-            _ => continue,
+
+            // Splice the target's components into the front of the queue
+            // so they get resolved on subsequent iterations.
+            if target.is_absolute() {
+                resolved = PathBuf::from("/");
+            } else {
+                resolved.pop();
+            }
+
+            let target_components: Vec<OsString> = target
+                .components()
+                .filter_map(|c| match c {
+                    Component::Normal(s) => Some(s.to_owned()),
+                    _ => None,
+                })
+                .collect();
+
+            for (i, tc) in target_components.into_iter().enumerate() {
+                pending.insert(i, tc);
+            }
         }
     }
 
@@ -1206,59 +1232,197 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn canonicalize_var_prefix() {
+    fn resolve_symlinks_unrelated_path_unchanged() {
+        assert_eq!(resolve_symlinks("/usr/local/bin"), "/usr/local/bin");
+    }
+
+    #[test]
+    fn resolve_symlinks_follows_real_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target_dir");
+        std::fs::create_dir(&target).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let resolved = resolve_symlinks(&format!("{}/child", link.display()));
+        // The expected path must also be resolved since the tempdir itself
+        // may live under a symlink (e.g. /var/folders on macOS).
+        let expected = format!("{}/child", resolve_symlinks(&target.to_string_lossy()));
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn resolve_symlinks_nonexistent_path_returned_as_is() {
+        let result = resolve_symlinks("/nonexistent/made/up/path");
+        assert_eq!(result, "/nonexistent/made/up/path");
+    }
+
+    // macOS-specific: /var, /tmp, /etc are symlinks to /private/*
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolve_symlinks_macos_var() {
         assert_eq!(
             resolve_symlinks("/var/folders/xx"),
             "/private/var/folders/xx"
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn canonicalize_tmp_prefix() {
-        assert_eq!(
-            resolve_symlinks("/tmp/build"),
-            "/private/tmp/build"
-        );
+    fn resolve_symlinks_macos_tmp() {
+        assert_eq!(resolve_symlinks("/tmp/build"), "/private/tmp/build");
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn canonicalize_etc_prefix() {
-        assert_eq!(
-            resolve_symlinks("/etc/hosts"),
-            "/private/etc/hosts"
-        );
+    fn resolve_symlinks_macos_etc() {
+        assert_eq!(resolve_symlinks("/etc/hosts"), "/private/etc/hosts");
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn canonicalize_exact_match() {
+    fn resolve_symlinks_macos_exact() {
         assert_eq!(resolve_symlinks("/var"), "/private/var");
         assert_eq!(resolve_symlinks("/tmp"), "/private/tmp");
         assert_eq!(resolve_symlinks("/etc"), "/private/etc");
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn canonicalize_already_private() {
+    fn resolve_symlinks_macos_already_private() {
         assert_eq!(
             resolve_symlinks("/private/var/folders"),
             "/private/var/folders"
         );
     }
 
+    // -----------------------------------------------------------------------
+    // symlink duality in effective_caps / explain_denial
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn canonicalize_unrelated_path() {
-        assert_eq!(
-            resolve_symlinks("/usr/local/bin"),
-            "/usr/local/bin"
+    fn effective_caps_symlink_rule_matches_resolved_query() {
+        // Create a symlink so resolve_symlinks can resolve both forms
+        let tmp = tempfile::tempdir().unwrap();
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real_dir, &link).unwrap();
+
+        let policy = SandboxPolicy {
+            default: Cap::READ,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::WRITE,
+                path: link.to_string_lossy().into_owned(),
+                path_match: PathMatch::Subpath,
+                follow_worktrees: false,
+                doc: None,
+            }],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+        // Query via the resolved (real) path should match the symlink rule
+        let query = format!("{}/file.txt", real_dir.display());
+        let caps = policy.effective_caps(&query, "/ignored");
+        assert!(
+            caps.contains(Cap::WRITE),
+            "rule on symlink path should match query via resolved path"
         );
     }
 
-    // -----------------------------------------------------------------------
-    // macOS symlink duality in effective_caps / explain_denial
-    // -----------------------------------------------------------------------
+    #[test]
+    fn effective_caps_resolved_rule_matches_symlink_query() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real_dir, &link).unwrap();
+
+        let policy = SandboxPolicy {
+            default: Cap::READ,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Allow,
+                caps: Cap::WRITE,
+                path: real_dir.to_string_lossy().into_owned(),
+                path_match: PathMatch::Subpath,
+                follow_worktrees: false,
+                doc: None,
+            }],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+        // Query via the symlink should match the real-path rule
+        let query = format!("{}/file.txt", link.display());
+        let caps = policy.effective_caps(&query, "/ignored");
+        assert!(
+            caps.contains(Cap::WRITE),
+            "rule on real path should match query via symlink"
+        );
+    }
 
     #[test]
-    fn effective_caps_symlink_rule_matches_private_query() {
-        // Rule uses /var/folders, query uses /private/var/folders
+    fn effective_caps_symlink_deny() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real_dir, &link).unwrap();
+
+        let policy = SandboxPolicy {
+            default: Cap::READ | Cap::WRITE,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Deny,
+                caps: Cap::WRITE,
+                path: link.to_string_lossy().into_owned(),
+                path_match: PathMatch::Subpath,
+                follow_worktrees: false,
+                doc: None,
+            }],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+        let query = format!("{}/file.txt", real_dir.display());
+        let caps = policy.effective_caps(&query, "/ignored");
+        assert!(
+            !caps.contains(Cap::WRITE),
+            "deny on symlink should apply to resolved path"
+        );
+    }
+
+    #[test]
+    fn explain_denial_across_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real_dir, &link).unwrap();
+
+        let policy = SandboxPolicy {
+            default: Cap::READ,
+            rules: vec![SandboxRule {
+                effect: RuleEffect::Deny,
+                caps: Cap::READ,
+                path: link.to_string_lossy().into_owned(),
+                path_match: PathMatch::Subpath,
+                follow_worktrees: false,
+                doc: None,
+            }],
+            network: NetworkPolicy::Deny,
+            doc: None,
+        };
+        let query = format!("{}/secret", real_dir.display());
+        let explanation = policy.explain_denial(&query, "/ignored", Cap::READ);
+        assert!(
+            explanation.is_some(),
+            "deny on symlink should explain denial for resolved path"
+        );
+    }
+
+    // macOS-specific: test with /var → /private/var system symlinks
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn effective_caps_macos_var_symlink_duality() {
         let policy = SandboxPolicy {
             default: Cap::READ,
             rules: vec![SandboxRule {
@@ -1279,9 +1443,9 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn effective_caps_private_rule_matches_symlink_query() {
-        // Rule uses /private/tmp, query uses /tmp
+    fn effective_caps_macos_private_rule_matches_symlink_query() {
         let policy = SandboxPolicy {
             default: Cap::READ,
             rules: vec![SandboxRule {
@@ -1299,75 +1463,6 @@ mod tests {
         assert!(
             caps.contains(Cap::WRITE),
             "rule on /private/tmp should match query for /tmp/scratch"
-        );
-    }
-
-    #[test]
-    fn effective_caps_symlink_deny_matches_private_query() {
-        // Deny rule on /etc should also deny /private/etc
-        let policy = SandboxPolicy {
-            default: Cap::READ | Cap::WRITE,
-            rules: vec![SandboxRule {
-                effect: RuleEffect::Deny,
-                caps: Cap::WRITE,
-                path: "/etc".into(),
-                path_match: PathMatch::Subpath,
-                follow_worktrees: false,
-                doc: None,
-            }],
-            network: NetworkPolicy::Deny,
-            doc: None,
-        };
-        let caps = policy.effective_caps("/private/etc/hosts", "/ignored");
-        assert!(
-            !caps.contains(Cap::WRITE),
-            "deny on /etc should apply to /private/etc/hosts"
-        );
-    }
-
-    #[test]
-    fn effective_caps_literal_symlink_duality() {
-        let policy = SandboxPolicy {
-            default: Cap::READ,
-            rules: vec![SandboxRule {
-                effect: RuleEffect::Allow,
-                caps: Cap::WRITE,
-                path: "/tmp/specific-file".into(),
-                path_match: PathMatch::Literal,
-                follow_worktrees: false,
-                doc: None,
-            }],
-            network: NetworkPolicy::Deny,
-            doc: None,
-        };
-        // Query with /private/tmp should match literal rule on /tmp
-        let caps = policy.effective_caps("/private/tmp/specific-file", "/ignored");
-        assert!(
-            caps.contains(Cap::WRITE),
-            "literal rule on /tmp/specific-file should match /private/tmp/specific-file"
-        );
-    }
-
-    #[test]
-    fn explain_denial_symlink_duality() {
-        let policy = SandboxPolicy {
-            default: Cap::READ,
-            rules: vec![SandboxRule {
-                effect: RuleEffect::Deny,
-                caps: Cap::READ,
-                path: "/var/secrets".into(),
-                path_match: PathMatch::Subpath,
-                follow_worktrees: false,
-                doc: None,
-            }],
-            network: NetworkPolicy::Deny,
-            doc: None,
-        };
-        // Query with /private/var should find the deny rule on /var
-        let explanation = policy.explain_denial("/private/var/secrets/key", "/ignored", Cap::READ);
-        assert!(
-            explanation.is_some(),
-            "deny on /var/secrets should explain denial for /private/var/secrets/key"
         );
     }
 }
