@@ -74,87 +74,33 @@ clash *ARGS:
     cargo run -p clash -- {{ARGS}}
 
 # Prepare a release: bump versions, freeze site docs, commit on a release branch.
-# Usage: just release 0.4.0
-[script]
+# Usage: just release 0.5.1
 release VERSION:
-    import re, subprocess, sys, tomllib
-    from pathlib import Path
+    #!/usr/bin/env bash
+    set -euo pipefail
 
-    new_version = "{{VERSION}}".lstrip("v")
-    tag = f"v{new_version}"
-    branch = f"release/{tag}"
-    root = Path(".")
-    root_toml = root / "Cargo.toml"
+    new_version="${{ VERSION }}"
+    new_version="${new_version#v}"
+    tag="v${new_version}"
+    branch="release/${tag}"
 
-    # Ensure we're on a clean working tree
-    if subprocess.run(["git", "diff", "--quiet"]).returncode != 0 \
-       or subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
-        print("Error: working tree is not clean", file=sys.stderr)
-        sys.exit(1)
+    # Ensure clean working tree
+    git diff --quiet && git diff --cached --quiet || { echo "Error: working tree is not clean" >&2; exit 1; }
 
-    # Create release branch from current HEAD
-    subprocess.run(["git", "checkout", "-b", branch], check=True)
+    # Create release branch
+    git checkout -b "$branch"
 
-    # Read workspace members
-    root_data = tomllib.loads(root_toml.read_text())
-    members = root_data["workspace"]["members"]
-
-    # Bump each member's [package] version
-    old_version = None
-    for member in members:
-        member_toml = root / member / "Cargo.toml"
-        if not member_toml.exists():
-            continue
-        data = tomllib.loads(member_toml.read_text())
-        ver = data.get("package", {}).get("version")
-        if ver is None or ver == new_version:
-            continue
-        if old_version is None:
-            old_version = ver
-        text = member_toml.read_text()
-        new_text = re.sub(
-            r'^(version\s*=\s*)"' + re.escape(ver) + r'"',
-            rf'\g<1>"{new_version}"',
-            text, count=1, flags=re.MULTILINE,
-        )
-        if new_text != text:
-            member_toml.write_text(new_text)
-            print(f"  {member}: {ver} → {new_version}")
-
-    if old_version is None:
-        print("No versions changed — already up to date?", file=sys.stderr)
-        sys.exit(1)
-
-    # Bump workspace dependency versions in root Cargo.toml
-    text = root_toml.read_text()
-    root_toml.write_text(text.replace(
-        f'version = "{old_version}"',
-        f'version = "{new_version}"',
-    ))
-    print(f"  workspace deps: {old_version} → {new_version}")
-
-    # Validate
-    result = subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version=1"],
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        print("cargo metadata failed!", file=sys.stderr)
-        print(result.stderr.decode(), file=sys.stderr)
-        sys.exit(1)
+    # Bump all workspace crate versions + inter-crate dependency references
+    cargo workspaces version custom "$new_version" --no-git-commit --yes
 
     # Freeze site docs
-    subprocess.run(["bun", "run", "freeze", tag], cwd="site", check=True)
+    cd site && bun run freeze "$tag" && cd ..
 
     # Commit, push, and create PR
-    subprocess.run(["git", "add", "-A"], check=True)
-    subprocess.run(["git", "commit", "-m", f"chore: release {tag}"], check=True)
-    subprocess.run(["git", "push", "-u", "origin", branch], check=True)
-    subprocess.run([
-        "gh", "pr", "create",
-        "--title", f"chore: release {tag}",
-        "--body", f"Version bump and frozen docs for {tag}",
-    ], check=True)
+    git add -A
+    git commit -m "chore: release ${tag}"
+    git push -u origin "$branch"
+    gh pr create --title "chore: release ${tag}" --body "Version bump and frozen docs for ${tag}"
 
 fix:
     cargo fix --allow-dirty
