@@ -79,7 +79,7 @@ release VERSION:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    new_version="${{ VERSION }}"
+    new_version="{{VERSION}}"
     tag="v$new_version"
     branch="release/$tag"
 
