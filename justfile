@@ -80,7 +80,6 @@ release VERSION:
     set -euo pipefail
 
     new_version="${{ VERSION }}"
-    new_version="${new_version#v}"
     tag="v${new_version}"
     branch="release/${tag}"
 
