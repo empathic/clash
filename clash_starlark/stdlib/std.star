@@ -292,6 +292,8 @@ def _path_match(path_value, worktree=False, match_type="literal"):
                     "caps": caps,
                     "match_type": match_type,
                 }
+                if worktree:
+                    rule["follow_worktrees"] = True
                 if doc != None:
                     rule["doc"] = doc
                 sandbox_rules.append(rule)
@@ -701,6 +703,8 @@ def _sandbox_to_json(sb):
             "path": path_str,
             "path_match": r.get("match_type", "subpath"),
         }
+        if r.get("follow_worktrees", False):
+            rule_dict["follow_worktrees"] = True
         doc_val = r.get("doc", None)
         if doc_val != None:
             rule_dict["doc"] = doc_val

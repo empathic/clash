@@ -145,6 +145,8 @@ pub fn exec_sandboxed(
         return Err(SandboxError::Apply("no command specified".into()));
     }
 
+    let policy = &policy.expand_worktree_rules(cwd);
+
     #[cfg(target_os = "linux")]
     {
         // Landlock has no trace mechanism — ignore trace_path.
@@ -172,6 +174,7 @@ pub fn exec_sandboxed(
 /// On Linux, returns a description string (Landlock is applied in-process, not via a profile).
 /// On unsupported platforms, returns an error.
 pub fn compile_sandbox_profile(policy: &SandboxPolicy, cwd: &Path) -> Result<String, SandboxError> {
+    let policy = &policy.expand_worktree_rules(cwd);
     let cwd_str = cwd.to_string_lossy();
 
     #[cfg(target_os = "macos")]
@@ -329,6 +332,7 @@ mod tests {
                     caps: Cap::all(),
                     path: "/tmp".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -336,6 +340,7 @@ mod tests {
                     caps: Cap::READ,
                     path: "/etc/shadow".into(),
                     path_match: PathMatch::Literal,
+                    follow_worktrees: false,
                     doc: None,
                 },
             ],
@@ -404,6 +409,7 @@ mod tests {
                 caps: Cap::WRITE,
                 path: "/tmp".into(),
                 path_match: PathMatch::Subpath,
+                follow_worktrees: false,
                 doc: None,
             }],
             network: NetworkPolicy::Allow,
@@ -422,6 +428,7 @@ mod tests {
                 caps: Cap::WRITE | Cap::DELETE,
                 path: "/etc".into(),
                 path_match: PathMatch::Subpath,
+                follow_worktrees: false,
                 doc: None,
             }],
             network: NetworkPolicy::Allow,
@@ -445,6 +452,7 @@ mod tests {
                     caps: Cap::WRITE,
                     path: "/data".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
                 SandboxRule {
@@ -452,6 +460,7 @@ mod tests {
                     caps: Cap::WRITE,
                     path: "/data/readonly".into(),
                     path_match: PathMatch::Subpath,
+                    follow_worktrees: false,
                     doc: None,
                 },
             ],
@@ -479,6 +488,7 @@ mod tests {
                 caps: Cap::READ,
                 path: "/secret.key".into(),
                 path_match: PathMatch::Literal,
+                follow_worktrees: false,
                 doc: None,
             }],
             network: NetworkPolicy::Allow,
@@ -499,6 +509,7 @@ mod tests {
                 caps: Cap::all(),
                 path: "/tmp".into(),
                 path_match: PathMatch::Subpath,
+                follow_worktrees: false,
                 doc: None,
             }],
             network: NetworkPolicy::Allow,

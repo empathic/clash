@@ -785,10 +785,12 @@ impl CompiledPolicy {
         match decision {
             Some(d) => {
                 let mut effect = d.effect();
+                let cwd_path = std::env::current_dir().unwrap_or_default();
                 let sandbox = d
                     .sandbox_ref()
                     .and_then(|sr| self.sandboxes.get(&sr.0))
-                    .cloned();
+                    .cloned()
+                    .map(|sbx| sbx.expand_worktree_rules(&cwd_path));
 
                 // For non-Bash tools with file operations, enforce sandbox fs
                 // rules at policy level (there's no OS sandbox wrapper for these).
@@ -806,10 +808,7 @@ impl CompiledPolicy {
                         "write" => Cap::WRITE | Cap::CREATE,
                         _ => Cap::empty(),
                     };
-                    let cwd = std::env::current_dir()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
+                    let cwd = cwd_path.to_string_lossy().to_string();
                     if let Some(explanation) = sbx.explain_denial(fs_path, &cwd, required) {
                         effect = Effect::Deny;
                         let sandbox_name =
@@ -1923,6 +1922,7 @@ mod tests {
                         caps: Cap::WRITE,
                         path: r"/tmp/build-\d+".to_string(),
                         path_match: PathMatch::Regex,
+                        follow_worktrees: false,
                         doc: None,
                     }],
                     network: NetworkPolicy::Deny,
@@ -1977,6 +1977,7 @@ mod tests {
                         caps: Cap::WRITE,
                         path: "/tmp".to_string(),
                         path_match: PathMatch::Subpath,
+                        follow_worktrees: false,
                         doc: None,
                     }],
                     network: NetworkPolicy::Deny,
