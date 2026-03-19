@@ -27,8 +27,7 @@ use toolpath_claude::types::ContentPart;
 pub struct PolicyDecision {
     pub tool_use_id: String,
     pub tool_name: Option<String>,
-    /// "allow", "deny", or "ask"
-    pub effect: String,
+    pub effect: crate::policy::Effect,
     pub reason: Option<String>,
 }
 
@@ -214,7 +213,7 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
         if let Some(ref name) = dec.tool_name {
             extra.insert("tool_name".to_string(), serde_json::json!(name));
         }
-        extra.insert("effect".to_string(), serde_json::json!(dec.effect));
+        extra.insert("effect".to_string(), serde_json::json!(dec.effect.to_string()));
         if let Some(ref reason) = dec.reason {
             extra.insert("reason".to_string(), serde_json::json!(reason));
         }
@@ -230,7 +229,7 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
             },
         );
 
-        if dec.effect == "deny" {
+        if dec.effect == crate::policy::Effect::Deny {
             // Denials are dead ends: rewind last_step_id to the tool_use step's
             // parent so both the tool_use and denial sit on a dead-end branch.
             meta.state.last_step_id = denied_tool_use_parent.clone();
@@ -656,7 +655,7 @@ mod tests {
             Some(PolicyDecision {
                 tool_use_id: "tu-123".into(),
                 tool_name: Some("Bash".into()),
-                effect: "allow".into(),
+                effect: crate::policy::Effect::Allow,
                 reason: Some("matched rule: exe(\"*\").allow()".into()),
             }),
         )
@@ -716,7 +715,7 @@ mod tests {
             Some(PolicyDecision {
                 tool_use_id: "tu-789".into(),
                 tool_name: None,
-                effect: "deny".into(),
+                effect: crate::policy::Effect::Deny,
                 reason: None,
             }),
         )
@@ -818,7 +817,7 @@ mod tests {
             Some(PolicyDecision {
                 tool_use_id: "tu-denied".into(),
                 tool_name: Some("Bash".into()),
-                effect: "deny".into(),
+                effect: crate::policy::Effect::Deny,
                 reason: Some("not allowed".into()),
             }),
         )
@@ -943,7 +942,7 @@ mod tests {
             Some(PolicyDecision {
                 tool_use_id: "tu-bash-1".into(),
                 tool_name: Some("Bash".into()),
-                effect: "allow".into(),
+                effect: crate::policy::Effect::Allow,
                 reason: Some("matched rule: exe(\"*\").allow()".into()),
             }),
         )
@@ -988,7 +987,7 @@ mod tests {
             Some(PolicyDecision {
                 tool_use_id: "tu-read-1".into(),
                 tool_name: Some("Read".into()),
-                effect: "allow".into(),
+                effect: crate::policy::Effect::Allow,
                 reason: None,
             }),
         )
