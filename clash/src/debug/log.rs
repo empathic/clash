@@ -7,7 +7,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::audit;
 use crate::debug::AuditLogEntry;
 use crate::style;
 
@@ -50,7 +49,7 @@ pub fn read_log_file(path: &Path) -> Result<Vec<AuditLogEntry>> {
 
 /// Read audit log entries for a specific session.
 pub fn read_session_log(session_id: &str) -> Result<Vec<AuditLogEntry>> {
-    let path = audit::session_dir(session_id).join("audit.jsonl");
+    let path = crate::session_dir::SessionDir::new(session_id).audit_log();
     if !path.exists() {
         anyhow::bail!(
             "no audit log found for session {session_id} (expected {})",

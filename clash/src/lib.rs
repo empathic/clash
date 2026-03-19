@@ -49,6 +49,7 @@ pub mod sandbox;
 pub mod sandbox_cmd;
 pub mod sandbox_hints;
 pub mod schema;
+pub mod session_dir;
 pub mod session_policy;
 pub mod settings;
 pub mod shell_cmd;

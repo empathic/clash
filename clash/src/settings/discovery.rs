@@ -157,7 +157,7 @@ pub fn project_policy_file(project_root: &std::path::Path) -> PathBuf {
 
 /// Returns the session-level policy file path for the given session ID.
 pub fn session_policy_file(session_id: &str) -> PathBuf {
-    crate::audit::session_dir(session_id).join("policy.star")
+    crate::session_dir::SessionDir::new(session_id).policy()
 }
 
 /// Return `policy.json` if it exists in `dir`, otherwise `policy.star`.

@@ -36,15 +36,15 @@ pub struct PolicyDecision {
 // ---------------------------------------------------------------------------
 
 fn session_dir(session_id: &str) -> PathBuf {
-    crate::audit::session_dir(session_id)
+    crate::session_dir::SessionDir::new(session_id).root().to_path_buf()
 }
 
 fn trace_meta_path(session_id: &str) -> PathBuf {
-    session_dir(session_id).join("trace.json")
+    crate::session_dir::SessionDir::new(session_id).trace_meta()
 }
 
 fn steps_path(session_id: &str) -> PathBuf {
-    session_dir(session_id).join("trace.jsonl")
+    crate::session_dir::SessionDir::new(session_id).trace_steps()
 }
 
 // ---------------------------------------------------------------------------
