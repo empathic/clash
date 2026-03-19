@@ -355,35 +355,46 @@ impl<'de> Deserialize<'de> for NetworkPolicy {
     }
 }
 
-/// Canonicalize well-known macOS symlinks for Seatbelt matching.
+/// Resolve symlinks in a path without resolving firmlinks.
 ///
-/// On macOS, `/var`, `/tmp`, and `/etc` are symlinks to `/private/var`,
-/// `/private/tmp`, and `/private/etc`. Seatbelt inconsistently resolves
-/// these, so both forms must be considered when matching paths.
+/// Walks each component of the path and resolves actual symlinks via
+/// `std::fs::read_link`. Unlike `std::fs::canonicalize`, this does NOT
+/// resolve macOS firmlinks (e.g. `/Users` → `/System/Volumes/Data/Users`)
+/// which are transparent to Seatbelt and would produce paths that never
+/// match.
 ///
-/// This avoids `std::fs::canonicalize()` because it resolves firmlinks
-/// (e.g. `/Users` → `/System/Volumes/Data/Users`) which are transparent
-/// to Seatbelt and would produce paths that never match.
-pub(crate) fn canonicalize_macos_symlinks(path: &str) -> String {
-    static SYMLINK_PREFIXES: &[(&str, &str)] = &[
-        ("/var/", "/private/var/"),
-        ("/tmp/", "/private/tmp/"),
-        ("/etc/", "/private/etc/"),
-    ];
+/// Falls back to the original path if resolution fails (e.g. path does
+/// not exist on the current system).
+pub(crate) fn resolve_symlinks(path: &str) -> String {
+    use std::path::{Component, Path, PathBuf};
 
-    for &(prefix, replacement) in SYMLINK_PREFIXES {
-        if let Some(rest) = path.strip_prefix(prefix) {
-            return format!("{}{}", replacement, rest);
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return path.to_string_lossy().into_owned();
+    }
+
+    let mut resolved = PathBuf::from("/");
+
+    for component in path.components() {
+        match component {
+            Component::RootDir => continue,
+            Component::Normal(c) => {
+                resolved.push(c);
+                if let Ok(target) = std::fs::read_link(&resolved) {
+                    if target.is_absolute() {
+                        resolved = target;
+                    } else {
+                        resolved.pop();
+                        resolved.push(target);
+                    }
+                }
+            }
+            // Pass through CurDir, ParentDir, Prefix as-is
+            _ => continue,
         }
     }
 
-    // Exact matches (no trailing slash)
-    match path {
-        "/var" => "/private/var".to_string(),
-        "/tmp" => "/private/tmp".to_string(),
-        "/etc" => "/private/etc".to_string(),
-        _ => path.to_string(),
-    }
+    resolved.to_string_lossy().into_owned()
 }
 
 impl SandboxPolicy {
@@ -459,11 +470,11 @@ impl SandboxPolicy {
 
         // Canonicalize the query path so that /var/foo and /private/var/foo
         // are treated identically when matching against rules.
-        let canonical_path = canonicalize_macos_symlinks(path);
+        let canonical_path = resolve_symlinks(path);
 
         for rule in &self.rules {
             let rule_path = Self::resolve_path(&rule.path, cwd);
-            let canonical_rule = canonicalize_macos_symlinks(&rule_path);
+            let canonical_rule = resolve_symlinks(&rule_path);
             let matches = match rule.path_match {
                 PathMatch::Subpath => {
                     canonical_path.starts_with(&canonical_rule) || canonical_path == canonical_rule
@@ -524,7 +535,7 @@ impl SandboxPolicy {
         let mut best_depth: usize = 0;
 
         // Canonicalize query path for consistent matching across symlink forms.
-        let canonical_path = canonicalize_macos_symlinks(path);
+        let canonical_path = resolve_symlinks(path);
 
         for rule in &self.rules {
             if rule.effect != RuleEffect::Deny {
@@ -535,7 +546,7 @@ impl SandboxPolicy {
                 continue;
             }
             let rule_path = Self::resolve_path(&rule.path, cwd);
-            let canonical_rule = canonicalize_macos_symlinks(&rule_path);
+            let canonical_rule = resolve_symlinks(&rule_path);
             let matches = match rule.path_match {
                 PathMatch::Subpath => {
                     canonical_path.starts_with(&canonical_rule) || canonical_path == canonical_rule
@@ -1191,13 +1202,13 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // canonicalize_macos_symlinks tests
+    // resolve_symlinks tests
     // -----------------------------------------------------------------------
 
     #[test]
     fn canonicalize_var_prefix() {
         assert_eq!(
-            canonicalize_macos_symlinks("/var/folders/xx"),
+            resolve_symlinks("/var/folders/xx"),
             "/private/var/folders/xx"
         );
     }
@@ -1205,7 +1216,7 @@ mod tests {
     #[test]
     fn canonicalize_tmp_prefix() {
         assert_eq!(
-            canonicalize_macos_symlinks("/tmp/build"),
+            resolve_symlinks("/tmp/build"),
             "/private/tmp/build"
         );
     }
@@ -1213,22 +1224,22 @@ mod tests {
     #[test]
     fn canonicalize_etc_prefix() {
         assert_eq!(
-            canonicalize_macos_symlinks("/etc/hosts"),
+            resolve_symlinks("/etc/hosts"),
             "/private/etc/hosts"
         );
     }
 
     #[test]
     fn canonicalize_exact_match() {
-        assert_eq!(canonicalize_macos_symlinks("/var"), "/private/var");
-        assert_eq!(canonicalize_macos_symlinks("/tmp"), "/private/tmp");
-        assert_eq!(canonicalize_macos_symlinks("/etc"), "/private/etc");
+        assert_eq!(resolve_symlinks("/var"), "/private/var");
+        assert_eq!(resolve_symlinks("/tmp"), "/private/tmp");
+        assert_eq!(resolve_symlinks("/etc"), "/private/etc");
     }
 
     #[test]
     fn canonicalize_already_private() {
         assert_eq!(
-            canonicalize_macos_symlinks("/private/var/folders"),
+            resolve_symlinks("/private/var/folders"),
             "/private/var/folders"
         );
     }
@@ -1236,7 +1247,7 @@ mod tests {
     #[test]
     fn canonicalize_unrelated_path() {
         assert_eq!(
-            canonicalize_macos_symlinks("/usr/local/bin"),
+            resolve_symlinks("/usr/local/bin"),
             "/usr/local/bin"
         );
     }

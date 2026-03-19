@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use crate::policy::sandbox_types::{
-    Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy, canonicalize_macos_symlinks,
+    Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy, resolve_symlinks,
 };
 use tracing::{Level, instrument};
 
@@ -105,7 +105,7 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
             resolved
         };
         let canonical = if rule.path_match != PathMatch::Regex {
-            canonicalize_macos_symlinks(&resolved)
+            resolve_symlinks(&resolved)
         } else {
             resolved.clone()
         };
