@@ -1,7 +1,7 @@
 [package]
 name = "clash-brush-core"
 description = "Reusable core of a POSIX/bash shell (used by brush-shell)"
-version = "0.5.0"
+version.workspace = true
 authors = ["reuben olinsky"]
 categories = ["command-line-utilities", "development-tools"]
 edition.workspace = true

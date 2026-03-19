@@ -1,6 +1,6 @@
 [package]
 name = "clash"
-version = "0.5.1"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Command Line Agent Safety Harness — permission policies for coding agents"
