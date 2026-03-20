@@ -21,6 +21,7 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::Validate { file, json } => handle_validate(file, json),
         PolicyCmd::Show { json } => handle_show(json),
         PolicyCmd::Edit { scope, raw } => handle_edit(scope, raw),
+        PolicyCmd::TestGen { file, output } => super::test_gen::run(&file, output.as_deref()),
         PolicyCmd::Allow {
             command,
             tool,

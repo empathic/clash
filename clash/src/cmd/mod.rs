@@ -12,6 +12,7 @@ pub mod schema;
 pub mod session;
 pub mod status;
 pub mod statusline;
+pub mod test_gen;
 pub mod trace;
 pub mod uninstall;
 pub mod update;

@@ -127,6 +127,16 @@ pub enum PolicyCmd {
         #[arg(long)]
         scope: Option<String>,
     },
+    /// Generate a clester YAML test script that exercises every rule
+    #[command(name = "test-gen")]
+    TestGen {
+        /// Path to the policy file (.star or .json) to generate tests from
+        file: std::path::PathBuf,
+        /// Output file path (default: print to stdout)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
+
     // --- Hidden/power-user subcommands ---
     /// Show policy summary: active policy, default effect, rule count
     #[command(hide = true)]
