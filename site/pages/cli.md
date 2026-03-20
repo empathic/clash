@@ -70,9 +70,12 @@ Diagnose common setup issues and report fix instructions.
 
 ```bash
 clash doctor
+clash doctor --onboard
 ```
 
 **Checks:** Policy files exist, policy parses successfully, plugin installed, binary on PATH, file permissions, sandbox support.
+
+With `--onboard`, failing checks prompt the user to fix the issue interactively (install plugin, configure bypassPermissions, create a policy, install status line).
 
 ---
 

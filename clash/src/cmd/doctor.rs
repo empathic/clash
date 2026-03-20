@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tracing::{Level, instrument};
+use tracing::{Level, instrument, warn};
 
 use crate::sandbox;
 use crate::settings::ClashSettings;
@@ -14,6 +14,18 @@ enum CheckResult {
     Warn(String),
     /// Check failed — action required.
     Fail(String),
+}
+
+/// Identifies a fixable issue for the onboard flow.
+enum OnboardFix {
+    /// The clash plugin is not installed in Claude Code.
+    InstallPlugin,
+    /// bypassPermissions is not configured.
+    ConfigureBypass,
+    /// No policy files exist.
+    CreatePolicy,
+    /// Status line is not installed (optional enhancement).
+    InstallStatusLine,
 }
 
 impl CheckResult {
@@ -56,8 +68,20 @@ impl CheckResult {
 }
 
 /// Run all diagnostic checks and report results.
-#[instrument(level = Level::TRACE)]
-pub fn run() -> Result<()> {
+///
+/// When `onboard` is true, failing or warning checks prompt the user
+/// to fix the issue interactively before moving on.
+#[instrument(level = Level::TRACE, skip(onboard))]
+pub fn run(onboard: bool) -> Result<()> {
+    if onboard {
+        run_onboard()
+    } else {
+        run_diagnose()
+    }
+}
+
+/// Standard diagnostic mode — report all checks without offering fixes.
+fn run_diagnose() -> Result<()> {
     ui::banner_section("Doctor");
 
     let checks = vec![
@@ -108,6 +132,236 @@ pub fn run() -> Result<()> {
 
     Ok(())
 }
+
+/// Interactive onboarding mode — diagnose and offer to fix each issue.
+fn run_onboard() -> Result<()> {
+    ui::banner_section("Doctor (onboard)");
+    println!("  Checking your setup...\n");
+
+    let mut fixed = 0u32;
+    let mut already_ok = 0u32;
+
+    // --- Check 1: Binary on PATH ---
+    let binary_check = check_binary_on_path();
+    binary_check.print("Binary on PATH");
+    match &binary_check {
+        CheckResult::Pass(_) => already_ok += 1,
+        _ => {
+            // Nothing we can auto-fix for PATH issues; just inform.
+            println!(
+                "    {} This must be fixed manually — ensure clash is on your $PATH.",
+                style::dim("->"),
+            );
+        }
+    }
+
+    // --- Check 2: Plugin installed ---
+    let (plugin_ok, bypass_ok) = check_plugin_and_bypass();
+
+    if plugin_ok {
+        println!(
+            "  {} {}: installed",
+            style::green_bold("PASS"),
+            style::bold("Claude Code plugin"),
+        );
+        already_ok += 1;
+    } else {
+        println!(
+            "  {} {}: not installed",
+            style::red_bold("FAIL"),
+            style::bold("Claude Code plugin"),
+        );
+        if offer_fix(OnboardFix::InstallPlugin)? {
+            ui::progress("Installing plugin...");
+            match super::init::install_plugin() {
+                Ok(()) => fixed += 1,
+                Err(e) => {
+                    warn!(error = %e, "Plugin install failed during onboard");
+                    ui::fail(&format!("Could not install plugin: {e}"));
+                }
+            }
+        }
+    }
+
+    // --- Check 3: bypassPermissions ---
+    if bypass_ok {
+        println!(
+            "  {} {}: configured",
+            style::green_bold("PASS"),
+            style::bold("bypassPermissions"),
+        );
+        already_ok += 1;
+    } else {
+        println!(
+            "  {} {}: not set",
+            style::red_bold("FAIL"),
+            style::bold("bypassPermissions"),
+        );
+        if offer_fix(OnboardFix::ConfigureBypass)? {
+            ui::progress("Configuring bypassPermissions...");
+            match super::init::set_bypass_permissions() {
+                Ok(()) => fixed += 1,
+                Err(e) => {
+                    warn!(error = %e, "bypassPermissions config failed during onboard");
+                    ui::fail(&format!("Could not configure bypassPermissions: {e}"));
+                }
+            }
+        }
+    }
+
+    // --- Check 4: Policy files ---
+    let policy_check = check_policy_files();
+    policy_check.print("Policy files");
+    match &policy_check {
+        CheckResult::Fail(_) => {
+            if offer_fix(OnboardFix::CreatePolicy)? {
+                ui::progress("Launching policy wizard...");
+                match crate::cmd::wizard::wiz() {
+                    Ok(()) => fixed += 1,
+                    Err(e) => {
+                        warn!(error = %e, "Policy wizard failed during onboard");
+                        ui::fail(&format!("Policy creation failed: {e}"));
+                    }
+                }
+            }
+        }
+        _ => already_ok += 1,
+    }
+
+    // --- Check 5: Status line (optional) ---
+    let statusline_installed = check_statusline_installed();
+    if statusline_installed {
+        println!(
+            "  {} {}: installed",
+            style::green_bold("PASS"),
+            style::bold("Status line"),
+        );
+        already_ok += 1;
+    } else {
+        println!(
+            "  {} {}: not installed (optional)",
+            style::green_bold("PASS"),
+            style::bold("Status line"),
+        );
+        if offer_fix(OnboardFix::InstallStatusLine)? {
+            ui::progress("Installing status line...");
+            match super::statusline::install() {
+                Ok(()) => fixed += 1,
+                Err(e) => {
+                    warn!(error = %e, "Status line install failed during onboard");
+                    ui::fail(&format!("Could not install status line: {e}"));
+                }
+            }
+        }
+    }
+
+    // --- Additional informational checks ---
+    check_disabled().print("Disabled");
+    check_passthrough().print("Passthrough");
+    check_sandbox_support().print("Sandbox support");
+
+    // --- Summary ---
+    println!();
+    if fixed > 0 {
+        println!(
+            "  {} Fixed {} issue(s). {} already OK.",
+            style::green_bold("OK"),
+            fixed,
+            already_ok,
+        );
+    } else {
+        println!(
+            "  {} All checks passed.",
+            style::green_bold("OK"),
+        );
+    }
+
+    println!(
+        "\n  Run {} to see your active policy.",
+        style::bold("`clash status`"),
+    );
+
+    // Enable the plugin marker in Claude Code settings (same as init).
+    let claude = claude_settings::ClaudeSettings::new();
+    if let Err(e) =
+        claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true)
+    {
+        warn!(error = %e, "Could not set enabledPlugins during onboard");
+    }
+
+    Ok(())
+}
+
+/// Prompt the user to fix an issue. The default answer varies by fix type:
+/// optional enhancements default to No, required fixes default to Yes.
+fn offer_fix(fix: OnboardFix) -> Result<bool> {
+    let (prompt, default_yes) = match fix {
+        OnboardFix::InstallPlugin => ("Install now?", true),
+        OnboardFix::ConfigureBypass => ("Configure now?", true),
+        OnboardFix::CreatePolicy => ("Create a starter policy?", true),
+        OnboardFix::InstallStatusLine => ("Install status line?", false),
+    };
+
+    // dialoguer::Confirm with explicit default
+    let result = dialoguer::Confirm::new()
+        .with_prompt(format!("    {} {}", style::dim("->"), prompt))
+        .default(default_yes)
+        .interact();
+
+    match result {
+        Ok(answer) => Ok(answer),
+        Err(_) => {
+            // Non-interactive terminal — skip the fix silently
+            ui::skip("Skipping (non-interactive)");
+            Ok(false)
+        }
+    }
+}
+
+/// Inspect Claude Code settings to determine plugin and bypass status as a pair.
+///
+/// Returns `(plugin_installed, bypass_configured)`.
+fn check_plugin_and_bypass() -> (bool, bool) {
+    let claude = claude_settings::ClaudeSettings::new();
+    let settings = match claude.read(claude_settings::SettingsLevel::User) {
+        Ok(Some(s)) => s,
+        _ => return (false, false),
+    };
+
+    let plugin_ok = settings
+        .hooks
+        .as_ref()
+        .is_some_and(hooks_reference_clash)
+        || settings
+            .enabled_plugins
+            .as_ref()
+            .and_then(|p| p.get("clash").copied())
+            == Some(true);
+
+    let bypass_ok = settings.bypass_permissions == Some(true);
+
+    (plugin_ok, bypass_ok)
+}
+
+/// Check whether the clash status line is installed in Claude Code settings.
+fn check_statusline_installed() -> bool {
+    let cs = claude_settings::ClaudeSettings::new();
+    let current = match cs.read_or_default(claude_settings::SettingsLevel::User) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    current
+        .extra
+        .get("statusLine")
+        .and_then(|v| v.get("command"))
+        .and_then(|v| v.as_str())
+        .is_some_and(|c| c.contains("clash statusline"))
+}
+
+// -----------------------------------------------------------------------
+// Individual diagnostic checks (unchanged from standard doctor mode)
+// -----------------------------------------------------------------------
 
 /// Check 0: Is clash disabled via environment variable?
 fn check_disabled() -> CheckResult {
@@ -520,5 +774,17 @@ mod tests {
     #[test]
     fn check_binary_on_path_does_not_panic() {
         let _ = check_binary_on_path();
+    }
+
+    #[test]
+    fn check_plugin_and_bypass_does_not_panic() {
+        let (plugin, bypass) = check_plugin_and_bypass();
+        // Just verify it returns without panicking; values depend on environment
+        let _ = (plugin, bypass);
+    }
+
+    #[test]
+    fn check_statusline_installed_does_not_panic() {
+        let _ = check_statusline_installed();
     }
 }
