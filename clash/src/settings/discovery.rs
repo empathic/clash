@@ -229,7 +229,9 @@ pub fn evaluate_policy_file(path: &std::path::Path) -> Result<String> {
 ///
 /// Returns the parsed config (falling back to defaults on error) and an
 /// optional warning message if parsing failed.
-pub fn parse_notification_config(yaml_str: &str) -> (crate::notifications::NotificationConfig, Option<String>) {
+pub fn parse_notification_config(
+    yaml_str: &str,
+) -> (crate::notifications::NotificationConfig, Option<String>) {
     use serde::Deserialize;
     use tracing::warn;
 
@@ -244,7 +246,10 @@ pub fn parse_notification_config(yaml_str: &str) -> (crate::notifications::Notif
         Err(e) => {
             let warning = format!("notifications config parse error: {}", e);
             warn!(error = %e, "Failed to parse notifications config");
-            (crate::notifications::NotificationConfig::default(), Some(warning))
+            (
+                crate::notifications::NotificationConfig::default(),
+                Some(warning),
+            )
         }
     }
 }

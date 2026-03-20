@@ -14,7 +14,9 @@ use crate::hooks::ToolUseHookInput;
 use crate::policy::sandbox_types::SandboxPolicy;
 
 use super::formatter::BlockedPath;
-use super::{MAX_REPORTED_PATHS, is_noise_path, operation_to_required_caps, suggest_parent_directory};
+use super::{
+    MAX_REPORTED_PATHS, is_noise_path, operation_to_required_caps, suggest_parent_directory,
+};
 
 /// Read sandbox violations from the session audit log.
 ///

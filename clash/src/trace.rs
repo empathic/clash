@@ -36,7 +36,9 @@ pub struct PolicyDecision {
 // ---------------------------------------------------------------------------
 
 fn session_dir(session_id: &str) -> PathBuf {
-    crate::session_dir::SessionDir::new(session_id).root().to_path_buf()
+    crate::session_dir::SessionDir::new(session_id)
+        .root()
+        .to_path_buf()
 }
 
 fn trace_meta_path(session_id: &str) -> PathBuf {
@@ -213,7 +215,10 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
         if let Some(ref name) = dec.tool_name {
             extra.insert("tool_name".to_string(), serde_json::json!(name));
         }
-        extra.insert("effect".to_string(), serde_json::json!(dec.effect.to_string()));
+        extra.insert(
+            "effect".to_string(),
+            serde_json::json!(dec.effect.to_string()),
+        );
         if let Some(ref reason) = dec.reason {
             extra.insert("reason".to_string(), serde_json::json!(reason));
         }

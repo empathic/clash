@@ -372,7 +372,9 @@ fn print_list_human(sessions: &[SessionInfo], active_id: &Option<String>) {
 
 fn run_dir(session: Option<String>) -> Result<()> {
     let session_id = resolve_session(session)?;
-    let dir = crate::session_dir::SessionDir::new(&session_id).root().to_path_buf();
+    let dir = crate::session_dir::SessionDir::new(&session_id)
+        .root()
+        .to_path_buf();
     if !dir.exists() {
         anyhow::bail!("session directory does not exist: {}", dir.display());
     }
@@ -386,7 +388,9 @@ fn run_dir(session: Option<String>) -> Result<()> {
 
 fn run_show(session: Option<String>, json: bool) -> Result<()> {
     let session_id = resolve_session(session)?;
-    let dir = crate::session_dir::SessionDir::new(&session_id).root().to_path_buf();
+    let dir = crate::session_dir::SessionDir::new(&session_id)
+        .root()
+        .to_path_buf();
 
     let meta_path = dir.join("metadata.json");
     let meta_str = std::fs::read_to_string(&meta_path)

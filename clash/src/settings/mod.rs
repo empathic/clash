@@ -13,21 +13,18 @@ use crate::audit::AuditConfig;
 use crate::notifications::NotificationConfig;
 use crate::policy::match_tree::CompiledPolicy;
 
-mod env;
 mod discovery;
+mod env;
 mod loader;
 
 // Re-export all public items so existing `crate::settings::*` imports continue to work.
-pub use env::{CLASH_DISABLE_ENV, CLASH_PASSTHROUGH_ENV, is_disabled, is_passthrough};
 pub use discovery::{
-    PolicyLevel,
-    DEFAULT_POLICY_TEMPLATE, SANDBOX_PRESETS, SandboxPreset,
+    DEFAULT_POLICY_TEMPLATE, PolicyLevel, SANDBOX_PRESETS, SandboxPreset,
     compile_default_policy_to_json, compile_default_policy_to_json_with_preset,
-    settings_dir, policy_file, project_policy_file, session_policy_file,
-    evaluate_star_policy, evaluate_policy_file,
-    parse_notification_config,
+    evaluate_policy_file, evaluate_star_policy, parse_notification_config, policy_file,
+    project_policy_file, session_policy_file, settings_dir,
 };
-
+pub use env::{CLASH_DISABLE_ENV, CLASH_PASSTHROUGH_ENV, is_disabled, is_passthrough};
 
 /// Session-level context from Claude Code hook input.
 ///

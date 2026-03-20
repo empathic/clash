@@ -149,9 +149,9 @@ impl HooksCmd {
                     let net = settings.as_ref().and_then(|s| {
                         crate::network_hints::check_for_sandbox_network_hint(&input, s)
                     });
-                    let fs = settings.as_ref().and_then(|s| {
-                        crate::sandbox_hints::check_for_sandbox_fs_hint(&input, s)
-                    });
+                    let fs = settings
+                        .as_ref()
+                        .and_then(|s| crate::sandbox_hints::check_for_sandbox_fs_hint(&input, s));
                     (net, fs)
                 };
 
