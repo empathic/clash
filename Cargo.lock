@@ -2084,9 +2084,9 @@ dependencies = [
 
 [[package]]
 name = "hotln"
-version = "0.1.4"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "283aa3dd76210bde149b6f99c2ad5616ee8bdd37b640586f030c21b57592a6eb"
+checksum = "57ffd85e5f1b930b38b1c46df59041b0d3237436e40f4d625e759b0894f0fc1d"
 dependencies = [
  "base64",
  "serde_json",
