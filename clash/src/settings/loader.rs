@@ -463,7 +463,7 @@ mod test {
 
     #[test]
     fn load_valid_policy_succeeds() {
-        let star_policy = "load(\"@clash//std.star\", \"policy\")\ndef main():\n    return policy(default = allow, rules = [])\n";
+        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\")\ndef main():\n    return policy(default = allow(), rules = [])\n";
         let dir = tempfile::tempdir().unwrap();
         let policy_path = dir.path().join("policy.star");
         std::fs::write(&policy_path, star_policy).unwrap();
@@ -533,7 +533,7 @@ mod test {
         let policy_path = dir.path().join("policy.star");
         std::fs::write(
             &policy_path,
-            "def main():\n    return policy(default = deny, rules = [])\n",
+            "load(\"@clash//std.star\", \"policy\", \"deny\")\ndef main():\n    return policy(default = deny(), rules = [])\n",
         )
         .unwrap();
 

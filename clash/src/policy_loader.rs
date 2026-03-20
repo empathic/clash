@@ -441,9 +441,9 @@ mod tests {
         std::fs::write(
             &star_path,
             r#"
-load("@clash//std.star", "tool", "policy")
+load("@clash//std.star", "tool", "policy", "deny")
 def main():
-    return policy(default = deny, rules = [tool("Read").allow()])
+    return policy(default = deny(), rules = [tool("Read").allow()])
 "#,
         )
         .unwrap();

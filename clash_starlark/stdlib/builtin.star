@@ -1,26 +1,25 @@
-load("@clash//std.star", "exe", "policy", "sandbox", "home", "path", "tool")
+load("@clash//std.star", "allow", "ask", "cmd", "deny", "home", "path", "sandbox", "tools")
 
 clashbox = sandbox(
     name="clash_box",
-    default=deny,
+    default=deny(),
     fs=[
         home().child(".clash").recurse().allow(read=True),
         home().recurse().allow(read=True, execute=True),
     ],
-    net=allow,
+    net=allow(),
 )
 
-clash = policy(
-    default=deny,
-    rules=[
-        exe("clash", args=["bug"]).sandbox(clashbox).allow(),
-        exe("clash", args=["status"]).sandbox(clashbox).allow(),
-        exe("clash", args=["policy", "list"]).sandbox(clashbox).allow(),
-        exe("clash", args=["policy", "show"]).sandbox(clashbox).allow(),
-        exe("clash", args=["policy", "explain"]).sandbox(clashbox).allow(),
-        exe("clash", args=["policy", "schema"]).allow(),
-        exe("clash", args=["policy", "setup"]).sandbox(clashbox).ask(),
-    ],
+clash = cmd(
+    "clash",
+    {
+        ("bug", "status"): allow(sandbox=clashbox),
+        "policy": {
+            ("list", "show", "explain"): allow(sandbox=clashbox),
+            "schema": allow(),
+            "edit": ask(sandbox=clashbox),
+        },
+    },
 )
 
 _claude_fs = sandbox(
@@ -31,30 +30,22 @@ _claude_fs = sandbox(
     ],
 )
 
-claude = policy(
-    default=deny,
-    rules=[
-        tool(
-            [
-                "Agent",
-                "AskUserQuestion",
-                "EnterPlanMode",
-                "ExitPlanMode",
-                "Skill",
-                "ToolSearch",
-                "EnterWorktree",
-                "TaskCreate",
-                "TaskGet",
-                "TaskList",
-                "TaskOutput",
-                "TaskStop",
-                "TaskUpdate",
-                "ToolSearch",
-            ]
-        )
-        .sandbox(_claude_fs)
-        .allow(),
-    ],
-)
+claude = tools({
+    (
+        "Agent",
+        "AskUserQuestion",
+        "EnterPlanMode",
+        "ExitPlanMode",
+        "Skill",
+        "ToolSearch",
+        "EnterWorktree",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskOutput",
+        "TaskStop",
+        "TaskUpdate",
+    ): allow(sandbox=_claude_fs),
+})
 
 base = clash.update(claude)

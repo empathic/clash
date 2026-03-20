@@ -51,16 +51,16 @@ Or create `~/.clash/policy.star` manually — see the examples below.
 
 ```python
 # v0.4.0
-load("@clash//std.star", "exe", "policy")
+load("@clash//std.star", "allow", "deny", "exe", "policy")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe("git", args = ["push"]).deny(),
         exe("git").allow(),
     ])
 ```
 
-Named policy blocks (`(policy "main" ...)`) are replaced by a single `main()` function that returns a `policy()` value. The `(default deny "name")` header becomes the `default` parameter.
+Named policy blocks (`(policy "main" ...)`) are replaced by a single `main()` function that returns a `policy()` value. The `(default deny "name")` header becomes the `default` parameter (`default = deny()`).
 
 ### Exec rules
 
@@ -86,8 +86,8 @@ The `cwd()` and `home()` builders compile to match tree nodes that observe tool 
 
 | S-expression | Starlark |
 |---|---|
-| `(allow (net (domain "github.com")))` | `domains({"github.com": allow})` |
-| `(deny (net (domain "evil.com")))` | `domains({"evil.com": deny})` |
+| `(allow (net (domain "github.com")))` | `domains({"github.com": allow()})` |
+| `(deny (net (domain "evil.com")))` | `domains({"evil.com": deny()})` |
 
 ### Full example
 
@@ -104,15 +104,15 @@ The `cwd()` and `home()` builders compile to match tree nodes that observe tool 
 
 ```python
 # v0.4.0
-load("@clash//std.star", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe("git", args = ["push"]).deny(),
         exe("git").allow(),
         exe("cargo").allow(),
         cwd().allow(read = True),
-        domains({"github.com": allow}),
+        domains({"github.com": allow()}),
     ])
 ```
 
@@ -127,7 +127,7 @@ Claude Code's built-in format (used before Clash, or in v0.1.x with Clash) used 
 | `"Bash(git:*)"` in allow | `exe("git").allow()` |
 | `"Bash(rm:*)"` in deny | `exe("rm").deny()` |
 | `"Read(*)"` in allow | `cwd().allow(read = True)` |
-| `"Read(.env)"` in deny | Use `default = deny` and scope `cwd()` to your project |
+| `"Read(.env)"` in deny | Use `default = deny()` and scope `cwd()` to your project |
 
 ### Full example
 
@@ -142,17 +142,17 @@ Claude Code's built-in format (used before Clash, or in v0.1.x with Clash) used 
 
 ```python
 # v0.4.0
-load("@clash//std.star", "exe", "policy", "cwd")
+load("@clash//std.star", "deny", "exe", "policy", "cwd")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe("rm").deny(),
         exe("git").allow(),
         cwd().allow(read = True),
     ])
 ```
 
-The `.env` deny is handled naturally by `default = deny` — only the working directory is readable.
+The `.env` deny is handled naturally by `default = deny()` — only the working directory is readable.
 
 ## Migrating from YAML profiles
 
@@ -177,14 +177,14 @@ profiles:
 
 ```python
 # v0.4.0
-load("@clash//std.star", "exe", "policy", "cwd")
+load("@clash//std.star", "deny", "exe", "policy", "cwd")
 
 readonly_rules = [
     cwd().allow(read = True),
 ]
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         *readonly_rules,
         exe("git", args = ["push", "--force"]).deny(),
         exe("git").allow(),
@@ -220,7 +220,7 @@ deny webfetch *:
 
 ```python
 # Starlark
-domains({"github.com": allow, "evil.com": deny})
+domains({"github.com": allow(), "evil.com": deny()})
 ```
 
 ## Key differences to remember

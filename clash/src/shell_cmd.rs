@@ -369,10 +369,10 @@ mod tests {
     /// Build a test policy that allows Bash with a sandbox.
     fn test_policy() -> Arc<CompiledPolicy> {
         Arc::new(compile_star(
-            r#"load("@clash//std.star", "policy", "sandbox", "cwd", "exe")
+            r#"load("@clash//std.star", "policy", "sandbox", "cwd", "exe", "deny")
 def main():
-    return policy(default = deny, rules = [
-        exe().sandbox(sandbox(name="test", default=deny, fs=[cwd().allow(read=True)])).allow(),
+    return policy(default = deny(), rules = [
+        exe().sandbox(sandbox(name="test", default=deny(), fs=[cwd().allow(read=True)])).allow(),
     ])
 "#,
         ))
@@ -418,9 +418,9 @@ def main():
     #[test]
     fn hook_returns_none_without_sandbox() {
         let policy = Arc::new(compile_star(
-            r#"load("@clash//std.star", "policy")
+            r#"load("@clash//std.star", "allow", "policy")
 def main():
-    return policy(default = allow, rules = [])
+    return policy(default = allow(), rules = [])
 "#,
         ));
         let hook = make_sandbox_hook("/usr/bin/clash".to_string(), policy, None, false);

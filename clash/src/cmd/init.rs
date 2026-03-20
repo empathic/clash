@@ -96,7 +96,7 @@ fn run_init_project() -> Result<()> {
     std::fs::create_dir_all(&clash_dir)
         .with_context(|| format!("failed to create {}", clash_dir.display()))?;
 
-    let project_policy = "def main():\n    return policy(default = deny, rules = [])\n";
+    let project_policy = "load(\"@clash//std.star\", \"policy\", \"deny\")\ndef main():\n    return policy(default = deny(), rules = [])\n";
     std::fs::write(&policy_path, project_policy)
         .with_context(|| format!("failed to write {}", policy_path.display()))?;
 
