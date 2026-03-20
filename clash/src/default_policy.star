@@ -1,5 +1,5 @@
 load("@clash//builtin.star", "base")
-load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home")
+load("@clash//std.star", "allow", "ask", "deny", "exe", "tool", "policy", "sandbox", "cwd", "home")
 load("@clash//sandboxes.star", "{preset}")
 
 # Tighter sandbox for Claude fs tools (no execute, scoped to cwd + ~/.claude)
@@ -13,7 +13,7 @@ _fs_box = sandbox(
 
 def main():
     my_policy = policy(
-        default = ask,
+        default = ask(),
         default_sandbox = {preset},
         rules = [
             # Claude fs tools

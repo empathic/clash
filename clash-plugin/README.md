@@ -46,7 +46,7 @@ Policies can be managed via `policy.json` (machine-readable, CLI-friendly) or wr
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home", "domains")
+load("@clash//std.star", "allow", "ask", "deny", "exe", "tool", "policy", "sandbox", "cwd", "home", "domains")
 
 def main():
     fs_access = sandbox(fs=[
@@ -54,13 +54,13 @@ def main():
         home().child(".ssh").allow(read = True),
     ])
 
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         tool(["Read", "Glob", "Grep"]).sandbox(fs_access).allow(),
         tool(["Write", "Edit"]).sandbox(fs_access).allow(),
         exe("git").allow(),
         exe("git", args = ["push"]).deny(),
         tool().allow(),
-        domains({"github.com": allow}),
+        domains({"github.com": allow()}),
     ])
 ```
 
@@ -76,7 +76,7 @@ Note: Filesystem path entries (`cwd`, `home`, `tempdir`, `path`) cannot appear d
 | Multiple binaries | `exe(["cargo", "rustc"]).allow()` |
 | Filesystem (via sandbox) | `tool(["Read"]).sandbox(sandbox(fs=[cwd().allow(read = True)])).allow()` |
 | Home subdir (via sandbox) | `exe("ssh").sandbox(sandbox(fs=[home().child(".ssh").allow(read = True)])).allow()` |
-| Network domains | `domains({"github.com": allow})` |
+| Network domains | `domains({"github.com": allow()})` |
 | Tool access | `tool().allow()` |
 | Sandbox on exec | `exe("cargo").sandbox(sb).allow()` |
 
@@ -84,9 +84,9 @@ Note: Filesystem path entries (`cwd`, `home`, `tempdir`, `path`) cannot appear d
 
 ```python
 sb = sandbox(
-    default = deny,
+    default = deny(),
     fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
-    net = allow,
+    net = allow(),
 )
 exe("cargo").sandbox(sb).allow()
 ```
@@ -105,11 +105,11 @@ Note: `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
 If a command fails because of sandbox restrictions, update the policy's sandbox definition to grant the needed access:
 
 ```python
-# If cargo needs network access, add net = allow to its sandbox
+# If cargo needs network access, add net = allow() to its sandbox
 cargo_env = sandbox(
-    default = deny,
+    default = deny(),
     fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
-    net = allow,
+    net = allow(),
 )
 exe("cargo").sandbox(cargo_env).allow()
 ```

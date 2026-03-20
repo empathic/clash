@@ -128,10 +128,10 @@ This is what Clash is for. Not just AI agents — anything you don't trust.
 ```python
 # ~/.clash/policy.star
 load("@clash//builtin.star", "base")
-load("@clash//std.star", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "ask", "deny", "exe", "policy", "cwd", "domains")
 
 def main():
-    my_rules = policy(default = ask, rules = [
+    my_rules = policy(default = ask(), rules = [
         # project files: read and write
         cwd(follow_worktrees = True).allow(read = True, write = True),
 
@@ -142,7 +142,7 @@ def main():
         exe("git").allow(),
 
         # network: GitHub only
-        domains({"github.com": allow}),
+        domains({"github.com": allow()}),
     ])
     return base.update(my_rules)
 ```

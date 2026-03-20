@@ -4,11 +4,11 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home", "tempdir")
+    load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "deny")
 
     fs_box = sandbox(
         name = "fs",
-        default = deny,
+        default = deny(),
         fs = [
             cwd().allow(read = True, write = True),
         ],
@@ -16,7 +16,7 @@ clash:
 
     home_box = sandbox(
         name = "home",
-        default = deny,
+        default = deny(),
         fs = [
             home().child(".cargo").allow(read = True),
             tempdir().allow(),
@@ -24,7 +24,7 @@ clash:
     )
 
     def main():
-        return policy(default=deny, rules=[
+        return policy(default=deny(), rules=[
             exe("cargo").sandbox(fs_box, home_box).allow(),
             exe("git").sandbox(fs_box).allow(),
             tool("Read").sandbox(fs_box).allow(),

@@ -10,14 +10,14 @@ Clash policies use Starlark (`.star` files) with three capability domains: **exe
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe("git", args = ["push"]).deny(),
         exe("git").allow(),
         cwd().allow(read = True, write = True),
-        domains({"github.com": allow}),
+        domains({"github.com": allow()}),
     ])
 ```
 
@@ -126,8 +126,8 @@ The fs domain maps to these tools:
 ### Net -- Network Access
 
 ```python
-domains({"github.com": allow})
-domains({"github.com": allow, "crates.io": allow})
+domains({"github.com": allow()})
+domains({"github.com": allow(), "crates.io": allow()})
 ```
 
 The net domain maps to:
@@ -173,7 +173,7 @@ If no rules match, the `default` effect applies.
 Starlark policies compose naturally using functions and variables:
 
 ```python
-load("@clash//std.star", "exe", "policy", "cwd")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd")
 
 def cwd_access():
     return [
@@ -188,10 +188,10 @@ def safe_git():
     ]
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         *cwd_access(),
         *safe_git(),
-        domains({"github.com": allow, "crates.io": allow}),
+        domains({"github.com": allow(), "crates.io": allow()}),
     ])
 ```
 
@@ -203,13 +203,13 @@ The `update()` method combines two policies. In `a.update(b)`, `b`'s default eff
 
 ```python
 load("@clash//builtin.star", "base")
-load("@clash//std.star", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
 
 def main():
-    my_policy = policy(default = deny, rules = [
+    my_policy = policy(default = deny(), rules = [
         cwd().allow(read = True, write = True),
         exe("git").allow(),
-        domains({"github.com": allow}),
+        domains({"github.com": allow()}),
     ])
     return base.update(my_policy)
 ```
@@ -240,31 +240,31 @@ Exec rules can attach a **sandbox policy** that defines what filesystem and netw
 ### Defining sandboxes
 
 ```python
-load("@clash//std.star", "exe", "sandbox", "cwd", "home", "policy", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "sandbox", "cwd", "home", "policy", "domains")
 
 def main():
     cargo_env = sandbox(
-        default = deny,
+        default = deny(),
         fs = [
             cwd().allow(read = True),
             path("./target").allow(write = True),
         ],
-        net = allow,
+        net = allow(),
     )
 
     git_env = sandbox(
-        default = deny,
+        default = deny(),
         fs = [
             cwd().allow(read = True),
         ],
     )
 
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe("git", args = ["push"]).deny(),
         exe("cargo").sandbox(cargo_env).allow(),
         exe("git").sandbox(git_env).allow(),
         cwd().allow(read = True),
-        domains({"github.com": allow}),
+        domains({"github.com": allow()}),
     ])
 ```
 
@@ -288,7 +288,7 @@ Intent-based sandbox presets express what you trust a command to do:
 load("@clash//sandboxes.star", "dev", "dev_network")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe("gh").sandbox(dev_network).allow(),
         exe("git").sandbox(dev).allow(),
         exe().sandbox(dev).allow(),
@@ -303,7 +303,7 @@ Load pre-built sandbox configurations for common toolchains:
 load("@clash//rust.star", "rust_sandbox")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe(["cargo", "rustc"]).sandbox(rust_sandbox).allow(),
     ])
 ```
@@ -326,7 +326,7 @@ Sandboxes automatically grant access to:
 
 Sandbox network access has four modes:
 
-- `net = allow` -- sandbox **allows** all network access (no restrictions)
+- `net = allow()` -- sandbox **allows** all network access (no restrictions)
 - Localhost-only -- sandbox allows **localhost-only** connections, enforced at the kernel level without a proxy
 - Domain list -- sandbox allows network access **only to listed domains** via a local HTTP proxy
 - No net rule -- sandbox **denies** all network access
@@ -346,7 +346,7 @@ Subdomain matching is supported: `"github.com"` also permits `api.github.com`.
 ```python
 # Literal match (exact binary name or domain)
 exe("git")
-domains({"github.com": allow})
+domains({"github.com": allow()})
 
 # Regex match
 exe(regex("^cargo-.*"))
@@ -402,7 +402,7 @@ tool("WebSearch", doc = "No external searches needed").deny()
 sandbox(
     name = "dev",
     doc = "Development sandbox for project work",
-    default = deny,
+    default = deny(),
     fs = [
         cwd().allow(read = True, write = True, doc = "Project source files"),
         home().child(".ssh").allow(read = True, doc = "SSH keys for git auth"),
@@ -489,10 +489,10 @@ Values appear inside `Literal` patterns and resolve at eval time:
 Deny everything by default, explicitly allow only safe operations:
 
 ```python
-load("@clash//std.star", "policy", "cwd")
+load("@clash//std.star", "deny", "policy", "cwd")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         cwd().allow(read = True),
     ])
 ```
@@ -502,10 +502,10 @@ def main():
 Allow reads and common dev tools, deny destructive operations:
 
 ```python
-load("@clash//std.star", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         cwd().allow(read = True, write = True),
         exe("cargo").allow(),
         exe("npm").allow(),
@@ -517,7 +517,7 @@ def main():
         exe("git", args = ["reset"]).deny(),
         exe("sudo").deny(),
         exe("rm", args = ["-rf"]).deny(),
-        domains({"github.com": allow, "crates.io": allow, "npmjs.com": allow}),
+        domains({"github.com": allow(), "crates.io": allow(), "npmjs.com": allow()}),
     ])
 ```
 
@@ -526,10 +526,10 @@ def main():
 Allow almost everything, but block the truly dangerous:
 
 ```python
-load("@clash//std.star", "exe", "policy", "cwd", "home", "path")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "home", "path")
 
 def main():
-    return policy(default = allow, rules = [
+    return policy(default = allow(), rules = [
         exe("git", args = ["push", "--force"]).deny(),
         exe("git", args = ["reset", "--hard"]).deny(),
         exe("sudo").deny(),
@@ -543,10 +543,10 @@ def main():
 Allow reading only, deny all modifications:
 
 ```python
-load("@clash//std.star", "exe", "policy", "cwd")
+load("@clash//std.star", "deny", "exe", "policy", "cwd")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         cwd().allow(read = True),
         exe("cat").allow(),
         exe("ls").allow(),
@@ -559,28 +559,28 @@ def main():
 Allow build tools with constrained sandbox environments:
 
 ```python
-load("@clash//std.star", "exe", "sandbox", "cwd", "path", "policy", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "sandbox", "cwd", "path", "policy", "domains")
 
 def main():
     cargo_env = sandbox(
-        default = deny,
+        default = deny(),
         fs = [
             cwd().allow(read = True),
             path("./target").allow(write = True),
         ],
-        net = allow,
+        net = allow(),
     )
 
     npm_env = sandbox(
-        default = deny,
+        default = deny(),
         fs = [
             cwd().allow(read = True),
             path("./node_modules").allow(write = True),
         ],
-        net = domains({"registry.npmjs.org": allow}),
+        net = domains({"registry.npmjs.org": allow()}),
     )
 
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe("cargo").sandbox(cargo_env).allow(),
         exe("npm").sandbox(npm_env).allow(),
         cwd().allow(read = True),
