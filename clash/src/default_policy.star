@@ -1,4 +1,4 @@
-load("@clash//builtin.star", "base")
+load("@clash//builtin.star", "builtins")
 load("@clash//std.star", "allow", "ask", "deny", "exe", "tool", "policy", "sandbox", "cwd", "home")
 load("@clash//sandboxes.star", "{preset}")
 
@@ -12,10 +12,10 @@ _fs_box = sandbox(
 )
 
 def main():
-    my_policy = policy(
+    return policy(
         default = ask(),
         default_sandbox = {preset},
-        rules = [
+        rules = builtins + [
             # Claude fs tools
             tool(["Read", "Glob", "Grep"]).sandbox(_fs_box).allow(),
             tool(["Write", "Edit", "NotebookEdit"]).sandbox(_fs_box).allow(),
@@ -32,4 +32,3 @@ def main():
             exe().sandbox({preset}).allow(),
         ],
     )
-    return base.update(my_policy)

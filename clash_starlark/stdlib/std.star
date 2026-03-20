@@ -228,7 +228,9 @@ def _cmd_build_tree(tree, arg_index, sandboxes, seen):
 
 
 def cmd(name, tree):
-    """Build a command policy from a nested dict tree.
+    """Build a command rule from a nested dict tree.
+
+    Returns a rule node for use in policy(rules=[...]).
 
     Usage:
         cmd("git", {
@@ -249,11 +251,13 @@ def cmd(name, tree):
     inner = _mt_condition({"positional_arg": 0}, name_pat).on(nodes)
     root = _mt_condition("tool_name", bash_pat).on([inner])
 
-    return _mt_policy(default=_DENY, sandboxes=sandboxes, rules=[root])
+    return struct(_node=root, _sandbox=None, _cmd_sandboxes=sandboxes)
 
 
 def tools(mapping):
-    """Build a tool policy from a dict.
+    """Build tool rules from a dict.
+
+    Returns a list of rule nodes for use in policy(rules=[...]).
 
     Usage:
         tools({
@@ -261,7 +265,7 @@ def tools(mapping):
             "Bash": ask(sandbox=project),
         })
     """
-    nodes = []
+    result = []
     sandboxes = []
     seen = {}
 
@@ -275,11 +279,16 @@ def tools(mapping):
         for name in names:
             pat = _pattern(name)
             cond = _mt_tool(pat)
-            nodes.append(cond.on([decision]))
+            result.append(struct(_node=cond.on([decision]), _sandbox=None))
 
         _collect_effect_sandbox(eff, sandboxes, seen)
 
-    return _mt_policy(default=_DENY, sandboxes=sandboxes, rules=nodes)
+    # Attach collected sandboxes to the first node for policy() to extract.
+    if result and sandboxes:
+        first = result[0]
+        result[0] = struct(_node=first._node, _sandbox=None, _cmd_sandboxes=sandboxes)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -826,6 +835,13 @@ def _collect_node(item, flat_nodes, sandbox_list, seen):
         if sb._name not in seen:
             seen[sb._name] = True
             sandbox_list.append(_sandbox_to_json(sb))
+    # cmd()/tools() attach pre-built sandbox JSON via _cmd_sandboxes
+    if hasattr(item, "_cmd_sandboxes"):
+        for sb_json in item._cmd_sandboxes:
+            name = sb_json.get("name", "")
+            if name not in seen:
+                seen[name] = True
+                sandbox_list.append(sb_json)
 
 
 def _sandbox_to_json(sb):

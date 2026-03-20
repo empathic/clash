@@ -235,6 +235,9 @@ pub enum Commands {
     #[command(subcommand, alias = "box")]
     Sandbox(SandboxCmd),
 
+    /// Interactive policy sandbox — write rules and test them against tool invocations
+    Playground,
+
     /// Diagnose common setup issues and report fix instructions
     Doctor,
 
