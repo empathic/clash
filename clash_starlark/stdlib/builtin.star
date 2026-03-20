@@ -48,4 +48,5 @@ claude = tools({
     ): allow(sandbox=_claude_fs),
 })
 
-base = clash.update(claude)
+# Flat list of all builtin rule nodes
+builtins = [clash] + claude

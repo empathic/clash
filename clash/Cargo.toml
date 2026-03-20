@@ -37,7 +37,6 @@ base64 = { workspace = true }
 console = { workspace = true }
 nu-ansi-term = { workspace = true }
 reedline = { workspace = true }
-reedline-repl-rs = { workspace = true }
 dialoguer = { workspace = true }
 semver = { workspace = true }
 which = { workspace = true }

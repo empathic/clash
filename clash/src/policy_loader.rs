@@ -106,12 +106,13 @@ fn evaluate_include(include_path: &str, base_dir: &Path) -> Result<String> {
 
 /// Evaluate a `@clash//` stdlib module by wrapping it in a Starlark policy.
 ///
-/// The wrapper loads the module, imports its `base` export (the conventional
-/// name for a reusable policy value), and returns it from `main()`.
+/// The wrapper loads the module, imports its `builtins` export (a list of rule
+/// nodes), and returns them wrapped in a `policy()` from `main()`.
 fn evaluate_stdlib_include(include_path: &str) -> Result<String> {
     let wrapper = format!(
-        "load(\"{include_path}\", \"base\")\n\
-         def main():\n    return base\n"
+        "load(\"{include_path}\", \"builtins\")\n\
+         load(\"@clash//std.star\", \"deny\", \"policy\")\n\
+         def main():\n    return policy(default=deny(), rules=builtins)\n"
     );
     let output = clash_starlark::evaluate(&wrapper, "<include>", Path::new("."))
         .with_context(|| format!("failed to evaluate stdlib include {include_path}"))?;
