@@ -7,6 +7,7 @@ pub mod fmt;
 pub mod hooks;
 pub mod init;
 pub mod launch;
+pub mod playground;
 pub mod policy;
 pub mod schema;
 pub mod session;
