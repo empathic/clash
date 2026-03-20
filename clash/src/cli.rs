@@ -167,7 +167,12 @@ pub enum Commands {
         #[arg(long, default_missing_value = "true", num_args = 0..=1)]
         no_bypass: Option<bool>,
         /// Scope to initialize: "user" (global) or "project" (this repo)
+        #[arg(conflicts_with = "from_trace")]
         scope: Option<String>,
+        /// Generate policy from an observed session trace file.
+        /// Pass a path to trace.jsonl or audit.jsonl, or "latest" to auto-detect.
+        #[arg(long = "from-trace", value_name = "PATH")]
+        from_trace: Option<std::path::PathBuf>,
     },
 
     /// Remove clash: undo bypass permissions, uninstall plugin, remove config and binary
