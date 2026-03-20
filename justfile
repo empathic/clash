@@ -101,6 +101,39 @@ release VERSION:
     git push -u origin "$branch"
     gh pr create --title "chore: release ${tag}" --body "Version bump and frozen docs for ${tag}"
 
+# Fast targeted testing for a specific module (default: all clash lib tests)
+quick MODULE="":
+    cargo test -p clash --lib {{MODULE}}
+
+# Run clippy lints only (no tests)
+lint:
+    cargo clippy --workspace --all-targets
+
+# Run unit tests only across the workspace (no e2e)
+test-unit:
+    cargo test --workspace --lib
+
+# Generate test coverage report (requires cargo-llvm-cov)
+coverage:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! cargo llvm-cov --version &>/dev/null; then
+        echo "Error: cargo-llvm-cov is not installed."
+        echo "Install it with: cargo install cargo-llvm-cov"
+        echo "Or via rustup: rustup component add llvm-tools-preview && cargo install cargo-llvm-cov"
+        exit 1
+    fi
+    cargo llvm-cov --workspace --html
+    open target/llvm-cov/html/index.html
+
+# Run benchmarks across the workspace
+bench:
+    cargo bench --workspace
+
+# Full CI: alias for `just ci`
+test-all:
+    just ci
+
 fix:
     cargo fix --allow-dirty
 
