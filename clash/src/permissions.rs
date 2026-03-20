@@ -349,17 +349,16 @@ pub fn extract_noun(tool_name: &str, tool_input: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assert_decision;
     use crate::hooks::ToolUseHookInput;
+    use crate::test_utils::{TestPolicy, bash_command, get_context, pre_tool_use, read_file};
     use anyhow::Result;
     use serde_json::json;
 
     fn bash_input(command: &str) -> ToolUseHookInput {
-        ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_input: json!({"command": command}),
-            ..Default::default()
-        }
+        pre_tool_use("Bash", bash_command(command))
     }
+
     fn settings_with_policy(source: &str) -> ClashSettings {
         let mut settings = ClashSettings::default();
         settings.set_policy_source(source);
@@ -368,28 +367,11 @@ mod tests {
 
     // --- policy engine tests ---
 
-    /// V5 policy: allow Bash when positional_arg(0) matches `bin`.
-    fn v5_allow_exec(bin: &str) -> String {
-        format!(
-            r#"{{"schema_version":5,"default_effect":"deny","sandboxes":{{}},"tree":[
-            {{"condition":{{"observe":"tool_name","pattern":{{"literal":{{"literal":"Bash"}}}},"children":[
-                {{"condition":{{"observe":{{"positional_arg":0}},"pattern":{{"literal":{{"literal":"{bin}"}}}},"children":[
-                    {{"decision":{{"allow":null}}}}
-                ]}}}}
-            ]}}}}
-        ]}}"#
-        )
-    }
-
     #[test]
     fn test_policy_allow_git_status() -> Result<()> {
-        let settings = settings_with_policy(&v5_allow_exec("git"));
-        let result = check_permission(&bash_input("git status"), &settings)?;
-        assert_decision(
-            &result,
-            claude_settings::PermissionRule::Allow,
-            Some("result: allow"),
-        );
+        let settings = TestPolicy::deny_all().allow_exec("git").build();
+        let input = pre_tool_use("Bash", bash_command("git status"));
+        assert_decision!(settings, input, Effect::Allow, reason_contains: "allow");
         Ok(())
     }
 
@@ -407,80 +389,41 @@ mod tests {
             ]}}
         ]}"#;
         let settings = settings_with_policy(source);
-        let result = check_permission(&bash_input("git push origin main"), &settings)?;
-        assert_decision(&result, claude_settings::PermissionRule::Deny, None);
+        assert_decision!(settings, bash_input("git push origin main"), Effect::Deny);
         Ok(())
     }
 
     #[test]
     fn test_policy_default_deny() -> Result<()> {
-        let settings = settings_with_policy(&v5_allow_exec("git"));
-        // ls doesn't match any rule
-        let result = check_permission(&bash_input("ls"), &settings)?;
-        assert_eq!(
-            get_decision(&result),
-            Some(claude_settings::PermissionRule::Deny),
-        );
+        let settings = TestPolicy::deny_all().allow_exec("git").build();
+        assert_decision!(settings, bash_input("ls"), Effect::Deny);
         Ok(())
     }
 
     #[test]
     fn test_policy_read_under_cwd() -> Result<()> {
-        let source = r#"{"schema_version":5,"default_effect":"deny","sandboxes":{},"tree":[
-            {"condition":{"observe":"fs_op","pattern":{"literal":{"literal":"read"}},"children":[
-                {"condition":{"observe":"fs_path","pattern":{"prefix":{"literal":"/home/user/project"}},"children":[
-                    {"decision":{"allow":null}}
-                ]}}
-            ]}}
-        ]}"#;
-        let settings = settings_with_policy(source);
-        let input = ToolUseHookInput {
-            tool_name: "Read".into(),
-            tool_input: json!({"file_path": "/home/user/project/src/main.rs"}),
-            cwd: "/home/user/project".into(),
-            ..Default::default()
-        };
-        let result = check_permission(&input, &settings)?;
-        assert_decision(
-            &result,
-            claude_settings::PermissionRule::Allow,
-            Some("result: allow"),
-        );
+        let settings = TestPolicy::deny_all()
+            .allow_read("/home/user/project")
+            .build();
+        let input = pre_tool_use("Read", read_file("/home/user/project/src/main.rs"));
+        assert_decision!(settings, input, Effect::Allow, reason_contains: "allow");
         Ok(())
     }
 
     #[test]
     fn test_policy_read_outside_cwd_denied() -> Result<()> {
-        let source = r#"{"schema_version":5,"default_effect":"deny","sandboxes":{},"tree":[
-            {"condition":{"observe":"fs_op","pattern":{"literal":{"literal":"read"}},"children":[
-                {"condition":{"observe":"fs_path","pattern":{"prefix":{"literal":"/home/user/project"}},"children":[
-                    {"decision":{"allow":null}}
-                ]}}
-            ]}}
-        ]}"#;
-        let settings = settings_with_policy(source);
-        let input = ToolUseHookInput {
-            tool_name: "Read".into(),
-            tool_input: json!({"file_path": "/etc/passwd"}),
-            cwd: "/home/user/project".into(),
-            ..Default::default()
-        };
-        let result = check_permission(&input, &settings)?;
-        assert_eq!(
-            get_decision(&result),
-            Some(claude_settings::PermissionRule::Deny),
-        );
+        let settings = TestPolicy::deny_all()
+            .allow_read("/home/user/project")
+            .build();
+        let input = pre_tool_use("Read", read_file("/etc/passwd"));
+        assert_decision!(settings, input, Effect::Deny);
         Ok(())
     }
 
     #[test]
     fn test_no_compiled_policy_denies() -> Result<()> {
         let settings = ClashSettings::default();
-        let result = check_permission(&bash_input("ls"), &settings)?;
-        assert_eq!(
-            get_decision(&result),
-            Some(claude_settings::PermissionRule::Deny),
-        );
+        assert_decision!(settings, bash_input("ls"), Effect::Deny);
         Ok(())
     }
 
@@ -488,9 +431,10 @@ mod tests {
 
     #[test]
     fn test_explanation_contains_matched_rule() -> Result<()> {
-        let settings = settings_with_policy(&v5_allow_exec("git"));
-        let result = check_permission(&bash_input("git status"), &settings)?;
-        let ctx = get_additional_context(&result).expect("should have additional_context");
+        let settings = TestPolicy::deny_all().allow_exec("git").build();
+        let input = pre_tool_use("Bash", bash_command("git status"));
+        let result = check_permission(&input, &settings)?;
+        let ctx = get_context(&result).expect("should have additional_context");
         assert!(
             ctx.contains("matched"),
             "explanation should contain 'matched' but got: {ctx}"
@@ -500,17 +444,9 @@ mod tests {
 
     #[test]
     fn test_explanation_no_rules_matched() -> Result<()> {
-        // default=ask so that unmatched tools get ask, not deny
-        let source = r#"{"schema_version":5,"default_effect":"ask","sandboxes":{},"tree":[
-            {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
-                {"condition":{"observe":{"positional_arg":0},"pattern":{"literal":{"literal":"git"}},"children":[
-                    {"decision":{"allow":null}}
-                ]}}
-            ]}}
-        ]}"#;
-        let settings = settings_with_policy(source);
+        let settings = TestPolicy::ask_all().allow_exec("git").build();
         let result = check_permission(&bash_input("ls"), &settings)?;
-        let ctx = get_additional_context(&result).expect("should have additional_context");
+        let ctx = get_context(&result).expect("should have additional_context");
         assert!(
             ctx.contains("No rules matched"),
             "explanation should say 'No rules matched' but got: {ctx}"
@@ -518,66 +454,16 @@ mod tests {
         Ok(())
     }
 
-    // --- Helper functions ---
-
-    fn get_decision(output: &HookOutput) -> Option<claude_settings::PermissionRule> {
-        match &output.hook_specific_output {
-            Some(crate::hooks::HookSpecificOutput::PreToolUse(pre)) => {
-                pre.permission_decision.clone()
-            }
-            _ => None,
-        }
-    }
-
-    fn get_additional_context(output: &HookOutput) -> Option<String> {
-        match &output.hook_specific_output {
-            Some(crate::hooks::HookSpecificOutput::PreToolUse(pre)) => {
-                pre.additional_context.clone()
-            }
-            _ => None,
-        }
-    }
-
-    fn assert_decision(
-        output: &HookOutput,
-        expected_decision: claude_settings::PermissionRule,
-        expected_reason: Option<&str>,
-    ) {
-        let decision = get_decision(output);
-        assert_eq!(decision, Some(expected_decision), "unexpected decision");
-        if let Some(expected) = expected_reason {
-            let reason = match &output.hook_specific_output {
-                Some(crate::hooks::HookSpecificOutput::PreToolUse(pre)) => {
-                    pre.permission_decision_reason.as_deref()
-                }
-                _ => None,
-            };
-            assert_eq!(reason, Some(expected), "unexpected reason");
-        }
-    }
-
     // --- interactive tool (AskUserQuestion) policy tests ---
 
     #[test]
     fn test_ask_user_question_allowed_by_blanket_tool_rule() -> Result<()> {
-        // Blanket allow all tools: wildcard on tool_name
-        let source = r#"{"schema_version":5,"default_effect":"deny","sandboxes":{},"tree":[
-            {"condition":{"observe":"tool_name","pattern":"wildcard","children":[
-                {"decision":{"allow":null}}
-            ]}}
-        ]}"#;
-        let settings = settings_with_policy(source);
-        let input = ToolUseHookInput {
-            tool_name: "AskUserQuestion".into(),
-            tool_input: json!({"questions": [{"question": "Which approach?", "options": []}]}),
-            ..Default::default()
-        };
-        let result = check_permission(&input, &settings)?;
-        assert_decision(
-            &result,
-            claude_settings::PermissionRule::Allow,
-            Some("result: allow"),
+        let settings = TestPolicy::deny_all().allow_all_tools().build();
+        let input = pre_tool_use(
+            "AskUserQuestion",
+            json!({"questions": [{"question": "Which approach?", "options": []}]}),
         );
+        assert_decision!(settings, input, Effect::Allow, reason_contains: "allow");
         Ok(())
     }
 
@@ -593,16 +479,8 @@ mod tests {
             ]}}
         ]}"#;
         let settings = settings_with_policy(source);
-        let input = ToolUseHookInput {
-            tool_name: "AskUserQuestion".into(),
-            tool_input: json!({"questions": []}),
-            ..Default::default()
-        };
-        let result = check_permission(&input, &settings)?;
-        assert_eq!(
-            get_decision(&result),
-            Some(claude_settings::PermissionRule::Deny),
-        );
+        let input = pre_tool_use("AskUserQuestion", json!({"questions": []}));
+        assert_decision!(settings, input, Effect::Deny);
         Ok(())
     }
 
@@ -752,19 +630,13 @@ mod tests {
 
     #[test]
     fn test_deny_decision_includes_agent_context() -> Result<()> {
-        // Deny all Bash commands
-        let source = r#"{"schema_version":5,"default_effect":"deny","sandboxes":{},"tree":[
-            {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
+        let settings = TestPolicy::deny_all()
+            .raw_node(r#"{"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
                 {"decision":"deny"}
-            ]}}
-        ]}"#;
-        let settings = settings_with_policy(source);
-        let result = check_permission(&bash_input("ls -la"), &settings)?;
-        assert_eq!(
-            get_decision(&result),
-            Some(claude_settings::PermissionRule::Deny),
-        );
-        let ctx = get_additional_context(&result).expect("deny should have additional_context");
+            ]}}"#)
+            .build();
+        let result = assert_decision!(settings, bash_input("ls -la"), Effect::Deny);
+        let ctx = get_context(&result).expect("deny should have additional_context");
         assert!(ctx.contains("BLOCKED"), "got: {ctx}");
         Ok(())
     }

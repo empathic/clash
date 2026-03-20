@@ -59,3 +59,6 @@ pub mod tracing_init;
 pub mod tui;
 pub mod ui;
 pub mod version;
+
+#[cfg(test)]
+pub mod test_utils;
