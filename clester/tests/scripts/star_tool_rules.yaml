@@ -4,9 +4,9 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "tool", "policy")
+    load("@clash//std.star", "tool", "policy", "deny")
     def main():
-        return policy(default=deny, rules=[
+        return policy(default=deny(), rules=[
             tool(["Read", "Glob", "Grep"]).allow(),
             tool("WebSearch").deny(),
             tool("Skill").allow(),
