@@ -168,3 +168,83 @@ pub fn suggest_closest(name: &str, candidates: &[&str]) -> Option<String> {
         .min_by_key(|(_, dist)| *dist)
         .map(|(c, _)| (*c).to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_error_invalid_effect() {
+        let err = PolicyParseError::InvalidEffect("yolo".to_string());
+        insta::assert_snapshot!("error_invalid_effect", format!("{err}"));
+    }
+
+    #[test]
+    fn snapshot_error_invalid_effect_hint() {
+        let err = PolicyParseError::InvalidEffect("yolo".to_string());
+        insta::assert_snapshot!("error_invalid_effect_hint", err.help().unwrap());
+    }
+
+    #[test]
+    fn snapshot_error_invalid_rule() {
+        let err = PolicyParseError::InvalidRule {
+            rule: "broken rule".to_string(),
+            message: "expected effect at start".to_string(),
+        };
+        insta::assert_snapshot!("error_invalid_rule", format!("{err}"));
+    }
+
+    #[test]
+    fn snapshot_error_invalid_rule_hint() {
+        let err = PolicyParseError::InvalidRule {
+            rule: "broken rule".to_string(),
+            message: "expected effect at start".to_string(),
+        };
+        insta::assert_snapshot!("error_invalid_rule_hint", err.help().unwrap());
+    }
+
+    #[test]
+    fn snapshot_error_circular_include() {
+        let err = PolicyParseError::CircularInclude {
+            cycle: "base".to_string(),
+            path: Some("base -> strict -> base".to_string()),
+        };
+        insta::assert_snapshot!("error_circular_include", format!("{err}"));
+    }
+
+    #[test]
+    fn snapshot_error_circular_include_hint() {
+        let err = PolicyParseError::CircularInclude {
+            cycle: "base".to_string(),
+            path: Some("base -> strict -> base".to_string()),
+        };
+        insta::assert_snapshot!("error_circular_include_hint", err.help().unwrap());
+    }
+
+    #[test]
+    fn snapshot_error_unknown_include() {
+        let err = PolicyParseError::UnknownInclude {
+            name: "strct".to_string(),
+            suggestion: Some("strict".to_string()),
+        };
+        insta::assert_snapshot!("error_unknown_include_with_suggestion", format!("{err}"));
+    }
+
+    #[test]
+    fn snapshot_error_compile_invalid_glob() {
+        let err = CompileError::InvalidGlob {
+            pattern: "[invalid".to_string(),
+            source: regex::Regex::new("[invalid").unwrap_err(),
+        };
+        insta::assert_snapshot!("error_compile_invalid_glob", format!("{err}"));
+    }
+
+    #[test]
+    fn snapshot_error_compile_invalid_glob_hint() {
+        let err = CompileError::InvalidGlob {
+            pattern: "[invalid".to_string(),
+            source: regex::Regex::new("[invalid").unwrap_err(),
+        };
+        insta::assert_snapshot!("error_compile_invalid_glob_hint", err.help().unwrap());
+    }
+}

@@ -1,0 +1,59 @@
+---
+source: clash/src/policy/compile.rs
+expression: policy
+---
+{
+  "sandboxes": {
+    "dev": {
+      "default": [
+        "read",
+        "execute"
+      ],
+      "rules": [
+        {
+          "effect": "allow",
+          "caps": [
+            "read",
+            "write"
+          ],
+          "path": "/home/user/project",
+          "path_match": "subpath"
+        }
+      ],
+      "network": "deny"
+    }
+  },
+  "tree": [
+    {
+      "condition": {
+        "observe": "tool_name",
+        "pattern": {
+          "literal": {
+            "literal": "Bash"
+          }
+        },
+        "children": [
+          {
+            "decision": {
+              "allow": "dev"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "condition": {
+        "observe": "tool_name",
+        "pattern": "wildcard",
+        "children": [
+          {
+            "decision": {
+              "allow": null
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "default_effect": "deny"
+}

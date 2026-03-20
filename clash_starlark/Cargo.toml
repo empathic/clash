@@ -20,3 +20,5 @@ include_dir = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+insta = { workspace = true, features = ["json"] }
+serde_json = { workspace = true }

@@ -1013,4 +1013,102 @@ def main():
             "should have tmpdir rule"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Snapshot tests — Starlark to JSON IR
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn snapshot_starlark_simple_policy() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "tool", "policy")
+
+def main():
+    return policy(default = deny, rules = [tool().allow()])
+"#,
+        );
+        insta::assert_json_snapshot!("starlark_simple_policy", doc);
+    }
+
+    #[test]
+    fn snapshot_starlark_exec_rules() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "exe", "tool", "policy")
+
+def main():
+    return policy(default = deny, rules = [
+        exe("git").allow(),
+        exe("cargo").allow(),
+        tool("Read").allow(),
+        tool().deny(),
+    ])
+"#,
+        );
+        insta::assert_json_snapshot!("starlark_exec_rules", doc);
+    }
+
+    #[test]
+    fn snapshot_starlark_exe_with_args() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "exe", "tool", "policy")
+
+def main():
+    return policy(default = deny, rules = [
+        exe("git", args = ["push"]).deny(),
+        exe("git").allow(),
+        tool().allow(),
+    ])
+"#,
+        );
+        insta::assert_json_snapshot!("starlark_exe_with_args", doc);
+    }
+
+    #[test]
+    fn snapshot_starlark_regex_pattern() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "exe", "regex", "policy")
+
+def main():
+    return policy(default = deny, rules = [
+        exe(regex("cargo.*")).allow(),
+    ])
+"#,
+        );
+        insta::assert_json_snapshot!("starlark_regex_pattern", doc);
+    }
+
+    #[test]
+    fn snapshot_starlark_fs_rules() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "tool", "policy", "cwd")
+
+def main():
+    return policy(default = deny, rules = [
+        cwd().file(".env").deny(write = True),
+        cwd().allow(read = True, write = True),
+        tool().allow(),
+    ])
+"#,
+        );
+        insta::assert_json_snapshot!("starlark_fs_rules", doc);
+    }
+
+    #[test]
+    fn snapshot_starlark_error_no_main() {
+        let result = evaluate("x = 1", "test.star", &PathBuf::from("."));
+        let err = result.unwrap_err().to_string();
+        insta::assert_snapshot!("starlark_error_no_main", err);
+    }
+
+    #[test]
+    fn snapshot_starlark_error_syntax() {
+        let result = evaluate("def main(\n  broken", "test.star", &PathBuf::from("."));
+        let err = result.unwrap_err().to_string();
+        insta::assert_snapshot!("starlark_error_syntax", err);
+    }
 }

@@ -1,0 +1,42 @@
+---
+source: clash_starlark/src/lib.rs
+expression: doc
+---
+{
+  "default_effect": "deny",
+  "sandboxes": {},
+  "schema_version": 5,
+  "tree": [
+    {
+      "condition": {
+        "children": [
+          {
+            "condition": {
+              "children": [
+                {
+                  "decision": {
+                    "allow": null
+                  }
+                }
+              ],
+              "observe": {
+                "positional_arg": 0
+              },
+              "pattern": {
+                "regex": "cargo.*"
+              },
+              "source": "test.star:6:9-30"
+            }
+          }
+        ],
+        "observe": "tool_name",
+        "pattern": {
+          "literal": {
+            "literal": "Bash"
+          }
+        },
+        "source": "test.star:6:9-30"
+      }
+    }
+  ]
+}

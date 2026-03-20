@@ -1,0 +1,5 @@
+---
+source: clash/src/policy/error.rs
+expression: err.help().unwrap()
+---
+expected format: 'effect entity tool pattern [: constraint]' (got 'broken rule')

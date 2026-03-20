@@ -1,0 +1,5 @@
+---
+source: clash/src/policy/error.rs
+expression: "format!(\"{err}\")"
+---
+unknown profile 'strct' in include; did you mean 'strict'?

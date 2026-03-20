@@ -1,0 +1,27 @@
+---
+source: clash/src/policy/compile.rs
+expression: policy
+---
+{
+  "sandboxes": {},
+  "tree": [
+    {
+      "condition": {
+        "observe": "net_domain",
+        "pattern": {
+          "literal": {
+            "literal": "github.com"
+          }
+        },
+        "children": [
+          {
+            "decision": {
+              "allow": null
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "default_effect": "deny"
+}

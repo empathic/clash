@@ -1,0 +1,9 @@
+---
+source: clash/src/policy/format.rs
+expression: "tree_lines.join(\"\\n\")"
+---
+tool="Bash"
+├── arg[0]="git"
+│   ├── arg[1]="push" → deny
+│   └── allow
+└── ask

@@ -1,0 +1,5 @@
+---
+source: clash/src/policy/error.rs
+expression: err.help().unwrap()
+---
+check glob pattern '[invalid': use * for single segment, ** for recursive, ? for single char

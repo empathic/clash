@@ -1,0 +1,41 @@
+---
+source: clash/src/policy/compile.rs
+expression: policy
+---
+{
+  "sandboxes": {},
+  "tree": [
+    {
+      "condition": {
+        "observe": "tool_name",
+        "pattern": {
+          "literal": {
+            "literal": "Bash"
+          }
+        },
+        "children": [
+          {
+            "condition": {
+              "observe": {
+                "positional_arg": 0
+              },
+              "pattern": {
+                "literal": {
+                  "literal": "git"
+                }
+              },
+              "children": [
+                {
+                  "decision": {
+                    "allow": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "default_effect": "deny"
+}

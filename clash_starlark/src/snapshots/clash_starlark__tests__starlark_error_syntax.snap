@@ -1,0 +1,10 @@
+---
+source: clash_starlark/src/lib.rs
+expression: err
+---
+error: Parse error: unexpected new line here, expected one of "(", ")", ",", ":" or "="
+ --> test.star:2:9
+  |
+2 |   broken
+  |         
+  |

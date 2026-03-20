@@ -1,0 +1,123 @@
+---
+source: clash_starlark/src/lib.rs
+expression: doc
+---
+{
+  "default_effect": "deny",
+  "sandboxes": {},
+  "schema_version": 5,
+  "tree": [
+    {
+      "condition": {
+        "children": [
+          {
+            "condition": {
+              "children": [
+                {
+                  "decision": "deny"
+                }
+              ],
+              "observe": "fs_path",
+              "pattern": {
+                "literal": {
+                  "path": [
+                    {
+                      "env": "PWD"
+                    },
+                    {
+                      "literal": ".env"
+                    }
+                  ]
+                }
+              },
+              "source": "test.star:6:9-46"
+            }
+          }
+        ],
+        "observe": "fs_op",
+        "pattern": {
+          "literal": {
+            "literal": "write"
+          }
+        },
+        "source": "test.star:6:9-46"
+      }
+    },
+    {
+      "condition": {
+        "children": [
+          {
+            "condition": {
+              "children": [
+                {
+                  "decision": {
+                    "allow": null
+                  }
+                }
+              ],
+              "observe": "fs_path",
+              "pattern": {
+                "literal": {
+                  "env": "PWD"
+                }
+              },
+              "source": "test.star:7:9-47"
+            }
+          }
+        ],
+        "observe": "fs_op",
+        "pattern": {
+          "literal": {
+            "literal": "read"
+          }
+        },
+        "source": "test.star:7:9-47"
+      }
+    },
+    {
+      "condition": {
+        "children": [
+          {
+            "condition": {
+              "children": [
+                {
+                  "decision": {
+                    "allow": null
+                  }
+                }
+              ],
+              "observe": "fs_path",
+              "pattern": {
+                "literal": {
+                  "env": "PWD"
+                }
+              },
+              "source": "test.star:7:9-47"
+            }
+          }
+        ],
+        "observe": "fs_op",
+        "pattern": {
+          "literal": {
+            "literal": "write"
+          }
+        },
+        "source": "test.star:7:9-47"
+      }
+    },
+    {
+      "condition": {
+        "children": [
+          {
+            "decision": {
+              "allow": null
+            }
+          }
+        ],
+        "observe": "tool_name",
+        "pattern": "wildcard",
+        "source": "test.star:8:9-15"
+      }
+    }
+  ]
+}

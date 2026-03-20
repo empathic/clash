@@ -1,0 +1,24 @@
+---
+source: clash/src/policy/match_tree.rs
+expression: decision.trace
+---
+DecisionTrace {
+    matched_rules: [
+        RuleMatch {
+            rule_index: 0,
+            description: "PositionalArg(0)=git",
+            effect: Allow,
+            has_active_constraints: true,
+            node_id: None,
+        },
+        RuleMatch {
+            rule_index: 1,
+            description: "ToolName=Bash",
+            effect: Allow,
+            has_active_constraints: true,
+            node_id: None,
+        },
+    ],
+    skipped_rules: [],
+    final_resolution: "result: deny",
+}

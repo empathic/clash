@@ -1,0 +1,6 @@
+---
+source: clash/src/policy/match_tree.rs
+expression: "decision.human_explanation().join(\"\\n\")"
+---
+Rule 'ToolName: Literal(Literal("Bash"))' was skipped: pattern does not match this request
+No rules matched. Defaulting to ask.

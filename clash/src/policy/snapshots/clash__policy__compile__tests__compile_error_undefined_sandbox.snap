@@ -1,0 +1,5 @@
+---
+source: clash/src/policy/compile.rs
+expression: err
+---
+match tree validation errors: sandbox reference 'nonexistent' not found in sandboxes map

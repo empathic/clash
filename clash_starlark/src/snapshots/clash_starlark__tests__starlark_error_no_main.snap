@@ -1,0 +1,5 @@
+---
+source: clash_starlark/src/lib.rs
+expression: err
+---
+policy.star must define a main() function

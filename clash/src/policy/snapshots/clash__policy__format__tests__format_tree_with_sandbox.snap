@@ -1,0 +1,6 @@
+---
+source: clash/src/policy/format.rs
+expression: "tree_lines.join(\"\\n\")"
+---
+tool="Bash" → allow [sandbox: dev]
+tool=* → allow

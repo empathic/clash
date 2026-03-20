@@ -1,0 +1,104 @@
+---
+source: clash_starlark/src/lib.rs
+expression: doc
+---
+{
+  "default_effect": "deny",
+  "sandboxes": {},
+  "schema_version": 5,
+  "tree": [
+    {
+      "condition": {
+        "children": [
+          {
+            "condition": {
+              "children": [
+                {
+                  "condition": {
+                    "children": [
+                      {
+                        "decision": "deny"
+                      }
+                    ],
+                    "observe": {
+                      "positional_arg": 1
+                    },
+                    "pattern": {
+                      "literal": {
+                        "literal": "push"
+                      }
+                    },
+                    "source": "test.star:6:9-36"
+                  }
+                }
+              ],
+              "observe": {
+                "positional_arg": 0
+              },
+              "pattern": {
+                "literal": {
+                  "literal": "git"
+                }
+              },
+              "source": "test.star:6:9-36"
+            }
+          }
+        ],
+        "observe": "tool_name",
+        "pattern": {
+          "literal": {
+            "literal": "Bash"
+          }
+        },
+        "source": "test.star:6:9-36"
+      }
+    },
+    {
+      "condition": {
+        "children": [
+          {
+            "condition": {
+              "children": [
+                {
+                  "decision": {
+                    "allow": null
+                  }
+                }
+              ],
+              "observe": {
+                "positional_arg": 0
+              },
+              "pattern": {
+                "literal": {
+                  "literal": "git"
+                }
+              },
+              "source": "test.star:7:9-19"
+            }
+          }
+        ],
+        "observe": "tool_name",
+        "pattern": {
+          "literal": {
+            "literal": "Bash"
+          }
+        },
+        "source": "test.star:7:9-19"
+      }
+    },
+    {
+      "condition": {
+        "children": [
+          {
+            "decision": {
+              "allow": null
+            }
+          }
+        ],
+        "observe": "tool_name",
+        "pattern": "wildcard",
+        "source": "test.star:8:9-15"
+      }
+    }
+  ]
+}

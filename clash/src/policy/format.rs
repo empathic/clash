@@ -199,3 +199,188 @@ pub fn format_pattern(pat: &Pattern) -> String {
         Pattern::Prefix(v) => format!("{}/**", v.resolve()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::compile::compile_to_tree;
+
+    #[test]
+    fn snapshot_format_rules_exec_policy() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {},
+            "tree": [
+                {
+                    "condition": {
+                        "observe": "tool_name",
+                        "pattern": {"literal": {"literal": "Bash"}},
+                        "children": [{
+                            "condition": {
+                                "observe": {"positional_arg": 0},
+                                "pattern": {"literal": {"literal": "git"}},
+                                "children": [{"decision": {"allow": null}}]
+                            }
+                        }]
+                    }
+                },
+                {
+                    "condition": {
+                        "observe": "tool_name",
+                        "pattern": "wildcard",
+                        "children": [{"decision": {"deny": null}}]
+                    }
+                }
+            ]
+        }"#;
+        let policy = compile_to_tree(source).unwrap();
+        let rules = format_rules(&policy);
+        insta::assert_snapshot!("format_rules_exec", rules.join("\n"));
+    }
+
+    #[test]
+    fn snapshot_format_tree_exec_policy() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {},
+            "tree": [
+                {
+                    "condition": {
+                        "observe": "tool_name",
+                        "pattern": {"literal": {"literal": "Bash"}},
+                        "children": [{
+                            "condition": {
+                                "observe": {"positional_arg": 0},
+                                "pattern": {"literal": {"literal": "git"}},
+                                "children": [{"decision": {"allow": null}}]
+                            }
+                        }]
+                    }
+                },
+                {
+                    "condition": {
+                        "observe": "tool_name",
+                        "pattern": "wildcard",
+                        "children": [{"decision": {"deny": null}}]
+                    }
+                }
+            ]
+        }"#;
+        let policy = compile_to_tree(source).unwrap();
+        let tree_lines = format_tree(&policy);
+        insta::assert_snapshot!("format_tree_exec", tree_lines.join("\n"));
+    }
+
+    #[test]
+    fn snapshot_format_tree_with_sandbox() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {
+                "dev": {
+                    "default": ["read", "execute"],
+                    "network": "deny"
+                }
+            },
+            "tree": [
+                {
+                    "condition": {
+                        "observe": "tool_name",
+                        "pattern": {"literal": {"literal": "Bash"}},
+                        "children": [{"decision": {"allow": "dev"}}]
+                    }
+                },
+                {
+                    "condition": {
+                        "observe": "tool_name",
+                        "pattern": "wildcard",
+                        "children": [{"decision": {"allow": null}}]
+                    }
+                }
+            ]
+        }"#;
+        let policy = compile_to_tree(source).unwrap();
+        let tree_lines = format_tree(&policy);
+        insta::assert_snapshot!("format_tree_with_sandbox", tree_lines.join("\n"));
+    }
+
+    #[test]
+    fn snapshot_format_rules_mixed_capabilities() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "ask",
+            "sandboxes": {},
+            "tree": [
+                {
+                    "condition": {
+                        "observe": "tool_name",
+                        "pattern": {"literal": {"literal": "Bash"}},
+                        "children": [{
+                            "condition": {
+                                "observe": {"positional_arg": 0},
+                                "pattern": {"literal": {"literal": "git"}},
+                                "children": [{"decision": {"allow": null}}]
+                            }
+                        }]
+                    }
+                },
+                {
+                    "condition": {
+                        "observe": "fs_op",
+                        "pattern": {"literal": {"literal": "read"}},
+                        "children": [{"decision": {"allow": null}}]
+                    }
+                },
+                {
+                    "condition": {
+                        "observe": "net_domain",
+                        "pattern": {"literal": {"literal": "github.com"}},
+                        "children": [{"decision": {"allow": null}}]
+                    }
+                }
+            ]
+        }"#;
+        let policy = compile_to_tree(source).unwrap();
+        let rules = format_rules(&policy);
+        insta::assert_snapshot!("format_rules_mixed_caps", rules.join("\n"));
+    }
+
+    #[test]
+    fn snapshot_format_tree_nested_conditions() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {},
+            "tree": [{
+                "condition": {
+                    "observe": "tool_name",
+                    "pattern": {"literal": {"literal": "Bash"}},
+                    "children": [
+                        {
+                            "condition": {
+                                "observe": {"positional_arg": 0},
+                                "pattern": {"literal": {"literal": "git"}},
+                                "children": [
+                                    {
+                                        "condition": {
+                                            "observe": {"positional_arg": 1},
+                                            "pattern": {"literal": {"literal": "push"}},
+                                            "children": [{"decision": {"deny": null}}]
+                                        }
+                                    },
+                                    {"decision": {"allow": null}}
+                                ]
+                            }
+                        },
+                        {"decision": {"ask": null}}
+                    ]
+                }
+            }]
+        }"#;
+        let policy = compile_to_tree(source).unwrap();
+        let tree_lines = format_tree(&policy);
+        insta::assert_snapshot!("format_tree_nested", tree_lines.join("\n"));
+    }
+}

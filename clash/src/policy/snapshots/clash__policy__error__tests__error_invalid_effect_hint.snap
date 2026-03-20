@@ -1,0 +1,5 @@
+---
+source: clash/src/policy/error.rs
+expression: err.help().unwrap()
+---
+valid effects are: allow, deny, ask (got 'yolo')

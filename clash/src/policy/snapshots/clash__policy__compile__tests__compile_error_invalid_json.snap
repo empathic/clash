@@ -1,0 +1,5 @@
+---
+source: clash/src/policy/compile.rs
+expression: err
+---
+invalid match tree policy JSON: expected ident at line 1 column 2

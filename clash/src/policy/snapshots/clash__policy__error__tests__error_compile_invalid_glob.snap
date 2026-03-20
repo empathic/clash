@@ -1,0 +1,8 @@
+---
+source: clash/src/policy/error.rs
+expression: "format!(\"{err}\")"
+---
+invalid glob pattern '[invalid': regex parse error:
+    [invalid
+    ^
+error: unclosed character class

@@ -1,0 +1,7 @@
+---
+source: clash/src/policy/match_tree.rs
+expression: "decision.explanation().join(\"\\n\")"
+---
+matched: PositionalArg(0)=git
+matched: ToolName=Bash
+result: allow

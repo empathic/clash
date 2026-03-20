@@ -1,0 +1,25 @@
+---
+source: clash_starlark/src/lib.rs
+expression: doc
+---
+{
+  "default_effect": "deny",
+  "sandboxes": {},
+  "schema_version": 5,
+  "tree": [
+    {
+      "condition": {
+        "children": [
+          {
+            "decision": {
+              "allow": null
+            }
+          }
+        ],
+        "observe": "tool_name",
+        "pattern": "wildcard",
+        "source": "test.star:5:44-50"
+      }
+    }
+  ]
+}

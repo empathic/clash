@@ -219,4 +219,129 @@ mod tests {
             "error should mention the undefined sandbox name, got: {err}"
         );
     }
+
+    #[test]
+    fn snapshot_compiled_exec_rule() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {},
+            "tree": [{
+                "condition": {
+                    "observe": "tool_name",
+                    "pattern": {"literal": {"literal": "Bash"}},
+                    "children": [{
+                        "condition": {
+                            "observe": {"positional_arg": 0},
+                            "pattern": {"literal": {"literal": "git"}},
+                            "children": [{"decision": {"allow": null}}]
+                        }
+                    }]
+                }
+            }]
+        }"#;
+        let policy = compile_to_tree(source).unwrap();
+        insta::assert_json_snapshot!("compiled_exec_rule", policy);
+    }
+
+    #[test]
+    fn snapshot_compiled_fs_rule() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {},
+            "tree": [{
+                "condition": {
+                    "observe": "fs_op",
+                    "pattern": {"literal": {"literal": "read"}},
+                    "children": [{
+                        "condition": {
+                            "observe": "fs_path",
+                            "pattern": {"prefix": {"literal": "/home/user/project"}},
+                            "children": [{"decision": {"allow": null}}]
+                        }
+                    }]
+                }
+            }]
+        }"#;
+        let policy = compile_to_tree(source).unwrap();
+        insta::assert_json_snapshot!("compiled_fs_rule", policy);
+    }
+
+    #[test]
+    fn snapshot_compiled_net_rule() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {},
+            "tree": [{
+                "condition": {
+                    "observe": "net_domain",
+                    "pattern": {"literal": {"literal": "github.com"}},
+                    "children": [{"decision": {"allow": null}}]
+                }
+            }]
+        }"#;
+        let policy = compile_to_tree(source).unwrap();
+        insta::assert_json_snapshot!("compiled_net_rule", policy);
+    }
+
+    #[test]
+    fn snapshot_compiled_sandbox_policy() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {
+                "dev": {
+                    "default": ["read", "execute"],
+                    "network": "deny",
+                    "rules": [
+                        {"effect": "allow", "path": "/home/user/project", "caps": ["read", "write"]}
+                    ]
+                }
+            },
+            "tree": [
+                {
+                    "condition": {
+                        "observe": "tool_name",
+                        "pattern": {"literal": {"literal": "Bash"}},
+                        "children": [{"decision": {"allow": "dev"}}]
+                    }
+                },
+                {
+                    "condition": {
+                        "observe": "tool_name",
+                        "pattern": "wildcard",
+                        "children": [{"decision": {"allow": null}}]
+                    }
+                }
+            ]
+        }"#;
+        let policy = compile_to_tree(source).unwrap();
+        insta::assert_json_snapshot!("compiled_sandbox_policy", policy);
+    }
+
+    #[test]
+    fn snapshot_compile_error_undefined_sandbox() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {},
+            "tree": [{
+                "condition": {
+                    "observe": "tool_name",
+                    "pattern": {"literal": {"literal": "Bash"}},
+                    "children": [{"decision": {"allow": "nonexistent"}}]
+                }
+            }]
+        }"#;
+        let err = compile_to_tree(source).unwrap_err().to_string();
+        insta::assert_snapshot!("compile_error_undefined_sandbox", err);
+    }
+
+    #[test]
+    fn snapshot_compile_error_invalid_json() {
+        let err = compile_to_tree("not valid json").unwrap_err().to_string();
+        insta::assert_snapshot!("compile_error_invalid_json", err);
+    }
 }

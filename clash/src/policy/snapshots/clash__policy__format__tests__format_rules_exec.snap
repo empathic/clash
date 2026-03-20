@@ -1,0 +1,6 @@
+---
+source: clash/src/policy/format.rs
+expression: "rules.join(\"\\n\")"
+---
+allow tool="Bash" → arg[0]="git"
+deny tool=*

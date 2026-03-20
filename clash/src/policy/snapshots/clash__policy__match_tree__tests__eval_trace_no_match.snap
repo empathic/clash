@@ -1,0 +1,6 @@
+---
+source: clash/src/policy/match_tree.rs
+expression: "decision.explanation().join(\"\\n\")"
+---
+skipped: ToolName: Literal(Literal("Bash")) (pattern mismatch (value: Read))
+no rules matched, default: deny

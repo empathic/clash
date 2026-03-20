@@ -1990,4 +1990,142 @@ mod tests {
         };
         assert!(policy.platform_warnings().is_empty());
     }
+
+    // -----------------------------------------------------------------------
+    // Snapshot tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn snapshot_eval_trace_match() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {},
+            "tree": [{
+                "condition": {
+                    "observe": "tool_name",
+                    "pattern": {"literal": {"literal": "Bash"}},
+                    "children": [{
+                        "condition": {
+                            "observe": {"positional_arg": 0},
+                            "pattern": {"literal": {"literal": "git"}},
+                            "children": [{"decision": {"allow": null}}]
+                        }
+                    }]
+                }
+            }]
+        }"#;
+        let policy: CompiledPolicy = serde_json::from_str(source).unwrap();
+        let decision = policy.evaluate("Bash", &serde_json::json!({"command": "git status"}));
+        insta::assert_snapshot!("eval_trace_match", decision.explanation().join("\n"));
+    }
+
+    #[test]
+    fn snapshot_eval_trace_no_match() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {},
+            "tree": [{
+                "condition": {
+                    "observe": "tool_name",
+                    "pattern": {"literal": {"literal": "Bash"}},
+                    "children": [{
+                        "condition": {
+                            "observe": {"positional_arg": 0},
+                            "pattern": {"literal": {"literal": "git"}},
+                            "children": [{"decision": {"allow": null}}]
+                        }
+                    }]
+                }
+            }]
+        }"#;
+        let policy: CompiledPolicy = serde_json::from_str(source).unwrap();
+        let decision = policy.evaluate("Read", &serde_json::json!({"file_path": "/etc/passwd"}));
+        insta::assert_snapshot!("eval_trace_no_match", decision.explanation().join("\n"));
+    }
+
+    #[test]
+    fn snapshot_eval_human_explanation_match() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {},
+            "tree": [{
+                "condition": {
+                    "observe": "tool_name",
+                    "pattern": {"literal": {"literal": "Bash"}},
+                    "children": [{
+                        "condition": {
+                            "observe": {"positional_arg": 0},
+                            "pattern": {"literal": {"literal": "git"}},
+                            "children": [{"decision": {"allow": null}}]
+                        }
+                    }]
+                }
+            }]
+        }"#;
+        let policy: CompiledPolicy = serde_json::from_str(source).unwrap();
+        let decision = policy.evaluate("Bash", &serde_json::json!({"command": "git push"}));
+        insta::assert_snapshot!(
+            "eval_human_explanation_match",
+            decision.human_explanation().join("\n")
+        );
+    }
+
+    #[test]
+    fn snapshot_eval_human_explanation_default() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "ask",
+            "sandboxes": {},
+            "tree": [{
+                "condition": {
+                    "observe": "tool_name",
+                    "pattern": {"literal": {"literal": "Bash"}},
+                    "children": [{"decision": {"allow": null}}]
+                }
+            }]
+        }"#;
+        let policy: CompiledPolicy = serde_json::from_str(source).unwrap();
+        let decision = policy.evaluate("Read", &serde_json::json!({"file_path": "/etc/hosts"}));
+        insta::assert_snapshot!(
+            "eval_human_explanation_default",
+            decision.human_explanation().join("\n")
+        );
+    }
+
+    #[test]
+    fn snapshot_eval_decision_debug() {
+        let source = r#"{
+            "schema_version": 5,
+            "default_effect": "deny",
+            "sandboxes": {},
+            "tree": [
+                {
+                    "condition": {
+                        "observe": "tool_name",
+                        "pattern": {"literal": {"literal": "Bash"}},
+                        "children": [{
+                            "condition": {
+                                "observe": {"positional_arg": 0},
+                                "pattern": {"literal": {"literal": "git"}},
+                                "children": [{"decision": {"deny": null}}]
+                            }
+                        }]
+                    }
+                },
+                {
+                    "condition": {
+                        "observe": "tool_name",
+                        "pattern": "wildcard",
+                        "children": [{"decision": {"allow": null}}]
+                    }
+                }
+            ]
+        }"#;
+        let policy: CompiledPolicy = serde_json::from_str(source).unwrap();
+        let decision = policy.evaluate("Bash", &serde_json::json!({"command": "git push"}));
+        insta::assert_debug_snapshot!("eval_decision_debug", decision.trace);
+    }
 }

@@ -1,0 +1,7 @@
+---
+source: clash/src/policy/format.rs
+expression: "rules.join(\"\\n\")"
+---
+allow net_domain="github.com"
+allow tool="Bash" → arg[0]="git"
+allow fs_op="read"
