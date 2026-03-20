@@ -18,9 +18,14 @@ fn main() -> Result<()> {
             Commands::Uninstall { yes } => cmd::uninstall::run(yes),
             Commands::Status { json } => cmd::status::run(json, cli.verbose),
             Commands::ShowCommands { json, all } => cmd::commands::run(json, all),
-            Commands::Explain { json, tool, args } => {
+            Commands::Explain {
+                json,
+                trace,
+                tool,
+                args,
+            } => {
                 let input = args.join(" ");
-                cmd::explain::run(json, tool, input)
+                cmd::explain::run(json, trace, tool, input)
             }
             Commands::Fmt { check, files } => cmd::fmt::run(check, files),
             Commands::Policy(policy_cmd) => cmd::policy::run(policy_cmd),
