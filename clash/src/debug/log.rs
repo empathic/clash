@@ -133,7 +133,8 @@ pub fn find_by_hash(hash: &str) -> Result<AuditLogEntry> {
         .collect();
     match matches.len() {
         0 => anyhow::bail!("no audit log entry matching '{hash}'"),
-        1 => Ok(matches.into_iter().next().unwrap()),
+        // Safety: the match arm guarantees exactly one element.
+        1 => Ok(matches.into_iter().next().expect("len == 1")),
         n => anyhow::bail!("ambiguous hash '{hash}' matches {n} entries — use more characters"),
     }
 }

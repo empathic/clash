@@ -83,7 +83,10 @@ impl ClashSettings {
     /// Write the active session ID to `~/.clash/active_session`.
     pub fn set_active_session(session_id: &str) -> Result<()> {
         let path = Self::active_session_file()?;
-        std::fs::create_dir_all(path.parent().unwrap())?;
+        let parent = path
+            .parent()
+            .context("active session file path has no parent directory")?;
+        std::fs::create_dir_all(parent)?;
         std::fs::write(&path, session_id)?;
         Ok(())
     }
