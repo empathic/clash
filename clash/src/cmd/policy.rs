@@ -14,8 +14,13 @@ use crate::style;
 pub fn run(cmd: PolicyCmd) -> Result<()> {
     match cmd {
         PolicyCmd::Schema { json } => super::schema::run(json),
-        PolicyCmd::Explain { json, tool, args } => {
-            super::explain::run(json, tool.unwrap_or_default(), args.join(" "))
+        PolicyCmd::Explain {
+            json,
+            trace,
+            tool,
+            args,
+        } => {
+            super::explain::run(json, trace, tool.unwrap_or_default(), args.join(" "))
         }
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Validate { file, json } => handle_validate(file, json),
