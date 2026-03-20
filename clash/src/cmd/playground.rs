@@ -1,9 +1,10 @@
 //! Interactive policy REPL for testing rules against hypothetical tool invocations.
 
-use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
+use reedline_repl_rs::clap::{Arg, ArgMatches, Command};
+use reedline_repl_rs::{Repl, Result as ReplResult};
 use tracing::{Level, instrument};
 
 use crate::debug::replay;
@@ -11,45 +12,6 @@ use crate::display;
 use crate::policy::compile;
 use crate::policy::match_tree::CompiledPolicy;
 use crate::style;
-
-/// Run the interactive playground REPL.
-#[instrument(level = Level::TRACE)]
-pub fn run() -> Result<()> {
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-
-    writeln!(out, "clash playground — interactive policy sandbox")?;
-    writeln!(out, "Type 'help' for available commands.\n")?;
-
-    let mut state = PlaygroundState::default();
-
-    for line in stdin.lock().lines() {
-        let line = line.context("failed to read line from stdin")?;
-        let trimmed = line.trim();
-
-        if trimmed.is_empty() {
-            write!(out, "clash> ")?;
-            out.flush()?;
-            continue;
-        }
-
-        match dispatch(trimmed, &mut state) {
-            ControlFlow::Continue(output) => {
-                if !output.is_empty() {
-                    writeln!(out, "{output}")?;
-                }
-                write!(out, "clash> ")?;
-                out.flush()?;
-            }
-            ControlFlow::Quit => {
-                return Ok(());
-            }
-        }
-    }
-
-    Ok(())
-}
 
 // ---------------------------------------------------------------------------
 // State
@@ -59,7 +21,7 @@ pub fn run() -> Result<()> {
 struct PlaygroundState {
     /// Raw Starlark policy snippets accumulated by the user.
     snippets: Vec<String>,
-    /// Current compiled policy (recompiled after each `policy:` command).
+    /// Current compiled policy (recompiled after each `policy` command).
     compiled: Option<CompiledPolicy>,
 }
 
@@ -104,104 +66,14 @@ impl PlaygroundState {
 }
 
 // ---------------------------------------------------------------------------
-// Dispatch
+// Command callbacks
 // ---------------------------------------------------------------------------
 
-enum ControlFlow {
-    Continue(String),
-    Quit,
-}
-
-fn dispatch(input: &str, state: &mut PlaygroundState) -> ControlFlow {
-    if let Some(snippet) = input.strip_prefix("policy:") {
-        ControlFlow::Continue(handle_policy(snippet.trim(), state))
-    } else if let Some(test_input) = input.strip_prefix("test:") {
-        ControlFlow::Continue(handle_test(test_input.trim(), state))
-    } else {
-        match input {
-            "help" => ControlFlow::Continue(handle_help()),
-            "show" => ControlFlow::Continue(handle_show(state)),
-            "reset" => {
-                state.reset();
-                ControlFlow::Continue("Policy cleared.".to_string())
-            }
-            "quit" | "exit" => ControlFlow::Quit,
-            _ => ControlFlow::Continue(format!(
-                "Unknown command: {input}\nType 'help' for available commands."
-            )),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Command handlers
-// ---------------------------------------------------------------------------
-
-fn handle_help() -> String {
-    [
-        "Available commands:",
-        "  policy: <rule>    Add a Starlark policy rule (e.g. exe(\"git\").allow())",
-        "  test: <tool>      Test a tool invocation (e.g. Bash { \"command\": \"git status\" })",
-        "  show              Display current policy rules",
-        "  reset             Clear all policy rules",
-        "  help              Show this help message",
-        "  quit / exit       Leave the playground",
-        "",
-        "Examples:",
-        "  policy: exe(\"git\").allow()",
-        "  policy: tool(\"Read\").allow()",
-        "  test: Bash { \"command\": \"git status\" }",
-        "  test: Read { \"file_path\": \"/tmp/test.txt\" }",
-    ]
-    .join("\n")
-}
-
-fn handle_policy(snippet: &str, state: &mut PlaygroundState) -> String {
-    if snippet.is_empty() {
-        return "Usage: policy: <starlark rule expression>".to_string();
-    }
-
-    state.snippets.push(snippet.to_string());
-
-    match state.recompile() {
-        Ok(()) => {
-            format!(
-                "Rule added (total: {}). Use 'test:' to evaluate.",
-                state.snippets.len()
-            )
-        }
-        Err(e) => {
-            // Remove the bad snippet
-            state.snippets.pop();
-            // Try to recompile without it
-            let _ = state.recompile();
-            format!("Error adding rule: {e:#}")
-        }
-    }
-}
-
-fn handle_test(input: &str, state: &PlaygroundState) -> String {
-    let tree = match &state.compiled {
-        Some(t) => t,
-        None => return "No policy loaded. Add rules with 'policy:' first.".to_string(),
-    };
-
-    let (tool_name, tool_input) = match parse_test_input(input) {
-        Ok(pair) => pair,
-        Err(e) => return format!("Failed to parse test input: {e}"),
-    };
-
-    let decision = tree.evaluate(&tool_name, &tool_input);
-
-    let mut lines = display::format_tool_header("Input:", &tool_name, &tool_input);
-    lines.push(String::new());
-    lines.extend(display::format_decision(&decision));
-    lines.join("\n")
-}
-
-fn handle_show(state: &PlaygroundState) -> String {
+fn handle_show(_args: ArgMatches, state: &mut PlaygroundState) -> ReplResult<Option<String>> {
     if state.snippets.is_empty() {
-        return "No policy rules defined. Use 'policy:' to add rules.".to_string();
+        return Ok(Some(
+            "No policy rules defined. Use 'policy' to add rules.".to_string(),
+        ));
     }
 
     let mut lines = vec![format!("{}", style::header("Current policy rules:"))];
@@ -218,7 +90,12 @@ fn handle_show(state: &PlaygroundState) -> String {
             "not compiled"
         }
     ));
-    lines.join("\n")
+    Ok(Some(lines.join("\n")))
+}
+
+fn handle_reset(_args: ArgMatches, state: &mut PlaygroundState) -> ReplResult<Option<String>> {
+    state.reset();
+    Ok(Some("Policy cleared.".to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +124,119 @@ fn parse_test_input(input: &str) -> Result<(String, serde_json::Value)> {
     let tool = parts[0];
     let args = parts.get(1).copied();
     replay::resolve_tool_input(tool, args)
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+/// Run the interactive playground REPL.
+#[instrument(level = Level::TRACE)]
+pub fn run() -> Result<()> {
+    let repl = Repl::new(PlaygroundState::default())
+        .with_name("clash")
+        .with_version(env!("CARGO_PKG_VERSION"))
+        .with_description("clash playground — interactive policy sandbox")
+        .with_banner("Type 'help' for available commands.\n")
+        .with_command(
+            Command::new("policy")
+                .about("Add a Starlark policy rule (e.g. exe(\"git\").allow())")
+                .arg(
+                    Arg::new("rule")
+                        .required(true)
+                        .num_args(1..)
+                        .trailing_var_arg(true)
+                        .help("Starlark rule expression"),
+                ),
+            |args, state| {
+                let parts: Vec<&str> = args
+                    .get_many::<String>("rule")
+                    .unwrap()
+                    .map(|s| s.as_str())
+                    .collect();
+                let combined = parts.join(" ");
+                handle_policy_combined(&combined, state)
+            },
+        )
+        .with_command(
+            Command::new("test")
+                .about("Test a tool invocation against current policy")
+                .arg(
+                    Arg::new("invocation")
+                        .required(true)
+                        .num_args(1..)
+                        .trailing_var_arg(true)
+                        .help("e.g. Bash { \"command\": \"git status\" } or bash \"git push\""),
+                ),
+            |args, state| {
+                let parts: Vec<&str> = args
+                    .get_many::<String>("invocation")
+                    .unwrap()
+                    .map(|s| s.as_str())
+                    .collect();
+                let combined = parts.join(" ");
+                handle_test_combined(&combined, state)
+            },
+        )
+        .with_command(
+            Command::new("show").about("Display current policy rules"),
+            handle_show,
+        )
+        .with_command(
+            Command::new("reset").about("Clear all policy rules"),
+            handle_reset,
+        );
+
+    let mut repl = repl;
+    repl.run().context("playground REPL failed")?;
+    Ok(())
+}
+
+// Helpers that take a pre-combined string instead of ArgMatches
+fn handle_policy_combined(
+    snippet: &str,
+    state: &mut PlaygroundState,
+) -> ReplResult<Option<String>> {
+    if snippet.is_empty() {
+        return Ok(Some("Usage: policy <starlark rule expression>".to_string()));
+    }
+
+    state.snippets.push(snippet.to_string());
+
+    match state.recompile() {
+        Ok(()) => Ok(Some(format!(
+            "Rule added (total: {}). Use 'test' to evaluate.",
+            state.snippets.len()
+        ))),
+        Err(e) => {
+            state.snippets.pop();
+            let _ = state.recompile();
+            Ok(Some(format!("Error adding rule: {e:#}")))
+        }
+    }
+}
+
+fn handle_test_combined(input: &str, state: &mut PlaygroundState) -> ReplResult<Option<String>> {
+    let tree = match &state.compiled {
+        Some(t) => t,
+        None => {
+            return Ok(Some(
+                "No policy loaded. Add rules with 'policy' first.".to_string(),
+            ));
+        }
+    };
+
+    let (tool_name, tool_input) = match parse_test_input(input) {
+        Ok(pair) => pair,
+        Err(e) => return Ok(Some(format!("Failed to parse test input: {e}"))),
+    };
+
+    let decision = tree.evaluate(&tool_name, &tool_input);
+
+    let mut lines = display::format_tool_header("Input:", &tool_name, &tool_input);
+    lines.push(String::new());
+    lines.extend(display::format_decision(&decision));
+    Ok(Some(lines.join("\n")))
 }
 
 #[cfg(test)]
@@ -281,120 +271,35 @@ mod tests {
     }
 
     #[test]
-    fn test_dispatch_help() {
-        let mut state = PlaygroundState::default();
-        match dispatch("help", &mut state) {
-            ControlFlow::Continue(output) => assert!(output.contains("Available commands")),
-            ControlFlow::Quit => panic!("unexpected quit"),
-        }
-    }
-
-    #[test]
-    fn test_dispatch_quit() {
-        let mut state = PlaygroundState::default();
-        assert!(matches!(dispatch("quit", &mut state), ControlFlow::Quit));
-        assert!(matches!(dispatch("exit", &mut state), ControlFlow::Quit));
-    }
-
-    #[test]
-    fn test_dispatch_unknown() {
-        let mut state = PlaygroundState::default();
-        match dispatch("foobar", &mut state) {
-            ControlFlow::Continue(output) => assert!(output.contains("Unknown command")),
-            ControlFlow::Quit => panic!("unexpected quit"),
-        }
-    }
-
-    #[test]
-    fn test_dispatch_reset() {
-        let mut state = PlaygroundState::default();
-        match dispatch("reset", &mut state) {
-            ControlFlow::Continue(output) => assert!(output.contains("cleared")),
-            ControlFlow::Quit => panic!("unexpected quit"),
-        }
-    }
-
-    #[test]
-    fn test_dispatch_show_empty() {
-        let mut state = PlaygroundState::default();
-        match dispatch("show", &mut state) {
-            ControlFlow::Continue(output) => assert!(output.contains("No policy rules")),
-            ControlFlow::Quit => panic!("unexpected quit"),
-        }
-    }
-
-    #[test]
-    fn test_dispatch_test_no_policy() {
-        let mut state = PlaygroundState::default();
-        match dispatch(r#"test: Bash { "command": "ls" }"#, &mut state) {
-            ControlFlow::Continue(output) => assert!(output.contains("No policy loaded")),
-            ControlFlow::Quit => panic!("unexpected quit"),
-        }
-    }
-
-    #[test]
-    fn test_policy_add_and_test() {
-        let mut state = PlaygroundState::default();
-
-        // Add a policy rule
-        match dispatch(r#"policy: exe("git").allow()"#, &mut state) {
-            ControlFlow::Continue(output) => assert!(output.contains("Rule added")),
-            ControlFlow::Quit => panic!("unexpected quit"),
-        }
-
-        // Test a matching invocation
-        match dispatch(r#"test: Bash { "command": "git status" }"#, &mut state) {
-            ControlFlow::Continue(output) => {
-                assert!(
-                    output.contains("allow"),
-                    "expected 'allow' in output, got: {output}"
-                );
-            }
-            ControlFlow::Quit => panic!("unexpected quit"),
-        }
-
-        // Test a non-matching invocation (default deny)
-        match dispatch(r#"test: Bash { "command": "rm -rf /" }"#, &mut state) {
-            ControlFlow::Continue(output) => {
-                assert!(
-                    output.contains("deny"),
-                    "expected 'deny' in output, got: {output}"
-                );
-            }
-            ControlFlow::Quit => panic!("unexpected quit"),
-        }
-    }
-
-    #[test]
-    fn test_policy_invalid_snippet() {
-        let mut state = PlaygroundState::default();
-        match dispatch("policy: this_is_not_valid(((", &mut state) {
-            ControlFlow::Continue(output) => {
-                assert!(
-                    output.contains("Error"),
-                    "expected error message, got: {output}"
-                );
-            }
-            ControlFlow::Quit => panic!("unexpected quit"),
-        }
-        // State should still be empty after failed add
+    fn test_playground_state_default() {
+        let state = PlaygroundState::default();
         assert!(state.snippets.is_empty());
         assert!(state.compiled.is_none());
     }
 
     #[test]
-    fn test_show_with_rules() {
+    fn test_playground_state_recompile_empty() {
         let mut state = PlaygroundState::default();
-        dispatch(r#"policy: exe("git").allow()"#, &mut state);
+        state.recompile().unwrap();
+        assert!(state.compiled.is_none());
+    }
 
-        match dispatch("show", &mut state) {
-            ControlFlow::Continue(output) => {
-                assert!(output.contains("[1]"));
-                assert!(output.contains("exe(\"git\").allow()"));
-                assert!(output.contains("compiled"));
-            }
-            ControlFlow::Quit => panic!("unexpected quit"),
-        }
+    #[test]
+    fn test_playground_state_recompile_valid() {
+        let mut state = PlaygroundState::default();
+        state.snippets.push(r#"exe("git").allow()"#.to_string());
+        state.recompile().unwrap();
+        assert!(state.compiled.is_some());
+    }
+
+    #[test]
+    fn test_playground_state_reset() {
+        let mut state = PlaygroundState::default();
+        state.snippets.push(r#"exe("git").allow()"#.to_string());
+        state.recompile().unwrap();
+        state.reset();
+        assert!(state.snippets.is_empty());
+        assert!(state.compiled.is_none());
     }
 
     #[test]
@@ -408,5 +313,49 @@ mod tests {
         assert!(source.contains(r#"exe("git").allow()"#));
         assert!(source.contains(r#"tool("Read").allow()"#));
         assert!(source.contains("return policy("));
+    }
+
+    #[test]
+    fn test_handle_policy_combined_valid() {
+        let mut state = PlaygroundState::default();
+        let result = handle_policy_combined(r#"exe("git").allow()"#, &mut state).unwrap();
+        assert!(result.unwrap().contains("Rule added"));
+        assert_eq!(state.snippets.len(), 1);
+    }
+
+    #[test]
+    fn test_handle_policy_combined_invalid() {
+        let mut state = PlaygroundState::default();
+        let result = handle_policy_combined("this_is_not_valid(((", &mut state).unwrap();
+        assert!(result.unwrap().contains("Error"));
+        assert!(state.snippets.is_empty());
+    }
+
+    #[test]
+    fn test_handle_test_combined_no_policy() {
+        let mut state = PlaygroundState::default();
+        let result = handle_test_combined(r#"Bash { "command": "ls" }"#, &mut state).unwrap();
+        assert!(result.unwrap().contains("No policy loaded"));
+    }
+
+    #[test]
+    fn test_handle_test_combined_with_policy() {
+        let mut state = PlaygroundState::default();
+        handle_policy_combined(r#"exe("git").allow()"#, &mut state).unwrap();
+
+        let result =
+            handle_test_combined(r#"Bash { "command": "git status" }"#, &mut state).unwrap();
+        let output = result.unwrap();
+        assert!(output.contains("allow"), "expected 'allow' in: {output}");
+    }
+
+    #[test]
+    fn test_handle_test_combined_deny() {
+        let mut state = PlaygroundState::default();
+        handle_policy_combined(r#"exe("git").allow()"#, &mut state).unwrap();
+
+        let result = handle_test_combined(r#"Bash { "command": "rm -rf /" }"#, &mut state).unwrap();
+        let output = result.unwrap();
+        assert!(output.contains("deny"), "expected 'deny' in: {output}");
     }
 }
