@@ -10,7 +10,7 @@ use crate::style;
 /// The result of replaying a tool invocation.
 pub struct ReplayResult {
     pub tool_name: String,
-    pub noun: String,
+    pub tool_input: serde_json::Value,
     pub decision: PolicyDecision,
     pub multi_level: bool,
 }
@@ -18,7 +18,7 @@ pub struct ReplayResult {
 impl ReplayResult {
     /// Render as human-readable text.
     pub fn format_human(&self) -> String {
-        let mut lines = display::format_tool_header("Input:", &self.tool_name, &self.noun);
+        let mut lines = display::format_tool_header("Input:", &self.tool_name, &self.tool_input);
         lines.push(String::new());
         lines.extend(display::format_decision(&self.decision));
 
@@ -53,9 +53,9 @@ impl ReplayResult {
     pub fn format_json(&self) -> Result<String> {
         let mut output = display::decision_to_json(&self.decision);
 
-        // replay JSON includes tool_name and noun at the top level
+        // replay JSON includes tool_name and tool_input at the top level
         output["tool_name"] = serde_json::json!(self.tool_name);
-        output["noun"] = serde_json::json!(self.noun);
+        output["tool_input"] = self.tool_input.clone();
 
         if self.decision.effect == crate::policy::Effect::Deny {
             output["suggestion"] = serde_json::json!(self.suggest_allow_command());
@@ -80,11 +80,10 @@ pub fn replay_from_args(tool: &str, input: Option<&str>, _cwd: &str) -> Result<R
 
     let multi_level = settings.loaded_policies().len() > 1;
     let decision = policy.evaluate(&tool_name, &tool_input);
-    let noun = crate::permissions::extract_noun(&tool_name, &tool_input);
 
     Ok(ReplayResult {
         tool_name,
-        noun,
+        tool_input,
         decision,
         multi_level,
     })

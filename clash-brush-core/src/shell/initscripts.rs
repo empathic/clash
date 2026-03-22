@@ -79,14 +79,12 @@ impl<SE: extensions::ShellExtensions> Shell<SE> {
                     if !self
                         .source_if_exists(home_path.join(".bash_profile").as_path(), &params)
                         .await?
-                    {
-                        if !self
+                        && !self
                             .source_if_exists(home_path.join(".bash_login").as_path(), &params)
                             .await?
-                        {
-                            self.source_if_exists(home_path.join(".profile").as_path(), &params)
-                                .await?;
-                        }
+                    {
+                        self.source_if_exists(home_path.join(".profile").as_path(), &params)
+                            .await?;
                     }
                 }
             }

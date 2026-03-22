@@ -1,6 +1,6 @@
 [package]
 name = "clash_starlark"
-version = "0.4.2"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Starlark policy evaluator for Clash — compiles .star files to JSON policy"
@@ -11,7 +11,7 @@ documentation.workspace = true
 
 [dependencies]
 starlark = { workspace = true }
-allocative = "0.3"
+allocative = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

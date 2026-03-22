@@ -1,0 +1,81 @@
+meta:
+  name: starlark policy — sandbox merge via varargs
+  description: Test merging multiple sandboxes with .sandbox(a, b, c)
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "deny")
+
+    fs_box = sandbox(
+        name = "fs",
+        default = deny(),
+        fs = [
+            cwd().allow(read = True, write = True),
+        ],
+    )
+
+    home_box = sandbox(
+        name = "home",
+        default = deny(),
+        fs = [
+            home().child(".cargo").allow(read = True),
+            tempdir().allow(),
+        ],
+    )
+
+    def main():
+        return policy(default=deny(), rules=[
+            exe("cargo").sandbox(fs_box, home_box).allow(),
+            exe("git").sandbox(fs_box).allow(),
+            tool("Read").sandbox(fs_box).allow(),
+        ])
+
+steps:
+  - name: cargo allowed with merged sandbox
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: cargo build
+    expect:
+      decision: allow
+
+  - name: cargo test allowed with merged sandbox
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: cargo test
+    expect:
+      decision: allow
+
+  - name: git allowed with single sandbox
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: read tool allowed
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/somefile.txt
+    expect:
+      decision: allow
+
+  - name: npm denied by default
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: deny
+
+  - name: write denied by default
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/output.txt
+      content: hello
+    expect:
+      decision: deny

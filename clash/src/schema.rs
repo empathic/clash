@@ -82,27 +82,27 @@ fn policy_section() -> SchemaSection {
         description: "Starlark policy file (policy.star) — defines rules compiled to JSON IR",
         fields: vec![
             SchemaField {
-                key: "(default effect \"policy-name\")",
+                key: "policy(default=effect)",
                 type_name: "form",
-                description: "Sets the default effect (allow/deny/ask) and names the active policy",
-                default: Some(serde_json::json!("(default deny \"main\")")),
+                description: "Sets the default effect (allow/deny/ask) via the policy() constructor",
+                default: Some(serde_json::json!("policy(default=deny)")),
                 values: None,
                 required: true,
                 fields: None,
             },
             SchemaField {
-                key: "(policy \"name\" ...rules)",
+                key: "def main(): return policy(...)",
                 type_name: "form",
-                description: "A named policy block containing rules and (include ...) directives",
+                description: "A main() function that returns a policy() value with rules",
                 default: None,
                 values: None,
                 required: true,
                 fields: None,
             },
             SchemaField {
-                key: "(include \"other-policy\")",
+                key: "load(\"@clash//lib.star\", ...)",
                 type_name: "form",
-                description: "Import rules from another policy block by name",
+                description: "Import rules or helpers from another Starlark module",
                 default: None,
                 values: None,
                 required: false,
@@ -232,13 +232,13 @@ fn audit_section() -> SchemaSection {
 
 fn rule_syntax() -> RuleSyntax {
     RuleSyntax {
-        format: "(effect (capability ...))",
+        format: "exe(\"bin\").allow() / cwd().allow(read=True) / domains({...})",
         effects: vec!["allow", "deny", "ask"],
         domains: vec![
             SchemaField {
                 key: "exec",
                 type_name: "capability",
-                description: "Command execution: (exec [binary] [args...]). Matches Bash tool invocations.",
+                description: "Command execution: exe(\"binary\", args=[...]). Matches Bash tool invocations.",
                 default: None,
                 values: None,
                 required: false,
@@ -247,7 +247,7 @@ fn rule_syntax() -> RuleSyntax {
             SchemaField {
                 key: "fs",
                 type_name: "capability",
-                description: "Filesystem access: (fs [operation] [path-filter]). Matches Read, Write, Edit, Glob, Grep tools.",
+                description: "Filesystem access: cwd().allow(read=True, write=True). Matches Read, Write, Edit, Glob, Grep tools.",
                 default: None,
                 values: None,
                 required: false,
@@ -256,7 +256,7 @@ fn rule_syntax() -> RuleSyntax {
             SchemaField {
                 key: "net",
                 type_name: "capability",
-                description: "Network access: (net [domain-pattern]). Matches WebFetch and WebSearch tools.",
+                description: "Network access: domains({\"example.com\": allow}). Matches WebFetch and WebSearch tools.",
                 default: None,
                 values: None,
                 required: false,
@@ -265,7 +265,7 @@ fn rule_syntax() -> RuleSyntax {
             SchemaField {
                 key: "tool",
                 type_name: "capability",
-                description: "Agent tool access: (tool [name-pattern]). Matches tools not covered by exec/fs/net (e.g. Skill, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode).",
+                description: "Agent tool access: tool([\"Name\"]). Matches tools not covered by exec/fs/net (e.g. Skill, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode).",
                 default: None,
                 values: None,
                 required: false,
@@ -301,7 +301,7 @@ fn rule_syntax() -> RuleSyntax {
                 fields: None,
             },
             SchemaField {
-                key: "(or p1 p2 ...)",
+                key: "any_of([p1, p2, ...])",
                 type_name: "combinator",
                 description: "Match any of the listed patterns",
                 default: None,
@@ -310,7 +310,7 @@ fn rule_syntax() -> RuleSyntax {
                 fields: None,
             },
             SchemaField {
-                key: "(not p)",
+                key: "not_(p)",
                 type_name: "combinator",
                 description: "Negate a pattern",
                 default: None,
@@ -321,9 +321,9 @@ fn rule_syntax() -> RuleSyntax {
         ],
         path_filters: vec![
             SchemaField {
-                key: "(subpath expr)",
+                key: "path(\"/dir\").recurse()",
                 type_name: "filter",
-                description: "Recursive subtree match. expr can be \"path\" or (env VAR).",
+                description: "Recursive subtree match. Use path(env=\"VAR\") for environment variables.",
                 default: None,
                 values: None,
                 required: false,

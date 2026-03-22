@@ -95,11 +95,11 @@ Clash supports three policy levels, each automatically included and evaluated in
 
 | Level | Location | Purpose |
 |-------|----------|---------|
-| **User** | `~/.clash/policy.star` | Your personal defaults across all projects |
-| **Project** | `<project>/.clash/policy.star` | Shared rules for a specific repository |
+| **User** | `~/.clash/policy.json` (or `.star`) | Your personal defaults across all projects |
+| **Project** | `<project>/.clash/policy.json` (or `.star`) | Shared rules for a specific repository |
 | **Session** | Created via `--scope session` | Temporary overrides for the current session |
 
-> **Note:** Both `.star` and `.json` are supported. When both exist at the same level, `.star` takes precedence.
+> **Note:** Both `.json` and `.star` are supported. When both exist at the same level, `.json` takes precedence. CLI commands (`clash policy allow/deny/remove`) operate on `policy.json`.
 
 **Layer precedence:** Session > Project > User. Higher layers can shadow rules from lower layers — for example, a project-level deny overrides a user-level allow for the same capability. Use `clash status` to see all active layers and which rules are shadowed.
 
@@ -107,15 +107,15 @@ Clash supports three policy levels, each automatically included and evaluated in
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "deny", "ask")
 
 def main():
     cwd_access = sandbox(
-        default = deny,
+        default = deny(),
         fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
     )
     return policy(
-        default = ask,
+        default = ask(),
         rules = [
             exe("cargo").sandbox(cwd_access).allow(),
             exe("git").sandbox(cwd_access).allow(),
@@ -157,14 +157,14 @@ Starlark replaces JSON's named policy blocks and `include` with standard `load()
 
 ```python
 load("@clash//rust.star", "rust_sandbox")
-load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "deny")
 
 def main():
     return policy(
-        default = deny,
+        default = deny(),
         rules = [
             exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow(),
-            exe("git").sandbox(sandbox(default = deny, fs = [cwd().allow(read = True)])).allow(),
+            exe("git").sandbox(sandbox(default = deny(), fs = [cwd().allow(read = True)])).allow(),
         ],
     )
 ```
@@ -176,19 +176,19 @@ The `@clash//` prefix loads from the built-in standard library, which includes s
 Exec rules can carry sandbox constraints that clash compiles into OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS):
 
 ```python
-load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "path", "tempdir")
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "path", "tempdir", "allow", "deny")
 
 def main():
     cargo_box = sandbox(
-        default = deny,
+        default = deny(),
         fs = [
             cwd().allow(read = True),
             path("./target").allow(write = True),
             tempdir().allow(),
         ],
-        net = allow,
+        net = allow(),
     )
-    return policy(default = deny, rules = [exe("cargo").sandbox(cargo_box).allow()])
+    return policy(default = deny(), rules = [exe("cargo").sandbox(cargo_box).allow()])
 ```
 
 Even if a command is allowed by policy, the sandbox ensures it can only access the paths you specify.
@@ -206,13 +206,16 @@ clash init                       # set up clash with a safe default policy
 clash status                     # see all layers, rules, and enforcement status
 clash doctor                     # diagnose common setup issues
 clash update                     # update clash to the latest release
-clash update --check             # check for updates without installing
 clash explain bash "git push"    # see which rule matches a command
 clash policy list                # list all rules with level tags
 clash policy validate            # validate policy syntax
 clash policy show                # show the compiled policy
+clash policy allow "gh pr create"  # allow a command
+clash policy deny --bin rm         # deny a binary
+clash policy remove --tool Read    # remove a rule
+clash sandbox create dev           # create a named sandbox
+clash sandbox add-rule dev ./src   # add a sandbox filesystem rule
 clash launch                     # launch the agent with clash loaded
-clash sandbox                    # run a command in a sandbox
 ```
 
 For the full command reference, see the [CLI Reference](docs/cli-reference.md).

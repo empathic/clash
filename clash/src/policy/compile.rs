@@ -76,31 +76,17 @@ pub fn compile_multi_level_to_tree(
     };
 
     // Annotate root-level nodes from the first level with source provenance.
-    let first_source = sorted[0].2.to_string();
+    let first_source = sorted[0].2;
     for node in &mut merged.tree {
-        if let Node::Condition {
-            source: source @ None,
-            ..
-        } = node
-        {
-            *source = Some(first_source.clone());
-        }
+        node.stamp_source(first_source);
     }
 
     // Append rules from lower-precedence levels.
     for (level, src, path) in &sorted[1..] {
         let mut policy: CompiledPolicy = serde_json::from_str(src)
             .map_err(|e| anyhow::anyhow!("{} policy: invalid JSON: {}", level.name(), e))?;
-        // Annotate root-level nodes with source provenance.
-        let source_label = path.to_string();
         for node in &mut policy.tree {
-            if let Node::Condition {
-                source: source @ None,
-                ..
-            } = node
-            {
-                *source = Some(source_label.clone());
-            }
+            node.stamp_source(path);
         }
         merged.tree.extend(policy.tree);
         for (k, v) in policy.sandboxes {
@@ -129,15 +115,8 @@ fn compile_policy_with_source(source: &str, source_path: &str) -> Result<Compile
         .map_err(|e| anyhow::anyhow!("invalid match tree policy JSON: {e}"))?;
 
     if !source_path.is_empty() {
-        let label = source_path.to_string();
         for node in &mut policy.tree {
-            if let Node::Condition {
-                source: source @ None,
-                ..
-            } = node
-            {
-                *source = Some(label.clone());
-            }
+            node.stamp_source(source_path);
         }
     }
 

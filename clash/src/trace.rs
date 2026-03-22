@@ -27,8 +27,7 @@ use toolpath_claude::types::ContentPart;
 pub struct PolicyDecision {
     pub tool_use_id: String,
     pub tool_name: Option<String>,
-    /// "allow", "deny", or "ask"
-    pub effect: String,
+    pub effect: crate::policy::Effect,
     pub reason: Option<String>,
 }
 
@@ -37,15 +36,17 @@ pub struct PolicyDecision {
 // ---------------------------------------------------------------------------
 
 fn session_dir(session_id: &str) -> PathBuf {
-    crate::audit::session_dir(session_id)
+    crate::session_dir::SessionDir::new(session_id)
+        .root()
+        .to_path_buf()
 }
 
 fn trace_meta_path(session_id: &str) -> PathBuf {
-    session_dir(session_id).join("trace.json")
+    crate::session_dir::SessionDir::new(session_id).trace_meta()
 }
 
 fn steps_path(session_id: &str) -> PathBuf {
-    session_dir(session_id).join("trace.jsonl")
+    crate::session_dir::SessionDir::new(session_id).trace_steps()
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +128,9 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
 
     // Map tool_use_id → derived step_id for parenting policy decisions.
     let mut tool_use_step_map = HashMap::new();
+    // For denied tool uses: the parent of the tool_use step, so we can rewind
+    // last_step_id to make the tool_use itself part of the dead end.
+    let mut denied_tool_use_parent: Option<String> = None;
 
     if !entries.is_empty() {
         // Build a temporary conversation from the new entries and derive Steps.
@@ -140,12 +144,20 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
         // derive_path generates step IDs as `step-{uuid_prefix}` from entry UUIDs.
         // This is stable public behavior of toolpath_claude — if the scheme ever
         // changes it would be a breaking change to the crate.
-        for (entry, part) in conversation.tool_uses() {
-            if let ContentPart::ToolUse { id, .. } = part {
-                let prefix: String = entry.uuid.chars().take(8).collect();
-                tool_use_step_map.insert(id.clone(), format!("step-{prefix}"));
-            }
-        }
+        let tool_use_step_ids: std::collections::HashSet<String> = conversation
+            .tool_uses()
+            .into_iter()
+            .filter_map(|(entry, part)| {
+                if let ContentPart::ToolUse { id, .. } = part {
+                    let prefix: String = entry.uuid.chars().take(8).collect();
+                    let step_id = format!("step-{prefix}");
+                    tool_use_step_map.insert(id.clone(), step_id.clone());
+                    Some(step_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         let config = DeriveConfig {
             project_path: Some(meta.cwd.clone()),
@@ -154,20 +166,22 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
         let derived = derive_path(&conversation, &config);
 
         // Merge actors from derive output.
-        if let Some(ref path_meta) = derived.meta {
-            if let Some(ref actors) = path_meta.actors {
-                meta.actors.extend(actors.clone());
-            }
+        if let Some(ref path_meta) = derived.meta
+            && let Some(ref actors) = path_meta.actors
+        {
+            meta.actors.extend(actors.clone());
         }
 
         // Append derived steps, chaining the first to the previous sync's last step.
         for (i, mut step) in derived.steps.into_iter().enumerate() {
-            if i == 0 {
-                if let Some(ref last_id) = meta.state.last_step_id {
-                    if step.step.parents.is_empty() {
-                        step.step.parents.push(last_id.clone());
-                    }
-                }
+            if i == 0
+                && let Some(ref last_id) = meta.state.last_step_id
+                && step.step.parents.is_empty()
+            {
+                step.step.parents.push(last_id.clone());
+            }
+            if tool_use_step_ids.contains(&step.step.id) {
+                denied_tool_use_parent = meta.state.last_step_id.clone();
             }
             meta.state.last_step_id = Some(step.step.id.clone());
             append_step(session_id, &step)?;
@@ -201,7 +215,10 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
         if let Some(ref name) = dec.tool_name {
             extra.insert("tool_name".to_string(), serde_json::json!(name));
         }
-        extra.insert("effect".to_string(), serde_json::json!(dec.effect));
+        extra.insert(
+            "effect".to_string(),
+            serde_json::json!(dec.effect.to_string()),
+        );
         if let Some(ref reason) = dec.reason {
             extra.insert("reason".to_string(), serde_json::json!(reason));
         }
@@ -217,7 +234,13 @@ pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow:
             },
         );
 
-        meta.state.last_step_id = Some(step.step.id.clone());
+        if dec.effect == crate::policy::Effect::Deny {
+            // Denials are dead ends: rewind last_step_id to the tool_use step's
+            // parent so both the tool_use and denial sit on a dead-end branch.
+            meta.state.last_step_id = denied_tool_use_parent.clone();
+        } else {
+            meta.state.last_step_id = Some(step.step.id.clone());
+        }
         append_step(session_id, &step)?;
     }
 
@@ -276,6 +299,41 @@ pub fn export_trace(session_id: &str) -> anyhow::Result<v1::Document> {
     Ok(v1::Document::Path(path))
 }
 
+/// Extract the most recent user message from a session's trace.jsonl.
+///
+/// Returns the first line of the message, truncated to 120 chars.
+pub fn last_user_message(session_id: &str) -> Option<String> {
+    use std::io::BufRead;
+
+    let trace_path = steps_path(session_id);
+    let file = std::fs::File::open(&trace_path).ok()?;
+    let reader = std::io::BufReader::new(file);
+
+    let mut last_line = None;
+    for line in reader.lines() {
+        let line = line.ok()?;
+        if line.contains("\"human:user\"") {
+            last_line = Some(line);
+        }
+    }
+
+    let entry: serde_json::Value = serde_json::from_str(&last_line?).ok()?;
+    let changes = entry.get("change")?.as_object()?;
+    for val in changes.values() {
+        if let Some(text) = val.pointer("/structural/text").and_then(|v| v.as_str()) {
+            let first_line = text.lines().next().unwrap_or(text);
+            let max_len = 120;
+            return Some(if first_line.len() > max_len {
+                let truncated = &first_line[..first_line.floor_char_boundary(max_len)];
+                format!("{truncated}...")
+            } else {
+                first_line.to_string()
+            });
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -289,7 +347,9 @@ fn load_meta(session_id: &str) -> anyhow::Result<TraceMeta> {
 fn save_meta(session_id: &str, meta: &TraceMeta) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(meta).context("serializing trace metadata")?;
     let out = trace_meta_path(session_id);
-    let dir = out.parent().unwrap();
+    let dir = out
+        .parent()
+        .context("trace meta path has no parent directory")?;
     let tmp = dir.join(".trace.json.tmp");
     std::fs::write(&tmp, &json).context("writing trace meta tmp file")?;
     std::fs::rename(&tmp, &out).context("renaming trace tmp to trace.json")?;
@@ -602,8 +662,8 @@ mod tests {
             Some(PolicyDecision {
                 tool_use_id: "tu-123".into(),
                 tool_name: Some("Bash".into()),
-                effect: "allow".into(),
-                reason: Some("matched rule: (allow (exec *))".into()),
+                effect: crate::policy::Effect::Allow,
+                reason: Some("matched rule: exe(\"*\").allow()".into()),
             }),
         )
         .unwrap();
@@ -662,7 +722,7 @@ mod tests {
             Some(PolicyDecision {
                 tool_use_id: "tu-789".into(),
                 tool_name: None,
-                effect: "deny".into(),
+                effect: crate::policy::Effect::Deny,
                 reason: None,
             }),
         )
@@ -722,6 +782,93 @@ mod tests {
         assert_eq!(tools[0], "Read");
 
         assert!(step.meta.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Denied tool uses are dead ends in the path DAG:
+    ///
+    ///   user_msg → tool_use → deny (dead end branch)
+    ///            → next_step (continues from user_msg)
+    ///
+    /// Both the tool_use and the denial sit on the dead-end branch.
+    #[test]
+    fn test_denial_is_dead_end() {
+        let session_id = format!("trace-deadend-{}", std::process::id());
+        let dir = session_dir(&session_id);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let transcript = dir.join("conversation.jsonl");
+
+        // Turn 1: user message, then assistant tries a tool use.
+        write_jsonl(
+            &transcript,
+            &[
+                make_user_entry("u1aaaaaa", "do something"),
+                make_tool_use_entry("a1bbbbbb", "tu-denied", "Bash"),
+            ],
+        );
+        init_trace(
+            &session_id,
+            transcript.to_str().unwrap(),
+            "/tmp",
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Policy denies the tool use.
+        sync_trace(
+            &session_id,
+            Some(PolicyDecision {
+                tool_use_id: "tu-denied".into(),
+                tool_name: Some("Bash".into()),
+                effect: crate::policy::Effect::Deny,
+                reason: Some("not allowed".into()),
+            }),
+        )
+        .unwrap();
+
+        // Turn 2: assistant responds with text (continues after denial).
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&transcript)
+                .unwrap();
+            writeln!(
+                f,
+                "{}",
+                serde_json::to_string(&make_assistant_entry("a2cccccc", "OK, I won't do that."))
+                    .unwrap()
+            )
+            .unwrap();
+        }
+        sync_trace(&session_id, None).unwrap();
+
+        let steps = load_steps(&session_id).unwrap();
+        // 4 steps: user_msg, tool_use, denial, assistant response
+        assert_eq!(steps.len(), 4);
+
+        let user_step = &steps[0];
+        let tool_use_step = &steps[1];
+        let denial_step = &steps[2];
+        let continue_step = &steps[3];
+
+        // tool_use parents to user_step.
+        assert_eq!(tool_use_step.step.parents, vec![user_step.step.id.clone()]);
+        // Denial parents to the tool_use step.
+        assert_eq!(
+            denial_step.step.parents,
+            vec![tool_use_step.step.id.clone()]
+        );
+        // The continuation parents to the user_step (not tool_use or denial).
+        // Both tool_use and denial are on a dead-end branch.
+        assert_eq!(
+            continue_step.step.parents,
+            vec![user_step.step.id.clone()],
+            "continuation should branch from user_step, not from denied tool_use"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -802,8 +949,8 @@ mod tests {
             Some(PolicyDecision {
                 tool_use_id: "tu-bash-1".into(),
                 tool_name: Some("Bash".into()),
-                effect: "allow".into(),
-                reason: Some("matched rule: (allow (exec *))".into()),
+                effect: crate::policy::Effect::Allow,
+                reason: Some("matched rule: exe(\"*\").allow()".into()),
             }),
         )
         .unwrap();
@@ -847,7 +994,7 @@ mod tests {
             Some(PolicyDecision {
                 tool_use_id: "tu-read-1".into(),
                 tool_name: Some("Read".into()),
-                effect: "allow".into(),
+                effect: crate::policy::Effect::Allow,
                 reason: None,
             }),
         )
@@ -1065,5 +1212,68 @@ mod tests {
         assert!(clash_actor.identities[0].id.starts_with("clash/"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_last_user_message() {
+        let sid = format!("trace-lastmsg-{}", std::process::id());
+        let dir = session_dir(&sid);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let transcript = dir.join("conversation.jsonl");
+        write_jsonl(
+            &transcript,
+            &[
+                make_user_entry("u1aaaaaa", "first message"),
+                make_assistant_entry("a1bbbbbb", "response"),
+                make_user_entry("u2cccccc", "second message"),
+            ],
+        );
+
+        init_trace(&sid, transcript.to_str().unwrap(), "/tmp", None, None).unwrap();
+        sync_trace(&sid, None).unwrap();
+
+        assert_eq!(last_user_message(&sid).as_deref(), Some("second message"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_last_user_message_truncates() {
+        let sid = format!("trace-lastmsg-trunc-{}", std::process::id());
+        let dir = session_dir(&sid);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let long_msg = "a".repeat(200);
+        let transcript = dir.join("conversation.jsonl");
+        write_jsonl(&transcript, &[make_user_entry("u1aaaaaa", &long_msg)]);
+
+        init_trace(&sid, transcript.to_str().unwrap(), "/tmp", None, None).unwrap();
+        sync_trace(&sid, None).unwrap();
+
+        let result = last_user_message(&sid).unwrap();
+        assert!(result.len() <= 124);
+        assert!(result.ends_with("..."));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_last_user_message_empty_trace() {
+        let sid = format!("trace-lastmsg-empty-{}", std::process::id());
+        let dir = session_dir(&sid);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(steps_path(&sid), "").unwrap();
+        assert!(last_user_message(&sid).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_last_user_message_no_trace() {
+        let sid = format!("trace-lastmsg-none-{}", std::process::id());
+        let dir = session_dir(&sid);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(last_user_message(&sid).is_none());
     }
 }

@@ -6,7 +6,7 @@ permalink: /policy/
 ---
 
 <h1 class="page-title">Policy Language</h1>
-<p class="page-desc">Everything you need to write clash policies. Policies are written in Starlark (<code>.star</code> files) and compiled to JSON IR.</p>
+<p class="page-desc">Everything you need to write clash policies. Use Starlark (<code>.star</code>) for expressive, hand-crafted policies. Use <code>policy.json</code> for CLI-driven and tool-managed rules.</p>
 
 ## Effects
 
@@ -23,7 +23,7 @@ exe("git", args = ["commit"]).ask()
 ```
 
 <details>
-<summary>JSON IR (v5 match tree)</summary>
+<summary>Compiled JSON IR</summary>
 
 ```json
 { "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } }, "children": [
@@ -36,13 +36,13 @@ exe("git", args = ["commit"]).ask()
 ```
 </details>
 
-**First match wins.** Within a capability domain, rules are evaluated in order — the first matching rule determines the effect. Put specific rules (like denies) before broad ones (like allows).
+**First match wins.** Rules are evaluated in order — the first matching rule determines the effect. Put specific rules (like denies) before broad ones (like allows).
 
 ---
 
-## Capability domains
+## Domains
 
-Clash controls three capability domains. Rules target capabilities, not tool names — a single rule can cover multiple agent tools.
+Clash matches rules across three domains. A single rule can cover multiple tools.
 
 ### Exec — shell commands
 
@@ -54,7 +54,7 @@ exe(["cargo", "rustc"]).allow()  # multiple binaries
 ```
 
 <details>
-<summary>JSON IR (v5 match tree)</summary>
+<summary>Compiled JSON IR</summary>
 
 ```json
 { "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } }, "children": [
@@ -85,7 +85,7 @@ home().child(".ssh").allow(read = True)             # read under ~/.ssh
 ```
 
 <details>
-<summary>JSON IR (v5 match tree)</summary>
+<summary>Compiled JSON IR</summary>
 
 Filesystem rules are compiled by Starlark into condition nodes that observe tool names and named arguments. The `cwd()` builder generates conditions matching Read/Write/Edit/Glob/Grep tools with path checks via `named_arg` or `nested_field` observables.
 </details>
@@ -95,12 +95,12 @@ The fs domain maps to agent tools: `Read` / `Glob` / `Grep` → `fs read`, `Writ
 ### Net — network access
 
 ```python
-domains({"github.com": allow})
-domains({"github.com": allow, "crates.io": allow})
+domains({"github.com": allow()})
+domains({"github.com": allow(), "crates.io": allow()})
 ```
 
 <details>
-<summary>JSON IR (v5 match tree)</summary>
+<summary>Compiled JSON IR</summary>
 
 Network rules are compiled by Starlark into condition nodes that observe the tool name (WebFetch/WebSearch) and extract the domain via `nested_field` or `named_arg` observables.
 </details>
@@ -118,9 +118,9 @@ The tool domain matches agent tools by name. Use this for tools that don't map t
 
 ---
 
-## Patterns (v5 match tree)
+## Patterns
 
-In the v5 match tree IR, patterns are used inside condition nodes to match against observable values.
+In the compiled match tree, patterns are used inside condition nodes to match against observable values.
 
 ### Wildcard
 
@@ -188,7 +188,7 @@ exe("git").allow()
 
 If the rules were reversed, `git push` would match the allow first and the deny would never fire.
 
-When a request matches rules in multiple capability domains, deny-overrides applies across domains: deny > ask > allow.
+When a request matches rules in multiple domains, deny-overrides applies across domains: deny > ask > allow.
 
 ---
 
@@ -210,40 +210,55 @@ safe_git_rules = [
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
 load("safe_git.star", "safe_git_rules")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         cwd(follow_worktrees = True).allow(read = True, write = True),
         *safe_git_rules,
-        domains({"github.com": allow, "crates.io": allow}),
+        domains({"github.com": allow(), "crates.io": allow()}),
     ])
 ```
 
-<details>
-<summary>Compiled JSON IR (v5 match tree)</summary>
+Starlark `load()` imports values from other `.star` files. All composition (function calls, list splicing, imports) resolves at compile time.
 
-In v5, composition happens at the Starlark level — the compiled output is a flat match tree with no includes. The tree from the Starlark above would contain condition nodes for git commands (deny push/reset, ask commit, allow others) followed by the remaining rules, all flattened into a single tree array.
-</details>
+### Two formats: `.star` for humans, `.json` for tools
 
-Starlark `load()` imports values from other `.star` files. All composition (function calls, list splicing, imports) resolves at compile time — the v5 JSON IR has no include mechanism.
+Clash supports two policy formats that serve different purposes:
 
-### Merging policies
+**Starlark (`.star`)** is for humans. Write expressive policies with functions, variables, imports, and composition. When you want to craft a nuanced policy — conditionals, shared rule sets across projects, sandbox builders — this is the format to use.
 
-The `merge()` method combines two policies. In `a.merge(b)`, `b` is merged on top: `b`'s default effect is used, tree nodes from both are concatenated (`a`'s rules first, then `b`'s), and sandboxes are merged (first defined wins on name conflicts).
+**JSON (`policy.json`)** is for tools. CLI commands like `clash policy allow`, `clash policy deny`, and `clash policy remove` read and write `policy.json` directly. It's a machine-readable format designed to be mutated programmatically — by the CLI, by scripts, or by agents themselves.
+
+```json
+{
+  "default_effect": "deny",
+  "includes": [
+    { "path": "@clash//builtin.star" },
+    { "path": "team-rules.star" }
+  ],
+  "tree": []
+}
+```
+
+The `includes` field lets `policy.json` pull in `.star` files, so you can combine CLI-managed rules with hand-written Starlark. Included files are compiled and merged at load time, with inline `tree` rules taking precedence. When both `.json` and `.star` exist at the same level, `.json` wins.
+
+### Updating policies
+
+The `update()` method combines two policies. In `a.update(b)`, `b`'s default effect is used, tree nodes from both are concatenated (`a`'s first, then `b`'s), and sandboxes are merged (first defined wins on name conflicts).
 
 ```python
 load("@clash//builtin.star", "base")
-load("@clash//std.star", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
 
 def main():
-    my_policy = policy(default = deny, rules = [
+    my_policy = policy(default = deny(), rules = [
         cwd().allow(read = True, write = True),
         exe("git").allow(),
-        domains({"github.com": allow}),
+        domains({"github.com": allow()}),
     ])
-    return my_policy.merge(base)
+    return base.update(my_policy)
 ```
 
 ### Built-in policy (`@clash//builtin.star`)
@@ -266,15 +281,15 @@ Allowed exec rules can carry a sandbox that constrains what the spawned process 
 In Starlark, use the `sandbox()` builder and attach it to exec rules with `.sandbox()`:
 
 ```python
-load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "sandbox", "cwd")
 
 def main():
     cargo_env = sandbox(
-        default = deny,
+        default = deny(),
         fs = [cwd().allow(read = True, write = True)],
-        net = allow,
+        net = allow(),
     )
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe("cargo").sandbox(cargo_env).allow(),
     ])
 ```
@@ -282,11 +297,10 @@ def main():
 Note that `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
 
 <details>
-<summary>JSON IR (v5 match tree)</summary>
+<summary>Compiled JSON IR</summary>
 
 ```json
 {
-  "schema_version": 5,
   "default_effect": "deny",
   "sandboxes": {
     "cargo-env": { "fs": [...], "net": "allow" }
@@ -310,10 +324,10 @@ Sandbox restrictions on **filesystem and network access** are inherited by all c
 
 ### Sandbox network modes
 
-- `net = allow` in a sandbox — allows all network access
-- `net = [domains({"localhost": allow})]` — localhost-only, enforced at the kernel level
-- `net = [domains({"domain.com": allow})]` — domain-filtered via local HTTP proxy
-- `net = deny` or omitted — denies all network access
+- `net = allow()` in a sandbox — allows all network access
+- `net = [domains({"localhost": allow()})]` — localhost-only, enforced at the kernel level
+- `net = [domains({"domain.com": allow()})]` — domain-filtered via local HTTP proxy
+- `net = deny()` or omitted — denies all network access
 
 ---
 
@@ -322,10 +336,10 @@ Sandbox restrictions on **filesystem and network access** are inherited by all c
 ### Conservative (untrusted projects)
 
 ```python
-load("@clash//std.star", "policy", "cwd")
+load("@clash//std.star", "deny", "policy", "cwd")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         cwd().allow(read = True),
     ])
 ```
@@ -333,10 +347,10 @@ def main():
 ### Developer-friendly
 
 ```python
-load("@clash//std.star", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "ask", "exe", "policy", "cwd", "domains")
 
 def main():
-    return policy(default = ask, rules = [
+    return policy(default = ask(), rules = [
         cwd(follow_worktrees = True).allow(read = True, write = True),
         exe(["cargo", "npm"]).allow(),
         exe("git", args = ["status"]).allow(),
@@ -348,17 +362,17 @@ def main():
         exe("git", args = ["reset"]).deny(),
         exe("sudo").deny(),
         exe("rm", args = ["-rf"]).deny(),
-        domains({"github.com": allow, "crates.io": allow, "npmjs.com": allow}),
+        domains({"github.com": allow(), "crates.io": allow(), "npmjs.com": allow()}),
     ])
 ```
 
 ### Full trust with guardrails
 
 ```python
-load("@clash//std.star", "exe", "policy")
+load("@clash//std.star", "allow", "exe", "policy")
 
 def main():
-    return policy(default = allow, rules = [
+    return policy(default = allow(), rules = [
         exe("git", args = ["push", "--force"]).deny(),
         exe("git", args = ["reset", "--hard"]).deny(),
         exe("rm", args = ["-rf"]).deny(),
@@ -370,20 +384,20 @@ def main():
 ### Sandboxed build tools
 
 ```python
-load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "sandbox", "cwd", "domains")
 
 def main():
     cargo_env = sandbox(
-        default = deny,
+        default = deny(),
         fs = [cwd().allow(read = True, write = True)],
-        net = allow,
+        net = allow(),
     )
     npm_env = sandbox(
-        default = deny,
+        default = deny(),
         fs = [cwd().allow(read = True, write = True)],
-        net = [domains({"registry.npmjs.org": allow})],
+        net = [domains({"registry.npmjs.org": allow()})],
     )
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe("cargo").sandbox(cargo_env).allow(),
         exe("npm").sandbox(npm_env).allow(),
         cwd().allow(read = True),

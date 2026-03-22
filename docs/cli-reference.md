@@ -79,7 +79,7 @@ clash status [OPTIONS]
 Outputs a comprehensive breakdown covering:
 
 - **Policy layers** — which levels are active (user, project, session) with file paths, and the automatic precedence chain (session > project > user)
-- **Effective policy** — all rules in evaluation order grouped by domain (exec, filesystem, network, tool), with level tags showing where each rule originates and shadow indicators when a higher-precedence layer overrides a lower one. Builtin rules (from `@clash//builtin.star`, merged via `merge(base)`) are collapsed into a summary count by default; pass `--verbose` to expand them.
+- **Effective policy** — all rules in evaluation order grouped by domain (exec, filesystem, network, tool), with level tags showing where each rule originates and shadow indicators when a higher-precedence layer overrides a lower one. Builtin rules (from `@clash//builtin.star`, included via `base.update(...)`) are collapsed into a summary count by default; pass `--verbose` to expand them.
 - **Potential issues** — detectable misconfigurations (overly broad wildcards, missing deny rules, shadowed rules, etc.)
 
 **Example:**
@@ -122,7 +122,111 @@ clash doctor
 
 ## clash policy
 
-View and validate the compiled policy.
+View, validate, and manage policy rules.
+
+### clash policy allow
+
+Add an allow rule for a tool or binary. Supports positional command syntax or explicit flags.
+
+```
+clash policy allow [OPTIONS] [COMMAND]...
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `[COMMAND]...` | Command to allow (e.g. `"gh pr create"` → bin=gh, args=[pr, create]) |
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--tool <TOOL>` | Tool name (e.g. "Bash", "Read", "Write") |
+| `--bin <BIN>` | Binary name (implies --tool Bash) |
+| `--sandbox <SANDBOX>` | Named sandbox to apply (must be defined in the policy) |
+| `--scope <SCOPE>` | Policy scope: "user" or "project" (default: auto-detect) |
+
+When no flags are provided, the positional command is parsed as a Bash tool rule: the first word becomes the binary name and remaining words become positional arguments.
+
+**Examples:**
+
+```bash
+# Allow a command (positional syntax)
+clash policy allow "gh pr create"
+
+# Allow a specific binary
+clash policy allow --bin grep
+
+# Allow a binary with a sandbox
+clash policy allow --bin cargo --sandbox cwd
+
+# Allow a tool by name
+clash policy allow --tool Read
+
+# Allow in user scope
+clash policy allow --scope user --bin git
+```
+
+### clash policy deny
+
+Add a deny rule for a tool or binary. Same syntax as `allow`.
+
+```
+clash policy deny [OPTIONS] [COMMAND]...
+```
+
+**Arguments and options are the same as `clash policy allow`** (except `--sandbox` is not available for deny rules).
+
+**Examples:**
+
+```bash
+# Deny a command
+clash policy deny "rm -rf"
+
+# Deny a tool
+clash policy deny --tool WebSearch
+
+# Deny a binary
+clash policy deny --bin curl
+```
+
+### clash policy remove
+
+Remove a rule matching a tool or binary.
+
+```
+clash policy remove [OPTIONS] [COMMAND]...
+```
+
+**Arguments and options are the same as `clash policy allow`** (except `--sandbox` is not available).
+
+**Examples:**
+
+```bash
+# Remove a previously added command rule
+clash policy remove "gh pr create"
+
+# Remove a tool rule
+clash policy remove --tool Read
+
+# Remove a binary rule
+clash policy remove --bin grep
+```
+
+### clash policy edit
+
+Open the policy file in `$EDITOR`.
+
+```
+clash policy edit [OPTIONS]
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--scope <SCOPE>` | Policy scope to edit: "user" or "project" (default: auto-detect) |
 
 ### clash policy show
 
@@ -311,6 +415,136 @@ clash launch -- --model sonnet
 ## clash sandbox
 
 Apply and test kernel-level sandbox restrictions. Clash uses Seatbelt on macOS and Landlock on Linux to enforce filesystem and network restrictions at the OS level.
+
+### clash sandbox create
+
+Create a new named sandbox definition in the policy.
+
+```
+clash sandbox create [OPTIONS] <NAME>
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `<NAME>` | Name for the new sandbox |
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--default <DEFAULT>` | Default capability: "deny" or "allow" (default: deny) |
+| `--network <NETWORK>` | Network policy: "allow", "deny", or "localhost" (default: deny) |
+| `--doc <DOC>` | Documentation string for the sandbox |
+| `--scope <SCOPE>` | Policy scope: "user" or "project" |
+
+**Examples:**
+
+```bash
+# Create a basic sandbox
+clash sandbox create dev
+
+# Create a sandbox with network access
+clash sandbox create build --network allow --doc "Build tools sandbox"
+
+# Create a sandbox with localhost-only networking
+clash sandbox create test --network localhost
+```
+
+### clash sandbox delete
+
+Delete a named sandbox from the policy.
+
+```
+clash sandbox delete [OPTIONS] <NAME>
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `<NAME>` | Name of the sandbox to delete |
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--scope <SCOPE>` | Policy scope: "user" or "project" |
+
+### clash sandbox list
+
+List all named sandboxes in the policy.
+
+```
+clash sandbox list [OPTIONS]
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output as JSON |
+| `--scope <SCOPE>` | Policy scope: "user" or "project" |
+
+### clash sandbox add-rule
+
+Add a filesystem rule to a named sandbox.
+
+```
+clash sandbox add-rule [OPTIONS] <SANDBOX> <PATH>
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `<SANDBOX>` | Name of the sandbox to modify |
+| `<PATH>` | Filesystem path for the rule |
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--effect <EFFECT>` | Rule effect: "allow" or "deny" (default: allow) |
+| `--caps <CAPS>` | Capabilities: "read", "write", or "read,write" (default: read) |
+| `--match <MATCH>` | Path match mode: "prefix" or "literal" (default: prefix) |
+| `--doc <DOC>` | Documentation string for the rule |
+| `--scope <SCOPE>` | Policy scope: "user" or "project" |
+
+**Examples:**
+
+```bash
+# Allow read access to a directory
+clash sandbox add-rule dev ./src
+
+# Allow read+write access
+clash sandbox add-rule dev ./target --caps read,write
+
+# Add a deny rule
+clash sandbox add-rule dev /etc --effect deny
+```
+
+### clash sandbox remove-rule
+
+Remove a filesystem rule from a named sandbox by path.
+
+```
+clash sandbox remove-rule [OPTIONS] <SANDBOX> <PATH>
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `<SANDBOX>` | Name of the sandbox |
+| `<PATH>` | Path of the rule to remove |
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--scope <SCOPE>` | Policy scope: "user" or "project" |
 
 ### clash sandbox check
 

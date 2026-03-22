@@ -1,9 +1,11 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use tracing::{Level, instrument};
+use tracing::{Level, info, instrument};
 
 use crate::cli::PolicyCmd;
+use crate::policy::manifest_edit;
+use crate::policy::match_tree::{Decision, PolicyManifest};
 use crate::settings::{ClashSettings, PolicyLevel};
 use crate::style;
 
@@ -12,18 +14,37 @@ use crate::style;
 pub fn run(cmd: PolicyCmd) -> Result<()> {
     match cmd {
         PolicyCmd::Schema { json } => super::schema::run(json),
-        PolicyCmd::Explain { json, tool, args } => {
-            let input = if args.is_empty() {
-                None
-            } else {
-                Some(args.join(" "))
-            };
-            super::explain::run(json, tool, input)
+        PolicyCmd::Explain {
+            json,
+            trace,
+            tool,
+            args,
+        } => {
+            super::explain::run(json, trace, tool.unwrap_or_default(), args.join(" "))
         }
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Validate { file, json } => handle_validate(file, json),
         PolicyCmd::Show { json } => handle_show(json),
-        PolicyCmd::Edit { scope } => handle_edit(scope),
+        PolicyCmd::Edit { scope, raw } => handle_edit(scope, raw),
+        PolicyCmd::Allow {
+            command,
+            tool,
+            bin,
+            sandbox,
+            scope,
+        } => handle_allow(command, tool, bin, sandbox, scope),
+        PolicyCmd::Deny {
+            command,
+            tool,
+            bin,
+            scope,
+        } => handle_deny(command, tool, bin, scope),
+        PolicyCmd::Remove {
+            command,
+            tool,
+            bin,
+            scope,
+        } => handle_remove(command, tool, bin, scope),
     }
 }
 
@@ -181,7 +202,7 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
     let mut results: Vec<serde_json::Value> = Vec::new();
 
     for (level, path) in &levels {
-        let source = match crate::settings::evaluate_star_policy(path) {
+        let source = match crate::settings::evaluate_policy_file(path) {
             Ok(s) => s,
             Err(e) => {
                 all_valid = false;
@@ -286,7 +307,7 @@ fn handle_validate(file: Option<std::path::PathBuf>, json: bool) -> Result<()> {
 }
 
 fn validate_single_file(path: &std::path::Path, json: bool) -> Result<()> {
-    let source = crate::settings::evaluate_star_policy(path)
+    let source = crate::settings::evaluate_policy_file(path)
         .with_context(|| format!("failed to evaluate: {}", path.display()))?;
 
     match crate::policy::compile::compile_to_tree(&source) {
@@ -354,7 +375,96 @@ pub fn open_in_editor(path: &Path) -> Result<()> {
 }
 
 /// Handle `clash policy edit`.
-fn handle_edit(scope: Option<String>) -> Result<()> {
+fn handle_edit(scope: Option<String>, raw: bool) -> Result<()> {
+    if raw {
+        // --raw: open in $EDITOR
+        let level = match scope.as_deref() {
+            Some("user") => PolicyLevel::User,
+            Some("project") => PolicyLevel::Project,
+            Some(other) => {
+                anyhow::bail!("unknown scope: \"{other}\" (expected \"user\" or \"project\")")
+            }
+            None => ClashSettings::default_scope(),
+        };
+        let path = ClashSettings::policy_file_for_level(level)?;
+        if !path.exists() {
+            anyhow::bail!(
+                "no policy file at {} — run `clash init {}` first",
+                path.display(),
+                level,
+            );
+        }
+        return open_in_editor(&path);
+    }
+
+    // Interactive TUI editor
+    let path = resolve_manifest_path(scope)?;
+    crate::tui::run(&path)
+}
+
+// ---------------------------------------------------------------------------
+// Allow / Deny / Remove handlers
+// ---------------------------------------------------------------------------
+
+/// The mutation to apply to a policy rule.
+enum PolicyMutation {
+    Allow { sandbox: Option<String> },
+    Deny,
+    Remove,
+}
+
+/// Shared pipeline for allow / deny / remove: resolve path, build node, mutate, write, report.
+fn apply_mutation(
+    command: Vec<String>,
+    tool: Option<String>,
+    bin: Option<String>,
+    scope: Option<String>,
+    mutation: PolicyMutation,
+) -> Result<()> {
+    let path = resolve_manifest_path(scope)?;
+    let mut manifest = crate::policy_loader::read_manifest(&path)?;
+
+    // For Remove we only need the observable chain — Decision::Deny is a dummy.
+    let dummy_decision = Decision::Deny;
+    let decision = match &mutation {
+        PolicyMutation::Allow { sandbox } => Decision::Allow(
+            sandbox
+                .as_deref()
+                .map(|s| crate::policy::match_tree::SandboxRef(s.to_string())),
+        ),
+        PolicyMutation::Deny | PolicyMutation::Remove => dummy_decision,
+    };
+
+    let node = build_rule_node(&command, tool, bin, decision)?;
+
+    let result_str = match mutation {
+        PolicyMutation::Remove => {
+            if manifest_edit::remove_rule(&mut manifest, &node) {
+                crate::policy_loader::write_manifest(&path, &manifest)?;
+                println!("{} Rule removed", style::green_bold("✓"));
+                println!("  {}", style::dim(&path.display().to_string()));
+            } else {
+                println!("No matching rule found");
+            }
+            return Ok(());
+        }
+        _ => {
+            let result = manifest_edit::upsert_rule(&mut manifest, node);
+            crate::policy_loader::write_manifest(&path, &manifest)?;
+            match result {
+                manifest_edit::UpsertResult::Inserted => "Rule added",
+                manifest_edit::UpsertResult::Replaced => "Rule updated (replaced existing)",
+            }
+        }
+    };
+
+    println!("{} {}", style::green_bold("✓"), result_str);
+    println!("  {}", style::dim(&path.display().to_string()));
+    Ok(())
+}
+
+/// Resolve the policy.json path for the given scope, creating it if needed.
+pub(crate) fn resolve_manifest_path(scope: Option<String>) -> Result<PathBuf> {
     let level = match scope.as_deref() {
         Some("user") => PolicyLevel::User,
         Some("project") => PolicyLevel::Project,
@@ -363,15 +473,119 @@ fn handle_edit(scope: Option<String>) -> Result<()> {
         }
         None => ClashSettings::default_scope(),
     };
-    let path = ClashSettings::policy_file_for_level(level)?;
-    if !path.exists() {
-        anyhow::bail!(
-            "no policy file at {} — run `clash init {}` first",
-            path.display(),
-            level,
-        );
+
+    let dir = match level {
+        PolicyLevel::User => ClashSettings::settings_dir()?,
+        PolicyLevel::Project => ClashSettings::project_root()?.join(".clash"),
+        PolicyLevel::Session => anyhow::bail!("session scope not supported for policy mutation"),
+    };
+
+    let json_path = dir.join("policy.json");
+    if json_path.exists() {
+        return Ok(json_path);
     }
-    open_in_editor(&path)
+
+    // If policy.star exists but no policy.json, create a manifest that includes it.
+    let star_path = dir.join("policy.star");
+    let manifest = if star_path.exists() {
+        PolicyManifest {
+            includes: vec![crate::policy::match_tree::IncludeEntry {
+                path: "policy.star".into(),
+            }],
+            policy: crate::policy::match_tree::CompiledPolicy {
+                sandboxes: std::collections::HashMap::new(),
+                tree: vec![],
+                default_effect: crate::policy::Effect::Deny,
+                default_sandbox: None,
+            },
+        }
+    } else {
+        // No policy at all — create a bare manifest.
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("failed to create {}", dir.display()))?;
+        PolicyManifest {
+            includes: vec![],
+            policy: crate::policy::match_tree::CompiledPolicy {
+                sandboxes: std::collections::HashMap::new(),
+                tree: vec![],
+                default_effect: crate::policy::Effect::Deny,
+                default_sandbox: None,
+            },
+        }
+    };
+
+    crate::policy_loader::write_manifest(&json_path, &manifest)?;
+    info!(path = %json_path.display(), "Created policy.json");
+    Ok(json_path)
+}
+
+/// Parse a positional command string into (bin, args).
+///
+/// Splits on whitespace: `"gh pr create"` → `("gh", ["pr", "create"])`.
+/// If the command vec has multiple words (from trailing_var_arg), joins them first.
+fn parse_command(command: &[String]) -> Option<(String, Vec<String>)> {
+    // Join all positional args, then split on whitespace to handle both
+    // `clash policy allow "gh pr create"` and `clash policy allow gh pr create`.
+    let joined = command.join(" ");
+    let parts: Vec<&str> = joined.split_whitespace().collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let bin = parts[0].to_string();
+    let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+    Some((bin, args))
+}
+
+/// Build a rule node from CLI arguments.
+///
+/// Priority: positional `command` > `--bin` > `--tool`.
+/// If no flags or command are provided, returns an error.
+fn build_rule_node(
+    command: &[String],
+    tool: Option<String>,
+    bin: Option<String>,
+    decision: Decision,
+) -> Result<crate::policy::match_tree::Node> {
+    // Positional command takes priority.
+    if let Some((bin_name, args)) = parse_command(command) {
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        return Ok(manifest_edit::build_exec_rule(
+            &bin_name, &arg_refs, decision,
+        ));
+    }
+    match (tool.as_deref(), bin.as_deref()) {
+        (_, Some(bin_name)) => Ok(manifest_edit::build_exec_rule(bin_name, &[], decision)),
+        (Some(tool_name), None) => Ok(manifest_edit::build_tool_rule(tool_name, decision)),
+        (None, None) => anyhow::bail!("provide a command, --tool, or --bin"),
+    }
+}
+
+fn handle_allow(
+    command: Vec<String>,
+    tool: Option<String>,
+    bin: Option<String>,
+    sandbox: Option<String>,
+    scope: Option<String>,
+) -> Result<()> {
+    apply_mutation(command, tool, bin, scope, PolicyMutation::Allow { sandbox })
+}
+
+fn handle_deny(
+    command: Vec<String>,
+    tool: Option<String>,
+    bin: Option<String>,
+    scope: Option<String>,
+) -> Result<()> {
+    apply_mutation(command, tool, bin, scope, PolicyMutation::Deny)
+}
+
+fn handle_remove(
+    command: Vec<String>,
+    tool: Option<String>,
+    bin: Option<String>,
+    scope: Option<String>,
+) -> Result<()> {
+    apply_mutation(command, tool, bin, scope, PolicyMutation::Remove)
 }
 
 /// Extract a help hint from an anyhow error chain.

@@ -55,6 +55,10 @@ pub struct InteractiveShell<'a, IB: InputBackend, SE: brush_core::ShellExtension
     shell: crate::ShellRef<SE>,
     /// The input backend to use.
     input: &'a mut IB,
+    /// Terminal control guard — keeps this process as the foreground process group
+    /// for the lifetime of the interactive session. Dropped on exit to restore the
+    /// previous foreground group.
+    _terminal_control: Option<brush_core::terminal::TerminalControl>,
     /// Terminal integration utility, if any.
     terminal_integration: Option<crate::term_integration::TerminalIntegration>,
     /// Options.
@@ -76,10 +80,16 @@ impl<'a, IB: InputBackend, SE: brush_core::ShellExtensions> InteractiveShell<'a,
     ) -> Result<Self, ShellError> {
         let stdin_is_terminal = std::io::stdin().is_terminal();
 
-        // Acquire terminal control if stdin is a terminal.
-        if stdin_is_terminal {
-            brush_core::terminal::TerminalControl::acquire()?;
-        }
+        // Acquire terminal control if stdin is a terminal. The guard must be
+        // stored so the process stays in the foreground group for the entire
+        // interactive session; dropping it immediately would restore the parent's
+        // group and leave this process reading from the terminal as a background
+        // job (hanging on SIGTTIN).
+        let terminal_control = if stdin_is_terminal {
+            Some(brush_core::terminal::TerminalControl::acquire()?)
+        } else {
+            None
+        };
 
         // Set up terminal integration if enabled *and* if stdin is a terminal.
         let terminal_integration = if options.terminal_shell_integration && stdin_is_terminal {
@@ -97,6 +107,7 @@ impl<'a, IB: InputBackend, SE: brush_core::ShellExtensions> InteractiveShell<'a,
         Ok(Self {
             shell: shell.clone(),
             input,
+            _terminal_control: terminal_control,
             terminal_integration,
             options: options.clone(),
         })
@@ -333,21 +344,21 @@ impl<'a, IB: InputBackend, SE: brush_core::ShellExtensions> InteractiveShell<'a,
         shell.check_for_completed_jobs()?;
 
         // If there's a variable called PROMPT_COMMAND, then run it first.
-        if options.run_prompt_command {
-            if let Some(prompt_cmd_var) = shell.env_var("PROMPT_COMMAND") {
-                match prompt_cmd_var.value() {
-                    brush_core::ShellValue::String(cmd_str) => {
-                        Self::run_pre_prompt_command(shell, cmd_str.to_owned()).await?;
-                    }
-                    brush_core::ShellValue::IndexedArray(values) => {
-                        let owned_values: Vec<_> = values.values().cloned().collect();
-                        for cmd_str in owned_values {
-                            Self::run_pre_prompt_command(shell, cmd_str).await?;
-                        }
-                    }
-                    // Other types are ignored.
-                    _ => (),
+        if options.run_prompt_command
+            && let Some(prompt_cmd_var) = shell.env_var("PROMPT_COMMAND")
+        {
+            match prompt_cmd_var.value() {
+                brush_core::ShellValue::String(cmd_str) => {
+                    Self::run_pre_prompt_command(shell, cmd_str.to_owned()).await?;
                 }
+                brush_core::ShellValue::IndexedArray(values) => {
+                    let owned_values: Vec<_> = values.values().cloned().collect();
+                    for cmd_str in owned_values {
+                        Self::run_pre_prompt_command(shell, cmd_str).await?;
+                    }
+                }
+                // Other types are ignored.
+                _ => (),
             }
         }
 

@@ -2,7 +2,27 @@
 #
 # Emits v5 match tree nodes using minimal Rust primitives.
 # Rust globals available: _mt_node, _mt_condition, _mt_pattern, _mt_prefix,
-# _mt_literal, _mt_policy, allow, deny, ask
+# _mt_literal, _mt_policy, _ALLOW, _DENY, _ASK
+
+# ---------------------------------------------------------------------------
+# Effect constructors
+# ---------------------------------------------------------------------------
+
+
+def allow(sandbox=None):
+    """Create an allow effect, optionally with a sandbox."""
+    return struct(_effect=_ALLOW, _sandbox=sandbox, _is_effect=True)
+
+
+def deny(sandbox=None):
+    """Create a deny effect, optionally with a sandbox."""
+    return struct(_effect=_DENY, _sandbox=sandbox, _is_effect=True)
+
+
+def ask(sandbox=None):
+    """Create an ask effect, optionally with a sandbox."""
+    return struct(_effect=_ASK, _sandbox=sandbox, _is_effect=True)
+
 
 # ---------------------------------------------------------------------------
 # Pattern helpers
@@ -173,6 +193,105 @@ def tool(name=None, doc=None):
 
 
 # ---------------------------------------------------------------------------
+# Dict-based builders (cmd, tools)
+# ---------------------------------------------------------------------------
+
+
+def _collect_effect_sandbox(eff, sandboxes, seen):
+    """Collect sandbox from an effect descriptor if present."""
+    if eff._sandbox != None:
+        sb = eff._sandbox
+        if sb._name not in seen:
+            seen[sb._name] = True
+            sandboxes.append(_sandbox_to_json(sb))
+
+
+def _cmd_build_tree(tree, arg_index, sandboxes, seen):
+    """Recursively build match tree nodes from a dict tree."""
+    nodes = []
+    for key, value in tree.items():
+        keys = key if type(key) == "tuple" else (key,)
+        for k in keys:
+            pat = _pattern(k)
+            cond = _mt_arg(arg_index, pat)
+
+            if type(value) == "dict":
+                children = _cmd_build_tree(value, arg_index + 1, sandboxes, seen)
+                nodes.append(cond.on(children))
+            elif hasattr(value, "_is_effect"):
+                decision = _effect_to_decision(value)
+                nodes.append(cond.on([decision]))
+                _collect_effect_sandbox(value, sandboxes, seen)
+            else:
+                fail("cmd() values must be effect descriptors or dicts")
+    return nodes
+
+
+def cmd(name, tree):
+    """Build a command rule from a nested dict tree.
+
+    Returns a rule node for use in policy(rules=[...]).
+
+    Usage:
+        cmd("git", {
+            "push": deny(),
+            ("pull", "fetch"): allow(),
+            "remote": {
+                "add": ask(),
+            },
+        })
+    """
+    sandboxes = []
+    seen = {}
+    nodes = _cmd_build_tree(tree, 1, sandboxes, seen)
+
+    # Wrap in ToolName=Bash → PosArg(0)=name
+    bash_pat = _mt_pattern("Bash")
+    name_pat = _pattern(name)
+    inner = _mt_condition({"positional_arg": 0}, name_pat).on(nodes)
+    root = _mt_condition("tool_name", bash_pat).on([inner])
+
+    return struct(_node=root, _sandbox=None, _cmd_sandboxes=sandboxes)
+
+
+def tools(mapping):
+    """Build tool rules from a dict.
+
+    Returns a list of rule nodes for use in policy(rules=[...]).
+
+    Usage:
+        tools({
+            ("Agent", "Skill"): allow(sandbox=fs),
+            "Bash": ask(sandbox=project),
+        })
+    """
+    result = []
+    sandboxes = []
+    seen = {}
+
+    for key, eff in mapping.items():
+        if not hasattr(eff, "_is_effect"):
+            fail("tools() values must be effect descriptors")
+
+        names = key if type(key) == "tuple" else (key,)
+        decision = _effect_to_decision(eff)
+
+        for name in names:
+            pat = _pattern(name)
+            cond = _mt_tool(pat)
+            result.append(struct(_node=cond.on([decision]), _sandbox=None))
+
+        _collect_effect_sandbox(eff, sandboxes, seen)
+
+    # Attach collected sandboxes to the first node for policy() to extract.
+    if result and sandboxes:
+        first = result[0]
+        result[0] = struct(_node=first._node, _sandbox=None, _cmd_sandboxes=sandboxes)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Filesystem path builders
 # ---------------------------------------------------------------------------
 
@@ -212,16 +331,37 @@ def _fs_nodes(path_pattern, read=None, write=None):
     return nodes
 
 
+def _unwrap_effect(effect):
+    """Extract the effect string from an effect descriptor or raw string."""
+    if hasattr(effect, "_is_effect"):
+        return effect._effect
+    return effect
+
+
 def _effect_decision(effect):
-    """Create a decision node from an effect string."""
-    if effect == allow:
+    """Create a decision node from an effect string or descriptor."""
+    e = _unwrap_effect(effect)
+    if e == _ALLOW:
         return _mt_allow(None)
-    elif effect == deny:
+    elif e == _DENY:
         return _mt_deny()
-    elif effect == ask:
+    elif e == _ASK:
         return _mt_ask(None)
     else:
-        fail("unknown effect: " + str(effect))
+        fail("unknown effect: " + str(e))
+
+
+def _effect_to_decision(eff):
+    """Convert an effect descriptor struct to a match tree decision node."""
+    sandbox_name = eff._sandbox._name if eff._sandbox != None else None
+    if eff._effect == _ALLOW:
+        return _mt_allow(sandbox_name)
+    elif eff._effect == _DENY:
+        return _mt_deny()
+    elif eff._effect == _ASK:
+        return _mt_ask(sandbox_name)
+    else:
+        fail("unknown effect: " + str(eff._effect))
 
 
 def _caps_from_bools(read, write, execute, all_ops):
@@ -278,7 +418,7 @@ def _path_match(path_value, worktree=False, match_type="literal"):
         nodes = _fs_nodes(path_pat, _read, _write)
 
         sandbox_rules = []
-        if effect == allow or effect == deny:
+        if effect == _ALLOW or effect == _DENY:
             caps = _caps_from_bools(
                 read or all_ops,
                 write or all_ops,
@@ -287,11 +427,13 @@ def _path_match(path_value, worktree=False, match_type="literal"):
             )
             if len(caps) > 0:
                 rule = {
-                    "effect": "allow" if effect == allow else "deny",
+                    "effect": "allow" if effect == _ALLOW else "deny",
                     "path_value": path_value,
                     "caps": caps,
                     "match_type": match_type,
                 }
+                if worktree:
+                    rule["follow_worktrees"] = True
                 if doc != None:
                     rule["doc"] = doc
                 sandbox_rules.append(rule)
@@ -304,13 +446,13 @@ def _path_match(path_value, worktree=False, match_type="literal"):
         )
 
     def _allow(read=None, write=None, execute=None, all=None, doc=None):
-        return _resolve(allow, read, write, execute, all, doc=doc)
+        return _resolve(_ALLOW, read, write, execute, all, doc=doc)
 
     def _deny(read=None, write=None, execute=None, all=None, doc=None):
-        return _resolve(deny, read, write, execute, all, doc=doc)
+        return _resolve(_DENY, read, write, execute, all, doc=doc)
 
     def _ask(read=None, write=None, execute=None, all=None, doc=None):
-        return _resolve(ask, read, write, execute, all, doc=doc)
+        return _resolve(_ASK, read, write, execute, all, doc=doc)
 
     return struct(
         child=child,
@@ -431,17 +573,17 @@ def _make_sandbox(name, default, fs_rules, net_policy, net_domain_names=None, do
     if net_domain_names == None:
         net_domain_names = []
 
-    def _merge(other):
-        merged_default = default if other._default == None else other._default
-        merged_domains = net_domain_names + (
+    def _update(other):
+        updated_default = default if other._default == None else other._default
+        updated_domains = net_domain_names + (
             other._net_domain_names if hasattr(other, "_net_domain_names") else []
         )
         return _make_sandbox(
             name,
-            merged_default,
+            updated_default,
             fs_rules + other._fs_rules,
             net_policy or other._net_policy,
-            merged_domains,
+            updated_domains,
             doc=doc,
         )
 
@@ -453,7 +595,7 @@ def _make_sandbox(name, default, fs_rules, net_policy, net_domain_names=None, do
         _net_domain_names=net_domain_names,
         _is_sandbox=True,
         _doc=doc,
-        merge=_merge,
+        update=_update,
     )
 
 
@@ -472,6 +614,9 @@ def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
     if name == None:
         fail("sandbox name is required")
 
+    # Accept effect descriptors for default and net
+    default = _unwrap_effect(default)
+
     fs_rules = []
     if fs == None:
         fs = []
@@ -487,7 +632,9 @@ def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
     net_policy = None
     net_domain_names = []
     if net != None:
-        if type(net) == "string":
+        if hasattr(net, "_is_effect"):
+            net_policy = _unwrap_effect(net)
+        elif type(net) == "string":
             net_policy = net  # "allow" or "deny"
         elif type(net) == "list":
             # domains() returns a list of structs with _node and _domain_name
@@ -535,6 +682,16 @@ def _expand_children(children):
     return expanded
 
 
+def _merge_sandboxes(*sandboxes):
+    """Merge multiple sandboxes into one, combining fs rules and net policies."""
+    if len(sandboxes) == 0:
+        fail("sandbox() requires at least one sandbox argument")
+    merged = sandboxes[0]
+    for i in range(1, len(sandboxes)):
+        merged = merged.update(sandboxes[i])
+    return merged
+
+
 def _with_sandbox_support(node):
     """Wrap a match tree node with .sandbox(), .on(), and decision support."""
 
@@ -550,8 +707,8 @@ def _with_sandbox_support(node):
         result = node.ask()
         return struct(_node=result, _sandbox=None)
 
-    def _set_sandbox(sb):
-        return _with_sandbox_and_node(node, sb)
+    def _set_sandbox(*sandboxes):
+        return _with_sandbox_and_node(node, _merge_sandboxes(*sandboxes))
 
     def _on(children):
         expanded = _expand_children(children)
@@ -584,8 +741,8 @@ def _with_sandbox_and_node(node, sb):
         result = node.ask(sandbox=sb._name)
         return struct(_node=result, _sandbox=sb)
 
-    def _set_sandbox(new_sb):
-        return _with_sandbox_and_node(node, new_sb)
+    def _set_sandbox(*sandboxes):
+        return _with_sandbox_and_node(node, _merge_sandboxes(*sandboxes))
 
     def _on(children):
         expanded = _expand_children(children)
@@ -612,7 +769,7 @@ def policy(default="deny", rules=None, default_sandbox=None):
     """Build a policy.
 
     Usage:
-        policy(default=deny, rules=[
+        policy(default=deny(), rules=[
             cwd().allow(read=True, write=True),
             exe("git", args=["push"]).deny(),
             exe("git").allow(),
@@ -621,10 +778,12 @@ def policy(default="deny", rules=None, default_sandbox=None):
             ]),
         ], default_sandbox=sandbox(
             name="default",
-            default=deny,
+            default=deny(),
             fs=[cwd().allow(read=True)],
         ))
     """
+    default = _unwrap_effect(default)
+
     if rules == None:
         rules = []
 
@@ -676,6 +835,13 @@ def _collect_node(item, flat_nodes, sandbox_list, seen):
         if sb._name not in seen:
             seen[sb._name] = True
             sandbox_list.append(_sandbox_to_json(sb))
+    # cmd()/tools() attach pre-built sandbox JSON via _cmd_sandboxes
+    if hasattr(item, "_cmd_sandboxes"):
+        for sb_json in item._cmd_sandboxes:
+            name = sb_json.get("name", "")
+            if name not in seen:
+                seen[name] = True
+                sandbox_list.append(sb_json)
 
 
 def _sandbox_to_json(sb):
@@ -691,6 +857,8 @@ def _sandbox_to_json(sb):
             "path": path_str,
             "path_match": r.get("match_type", "subpath"),
         }
+        if r.get("follow_worktrees", False):
+            rule_dict["follow_worktrees"] = True
         doc_val = r.get("doc", None)
         if doc_val != None:
             rule_dict["doc"] = doc_val
@@ -713,7 +881,7 @@ def _sandbox_to_json(sb):
     # deny default = execute-only; auto-inject system path reads so
     # basic commands can load shared libraries and frameworks.
     # allow default = full access (no system paths needed).
-    if sb._default == deny:
+    if sb._default == _DENY:
         default_caps = ["execute"]
     else:
         default_caps = ["read", "write", "create", "delete", "execute"]

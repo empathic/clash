@@ -1,0 +1,2604 @@
+//! Inline ratatui form overlays — no raw-mode exit needed.
+//!
+//! Each form is a list of [`FormField`]s rendered as a centered popup.
+//! Navigation: Tab/Shift-Tab between fields, type into text fields,
+//! Left/Right to cycle selects, Space to toggle multi-selects.
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+use crate::policy::manifest_edit;
+use crate::policy::match_tree::{
+    Decision, IncludeEntry, Node, Observable, Pattern, PolicyManifest, SandboxRef, Value,
+};
+use crate::policy::sandbox_edit;
+use crate::policy::sandbox_types::{Cap, NetworkPolicy, PathMatch, RuleEffect};
+use crate::tui::tool_registry;
+
+use super::tea::FormRequest;
+
+// ---------------------------------------------------------------------------
+// Field types
+// ---------------------------------------------------------------------------
+
+pub enum FormField {
+    Text {
+        label: String,
+        value: String,
+        cursor: usize,
+        placeholder: String,
+        hint: Option<&'static str>,
+    },
+    Select {
+        label: String,
+        options: Vec<String>,
+        selected: usize,
+        /// Per-option hints — `hints[selected]` is shown when this field is active.
+        hints: Vec<&'static str>,
+    },
+    MultiSelect {
+        label: String,
+        options: Vec<String>,
+        toggled: Vec<bool>,
+        cursor: usize,
+        hint: Option<&'static str>,
+    },
+}
+
+impl FormField {
+    /// Returns the contextual hint for this field's current state.
+    fn hint(&self) -> Option<&'static str> {
+        match self {
+            FormField::Text { hint, .. } => *hint,
+            FormField::Select {
+                hints, selected, ..
+            } => {
+                let h = hints.get(*selected).copied().unwrap_or("");
+                if h.is_empty() { None } else { Some(h) }
+            }
+            FormField::MultiSelect { hint, .. } => *hint,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Form state
+// ---------------------------------------------------------------------------
+
+pub struct FormState {
+    pub title: String,
+    pub kind: FormKind,
+    pub fields: Vec<FormField>,
+    /// Indices into `fields` that are currently visible.
+    visible: Vec<usize>,
+    /// Index into `visible`.
+    active: usize,
+    /// Tool name context (from ancestor nodes or typed value), used to
+    /// filter effects and validate observables.
+    tool_context: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum FormKind {
+    AddRule,
+    AddSandbox,
+    AddSandboxRule {
+        sandbox_name: String,
+    },
+    AddInclude,
+    EditCondition {
+        path: Vec<usize>,
+    },
+    EditDecision {
+        path: Vec<usize>,
+    },
+    AddChild {
+        parent_path: Vec<usize>,
+    },
+    EditSandbox {
+        sandbox_name: String,
+    },
+    EditSandboxRule {
+        sandbox_name: String,
+        rule_index: usize,
+    },
+}
+
+/// Result of processing a key event in the form.
+pub enum FormEvent {
+    /// Still editing.
+    Continue,
+    /// User submitted — apply changes.
+    Submit,
+    /// User cancelled.
+    Cancel,
+}
+
+// ---------------------------------------------------------------------------
+// Constructors
+// ---------------------------------------------------------------------------
+
+impl FormState {
+    /// Create the appropriate form for the given request.
+    ///
+    /// `included` provides sandboxes from resolved `.star` includes so they
+    /// appear in sandbox dropdowns (but are not editable).
+    pub fn from_request(
+        request: &FormRequest,
+        manifest: &PolicyManifest,
+        included: Option<&crate::policy::match_tree::CompiledPolicy>,
+    ) -> Self {
+        match request {
+            FormRequest::AddRule => Self::new_add_rule(manifest, included),
+            FormRequest::AddSandbox => Self::new_add_sandbox(),
+            FormRequest::AddSandboxRule { sandbox_name } => {
+                Self::new_add_sandbox_rule(sandbox_name)
+            }
+            FormRequest::AddInclude => Self::new_add_include(),
+            FormRequest::EditCondition { path } => Self::new_edit_condition(path, manifest),
+            FormRequest::EditDecision { path } => Self::new_edit_decision(path, manifest, included),
+            FormRequest::AddChild { parent_path } => {
+                Self::new_add_child(parent_path, manifest, included)
+            }
+            FormRequest::EditSandbox { sandbox_name } => {
+                Self::new_edit_sandbox(sandbox_name, manifest)
+            }
+            FormRequest::EditSandboxRule {
+                sandbox_name,
+                rule_index,
+            } => Self::new_edit_sandbox_rule(sandbox_name, *rule_index, manifest),
+        }
+    }
+
+    fn new_add_rule(
+        manifest: &PolicyManifest,
+        included: Option<&crate::policy::match_tree::CompiledPolicy>,
+    ) -> Self {
+        let (sandbox_opts, sb_default) =
+            Self::build_sandbox_options_with_included(manifest, included);
+
+        let fields = vec![
+            FormField::Select {
+                label: "Rule type".into(),
+                options: vec!["Tool rule".into(), "Shell command".into()],
+                selected: 0,
+                hints: vec![
+                    "Match a Claude tool like Read, Write, Bash, Edit",
+                    "Match a shell command like git, npm, curl",
+                ],
+            },
+            FormField::Text {
+                label: "Tool name".into(),
+                value: String::new(),
+                cursor: 0,
+                placeholder: "e.g. Read, Write, Bash, Edit".into(),
+                hint: Some("e.g. Read, Write, Bash, Edit, Glob, Grep, WebSearch"),
+            },
+            FormField::Text {
+                label: "Command".into(),
+                value: String::new(),
+                cursor: 0,
+                placeholder: "e.g. git, npm, gh, curl".into(),
+                hint: Some("The program to match, e.g. git, npm, gh, curl"),
+            },
+            FormField::Text {
+                label: "Arguments".into(),
+                value: String::new(),
+                cursor: 0,
+                placeholder: "optional, e.g. push --force".into(),
+                hint: Some("Optional: only match when these args are used"),
+            },
+            FormField::Select {
+                label: "When matched".into(),
+                options: vec![
+                    "allow (permit)".into(),
+                    "deny (block)".into(),
+                    "ask (prompt)".into(),
+                ],
+                selected: 0,
+                hints: vec!["", "", ""],
+            },
+            FormField::Select {
+                label: "Sandbox".into(),
+                options: sandbox_opts,
+                selected: sb_default,
+                hints: vec![],
+            },
+        ];
+
+        let mut form = FormState {
+            title: "Add Rule".into(),
+            kind: FormKind::AddRule,
+            fields,
+            visible: vec![],
+            active: 0,
+            tool_context: None,
+        };
+        form.recompute_visible();
+        form
+    }
+
+    fn new_add_sandbox() -> Self {
+        let fields = vec![
+            FormField::Text {
+                label: "Name".into(),
+                value: String::new(),
+                cursor: 0,
+                placeholder: "e.g. cwd, strict".into(),
+                hint: Some("A short name for this sandbox profile"),
+            },
+            FormField::MultiSelect {
+                label: "Default caps".into(),
+                options: vec![
+                    "read".into(),
+                    "write".into(),
+                    "create".into(),
+                    "delete".into(),
+                    "execute".into(),
+                ],
+                toggled: vec![true, false, false, false, true],
+                cursor: 0,
+                hint: Some("Default filesystem capabilities for this sandbox"),
+            },
+            FormField::Select {
+                label: "Network".into(),
+                options: vec!["deny".into(), "allow".into(), "localhost".into()],
+                selected: 0,
+                hints: vec![
+                    "Block all network access",
+                    "Permit all network access",
+                    "Only allow connections to 127.0.0.1",
+                ],
+            },
+        ];
+
+        FormState {
+            title: "Add Sandbox".into(),
+            kind: FormKind::AddSandbox,
+            fields,
+            visible: vec![0, 1, 2],
+            active: 0,
+            tool_context: None,
+        }
+    }
+
+    fn new_add_sandbox_rule(sandbox_name: &str) -> Self {
+        let fields = vec![
+            FormField::Select {
+                label: "Effect".into(),
+                options: vec!["allow".into(), "deny".into()],
+                selected: 0,
+                hints: vec!["", ""],
+            },
+            FormField::MultiSelect {
+                label: "Caps".into(),
+                options: vec![
+                    "read".into(),
+                    "write".into(),
+                    "create".into(),
+                    "delete".into(),
+                    "execute".into(),
+                ],
+                toggled: vec![true, true, false, false, false],
+                cursor: 0,
+                hint: None,
+            },
+            FormField::Text {
+                label: "Path".into(),
+                value: String::new(),
+                cursor: 0,
+                placeholder: "e.g. $PWD, $HOME/.config".into(),
+                hint: Some("The filesystem path this rule applies to"),
+            },
+            FormField::Select {
+                label: "Path match".into(),
+                options: vec!["subpath".into(), "literal".into(), "regex".into()],
+                selected: 0,
+                hints: vec![
+                    "Match this path and everything under it",
+                    "Match this exact path only",
+                    "Match paths by regular expression",
+                ],
+            },
+        ];
+
+        FormState {
+            title: format!("Add Rule to '{sandbox_name}'"),
+            kind: FormKind::AddSandboxRule {
+                sandbox_name: sandbox_name.to_string(),
+            },
+            fields,
+            visible: vec![0, 1, 2, 3],
+            active: 0,
+            tool_context: None,
+        }
+    }
+
+    fn new_edit_sandbox(sandbox_name: &str, manifest: &PolicyManifest) -> Self {
+        let sb = manifest.policy.sandboxes.get(sandbox_name);
+
+        let caps_toggled = if let Some(sb) = sb {
+            vec![
+                sb.default.contains(Cap::READ),
+                sb.default.contains(Cap::WRITE),
+                sb.default.contains(Cap::CREATE),
+                sb.default.contains(Cap::DELETE),
+                sb.default.contains(Cap::EXECUTE),
+            ]
+        } else {
+            vec![true, false, false, false, true]
+        };
+
+        let network_idx = match sb.map(|s| &s.network) {
+            Some(NetworkPolicy::Deny) | None => 0,
+            Some(NetworkPolicy::Allow) => 1,
+            Some(NetworkPolicy::Localhost) => 2,
+            Some(NetworkPolicy::AllowDomains(_)) => 1, // approximate
+        };
+
+        let fields = vec![
+            FormField::MultiSelect {
+                label: "Default caps".into(),
+                options: vec![
+                    "read".into(),
+                    "write".into(),
+                    "create".into(),
+                    "delete".into(),
+                    "execute".into(),
+                ],
+                toggled: caps_toggled,
+                cursor: 0,
+                hint: Some("Default filesystem capabilities for this sandbox"),
+            },
+            FormField::Select {
+                label: "Network".into(),
+                options: vec!["deny".into(), "allow".into(), "localhost".into()],
+                selected: network_idx,
+                hints: vec![
+                    "Block all network access",
+                    "Permit all network access",
+                    "Only allow connections to 127.0.0.1",
+                ],
+            },
+        ];
+
+        FormState {
+            title: format!("Edit Sandbox '{sandbox_name}'"),
+            kind: FormKind::EditSandbox {
+                sandbox_name: sandbox_name.to_string(),
+            },
+            fields,
+            visible: vec![0, 1],
+            active: 0,
+            tool_context: None,
+        }
+    }
+
+    fn new_edit_sandbox_rule(
+        sandbox_name: &str,
+        rule_index: usize,
+        manifest: &PolicyManifest,
+    ) -> Self {
+        let rule = manifest
+            .policy
+            .sandboxes
+            .get(sandbox_name)
+            .and_then(|sb| sb.rules.get(rule_index));
+
+        let effect_idx = match rule.map(|r| &r.effect) {
+            Some(RuleEffect::Allow) | None => 0,
+            Some(RuleEffect::Deny) => 1,
+        };
+
+        let caps_toggled = if let Some(r) = rule {
+            vec![
+                r.caps.contains(Cap::READ),
+                r.caps.contains(Cap::WRITE),
+                r.caps.contains(Cap::CREATE),
+                r.caps.contains(Cap::DELETE),
+                r.caps.contains(Cap::EXECUTE),
+            ]
+        } else {
+            vec![true, true, false, false, false]
+        };
+
+        let path_value = rule.map(|r| r.path.clone()).unwrap_or_default();
+        let path_cursor = path_value.len();
+
+        let path_match_idx = match rule.map(|r| &r.path_match) {
+            Some(PathMatch::Subpath) | None => 0,
+            Some(PathMatch::Literal) => 1,
+            Some(PathMatch::Regex) => 2,
+        };
+
+        let fields = vec![
+            FormField::Select {
+                label: "Effect".into(),
+                options: vec!["allow".into(), "deny".into()],
+                selected: effect_idx,
+                hints: vec!["", ""],
+            },
+            FormField::MultiSelect {
+                label: "Caps".into(),
+                options: vec![
+                    "read".into(),
+                    "write".into(),
+                    "create".into(),
+                    "delete".into(),
+                    "execute".into(),
+                ],
+                toggled: caps_toggled,
+                cursor: 0,
+                hint: None,
+            },
+            FormField::Text {
+                label: "Path".into(),
+                value: path_value,
+                cursor: path_cursor,
+                placeholder: "e.g. $PWD, $HOME/.config".into(),
+                hint: Some("The filesystem path this rule applies to"),
+            },
+            FormField::Select {
+                label: "Path match".into(),
+                options: vec!["subpath".into(), "literal".into(), "regex".into()],
+                selected: path_match_idx,
+                hints: vec![
+                    "Match this path and everything under it",
+                    "Match this exact path only",
+                    "Match paths by regular expression",
+                ],
+            },
+        ];
+
+        FormState {
+            title: format!("Edit Rule in '{sandbox_name}'"),
+            kind: FormKind::EditSandboxRule {
+                sandbox_name: sandbox_name.to_string(),
+                rule_index,
+            },
+            fields,
+            visible: vec![0, 1, 2, 3],
+            active: 0,
+            tool_context: None,
+        }
+    }
+
+    fn new_add_include() -> Self {
+        let fields = vec![FormField::Text {
+            label: "Include path".into(),
+            value: String::new(),
+            cursor: 0,
+            placeholder: "e.g. rules.star, @clash//builtin.star".into(),
+            hint: Some("e.g. rules.star, @clash//builtin.star"),
+        }];
+
+        FormState {
+            title: "Add Include".into(),
+            kind: FormKind::AddInclude,
+            fields,
+            visible: vec![0],
+            active: 0,
+            tool_context: None,
+        }
+    }
+
+    fn new_edit_condition(path: &[usize], manifest: &PolicyManifest) -> Self {
+        let (obs_idx, pat_value) = Self::read_condition_at_path(&manifest.policy.tree, path);
+        let title = Self::describe_condition_at_path(&manifest.policy.tree, path);
+
+        let pat_type_idx = Self::pattern_type_index_at_path(&manifest.policy.tree, path);
+        let fields = vec![
+            FormField::Select {
+                label: "Match on".into(),
+                options: observable_options(),
+                selected: obs_idx,
+                hints: observable_option_hints(),
+            },
+            FormField::Text {
+                label: "Which one".into(),
+                value: Self::observable_param_at_path(&manifest.policy.tree, path),
+                cursor: 0,
+                placeholder: observable_param_placeholder(obs_idx).into(),
+                hint: {
+                    let h = observable_param_hint(obs_idx);
+                    if h.is_empty() { None } else { Some(h) }
+                },
+            },
+            FormField::Select {
+                label: "Match type".into(),
+                options: vec![
+                    "exact value".into(),
+                    "anything".into(),
+                    "regex".into(),
+                    "path prefix".into(),
+                ],
+                selected: pat_type_idx,
+                hints: pattern_option_hints(),
+            },
+            FormField::Text {
+                label: "Match value".into(),
+                value: pat_value,
+                cursor: 0,
+                placeholder: pattern_value_placeholder(obs_idx).into(),
+                hint: {
+                    let h = pattern_value_hint(pat_type_idx);
+                    if h.is_empty() { None } else { Some(h) }
+                },
+            },
+        ];
+
+        let mut form = FormState {
+            title,
+            kind: FormKind::EditCondition {
+                path: path.to_vec(),
+            },
+            fields,
+            visible: vec![],
+            active: 0,
+            tool_context: Self::ancestor_tool_name(&manifest.policy.tree, path),
+        };
+        form.recompute_visible();
+        form
+    }
+
+    fn new_edit_decision(
+        path: &[usize],
+        manifest: &PolicyManifest,
+        included: Option<&crate::policy::match_tree::CompiledPolicy>,
+    ) -> Self {
+        let (effect_idx, sandbox_name) = Self::read_decision_at_path(&manifest.policy.tree, path);
+        let title = Self::describe_node_at_path(&manifest.policy.tree, path);
+        let tool_ctx = Self::ancestor_tool_name(&manifest.policy.tree, path);
+
+        let (effect_labels, effect_hints) =
+            tool_registry::effect_options_for_tool(tool_ctx.as_deref());
+        // Clamp effect_idx if it's beyond filtered options
+        let selected_effect = effect_idx.min(effect_labels.len().saturating_sub(1));
+
+        let (sandbox_opts, sb_default) =
+            Self::build_sandbox_options_with_included(manifest, included);
+
+        // Use existing sandbox if set, otherwise fall back to default
+        let sb_selected = if let Some(ref name) = sandbox_name {
+            sandbox_opts
+                .iter()
+                .position(|s| s == name)
+                .unwrap_or(sb_default)
+        } else {
+            sb_default
+        };
+
+        let fields = vec![
+            FormField::Select {
+                label: "When matched".into(),
+                options: effect_labels,
+                selected: selected_effect,
+                hints: effect_hints,
+            },
+            FormField::Select {
+                label: "Sandbox".into(),
+                options: sandbox_opts,
+                selected: sb_selected,
+                hints: vec![],
+            },
+        ];
+
+        let mut form = FormState {
+            title,
+            kind: FormKind::EditDecision {
+                path: path.to_vec(),
+            },
+            fields,
+            visible: vec![],
+            active: 0,
+            tool_context: tool_ctx,
+        };
+        form.recompute_visible();
+        form
+    }
+
+    fn read_decision_at_path(tree: &[Node], path: &[usize]) -> (usize, Option<String>) {
+        match Self::get_node_at_path(tree, path) {
+            Some(Node::Decision(d)) => match d {
+                Decision::Allow(sb) => (0, sb.as_ref().map(|s| s.0.clone())),
+                Decision::Deny => (1, None),
+                Decision::Ask(sb) => (2, sb.as_ref().map(|s| s.0.clone())),
+            },
+            // For inline leaves (Condition with single Decision child), read the child
+            Some(Node::Condition { children, .. }) => {
+                if let Some(Node::Decision(d)) = children.first() {
+                    match d {
+                        Decision::Allow(sb) => (0, sb.as_ref().map(|s| s.0.clone())),
+                        Decision::Deny => (1, None),
+                        Decision::Ask(sb) => (2, sb.as_ref().map(|s| s.0.clone())),
+                    }
+                } else {
+                    (0, None)
+                }
+            }
+            _ => (0, None),
+        }
+    }
+
+    fn new_add_child(
+        parent_path: &[usize],
+        manifest: &PolicyManifest,
+        included: Option<&crate::policy::match_tree::CompiledPolicy>,
+    ) -> Self {
+        let parent_desc = Self::describe_condition_at_path(&manifest.policy.tree, parent_path);
+
+        let (sandbox_opts, sb_default) =
+            Self::build_sandbox_options_with_included(manifest, included);
+
+        let fields = vec![
+            FormField::Select {
+                label: "Add".into(),
+                options: vec!["Match condition".into(), "Effect (allow/deny/ask)".into()],
+                selected: 0,
+                hints: vec![
+                    "Add a branch that narrows what this rule matches",
+                    "Add a final allow/deny/ask decision",
+                ],
+            },
+            FormField::Select {
+                label: "Match on".into(),
+                options: observable_options(),
+                selected: 0,
+                hints: observable_option_hints(),
+            },
+            FormField::Text {
+                label: "Which one".into(),
+                value: String::new(),
+                cursor: 0,
+                placeholder: "e.g. 0, arg_name, field.path".into(),
+                hint: None, // updated in recompute_visible
+            },
+            FormField::Select {
+                label: "Match type".into(),
+                options: vec![
+                    "exact value".into(),
+                    "anything".into(),
+                    "regex".into(),
+                    "path prefix".into(),
+                ],
+                selected: 0,
+                hints: pattern_option_hints(),
+            },
+            FormField::Text {
+                label: "Match value".into(),
+                value: String::new(),
+                cursor: 0,
+                placeholder: "e.g. Read, /^git.*/, $HOME".into(),
+                hint: None, // updated in recompute_visible
+            },
+            FormField::Select {
+                label: "When matched".into(),
+                options: vec![
+                    "allow (permit)".into(),
+                    "deny (block)".into(),
+                    "ask (prompt)".into(),
+                ],
+                selected: 0,
+                hints: vec!["", "", ""],
+            },
+            FormField::Select {
+                label: "Sandbox".into(),
+                options: sandbox_opts,
+                selected: sb_default,
+                hints: vec![],
+            },
+        ];
+
+        let mut form = FormState {
+            title: parent_desc,
+            kind: FormKind::AddChild {
+                parent_path: parent_path.to_vec(),
+            },
+            fields,
+            visible: vec![],
+            active: 0,
+            tool_context: Self::ancestor_tool_name(&manifest.policy.tree, parent_path),
+        };
+        form.recompute_visible();
+        form
+    }
+
+    /// Build a human-readable title describing the condition node at this path.
+    fn describe_condition_at_path(tree: &[Node], path: &[usize]) -> String {
+        match Self::get_node_at_path(tree, path) {
+            Some(Node::Condition {
+                observe, pattern, ..
+            }) => {
+                let what = observable_short_desc(observe);
+                let val = short_pattern_desc(pattern);
+                format!("Edit: {what} = {val}")
+            }
+            _ => "Edit Condition".into(),
+        }
+    }
+
+    /// Build a human-readable title describing any node at this path.
+    fn describe_node_at_path(tree: &[Node], path: &[usize]) -> String {
+        // Walk up from the node to build context breadcrumbs
+        match Self::get_node_at_path(tree, path) {
+            Some(Node::Decision(d)) => {
+                // Try to describe the parent condition for context
+                if path.len() >= 2 {
+                    let parent_path = &path[..path.len() - 1];
+                    if let Some(Node::Condition {
+                        observe, pattern, ..
+                    }) = Self::get_node_at_path(tree, parent_path)
+                    {
+                        let what = observable_short_desc(observe);
+                        let val = short_pattern_desc(pattern);
+                        return format!("Edit effect for {what} = {val}");
+                    }
+                }
+                let effect = match d {
+                    Decision::Allow(_) => "allow",
+                    Decision::Deny => "deny",
+                    Decision::Ask(_) => "ask",
+                };
+                format!("Edit effect (currently {effect})")
+            }
+            Some(Node::Condition {
+                observe,
+                pattern,
+                children,
+                ..
+            }) => {
+                // Inline leaf — show condition context + current effect
+                if children.len() == 1
+                    && let Node::Decision(d) = &children[0]
+                {
+                    let what = observable_short_desc(observe);
+                    let val = short_pattern_desc(pattern);
+                    let effect = match d {
+                        Decision::Allow(_) => "allow",
+                        Decision::Deny => "deny",
+                        Decision::Ask(_) => "ask",
+                    };
+                    return format!("Edit: {what} = {val} (currently {effect})");
+                }
+                let what = observable_short_desc(observe);
+                let val = short_pattern_desc(pattern);
+                format!("Edit: {what} = {val}")
+            }
+            None => "Edit".into(),
+        }
+    }
+
+    /// Read the observable index and pattern value from a node at a path.
+    fn read_condition_at_path(tree: &[Node], path: &[usize]) -> (usize, String) {
+        let node = Self::get_node_at_path(tree, path);
+        match node {
+            Some(Node::Condition {
+                observe, pattern, ..
+            }) => {
+                let obs_idx = observable_to_index(observe);
+                let pat_val = pattern_to_value_string(pattern);
+                (obs_idx, pat_val)
+            }
+            _ => (0, String::new()),
+        }
+    }
+
+    fn observable_param_at_path(tree: &[Node], path: &[usize]) -> String {
+        match Self::get_node_at_path(tree, path) {
+            Some(Node::Condition { observe, .. }) => match observe {
+                Observable::PositionalArg(n) => n.to_string(),
+                Observable::NamedArg(name) => name.clone(),
+                Observable::NestedField(parts) => parts.join("."),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        }
+    }
+
+    fn pattern_type_index_at_path(tree: &[Node], path: &[usize]) -> usize {
+        match Self::get_node_at_path(tree, path) {
+            Some(Node::Condition { pattern, .. }) => match pattern {
+                Pattern::Literal(_) => 0,
+                Pattern::Wildcard => 1,
+                Pattern::Regex(_) => 2,
+                Pattern::Prefix(_) => 3,
+                _ => 0,
+            },
+            _ => 0,
+        }
+    }
+
+    /// Build sandbox options list and default selection index.
+    ///
+    /// Includes sandboxes from both inline policy and resolved `.star` includes.
+    /// Defaults to `default_sandbox` if set, otherwise "(none)".
+    fn build_sandbox_options_with_included(
+        manifest: &PolicyManifest,
+        included: Option<&crate::policy::match_tree::CompiledPolicy>,
+    ) -> (Vec<String>, usize) {
+        let mut opts = vec!["(none)".to_string()];
+        let mut names: Vec<String> = manifest.policy.sandboxes.keys().cloned().collect();
+        // Add included sandbox names
+        if let Some(inc) = included {
+            for k in inc.sandboxes.keys() {
+                if !manifest.policy.sandboxes.contains_key(k) {
+                    names.push(k.clone());
+                }
+            }
+        }
+        names.sort();
+        opts.extend(names);
+
+        let default_idx = manifest
+            .policy
+            .default_sandbox
+            .as_ref()
+            .and_then(|name| opts.iter().position(|s| s == name))
+            .unwrap_or(0);
+
+        (opts, default_idx)
+    }
+
+    /// Walk ancestor nodes to find the nearest ToolName condition's pattern value.
+    fn ancestor_tool_name(tree: &[Node], path: &[usize]) -> Option<String> {
+        for len in (1..=path.len()).rev() {
+            let sub_path = &path[..len];
+            if let Some(Node::Condition {
+                observe: Observable::ToolName,
+                pattern,
+                ..
+            }) = Self::get_node_at_path(tree, sub_path)
+            {
+                return Some(pattern_to_value_string(pattern));
+            }
+        }
+        None
+    }
+
+    fn get_node_at_path<'a>(tree: &'a [Node], path: &[usize]) -> Option<&'a Node> {
+        if path.is_empty() {
+            return None;
+        }
+        let mut current = tree.get(path[0])?;
+        for &idx in &path[1..] {
+            match current {
+                Node::Condition { children, .. } => {
+                    current = children.get(idx)?;
+                }
+                Node::Decision(_) => return None,
+            }
+        }
+        Some(current)
+    }
+
+    /// Rebuild a Select field's options/hints to match allowed effects for a tool.
+    fn rebuild_effect_select(field: &mut FormField, tool_name: Option<&str>) {
+        if let FormField::Select {
+            options,
+            hints,
+            selected,
+            ..
+        } = field
+        {
+            let (new_options, new_hints) = tool_registry::effect_options_for_tool(tool_name);
+            if *options != new_options {
+                *options = new_options;
+                *hints = new_hints;
+                if *selected >= options.len() {
+                    *selected = options.len().saturating_sub(1);
+                }
+            }
+        }
+    }
+
+    /// Set the hint on a Text field. No-op for other field types.
+    fn set_text_hint(field: &mut FormField, h: &'static str) {
+        if let FormField::Text { hint, .. } = field {
+            *hint = if h.is_empty() { None } else { Some(h) };
+        }
+    }
+
+    /// Recompute which field indices are visible based on current selections.
+    fn recompute_visible(&mut self) {
+        match &self.kind {
+            FormKind::AddRule => {
+                let rule_type = match &self.fields[0] {
+                    FormField::Select { selected, .. } => *selected,
+                    _ => 0,
+                };
+
+                // Update tool context from typed tool name
+                if rule_type == 0 {
+                    let name = self.text_value(1);
+                    self.tool_context = if name.is_empty() { None } else { Some(name) };
+                } else {
+                    self.tool_context = None;
+                }
+
+                // Rebuild effect options based on tool context
+                Self::rebuild_effect_select(&mut self.fields[4], self.tool_context.as_deref());
+
+                let effect = match &self.fields[4] {
+                    FormField::Select { selected, .. } => *selected,
+                    _ => 0,
+                };
+                let has_sandboxes = match &self.fields[5] {
+                    FormField::Select { options, .. } => options.len() > 1,
+                    _ => false,
+                };
+
+                let mut vis = vec![0]; // always show rule type
+                if rule_type == 0 {
+                    vis.push(1); // tool name
+                } else {
+                    vis.push(2); // binary
+                    vis.push(3); // args
+                }
+                vis.push(4); // effect
+                // Show sandbox only for allow/ask and when sandboxes exist
+                let canonical = tool_registry::filtered_effect_to_canonical(
+                    self.tool_context.as_deref(),
+                    effect,
+                );
+                if canonical != 1 && has_sandboxes {
+                    vis.push(5);
+                }
+                self.visible = vis;
+            }
+            FormKind::EditCondition { .. } => {
+                let obs_idx = self.select_value(0);
+                let pat_idx = self.select_value(2);
+                // Refresh dependent text hints
+                Self::set_text_hint(&mut self.fields[1], observable_param_hint(obs_idx));
+                Self::set_text_hint(&mut self.fields[3], pattern_value_hint(pat_idx));
+                let mut vis = vec![0]; // observable
+                if observable_needs_param(obs_idx) {
+                    vis.push(1); // parameter
+                }
+                vis.push(2); // pattern type
+                if pat_idx != 1 {
+                    // not wildcard
+                    vis.push(3); // pattern value
+                }
+                self.visible = vis;
+            }
+            FormKind::EditDecision { .. } => {
+                let effect_idx = self.select_value(0);
+                let canonical = tool_registry::filtered_effect_to_canonical(
+                    self.tool_context.as_deref(),
+                    effect_idx,
+                );
+                let has_sandboxes = match &self.fields[1] {
+                    FormField::Select { options, .. } => options.len() > 1,
+                    _ => false,
+                };
+                let mut vis = vec![0]; // effect
+                // Show sandbox for allow/ask when sandboxes exist
+                if canonical != 1 && has_sandboxes {
+                    vis.push(1);
+                }
+                self.visible = vis;
+            }
+            FormKind::AddChild { .. } => {
+                let child_type = self.select_value(0);
+                if child_type == 0 {
+                    // Condition
+                    let obs_idx = self.select_value(1);
+                    let pat_idx = self.select_value(3);
+                    // Refresh dependent text hints
+                    Self::set_text_hint(&mut self.fields[2], observable_param_hint(obs_idx));
+                    Self::set_text_hint(&mut self.fields[4], pattern_value_hint(pat_idx));
+                    let mut vis = vec![0, 1]; // type, observable
+                    if observable_needs_param(obs_idx) {
+                        vis.push(2); // parameter
+                    }
+                    vis.push(3); // pattern type
+                    if pat_idx != 1 {
+                        // not wildcard
+                        vis.push(4); // pattern value
+                    }
+                    self.visible = vis;
+                } else {
+                    // Decision — filter effects based on tool context
+                    Self::rebuild_effect_select(&mut self.fields[5], self.tool_context.as_deref());
+                    let effect_idx = self.select_value(5);
+                    let canonical = tool_registry::filtered_effect_to_canonical(
+                        self.tool_context.as_deref(),
+                        effect_idx,
+                    );
+                    let has_sandboxes = match &self.fields[6] {
+                        FormField::Select { options, .. } => options.len() > 1,
+                        _ => false,
+                    };
+                    let mut vis = vec![0, 5]; // type, effect
+                    if canonical != 1 && has_sandboxes {
+                        vis.push(6); // sandbox
+                    }
+                    self.visible = vis;
+                }
+            }
+            _ => {} // other forms have static visibility
+        }
+
+        // Clamp active
+        if self.active >= self.visible.len() {
+            self.active = self.visible.len().saturating_sub(1);
+        }
+    }
+
+    fn active_field_index(&self) -> usize {
+        self.visible[self.active]
+    }
+
+    /// Returns true if the currently active field is a Select (not a Text input).
+    pub fn active_field_is_select(&self) -> bool {
+        matches!(
+            self.fields[self.active_field_index()],
+            FormField::Select { .. }
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Key handling
+// ---------------------------------------------------------------------------
+
+impl FormState {
+    /// Process a key event. Returns a FormEvent indicating what happened.
+    pub fn handle_key(&mut self, key: KeyEvent) -> FormEvent {
+        match key.code {
+            KeyCode::Esc => return FormEvent::Cancel,
+            // Submit: Ctrl+Enter or Enter when not on a text/multiselect field
+            KeyCode::Enter
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    || key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                return FormEvent::Submit;
+            }
+            _ => {}
+        }
+
+        let fi = self.active_field_index();
+
+        // Field-specific key handling
+        match &mut self.fields[fi] {
+            FormField::Text { value, cursor, .. } => match key.code {
+                KeyCode::Char(c) => {
+                    value.insert(*cursor, c);
+                    *cursor += 1;
+                    self.recompute_visible();
+                }
+                KeyCode::Backspace => {
+                    if *cursor > 0 {
+                        *cursor -= 1;
+                        value.remove(*cursor);
+                        self.recompute_visible();
+                    }
+                }
+                KeyCode::Delete => {
+                    if *cursor < value.len() {
+                        value.remove(*cursor);
+                        self.recompute_visible();
+                    }
+                }
+                KeyCode::Left => {
+                    *cursor = cursor.saturating_sub(1);
+                }
+                KeyCode::Right => {
+                    *cursor = (*cursor + 1).min(value.len());
+                }
+                KeyCode::Home => {
+                    *cursor = 0;
+                }
+                KeyCode::End => {
+                    *cursor = value.len();
+                }
+                KeyCode::Enter => {
+                    // Move to next field or submit
+                    if self.active + 1 < self.visible.len() {
+                        self.active += 1;
+                    } else {
+                        return FormEvent::Submit;
+                    }
+                }
+                KeyCode::BackTab => {
+                    self.active = self.active.saturating_sub(1);
+                }
+                KeyCode::Tab => {
+                    if self.active + 1 < self.visible.len() {
+                        self.active += 1;
+                    }
+                }
+                KeyCode::Down => {
+                    if self.active + 1 < self.visible.len() {
+                        self.active += 1;
+                    }
+                }
+                KeyCode::Up => {
+                    self.active = self.active.saturating_sub(1);
+                }
+                _ => {}
+            },
+            FormField::Select {
+                options, selected, ..
+            } => {
+                let len = options.len();
+                match key.code {
+                    KeyCode::Left | KeyCode::Char('h') => {
+                        *selected = if *selected == 0 {
+                            len - 1
+                        } else {
+                            *selected - 1
+                        };
+                        self.recompute_visible();
+                    }
+                    KeyCode::Right | KeyCode::Char('l') => {
+                        *selected = (*selected + 1) % len;
+                        self.recompute_visible();
+                    }
+                    KeyCode::Tab => {
+                        *selected = (*selected + 1) % len;
+                        self.recompute_visible();
+                    }
+                    KeyCode::BackTab => {
+                        *selected = if *selected == 0 {
+                            len - 1
+                        } else {
+                            *selected - 1
+                        };
+                        self.recompute_visible();
+                    }
+                    KeyCode::Enter => {
+                        if self.active + 1 < self.visible.len() {
+                            self.active += 1;
+                        } else {
+                            return FormEvent::Submit;
+                        }
+                    }
+                    KeyCode::Down => {
+                        if self.active + 1 < self.visible.len() {
+                            self.active += 1;
+                        }
+                    }
+                    KeyCode::Up => {
+                        self.active = self.active.saturating_sub(1);
+                    }
+                    _ => {}
+                }
+            }
+            FormField::MultiSelect {
+                options,
+                toggled,
+                cursor,
+                ..
+            } => match key.code {
+                KeyCode::Left | KeyCode::Char('h') => {
+                    *cursor = cursor.saturating_sub(1);
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    *cursor = (*cursor + 1).min(options.len().saturating_sub(1));
+                }
+                KeyCode::Char(' ') => {
+                    if *cursor < toggled.len() {
+                        toggled[*cursor] = !toggled[*cursor];
+                    }
+                }
+                KeyCode::Tab => {
+                    *cursor = (*cursor + 1).min(options.len().saturating_sub(1));
+                }
+                KeyCode::BackTab => {
+                    *cursor = cursor.saturating_sub(1);
+                }
+                KeyCode::Enter => {
+                    if self.active + 1 < self.visible.len() {
+                        self.active += 1;
+                    } else {
+                        return FormEvent::Submit;
+                    }
+                }
+                KeyCode::Down => {
+                    if self.active + 1 < self.visible.len() {
+                        self.active += 1;
+                    }
+                }
+                KeyCode::Up => {
+                    self.active = self.active.saturating_sub(1);
+                }
+                _ => {}
+            },
+        }
+
+        FormEvent::Continue
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Submission — apply form values to manifest
+// ---------------------------------------------------------------------------
+
+impl FormState {
+    /// Apply the form values to the manifest. Returns true if modified, or an error message.
+    pub fn apply(&self, manifest: &mut PolicyManifest) -> Result<bool, String> {
+        match &self.kind {
+            FormKind::AddRule => self.apply_add_rule(manifest),
+            FormKind::AddSandbox => self.apply_add_sandbox(manifest),
+            FormKind::AddSandboxRule { sandbox_name } => {
+                self.apply_add_sandbox_rule(manifest, sandbox_name)
+            }
+            FormKind::AddInclude => self.apply_add_include(manifest),
+            FormKind::EditCondition { path } => self.apply_edit_condition(manifest, path),
+            FormKind::EditDecision { path } => self.apply_edit_decision(manifest, path),
+            FormKind::AddChild { parent_path } => self.apply_add_child(manifest, parent_path),
+            FormKind::EditSandbox { sandbox_name } => {
+                self.apply_edit_sandbox(manifest, sandbox_name)
+            }
+            FormKind::EditSandboxRule {
+                sandbox_name,
+                rule_index,
+            } => self.apply_edit_sandbox_rule(manifest, sandbox_name, *rule_index),
+        }
+    }
+
+    fn apply_add_rule(&self, manifest: &mut PolicyManifest) -> Result<bool, String> {
+        let rule_type = self.select_value(0);
+        let effect_idx = tool_registry::filtered_effect_to_canonical(
+            self.tool_context.as_deref(),
+            self.select_value(4),
+        );
+
+        // Build sandbox ref
+        let sandbox_ref = if effect_idx != 1 {
+            // not deny
+            let sb_idx = self.select_value(5);
+            if sb_idx > 0 {
+                let sb_name = self.select_option_str(5, sb_idx);
+                Some(SandboxRef(sb_name))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let decision = match effect_idx {
+            0 => Decision::Allow(sandbox_ref),
+            1 => Decision::Deny,
+            2 => Decision::Ask(sandbox_ref),
+            _ => Decision::Deny,
+        };
+
+        let node = if rule_type == 0 {
+            // Tool rule
+            let tool_name = self.text_value(1);
+            if tool_name.is_empty() {
+                return Err("Tool name is required".into());
+            }
+            manifest_edit::build_tool_rule(&tool_name, decision)
+        } else {
+            // Exec rule
+            let bin = self.text_value(2);
+            if bin.is_empty() {
+                return Err("Binary name is required".into());
+            }
+            let args_str = self.text_value(3);
+            let args: Vec<&str> = if args_str.is_empty() {
+                vec![]
+            } else {
+                args_str.split_whitespace().collect()
+            };
+            manifest_edit::build_exec_rule(&bin, &args, decision)
+        };
+
+        manifest_edit::upsert_rule(manifest, node);
+        Ok(true)
+    }
+
+    fn apply_add_sandbox(&self, manifest: &mut PolicyManifest) -> Result<bool, String> {
+        let name = self.text_value(0);
+        if name.is_empty() {
+            return Err("Sandbox name is required".into());
+        }
+
+        let caps = self.multi_select_caps(1);
+        let network = match self.select_value(2) {
+            0 => NetworkPolicy::Deny,
+            1 => NetworkPolicy::Allow,
+            2 => NetworkPolicy::Localhost,
+            _ => NetworkPolicy::Deny,
+        };
+
+        sandbox_edit::create_sandbox(manifest, &name, caps, network, None)
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
+    fn apply_add_sandbox_rule(
+        &self,
+        manifest: &mut PolicyManifest,
+        sandbox_name: &str,
+    ) -> Result<bool, String> {
+        let effect = match self.select_value(0) {
+            0 => RuleEffect::Allow,
+            _ => RuleEffect::Deny,
+        };
+        let caps = self.multi_select_caps(1);
+        let path = self.text_value(2);
+        if path.is_empty() {
+            return Err("Path is required".into());
+        }
+        let path_match = match self.select_value(3) {
+            0 => PathMatch::Subpath,
+            1 => PathMatch::Literal,
+            2 => PathMatch::Regex,
+            _ => PathMatch::Subpath,
+        };
+
+        sandbox_edit::add_rule(manifest, sandbox_name, effect, caps, path, path_match, None)
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
+    fn apply_add_include(&self, manifest: &mut PolicyManifest) -> Result<bool, String> {
+        let path = self.text_value(0);
+        if path.is_empty() {
+            return Err("Include path is required".into());
+        }
+        manifest.includes.push(IncludeEntry { path });
+        Ok(true)
+    }
+
+    fn apply_edit_condition(
+        &self,
+        manifest: &mut PolicyManifest,
+        path: &[usize],
+    ) -> Result<bool, String> {
+        let observable = self.build_observable(0, 1)?;
+        let pattern = self.build_pattern(2, 3)?;
+
+        let node = Self::get_node_at_path_mut(&mut manifest.policy.tree, path)
+            .ok_or_else(|| "Node not found".to_string())?;
+
+        match node {
+            Node::Condition {
+                observe,
+                pattern: pat,
+                ..
+            } => {
+                *observe = observable;
+                *pat = pattern;
+                Ok(true)
+            }
+            _ => Err("Not a condition node".into()),
+        }
+    }
+
+    fn apply_edit_decision(
+        &self,
+        manifest: &mut PolicyManifest,
+        path: &[usize],
+    ) -> Result<bool, String> {
+        let effect_idx = tool_registry::filtered_effect_to_canonical(
+            self.tool_context.as_deref(),
+            self.select_value(0),
+        );
+        let sandbox_ref = if effect_idx != 1 {
+            let sb_idx = self.select_value(1);
+            if sb_idx > 0 {
+                Some(SandboxRef(self.select_option_str(1, sb_idx)))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let new_decision = match effect_idx {
+            0 => Decision::Allow(sandbox_ref),
+            1 => Decision::Deny,
+            2 => Decision::Ask(sandbox_ref),
+            _ => Decision::Deny,
+        };
+
+        let node = Self::get_node_at_path_mut(&mut manifest.policy.tree, path)
+            .ok_or_else(|| "Node not found".to_string())?;
+
+        match node {
+            Node::Decision(d) => {
+                *d = new_decision;
+                Ok(true)
+            }
+            // Inline leaf: condition with a single decision child
+            Node::Condition { children, .. } => {
+                if let Some(Node::Decision(d)) = children.first_mut() {
+                    *d = new_decision;
+                    Ok(true)
+                } else {
+                    Err("Not a decision node".into())
+                }
+            }
+        }
+    }
+
+    fn apply_edit_sandbox(
+        &self,
+        manifest: &mut PolicyManifest,
+        sandbox_name: &str,
+    ) -> Result<bool, String> {
+        let caps = self.multi_select_caps(0);
+        let network = match self.select_value(1) {
+            0 => NetworkPolicy::Deny,
+            1 => NetworkPolicy::Allow,
+            2 => NetworkPolicy::Localhost,
+            _ => NetworkPolicy::Deny,
+        };
+
+        let sb = manifest
+            .policy
+            .sandboxes
+            .get_mut(sandbox_name)
+            .ok_or_else(|| format!("Sandbox '{sandbox_name}' not found"))?;
+        sb.default = caps;
+        sb.network = network;
+        Ok(true)
+    }
+
+    fn apply_edit_sandbox_rule(
+        &self,
+        manifest: &mut PolicyManifest,
+        sandbox_name: &str,
+        rule_index: usize,
+    ) -> Result<bool, String> {
+        let effect = match self.select_value(0) {
+            0 => RuleEffect::Allow,
+            _ => RuleEffect::Deny,
+        };
+        let caps = self.multi_select_caps(1);
+        let path = self.text_value(2);
+        if path.is_empty() {
+            return Err("Path is required".into());
+        }
+        let path_match = match self.select_value(3) {
+            0 => PathMatch::Subpath,
+            1 => PathMatch::Literal,
+            2 => PathMatch::Regex,
+            _ => PathMatch::Subpath,
+        };
+
+        let sb = manifest
+            .policy
+            .sandboxes
+            .get_mut(sandbox_name)
+            .ok_or_else(|| format!("Sandbox '{sandbox_name}' not found"))?;
+        let rule = sb
+            .rules
+            .get_mut(rule_index)
+            .ok_or_else(|| format!("Rule index {rule_index} out of range"))?;
+        rule.effect = effect;
+        rule.caps = caps;
+        rule.path = path;
+        rule.path_match = path_match;
+        Ok(true)
+    }
+
+    fn apply_add_child(
+        &self,
+        manifest: &mut PolicyManifest,
+        parent_path: &[usize],
+    ) -> Result<bool, String> {
+        let child_type = self.select_value(0);
+
+        let child = if child_type == 0 {
+            // Condition
+            let observable = self.build_observable(1, 2)?;
+            let pattern = self.build_pattern(3, 4)?;
+            Node::Condition {
+                observe: observable,
+                pattern,
+                children: vec![Node::Decision(Decision::Ask(None))],
+                doc: None,
+                source: None,
+                terminal: false,
+            }
+        } else {
+            // Decision
+            let effect_idx = tool_registry::filtered_effect_to_canonical(
+                self.tool_context.as_deref(),
+                self.select_value(5),
+            );
+            let sandbox_ref = if effect_idx != 1 {
+                let sb_idx = self.select_value(6);
+                if sb_idx > 0 {
+                    Some(SandboxRef(self.select_option_str(6, sb_idx)))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let decision = match effect_idx {
+                0 => Decision::Allow(sandbox_ref),
+                1 => Decision::Deny,
+                2 => Decision::Ask(sandbox_ref),
+                _ => Decision::Deny,
+            };
+            Node::Decision(decision)
+        };
+
+        let parent = Self::get_node_at_path_mut(&mut manifest.policy.tree, parent_path)
+            .ok_or_else(|| "Parent node not found".to_string())?;
+
+        match parent {
+            Node::Condition { children, .. } => {
+                children.push(child);
+                Ok(true)
+            }
+            _ => Err("Parent is not a condition node".into()),
+        }
+    }
+
+    /// Build an Observable from field indices for observable-type select and param text.
+    fn build_observable(&self, obs_field: usize, param_field: usize) -> Result<Observable, String> {
+        let obs_idx = self.select_value(obs_field);
+        let param = self.text_value(param_field);
+        index_to_observable(obs_idx, &param)
+    }
+
+    /// Build a Pattern from field indices for pattern-type select and value text.
+    fn build_pattern(&self, type_field: usize, value_field: usize) -> Result<Pattern, String> {
+        let pat_idx = self.select_value(type_field);
+        let value = self.text_value(value_field);
+        index_to_pattern(pat_idx, &value)
+    }
+
+    fn get_node_at_path_mut<'a>(tree: &'a mut [Node], path: &[usize]) -> Option<&'a mut Node> {
+        if path.is_empty() {
+            return None;
+        }
+        let mut current = tree.get_mut(path[0])?;
+        for &idx in &path[1..] {
+            match current {
+                Node::Condition { children, .. } => {
+                    current = children.get_mut(idx)?;
+                }
+                Node::Decision(_) => return None,
+            }
+        }
+        Some(current)
+    }
+
+    // --- Helpers to extract field values ---
+
+    fn text_value(&self, field_idx: usize) -> String {
+        match &self.fields[field_idx] {
+            FormField::Text { value, .. } => value.trim().to_string(),
+            _ => String::new(),
+        }
+    }
+
+    fn select_value(&self, field_idx: usize) -> usize {
+        match &self.fields[field_idx] {
+            FormField::Select { selected, .. } => *selected,
+            _ => 0,
+        }
+    }
+
+    fn select_option_str(&self, field_idx: usize, option_idx: usize) -> String {
+        match &self.fields[field_idx] {
+            FormField::Select { options, .. } => {
+                options.get(option_idx).cloned().unwrap_or_default()
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn multi_select_caps(&self, field_idx: usize) -> Cap {
+        match &self.fields[field_idx] {
+            FormField::MultiSelect { toggled, .. } => {
+                let mut caps = Cap::empty();
+                let all = [
+                    Cap::READ,
+                    Cap::WRITE,
+                    Cap::CREATE,
+                    Cap::DELETE,
+                    Cap::EXECUTE,
+                ];
+                for (i, &on) in toggled.iter().enumerate() {
+                    if on && let Some(&cap) = all.get(i) {
+                        caps |= cap;
+                    }
+                }
+                if caps.is_empty() {
+                    Cap::READ // fallback
+                } else {
+                    caps
+                }
+            }
+            _ => Cap::READ,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+impl FormState {
+    /// Return the contextual hint for the given raw field index.
+    fn field_hint(&self, field_idx: usize) -> Option<&'static str> {
+        self.fields[field_idx].hint()
+    }
+
+    pub fn view(&self, frame: &mut Frame, area: Rect) {
+        let height = (self.visible.len() as u16 * 3) + 6; // fields + hint + spacing + title + footer
+        let height_pct = ((height as f32 / area.height as f32) * 100.0)
+            .ceil()
+            .clamp(30.0, 80.0) as u16;
+
+        let popup = centered_rect(60, height_pct, area);
+        frame.render_widget(Clear, popup);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(format!(" {} ", self.title));
+
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(Line::from(""));
+
+        for (vi, &fi) in self.visible.iter().enumerate() {
+            let is_active = vi == self.active;
+            let field = &self.fields[fi];
+
+            match field {
+                FormField::Text {
+                    label,
+                    value,
+                    cursor,
+                    placeholder,
+                    ..
+                } => {
+                    let label_style = if is_active {
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+
+                    let display_value = if value.is_empty() && !is_active {
+                        placeholder.as_str()
+                    } else if value.is_empty() {
+                        ""
+                    } else {
+                        value.as_str()
+                    };
+
+                    let value_style = if value.is_empty() && !is_active {
+                        Style::default().fg(Color::DarkGray)
+                    } else if is_active {
+                        Style::default().fg(Color::White)
+                    } else {
+                        Style::default().fg(Color::Cyan)
+                    };
+
+                    if is_active && !value.is_empty() {
+                        // Render with cursor
+                        let before = &value[..*cursor];
+                        let cursor_char = value.chars().nth(*cursor).unwrap_or(' ');
+                        let after = if *cursor < value.len() {
+                            &value[*cursor + cursor_char.len_utf8()..]
+                        } else {
+                            ""
+                        };
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("  {label}: "), label_style),
+                            Span::styled(before, value_style),
+                            Span::styled(
+                                cursor_char.to_string(),
+                                Style::default().fg(Color::Black).bg(Color::White),
+                            ),
+                            Span::styled(after, value_style),
+                        ]));
+                    } else if is_active && value.is_empty() {
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("  {label}: "), label_style),
+                            Span::styled(" ", Style::default().fg(Color::Black).bg(Color::White)),
+                        ]));
+                    } else {
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("  {label}: "), label_style),
+                            Span::styled(display_value, value_style),
+                        ]));
+                    }
+                }
+                FormField::Select {
+                    label,
+                    options,
+                    selected,
+                    ..
+                } => {
+                    let label_style = if is_active {
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+                    let option = &options[*selected];
+                    let arrows = if is_active {
+                        ("< ", " >")
+                    } else {
+                        ("  ", "  ")
+                    };
+                    let value_style = if is_active {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Cyan)
+                    };
+
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {label}: "), label_style),
+                        Span::styled(
+                            arrows.0,
+                            Style::default().fg(if is_active {
+                                Color::Yellow
+                            } else {
+                                Color::DarkGray
+                            }),
+                        ),
+                        Span::styled(option.as_str(), value_style),
+                        Span::styled(
+                            arrows.1,
+                            Style::default().fg(if is_active {
+                                Color::Yellow
+                            } else {
+                                Color::DarkGray
+                            }),
+                        ),
+                    ]));
+                }
+                FormField::MultiSelect {
+                    label,
+                    options,
+                    toggled,
+                    cursor,
+                    ..
+                } => {
+                    let label_style = if is_active {
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+
+                    let mut spans = vec![Span::styled(format!("  {label}: "), label_style)];
+
+                    for (i, opt) in options.iter().enumerate() {
+                        let checked = if toggled[i] { "[x]" } else { "[ ]" };
+                        let is_cursor = is_active && i == *cursor;
+                        let style = if is_cursor {
+                            Style::default()
+                                .fg(Color::White)
+                                .bg(Color::DarkGray)
+                                .add_modifier(Modifier::BOLD)
+                        } else if toggled[i] {
+                            Style::default().fg(Color::Green)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        };
+                        spans.push(Span::styled(format!("{checked} {opt}"), style));
+                        if i + 1 < options.len() {
+                            spans.push(Span::raw("  "));
+                        }
+                    }
+
+                    lines.push(Line::from(spans));
+                }
+            }
+
+            // Context hint for active field
+            if is_active && let Some(hint) = self.field_hint(fi) {
+                lines.push(Line::from(Span::styled(
+                    format!("    {hint}"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+
+            // Spacing between fields
+            lines.push(Line::from(""));
+        }
+
+        // Footer
+        lines.push(Line::from(vec![
+            Span::styled("  Enter", Style::default().fg(Color::Yellow)),
+            Span::styled(" submit  ", Style::default().fg(Color::Gray)),
+            Span::styled("Tab", Style::default().fg(Color::Yellow)),
+            Span::styled(" next field  ", Style::default().fg(Color::Gray)),
+            Span::styled("Esc", Style::default().fg(Color::Yellow)),
+            Span::styled(" cancel", Style::default().fg(Color::Gray)),
+        ]));
+
+        let para = Paragraph::new(lines);
+        frame.render_widget(para, inner);
+    }
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .split(area);
+
+    Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .split(vertical[1])[1]
+}
+
+// ---------------------------------------------------------------------------
+// Observable / Pattern helpers
+// ---------------------------------------------------------------------------
+
+/// Short human description of a pattern value, for use in titles.
+fn short_pattern_desc(pat: &Pattern) -> String {
+    match pat {
+        Pattern::Wildcard => "*".into(),
+        Pattern::Literal(v) => {
+            let s = v.resolve();
+            if s.len() > 30 {
+                format!("\"{}...\"", &s[..27])
+            } else {
+                format!("\"{s}\"")
+            }
+        }
+        Pattern::Regex(re) => format!("/{}/", re.as_str()),
+        Pattern::Prefix(v) => format!("{}/**", v.resolve()),
+        Pattern::AnyOf(pats) => format!("[{} values]", pats.len()),
+        Pattern::Not(inner) => format!("not {}", short_pattern_desc(inner)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Observable registry — single source of truth for UI ↔ enum mapping
+// ---------------------------------------------------------------------------
+
+/// Declares an ordered registry of Observable variants with their UI metadata.
+/// Generates: observable_options(), observable_to_index(), index_to_observable(),
+/// observable_needs_param(), observable_hint(), observable_param_hint(),
+/// observable_param_placeholder(), pattern_value_placeholder().
+///
+/// Simple variants use `param: none`. Parameterized variants specify hint,
+/// placeholder, and a parse block that receives `_param: &str` and returns
+/// `Result<Observable, String>`.
+macro_rules! observable_registry {
+    // Entry: split into simple (param: none) and parameterized variants.
+    (
+        $( $variant:ident {
+            label: $label:expr,
+            hint: $hint:expr,
+            value_placeholder: $val_ph:expr,
+            param_hint: $ph:expr,
+            param_placeholder: $pp:expr,
+            parse($param_name:ident): $parse:expr,
+        } ),* $(,)?
+    ) => {
+        fn observable_options() -> Vec<String> {
+            vec![ $( $label.into() ),* ]
+        }
+
+        /// Per-option hint strings, parallel to `observable_options()`.
+        fn observable_option_hints() -> Vec<&'static str> {
+            vec![ $( $hint ),* ]
+        }
+
+        fn observable_to_index(obs: &Observable) -> usize {
+            let mut _i = 0usize;
+            $(
+                if observable_registry!(@matches obs, $variant) { return _i; }
+                _i += 1;
+            )*
+            unreachable!("all Observable variants covered")
+        }
+
+        #[allow(dead_code)]
+        fn observable_hint(idx: usize) -> &'static str {
+            const HINTS: &[&str] = &[ $( $hint ),* ];
+            HINTS.get(idx).copied().unwrap_or("")
+        }
+
+        fn observable_needs_param(idx: usize) -> bool {
+            const FLAGS: &[bool] = &[ $( !$ph.is_empty() ),* ];
+            FLAGS.get(idx).copied().unwrap_or(false)
+        }
+
+        fn observable_param_hint(idx: usize) -> &'static str {
+            const HINTS: &[&str] = &[ $( $ph ),* ];
+            HINTS.get(idx).copied().unwrap_or("")
+        }
+
+        fn observable_param_placeholder(idx: usize) -> &'static str {
+            const PHS: &[&str] = &[ $( $pp ),* ];
+            PHS.get(idx).copied().unwrap_or("")
+        }
+
+        fn pattern_value_placeholder(idx: usize) -> &'static str {
+            const PHS: &[&str] = &[ $( $val_ph ),* ];
+            PHS.get(idx).copied().unwrap_or("the value to match")
+        }
+
+        #[allow(unused_variables)]
+        fn index_to_observable(idx: usize, _param: &str) -> Result<Observable, String> {
+            let mut _i = 0usize;
+            $(
+                if idx == _i {
+                    let $param_name: &str = _param;
+                    return $parse;
+                }
+                _i += 1;
+            )*
+            Err("Unknown observable type".into())
+        }
+    };
+
+    // --- internal helpers ---
+
+    (@matches $obs:expr, ToolName) => { matches!($obs, Observable::ToolName) };
+    (@matches $obs:expr, HookType) => { matches!($obs, Observable::HookType) };
+    (@matches $obs:expr, AgentName) => { matches!($obs, Observable::AgentName) };
+    (@matches $obs:expr, PositionalArg) => { matches!($obs, Observable::PositionalArg(_)) };
+    (@matches $obs:expr, HasArg) => { matches!($obs, Observable::HasArg) };
+    (@matches $obs:expr, NamedArg) => { matches!($obs, Observable::NamedArg(_)) };
+    (@matches $obs:expr, NestedField) => { matches!($obs, Observable::NestedField(_)) };
+    (@matches $obs:expr, FsOp) => { matches!($obs, Observable::FsOp) };
+    (@matches $obs:expr, FsPath) => { matches!($obs, Observable::FsPath) };
+    (@matches $obs:expr, NetDomain) => { matches!($obs, Observable::NetDomain) };
+
+}
+
+observable_registry! {
+    ToolName {
+        label: "Tool Name",
+        hint: "Match by tool name: Read, Write, Bash, Edit, Glob, Grep, etc.",
+        value_placeholder: "e.g. Read, Write, Bash, Edit",
+        param_hint: "",
+        param_placeholder: "",
+        parse(s): Ok(Observable::ToolName),
+    },
+    HookType {
+        label: "Hook Type",
+        hint: "Match by hook type: PreToolUse, PostToolUse, etc.",
+        value_placeholder: "e.g. PreToolUse, PostToolUse",
+        param_hint: "",
+        param_placeholder: "",
+        parse(s): Ok(Observable::HookType),
+    },
+    AgentName {
+        label: "Agent Name",
+        hint: "Match by the name of the agent making the request",
+        value_placeholder: "e.g. my-agent",
+        param_hint: "",
+        param_placeholder: "",
+        parse(s): Ok(Observable::AgentName),
+    },
+    PositionalArg {
+        label: "Positional Arg",
+        hint: "Match a positional argument (e.g. arg[0] is the command in Bash)",
+        value_placeholder: "e.g. git, npm, gh",
+        param_hint: "Argument index (0 = command, 1 = first arg, etc.)",
+        param_placeholder: "e.g. 0 (command), 1 (first arg), 2 ...",
+        parse(s): {
+            let n: i32 = s.parse().map_err(|_| "Invalid arg index".to_string())?;
+            Ok(Observable::PositionalArg(n))
+        },
+    },
+    HasArg {
+        label: "Has Arg",
+        hint: "Match if any argument contains the pattern value",
+        value_placeholder: "the value to match",
+        param_hint: "",
+        param_placeholder: "",
+        parse(s): Ok(Observable::HasArg),
+    },
+    NamedArg {
+        label: "Named Arg",
+        hint: "Match a specific named argument by key",
+        value_placeholder: "the value to match",
+        param_hint: "The argument key name to match against",
+        param_placeholder: "e.g. file_path, content",
+        parse(s): {
+            if s.is_empty() {
+                return Err("Named arg requires a name".into());
+            }
+            Ok(Observable::NamedArg(s.to_string()))
+        },
+    },
+    NestedField {
+        label: "Nested Field",
+        hint: "Match a nested field in the tool's JSON input",
+        value_placeholder: "the value to match",
+        param_hint: "Dot-separated path into JSON, e.g. content.text",
+        param_placeholder: "e.g. content.text, options.mode",
+        parse(s): {
+            if s.is_empty() {
+                return Err("Nested field requires a path".into());
+            }
+            let parts: Vec<String> = s.split('.').map(|p| p.to_string()).collect();
+            Ok(Observable::NestedField(parts))
+        },
+    },
+    FsOp {
+        label: "FS Operation",
+        hint: "Match the filesystem operation type: read or write",
+        value_placeholder: "e.g. read, write",
+        param_hint: "",
+        param_placeholder: "",
+        parse(s): Ok(Observable::FsOp),
+    },
+    FsPath {
+        label: "FS Path",
+        hint: "Match the filesystem path being accessed",
+        value_placeholder: "e.g. /home/user/project, $PWD",
+        param_hint: "",
+        param_placeholder: "",
+        parse(s): Ok(Observable::FsPath),
+    },
+    NetDomain {
+        label: "Net Domain",
+        hint: "Match the network domain being accessed",
+        value_placeholder: "e.g. github.com, api.example.com",
+        param_hint: "",
+        param_placeholder: "",
+        parse(s): Ok(Observable::NetDomain),
+    },
+}
+
+/// Short human description of an observable, for use in form titles.
+/// This is outside the macro because it operates on `&Observable` (compiler-checked
+/// exhaustive match) rather than on indices, so it doesn't have the fragility problem.
+fn observable_short_desc(obs: &Observable) -> String {
+    match obs {
+        Observable::ToolName => "tool".into(),
+        Observable::HookType => "hook".into(),
+        Observable::AgentName => "agent".into(),
+        Observable::PositionalArg(n) => format!("arg[{n}]"),
+        Observable::HasArg => "any arg".into(),
+        Observable::NamedArg(name) => format!("arg \"{name}\""),
+        Observable::NestedField(parts) => format!("field {}", parts.join(".")),
+        Observable::FsOp => "fs operation".into(),
+        Observable::FsPath => "fs path".into(),
+        Observable::NetDomain => "network domain".into(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pattern registry — single source of truth for UI ↔ enum mapping
+// ---------------------------------------------------------------------------
+
+macro_rules! pattern_registry {
+    (
+        $( $name:ident {
+            label: $label:expr,
+            hint: $hint:expr,
+            value_hint: $val_hint:expr,
+            parse($param_name:ident): $parse:expr,
+        } ),* $(,)?
+    ) => {
+        #[allow(dead_code)]
+        fn pattern_options() -> Vec<String> {
+            vec![ $( $label.into() ),* ]
+        }
+
+        /// Per-option hint strings, parallel to `pattern_options()`.
+        #[allow(dead_code)]
+        fn pattern_option_hints() -> Vec<&'static str> {
+            vec![ $( $hint ),* ]
+        }
+
+        #[allow(dead_code)]
+        fn pattern_hint(idx: usize) -> &'static str {
+            const HINTS: &[&str] = &[ $( $hint ),* ];
+            HINTS.get(idx).copied().unwrap_or("")
+        }
+
+        fn pattern_value_hint(idx: usize) -> &'static str {
+            const HINTS: &[&str] = &[ $( $val_hint ),* ];
+            HINTS.get(idx).copied().unwrap_or("")
+        }
+
+        fn index_to_pattern(idx: usize, _value: &str) -> Result<Pattern, String> {
+            let mut _i = 0usize;
+            $(
+                if idx == _i {
+                    let $param_name: &str = _value;
+                    return $parse;
+                }
+                _i += 1;
+            )*
+            Err("Unknown pattern type".into())
+        }
+    };
+}
+
+pattern_registry! {
+    Literal {
+        label: "exact value",
+        hint: "literal: match an exact string value",
+        value_hint: "The exact string to match",
+        parse(v): {
+            if v.is_empty() { return Err("Literal pattern requires a value".into()); }
+            Ok(Pattern::Literal(Value::Literal(v.to_string())))
+        },
+    },
+    Wildcard {
+        label: "anything",
+        hint: "wildcard: match anything (no value needed)",
+        value_hint: "",
+        parse(_v): Ok(Pattern::Wildcard),
+    },
+    Regex {
+        label: "regex",
+        hint: "regex: match against a regular expression",
+        value_hint: "A regex, e.g. ^git.* or deploy|release",
+        parse(v): {
+            if v.is_empty() { return Err("Regex pattern requires a value".into()); }
+            let re = regex::Regex::new(v).map_err(|e| format!("Invalid regex: {e}"))?;
+            Ok(Pattern::Regex(std::sync::Arc::new(re)))
+        },
+    },
+    Prefix {
+        label: "path prefix",
+        hint: "prefix: match a path and all its children",
+        value_hint: "A path prefix, e.g. /home/user or $PWD",
+        parse(v): {
+            if v.is_empty() { return Err("Prefix pattern requires a value".into()); }
+            Ok(Pattern::Prefix(Value::Literal(v.to_string())))
+        },
+    },
+}
+
+fn pattern_to_value_string(pat: &Pattern) -> String {
+    match pat {
+        Pattern::Wildcard => String::new(),
+        Pattern::Literal(v) => v.resolve(),
+        Pattern::Regex(re) => re.as_str().to_string(),
+        Pattern::Prefix(v) => v.resolve(),
+        Pattern::AnyOf(pats) => pats
+            .iter()
+            .map(pattern_to_value_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Pattern::Not(inner) => format!("!{}", pattern_to_value_string(inner)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::match_tree::*;
+    use crossterm::event::{KeyEvent, KeyModifiers};
+    use std::collections::HashMap;
+
+    fn empty_manifest() -> PolicyManifest {
+        PolicyManifest {
+            includes: vec![],
+            policy: CompiledPolicy {
+                sandboxes: HashMap::new(),
+                tree: vec![],
+                default_effect: crate::policy::Effect::Deny,
+                default_sandbox: None,
+            },
+        }
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    #[test]
+    fn test_add_include_form() {
+        let manifest = empty_manifest();
+        let mut form = FormState::from_request(&FormRequest::AddInclude, &manifest, None);
+
+        // Type "test.star"
+        for c in "test.star".chars() {
+            form.handle_key(key(KeyCode::Char(c)));
+        }
+
+        // Submit
+        let result = form.handle_key(key(KeyCode::Enter));
+        assert!(matches!(result, FormEvent::Submit));
+
+        let mut manifest = empty_manifest();
+        assert!(form.apply(&mut manifest).is_ok());
+        assert_eq!(manifest.includes.len(), 1);
+        assert_eq!(manifest.includes[0].path, "test.star");
+    }
+
+    #[test]
+    fn test_add_tool_rule_form() {
+        let manifest = empty_manifest();
+        let mut form = FormState::from_request(&FormRequest::AddRule, &manifest, None);
+
+        // Field 0 is rule type select, default is "Tool rule" — press Enter to advance
+        form.handle_key(key(KeyCode::Enter));
+
+        // Field 1 is tool name text — type "Read"
+        for c in "Read".chars() {
+            form.handle_key(key(KeyCode::Char(c)));
+        }
+        form.handle_key(key(KeyCode::Enter));
+
+        // Field 4 is effect select — default "allow", press Enter to advance
+        // This should be the last visible field (no sandboxes defined) — submit
+        let result = form.handle_key(key(KeyCode::Enter));
+        assert!(matches!(result, FormEvent::Submit));
+
+        let mut manifest = empty_manifest();
+        assert!(form.apply(&mut manifest).is_ok());
+        assert!(!manifest.policy.tree.is_empty());
+    }
+
+    #[test]
+    fn test_cancel_form() {
+        let manifest = empty_manifest();
+        let mut form = FormState::from_request(&FormRequest::AddInclude, &manifest, None);
+
+        let result = form.handle_key(key(KeyCode::Esc));
+        assert!(matches!(result, FormEvent::Cancel));
+    }
+
+    #[test]
+    fn test_text_field_editing() {
+        let manifest = empty_manifest();
+        let mut form = FormState::from_request(&FormRequest::AddInclude, &manifest, None);
+
+        // Type "hello"
+        for c in "hello".chars() {
+            form.handle_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(form.text_value(0), "hello");
+
+        // Backspace
+        form.handle_key(key(KeyCode::Backspace));
+        assert_eq!(form.text_value(0), "hell");
+
+        // Left then insert
+        form.handle_key(key(KeyCode::Left));
+        form.handle_key(key(KeyCode::Char('X')));
+        assert_eq!(form.text_value(0), "helXl");
+    }
+
+    #[test]
+    fn test_empty_text_rejected() {
+        let manifest = empty_manifest();
+        let form = FormState::from_request(&FormRequest::AddInclude, &manifest, None);
+
+        let mut manifest = empty_manifest();
+        let result = form.apply(&mut manifest);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_edit_condition_form() {
+        use crate::policy::manifest_edit;
+
+        let mut manifest = empty_manifest();
+        manifest_edit::upsert_rule(
+            &mut manifest,
+            manifest_edit::build_tool_rule("Read", Decision::Allow(None)),
+        );
+
+        // Create edit form for the root condition
+        let mut form = FormState::from_request(
+            &FormRequest::EditCondition { path: vec![0] },
+            &manifest,
+            None,
+        );
+
+        // Observable should be pre-filled as tool_name (index 0)
+        assert_eq!(form.select_value(0), 0);
+        // Pattern value should be pre-filled as "Read"
+        assert_eq!(form.text_value(3), "Read");
+
+        // Change pattern value to "Write"
+        // Navigate to value field (field index 3)
+        // Use Enter to advance past Select fields (Tab now cycles options)
+        form.handle_key(key(KeyCode::Enter)); // -> pattern type
+        form.handle_key(key(KeyCode::Enter)); // -> value
+
+        // Clear existing text and type new value
+        // Select all and delete by using Home then deleting forward
+        form.handle_key(key(KeyCode::Home));
+        for _ in 0..10 {
+            form.handle_key(key(KeyCode::Delete));
+        }
+        for c in "Write".chars() {
+            form.handle_key(key(KeyCode::Char(c)));
+        }
+
+        let result = form.handle_key(key(KeyCode::Enter));
+        assert!(matches!(result, FormEvent::Submit));
+
+        assert!(form.apply(&mut manifest).is_ok());
+        // Verify the condition was updated
+        match &manifest.policy.tree[0] {
+            Node::Condition { pattern, .. } => match pattern {
+                Pattern::Literal(v) => assert_eq!(v.resolve(), "Write"),
+                _ => panic!("Expected literal pattern"),
+            },
+            _ => panic!("Expected condition node"),
+        }
+    }
+
+    #[test]
+    fn test_add_child_decision_form() {
+        use crate::policy::manifest_edit;
+
+        let mut manifest = empty_manifest();
+        // Create a condition with multiple children so it's expandable
+        manifest_edit::upsert_rule(
+            &mut manifest,
+            manifest_edit::build_exec_rule("gh", &["pr"], Decision::Allow(None)),
+        );
+
+        // Add a decision child under root (Bash condition)
+        let mut form = FormState::from_request(
+            &FormRequest::AddChild {
+                parent_path: vec![0],
+            },
+            &manifest,
+            None,
+        );
+
+        // Switch to Decision type
+        form.handle_key(key(KeyCode::Right)); // type: Condition -> Decision
+
+        // Effect should now be visible, default "allow"
+        // Navigate to effect and change to "deny"
+        form.handle_key(key(KeyCode::Enter)); // -> effect
+        form.handle_key(key(KeyCode::Right)); // allow -> deny
+
+        let result = form.handle_key(key(KeyCode::Enter));
+        assert!(matches!(result, FormEvent::Submit));
+
+        assert!(form.apply(&mut manifest).is_ok());
+        // Root condition should now have an extra child
+        match &manifest.policy.tree[0] {
+            Node::Condition { children, .. } => {
+                let has_deny = children
+                    .iter()
+                    .any(|c| matches!(c, Node::Decision(Decision::Deny)));
+                assert!(has_deny, "Should have a Deny decision child");
+            }
+            _ => panic!("Expected condition node"),
+        }
+    }
+
+    #[test]
+    fn test_add_sandbox_form() {
+        let manifest = empty_manifest();
+        let mut form = FormState::from_request(&FormRequest::AddSandbox, &manifest, None);
+
+        // Field 0: name text — type "dev"
+        for c in "dev".chars() {
+            form.handle_key(key(KeyCode::Char(c)));
+        }
+        form.handle_key(key(KeyCode::Tab));
+
+        // Field 1: multi-select caps — defaults are read + execute, skip
+        form.handle_key(key(KeyCode::Enter));
+
+        // Field 2: network select — default "deny", submit
+        let result = form.handle_key(key(KeyCode::Enter));
+        assert!(matches!(result, FormEvent::Submit));
+
+        let mut manifest = empty_manifest();
+        assert!(form.apply(&mut manifest).is_ok());
+        assert!(manifest.policy.sandboxes.contains_key("dev"));
+        let sb = &manifest.policy.sandboxes["dev"];
+        assert_eq!(sb.default, Cap::READ | Cap::EXECUTE);
+        assert_eq!(sb.network, NetworkPolicy::Deny);
+    }
+
+    #[test]
+    fn test_bash_tool_hides_ask_effect() {
+        let manifest = empty_manifest();
+        let mut form = FormState::from_request(&FormRequest::AddRule, &manifest, None);
+
+        // Type "Bash" into tool name field (field 1)
+        // First, advance to field 1 (it's a Text field, Tab advances)
+        form.handle_key(key(KeyCode::Enter)); // past rule type select -> tool name
+        for c in "Bash".chars() {
+            form.handle_key(key(KeyCode::Char(c)));
+        }
+
+        // Effect field (field 4) should now only have 2 options
+        match &form.fields[4] {
+            FormField::Select { options, .. } => {
+                assert_eq!(options.len(), 2, "Bash should only have allow/deny");
+                assert!(options[0].contains("allow"));
+                assert!(options[1].contains("deny"));
+            }
+            _ => panic!("Expected Select field"),
+        }
+    }
+
+    #[test]
+    fn test_non_bash_tool_has_ask_effect() {
+        let manifest = empty_manifest();
+        let mut form = FormState::from_request(&FormRequest::AddRule, &manifest, None);
+
+        // Type "Read" into tool name field
+        form.handle_key(key(KeyCode::Enter));
+        for c in "Read".chars() {
+            form.handle_key(key(KeyCode::Char(c)));
+        }
+
+        // Effect field should have all 3 options
+        match &form.fields[4] {
+            FormField::Select { options, .. } => {
+                assert_eq!(options.len(), 3, "Read should have allow/deny/ask");
+            }
+            _ => panic!("Expected Select field"),
+        }
+    }
+
+    #[test]
+    fn test_bash_add_rule_applies_deny() {
+        let manifest = empty_manifest();
+        let mut form = FormState::from_request(&FormRequest::AddRule, &manifest, None);
+
+        // Type "Bash" tool name
+        form.handle_key(key(KeyCode::Enter));
+        for c in "Bash".chars() {
+            form.handle_key(key(KeyCode::Char(c)));
+        }
+
+        // Advance to effect, select deny (index 1 in filtered = canonical 1)
+        form.handle_key(key(KeyCode::Enter)); // -> effect
+        form.handle_key(key(KeyCode::Right)); // allow -> deny
+
+        // Submit
+        let result = form.handle_key(key(KeyCode::Enter));
+        assert!(matches!(result, FormEvent::Submit));
+
+        let mut manifest = empty_manifest();
+        assert!(form.apply(&mut manifest).is_ok());
+
+        // Should have a Bash deny rule
+        assert!(!manifest.policy.tree.is_empty());
+    }
+
+    #[test]
+    fn test_edit_decision_under_bash_hides_ask() {
+        use crate::policy::manifest_edit;
+
+        let mut manifest = empty_manifest();
+        manifest_edit::upsert_rule(
+            &mut manifest,
+            manifest_edit::build_tool_rule("Bash", Decision::Allow(None)),
+        );
+
+        // The tool rule creates Condition(tool_name=Bash) -> Decision(Allow)
+        // Edit the decision at path [0, 0] (child of root condition)
+        let form = FormState::from_request(
+            &FormRequest::EditDecision { path: vec![0, 0] },
+            &manifest,
+            None,
+        );
+
+        assert_eq!(form.tool_context.as_deref(), Some("Bash"));
+        match &form.fields[0] {
+            FormField::Select { options, .. } => {
+                assert_eq!(options.len(), 2, "Under Bash, only allow/deny");
+            }
+            _ => panic!("Expected Select field"),
+        }
+    }
+
+    #[test]
+    fn test_edit_sandbox_prefills_and_applies() {
+        let mut manifest = empty_manifest();
+        sandbox_edit::create_sandbox(
+            &mut manifest,
+            "dev",
+            Cap::READ | Cap::WRITE,
+            NetworkPolicy::Localhost,
+            None,
+        )
+        .unwrap();
+
+        let form = FormState::from_request(
+            &FormRequest::EditSandbox {
+                sandbox_name: "dev".into(),
+            },
+            &manifest,
+            None,
+        );
+
+        // Check prefilled caps: read=true, write=true, rest=false
+        match &form.fields[0] {
+            FormField::MultiSelect { toggled, .. } => {
+                assert_eq!(toggled, &[true, true, false, false, false]);
+            }
+            _ => panic!("Expected MultiSelect"),
+        }
+        // Check prefilled network: localhost = index 2
+        match &form.fields[1] {
+            FormField::Select { selected, .. } => {
+                assert_eq!(*selected, 2);
+            }
+            _ => panic!("Expected Select"),
+        }
+
+        // Apply should update the sandbox
+        form.apply(&mut manifest).unwrap();
+        let sb = &manifest.policy.sandboxes["dev"];
+        assert_eq!(sb.default, Cap::READ | Cap::WRITE);
+        assert_eq!(sb.network, NetworkPolicy::Localhost);
+    }
+
+    #[test]
+    fn test_edit_sandbox_rule_prefills_and_applies() {
+        let mut manifest = empty_manifest();
+        sandbox_edit::create_sandbox(&mut manifest, "dev", Cap::READ, NetworkPolicy::Deny, None)
+            .unwrap();
+        sandbox_edit::add_rule(
+            &mut manifest,
+            "dev",
+            RuleEffect::Deny,
+            Cap::WRITE | Cap::DELETE,
+            "/tmp".into(),
+            PathMatch::Literal,
+            None,
+        )
+        .unwrap();
+
+        let form = FormState::from_request(
+            &FormRequest::EditSandboxRule {
+                sandbox_name: "dev".into(),
+                rule_index: 0,
+            },
+            &manifest,
+            None,
+        );
+
+        // Effect: deny = index 1
+        assert_eq!(form.select_value(0), 1);
+        // Caps: write + delete
+        match &form.fields[1] {
+            FormField::MultiSelect { toggled, .. } => {
+                assert_eq!(toggled, &[false, true, false, true, false]);
+            }
+            _ => panic!("Expected MultiSelect"),
+        }
+        // Path prefilled
+        match &form.fields[2] {
+            FormField::Text { value, .. } => assert_eq!(value, "/tmp"),
+            _ => panic!("Expected Text"),
+        }
+        // Path match: literal = index 1
+        assert_eq!(form.select_value(3), 1);
+
+        // Apply should update the rule
+        form.apply(&mut manifest).unwrap();
+        let rule = &manifest.policy.sandboxes["dev"].rules[0];
+        assert_eq!(rule.effect, RuleEffect::Deny);
+        assert_eq!(rule.caps, Cap::WRITE | Cap::DELETE);
+        assert_eq!(rule.path, "/tmp");
+        assert_eq!(rule.path_match, PathMatch::Literal);
+    }
+}

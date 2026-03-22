@@ -251,9 +251,28 @@ pub enum Node {
         /// Optional source provenance (e.g. policy level name).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<String>,
+        /// When true, asserts that no more positional args exist after this one.
+        /// Analogous to `$` in regex — the match is exhaustive.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        terminal: bool,
     },
     /// A leaf decision.
     Decision(Decision),
+}
+
+impl Node {
+    /// Stamp source provenance on a root-level Condition node if it has none.
+    ///
+    /// Leaves (`Decision`) and already-stamped nodes are left unchanged.
+    pub fn stamp_source(&mut self, source: &str) {
+        if let Node::Condition {
+            source: slot @ None,
+            ..
+        } = self
+        {
+            *slot = Some(source.to_string());
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -279,6 +298,30 @@ fn default_effect() -> Effect {
     Effect::Ask
 }
 
+// ---------------------------------------------------------------------------
+// PolicyManifest — on-disk policy.json representation
+// ---------------------------------------------------------------------------
+
+/// On-disk `policy.json` representation. Parsed at the loader level;
+/// `includes` are resolved and merged before the inner `CompiledPolicy` is used.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyManifest {
+    /// Starlark files to include (evaluated and merged at load time).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub includes: Vec<IncludeEntry>,
+    /// The inline policy (tree, sandboxes, default_effect, etc.).
+    #[serde(flatten)]
+    pub policy: CompiledPolicy,
+}
+
+/// A single include directive in `policy.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncludeEntry {
+    /// Path to a `.star` file. `@clash//` prefix resolves to the embedded stdlib;
+    /// other paths are relative to the directory containing `policy.json`.
+    pub path: String,
+}
+
 impl CompiledPolicy {
     /// Return the number of root-level rule branches.
     pub fn rule_count(&self) -> usize {
@@ -287,179 +330,12 @@ impl CompiledPolicy {
 
     /// Format rules as human-readable lines for display (flat, denormalized).
     pub fn format_rules(&self) -> Vec<String> {
-        let mut lines = Vec::new();
-        for node in &self.tree {
-            format_node_flat(node, &mut Vec::new(), &mut lines);
-        }
-        lines
+        super::format::format_rules(self)
     }
 
     /// Format rules as a tree with box-drawing characters.
-    /// Merges duplicate condition nodes to show shared structure.
     pub fn format_tree(&self) -> Vec<String> {
-        let mut lines = Vec::new();
-        let len = self.tree.len();
-        for (i, node) in self.tree.iter().enumerate() {
-            let is_last = i == len - 1;
-            format_tree_node(node, "", is_last, true, &mut lines);
-        }
-        lines
-    }
-}
-
-/// Recursively render a node as tree lines with box-drawing characters.
-fn format_tree_node(
-    node: &Node,
-    prefix: &str,
-    is_last: bool,
-    is_root: bool,
-    lines: &mut Vec<String>,
-) {
-    let connector = if is_root {
-        ""
-    } else if is_last {
-        "└── "
-    } else {
-        "├── "
-    };
-    let child_prefix = if is_root {
-        ""
-    } else if is_last {
-        "    "
-    } else {
-        "│   "
-    };
-
-    match node {
-        Node::Decision(d) => {
-            let effect = format_decision(d);
-            lines.push(format!("{prefix}{connector}{effect}"));
-        }
-        Node::Condition {
-            observe,
-            pattern,
-            children,
-            doc,
-            source,
-        } => {
-            let label = format_condition(observe, pattern);
-            let doc_suffix = doc
-                .as_deref()
-                .map(|d| format!("  # {d}"))
-                .unwrap_or_default();
-            let source_suffix = if is_root {
-                source
-                    .as_deref()
-                    .map(|s| format!("  [{s}]"))
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-
-            // Single decision child → show inline: "label → effect"
-            if children.len() == 1
-                && let Node::Decision(d) = &children[0]
-            {
-                let effect = format_decision(d);
-                lines.push(format!(
-                    "{prefix}{connector}{label} → {effect}{doc_suffix}{source_suffix}"
-                ));
-                return;
-            }
-
-            // Branch — show label, then children as sub-tree
-            lines.push(format!(
-                "{prefix}{connector}{label}{doc_suffix}{source_suffix}"
-            ));
-            let new_prefix = format!("{prefix}{child_prefix}");
-            let child_count = children.len();
-            for (i, child) in children.iter().enumerate() {
-                let child_is_last = i == child_count - 1;
-                format_tree_node(child, &new_prefix, child_is_last, false, lines);
-            }
-        }
-    }
-}
-
-fn format_decision(d: &Decision) -> String {
-    match d {
-        Decision::Allow(Some(sb)) => format!("allow [sandbox: {}]", sb.0),
-        Decision::Allow(None) => "allow".to_string(),
-        Decision::Deny => "deny".to_string(),
-        Decision::Ask(Some(sb)) => format!("ask [sandbox: {}]", sb.0),
-        Decision::Ask(None) => "ask".to_string(),
-    }
-}
-
-/// Recursively format a node as a flat, denormalized rule line.
-fn format_node_flat(node: &Node, path: &mut Vec<String>, lines: &mut Vec<String>) {
-    match node {
-        Node::Decision(d) => {
-            let effect = format_decision(d);
-            if path.is_empty() {
-                lines.push(format!("{effect} *"));
-            } else {
-                lines.push(format!("{effect} {}", path.join(" → ")));
-            }
-        }
-        Node::Condition {
-            observe,
-            pattern,
-            children,
-            doc,
-            source: _,
-        } => {
-            let segment = format_condition(observe, pattern);
-            path.push(segment);
-            if children.is_empty() {
-                lines.push(format!("(no decision) {}", path.join(" → ")));
-            } else {
-                // Check if this is a leaf condition (all children are decisions)
-                let is_leaf = children.iter().all(|c| matches!(c, Node::Decision(_)));
-                for child in children {
-                    format_node_flat(child, path, lines);
-                }
-                // Append doc to the last line if this is the innermost condition
-                if is_leaf
-                    && let Some(doc_text) = doc
-                    && let Some(last) = lines.last_mut()
-                {
-                    last.push_str(&format!("  # {doc_text}"));
-                }
-            }
-            path.pop();
-        }
-    }
-}
-
-fn format_condition(obs: &Observable, pat: &Pattern) -> String {
-    let obs_str = match obs {
-        Observable::ToolName => "tool".to_string(),
-        Observable::HookType => "hook".to_string(),
-        Observable::AgentName => "agent".to_string(),
-        Observable::PositionalArg(n) => format!("arg[{n}]"),
-        Observable::HasArg => "has_arg".to_string(),
-        Observable::NamedArg(name) => format!("named({name})"),
-        Observable::NestedField(path) => format!("field({})", path.join(".")),
-        Observable::FsOp => "fs_op".to_string(),
-        Observable::FsPath => "fs_path".to_string(),
-        Observable::NetDomain => "net_domain".to_string(),
-    };
-    let pat_str = format_pattern(pat);
-    format!("{obs_str}={pat_str}")
-}
-
-fn format_pattern(pat: &Pattern) -> String {
-    match pat {
-        Pattern::Wildcard => "*".to_string(),
-        Pattern::Literal(v) => format!("\"{}\"", v.resolve()),
-        Pattern::Regex(re) => format!("/{}/", re.as_str()),
-        Pattern::AnyOf(pats) => {
-            let items: Vec<_> = pats.iter().map(|p| format_pattern(p)).collect();
-            format!("[{}]", items.join(", "))
-        }
-        Pattern::Not(inner) => format!("!{}", format_pattern(inner)),
-        Pattern::Prefix(v) => format!("{}/**", v.resolve()),
+        super::format::format_tree(self)
     }
 }
 
@@ -513,7 +389,7 @@ impl QueryContext {
                 tool_input
                     .get("file_path")
                     .and_then(|v| v.as_str())
-                    .map(|s| resolve_relative_path(s)),
+                    .map(resolve_relative_path),
             ),
             "Glob" | "Grep" => (
                 Some("read".to_string()),
@@ -521,14 +397,14 @@ impl QueryContext {
                     .get("path")
                     .or_else(|| tool_input.get("pattern"))
                     .and_then(|v| v.as_str())
-                    .map(|s| resolve_relative_path(s)),
+                    .map(resolve_relative_path),
             ),
             "Write" | "Edit" => (
                 Some("write".to_string()),
                 tool_input
                     .get("file_path")
                     .and_then(|v| v.as_str())
-                    .map(|s| resolve_relative_path(s)),
+                    .map(resolve_relative_path),
             ),
             _ => (None, None),
         };
@@ -746,12 +622,13 @@ pub fn eval(nodes: &[Node], ctx: &QueryContext) -> Option<Decision> {
                 observe,
                 pattern,
                 children,
+                terminal,
                 ..
             } => {
-                if matches_observable(observe, pattern, ctx) {
-                    if let Some(d) = eval(children, ctx) {
-                        return Some(d);
-                    }
+                if matches_observable(observe, pattern, *terminal, ctx)
+                    && let Some(d) = eval(children, ctx)
+                {
+                    return Some(d);
                 }
             }
         }
@@ -773,6 +650,7 @@ pub fn eval_traced(
                 observe,
                 pattern,
                 children,
+                terminal,
                 ..
             } => {
                 let obs_name = format!("{observe:?}");
@@ -780,7 +658,7 @@ pub fn eval_traced(
                 let values = ctx.extract(observe);
                 let tested = values.as_ref().map(|vs| vs.join(", "));
 
-                if matches_observable(observe, pattern, ctx) {
+                if matches_observable(observe, pattern, *terminal, ctx) {
                     path.push(obs_name.clone());
                     if let Some(d) = eval_traced(children, ctx, trace, path) {
                         trace.matched.push(TraceEntry {
@@ -814,12 +692,52 @@ pub fn eval_traced(
     None
 }
 
+/// Walk the tree and return the index path to the first matching decision.
+fn find_match_path_dfs(nodes: &[Node], ctx: &QueryContext) -> Option<Vec<usize>> {
+    for (i, node) in nodes.iter().enumerate() {
+        match node {
+            Node::Decision(_) => return Some(vec![i]),
+            Node::Condition {
+                observe,
+                pattern,
+                children,
+                terminal,
+                ..
+            } => {
+                if matches_observable(observe, pattern, *terminal, ctx)
+                    && let Some(mut child_path) = find_match_path_dfs(children, ctx)
+                {
+                    child_path.insert(0, i);
+                    return Some(child_path);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Test whether an observable matches a pattern in the given context.
-fn matches_observable(obs: &Observable, pattern: &Pattern, ctx: &QueryContext) -> bool {
+///
+/// When `terminal` is true and the observable is a `PositionalArg(i)`,
+/// additionally asserts that no more positional args exist after index `i`.
+/// This is analogous to `$` in regex — the match is exhaustive.
+fn matches_observable(
+    obs: &Observable,
+    pattern: &Pattern,
+    terminal: bool,
+    ctx: &QueryContext,
+) -> bool {
     match obs {
         Observable::HasArg => {
             // HasArg: true if ANY arg matches the pattern
             ctx.args.iter().any(|arg| pattern.matches(arg))
+        }
+        Observable::PositionalArg(i) if terminal => {
+            let idx = *i as usize;
+            match ctx.args.get(idx) {
+                Some(val) if pattern.matches(val) => ctx.args.len() == idx + 1,
+                _ => false,
+            }
         }
         _ => {
             // For all other observables, extract the value and match
@@ -844,6 +762,19 @@ impl CompiledPolicy {
         self.evaluate_ctx(&ctx)
     }
 
+    /// Find the index path through the tree to the first matching decision.
+    ///
+    /// Returns `Some(vec![root_idx, child_idx, ...])` if a rule matched,
+    /// or `None` if no rule matched (default effect applies).
+    pub fn find_match_path(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> Option<Vec<usize>> {
+        let ctx = QueryContext::from_tool(tool_name, tool_input);
+        find_match_path_dfs(&self.tree, &ctx)
+    }
+
     /// Evaluate this policy against a prepared query context.
     pub fn evaluate_ctx(&self, ctx: &QueryContext) -> PolicyDecision {
         let mut trace = EvalTrace::default();
@@ -854,18 +785,22 @@ impl CompiledPolicy {
         match decision {
             Some(d) => {
                 let mut effect = d.effect();
+                let cwd_path = std::env::current_dir().unwrap_or_default();
                 let sandbox = d
                     .sandbox_ref()
                     .and_then(|sr| self.sandboxes.get(&sr.0))
-                    .cloned();
+                    .cloned()
+                    .map(|sbx| sbx.expand_worktree_rules(&cwd_path));
 
                 // For non-Bash tools with file operations, enforce sandbox fs
                 // rules at policy level (there's no OS sandbox wrapper for these).
+                let mut sandbox_denial: Option<String> = None;
                 if effect == Effect::Allow
                     && ctx.tool_name != "Bash"
                     && let Some(ref sbx) = sandbox
                     && let Some(ref fs_op) = ctx.fs_op
                     && let Some(ref fs_path) = ctx.fs_path
+                    && fs_path.starts_with('/')
                 {
                     use crate::policy::sandbox_types::Cap;
                     let required = match fs_op.as_str() {
@@ -873,13 +808,19 @@ impl CompiledPolicy {
                         "write" => Cap::WRITE | Cap::CREATE,
                         _ => Cap::empty(),
                     };
-                    let effective = sbx.effective_caps(fs_path, "");
-                    if !effective.contains(required) {
+                    let cwd = cwd_path.to_string_lossy().to_string();
+                    if let Some(explanation) = sbx.explain_denial(fs_path, &cwd, required) {
                         effect = Effect::Deny;
+                        let sandbox_name =
+                            d.sandbox_ref().map(|sr| sr.0.as_str()).unwrap_or("unnamed");
+                        sandbox_denial = Some(format!("sandbox '{sandbox_name}': {explanation}"));
                     }
                 }
 
-                let resolution = format!("result: {effect}");
+                let resolution = match sandbox_denial {
+                    Some(ref detail) => format!("result: {effect} ({detail})"),
+                    None => format!("result: {effect}"),
+                };
 
                 PolicyDecision {
                     effect,
@@ -950,13 +891,13 @@ impl CompiledPolicy {
         for node in nodes {
             match node {
                 Node::Decision(d) => {
-                    if let Some(sr) = d.sandbox_ref() {
-                        if !self.sandboxes.contains_key(&sr.0) {
-                            errors.push(format!(
-                                "sandbox reference '{}' not found in sandboxes map",
-                                sr.0
-                            ));
-                        }
+                    if let Some(sr) = d.sandbox_ref()
+                        && !self.sandboxes.contains_key(&sr.0)
+                    {
+                        errors.push(format!(
+                            "sandbox reference '{}' not found in sandboxes map",
+                            sr.0
+                        ));
                     }
                 }
                 Node::Condition { children, .. } => {
@@ -1016,6 +957,7 @@ impl Node {
                     children,
                     doc,
                     source,
+                    terminal,
                 } => {
                     if let Some(existing) = out.iter_mut().find_map(|n| match n {
                         Node::Condition {
@@ -1038,6 +980,7 @@ impl Node {
                             children,
                             doc,
                             source,
+                            terminal,
                         });
                     }
                 }
@@ -1145,6 +1088,7 @@ mod tests {
             children: vec![Node::Decision(Decision::Allow(None))],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let ctx = make_ctx("Bash", "echo hello");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
@@ -1158,9 +1102,91 @@ mod tests {
             children: vec![Node::Decision(Decision::Allow(None))],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let ctx = make_ctx("Bash", "echo hello");
         assert_eq!(eval(&nodes, &ctx), None);
+    }
+
+    #[test]
+    fn terminal_exact_match() {
+        // terminal: true on arg[1] means "git commit" matches but "git commit --amend" does not
+        let nodes = vec![Node::Condition {
+            observe: Observable::ToolName,
+            pattern: Pattern::Literal(Value::Literal("Bash".into())),
+            children: vec![Node::Condition {
+                observe: Observable::PositionalArg(0),
+                pattern: Pattern::Literal(Value::Literal("git".into())),
+                children: vec![Node::Condition {
+                    observe: Observable::PositionalArg(1),
+                    pattern: Pattern::Literal(Value::Literal("commit".into())),
+                    children: vec![Node::Decision(Decision::Deny)],
+                    doc: None,
+                    source: None,
+                    terminal: true,
+                }],
+                doc: None,
+                source: None,
+                terminal: false,
+            }],
+            doc: None,
+            source: None,
+            terminal: false,
+        }];
+
+        // Exact match: "git commit" → deny
+        let ctx = make_ctx("Bash", "git commit");
+        assert_eq!(eval(&nodes, &ctx), Some(Decision::Deny));
+
+        // Extra args: "git commit --amend" → no match (terminal blocks it)
+        let ctx = make_ctx("Bash", "git commit --amend");
+        assert_eq!(eval(&nodes, &ctx), None);
+
+        // Different subcommand: "git push" → no match
+        let ctx = make_ctx("Bash", "git push");
+        assert_eq!(eval(&nodes, &ctx), None);
+    }
+
+    #[test]
+    fn terminal_single_binary() {
+        // terminal: true on arg[0] means "ls" matches but "ls -la" does not
+        let nodes = vec![Node::Condition {
+            observe: Observable::PositionalArg(0),
+            pattern: Pattern::Literal(Value::Literal("ls".into())),
+            children: vec![Node::Decision(Decision::Allow(None))],
+            doc: None,
+            source: None,
+            terminal: true,
+        }];
+
+        let ctx = make_ctx("Bash", "ls");
+        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
+
+        let ctx = make_ctx("Bash", "ls -la");
+        assert_eq!(eval(&nodes, &ctx), None);
+    }
+
+    #[test]
+    fn non_terminal_allows_extra_args() {
+        // terminal: false (default) means "git commit --amend" still matches "git commit"
+        let nodes = vec![Node::Condition {
+            observe: Observable::PositionalArg(0),
+            pattern: Pattern::Literal(Value::Literal("git".into())),
+            children: vec![Node::Condition {
+                observe: Observable::PositionalArg(1),
+                pattern: Pattern::Literal(Value::Literal("commit".into())),
+                children: vec![Node::Decision(Decision::Allow(None))],
+                doc: None,
+                source: None,
+                terminal: false,
+            }],
+            doc: None,
+            source: None,
+            terminal: false,
+        }];
+
+        let ctx = make_ctx("Bash", "git commit --amend");
+        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
     }
 
     #[test]
@@ -1174,9 +1200,11 @@ mod tests {
                 children: vec![Node::Decision(Decision::Allow(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             }],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let ctx = make_ctx("Bash", "git push");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
@@ -1193,9 +1221,11 @@ mod tests {
                 children: vec![Node::Decision(Decision::Deny)],
                 doc: None,
                 source: None,
+                terminal: false,
             }],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let ctx = make_ctx("Bash", "git push --force origin main");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Deny));
@@ -1212,9 +1242,11 @@ mod tests {
                 children: vec![Node::Decision(Decision::Deny)],
                 doc: None,
                 source: None,
+                terminal: false,
             }],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let ctx = make_ctx("Bash", "git push origin main");
         assert_eq!(eval(&nodes, &ctx), None);
@@ -1230,6 +1262,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Ask(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             },
             Node::Condition {
                 observe: Observable::ToolName,
@@ -1237,6 +1270,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Allow(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             },
         ];
         let nodes = Node::compact(nodes);
@@ -1259,9 +1293,11 @@ mod tests {
                     children: vec![Node::Decision(Decision::Allow(None))],
                     doc: None,
                     source: None,
+                    terminal: false,
                 }],
                 doc: None,
                 source: None,
+                terminal: false,
             },
             Node::Condition {
                 observe: Observable::ToolName,
@@ -1269,6 +1305,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Ask(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             },
         ];
         // "git push" matches Bash but not cargo, so should backtrack to wildcard
@@ -1284,6 +1321,7 @@ mod tests {
             children: vec![Node::Decision(Decision::Allow(None))],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let input = serde_json::json!({"file_path": "/src/main.rs"});
         let ctx = QueryContext::from_tool("Edit", &input);
@@ -1298,6 +1336,7 @@ mod tests {
             children: vec![Node::Decision(Decision::Allow(None))],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let ctx = make_ctx("Bash", "cargo-clippy check");
         assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
@@ -1314,6 +1353,7 @@ mod tests {
             children: vec![Node::Decision(Decision::Allow(None))],
             doc: None,
             source: None,
+            terminal: false,
         }];
 
         let ctx = make_ctx("Bash", "rustc main.rs");
@@ -1331,6 +1371,7 @@ mod tests {
             children: vec![Node::Decision(Decision::Allow(None))],
             doc: None,
             source: None,
+            terminal: false,
         }];
 
         let ctx = make_ctx("Bash", "ls -la");
@@ -1396,14 +1437,17 @@ mod tests {
                                 children: vec![Node::Decision(Decision::Deny)],
                                 doc: None,
                                 source: None,
+                                terminal: false,
                             },
                             Node::Decision(Decision::Allow(None)),
                         ],
                         doc: None,
                         source: None,
+                        terminal: false,
                     }],
                     doc: None,
                     source: None,
+                    terminal: false,
                 },
                 Node::Condition {
                     observe: Observable::ToolName,
@@ -1411,6 +1455,7 @@ mod tests {
                     children: vec![Node::Decision(Decision::Allow(None))],
                     doc: None,
                     source: None,
+                    terminal: false,
                 },
             ],
             default_effect: Effect::Deny,
@@ -1439,6 +1484,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Allow(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             },
             Node::Condition {
                 observe: Observable::ToolName,
@@ -1446,6 +1492,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Deny)],
                 doc: None,
                 source: None,
+                terminal: false,
             },
         ];
         let warnings = detect_unreachable(&nodes);
@@ -1480,6 +1527,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Allow(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             },
             Node::Condition {
                 observe: Observable::ToolName,
@@ -1487,6 +1535,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Deny)],
                 doc: None,
                 source: None,
+                terminal: false,
             },
         ];
 
@@ -1521,6 +1570,7 @@ mod tests {
             children: vec![Node::Decision(Decision::Deny)],
             doc: None,
             source: None,
+            terminal: false,
         }];
         let input = serde_json::json!({"file_path": "/project/.env"});
         let ctx = QueryContext::from_tool("Write", &input);
@@ -1541,9 +1591,11 @@ mod tests {
                     children: vec![Node::Decision(Decision::Allow(None))],
                     doc: None,
                     source: None,
+                    terminal: false,
                 }],
                 doc: None,
                 source: None,
+                terminal: false,
             }],
             default_effect: Effect::Deny,
             default_sandbox: None,
@@ -1584,6 +1636,7 @@ mod tests {
                 children: vec![Node::Decision(Decision::Allow(None))],
                 doc: None,
                 source: None,
+                terminal: false,
             }],
             default_effect: Effect::Deny,
             default_sandbox: None,
@@ -1869,6 +1922,7 @@ mod tests {
                         caps: Cap::WRITE,
                         path: r"/tmp/build-\d+".to_string(),
                         path_match: PathMatch::Regex,
+                        follow_worktrees: false,
                         doc: None,
                     }],
                     network: NetworkPolicy::Deny,
@@ -1923,6 +1977,7 @@ mod tests {
                         caps: Cap::WRITE,
                         path: "/tmp".to_string(),
                         path_match: PathMatch::Subpath,
+                        follow_worktrees: false,
                         doc: None,
                     }],
                     network: NetworkPolicy::Deny,

@@ -385,7 +385,7 @@ async fn run_interactive(cwd: &str, hook: clash_brush_core::ExternalCommandHook)
 
     let shell_ref = std::sync::Arc::new(tokio::sync::Mutex::new(shell));
 
-    let mut input = clash_brush_interactive::BasicInputBackend::default();
+    let mut input = clash_brush_interactive::BasicInputBackend;
 
     let options = clash_brush_interactive::InteractiveOptions::default();
 
@@ -429,10 +429,10 @@ mod tests {
     /// Build a test policy that allows Bash with a sandbox.
     fn test_policy() -> Arc<PolicyCache> {
         policy_cache(Arc::new(compile_star(
-            r#"load("@clash//std.star", "policy", "sandbox", "cwd", "exe")
+            r#"load("@clash//std.star", "policy", "sandbox", "cwd", "exe", "deny")
 def main():
-    return policy(default = deny, rules = [
-        exe().sandbox(sandbox(name="test", default=deny, fs=[cwd().allow(read=True)])).allow(),
+    return policy(default = deny(), rules = [
+        exe().sandbox(sandbox(name="test", default=deny(), fs=[cwd().allow(read=True)])).allow(),
     ])
 "#,
         )))
@@ -478,9 +478,9 @@ def main():
     #[test]
     fn hook_returns_none_without_sandbox() {
         let policy = policy_cache(Arc::new(compile_star(
-            r#"load("@clash//std.star", "policy")
+            r#"load("@clash//std.star", "allow", "policy")
 def main():
-    return policy(default = allow, rules = [])
+    return policy(default = allow(), rules = [])
 "#,
         )));
         let hook = make_sandbox_hook("/usr/bin/clash".to_string(), policy, None, false);

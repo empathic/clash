@@ -135,43 +135,60 @@ fn resolve_via_desktop_then_continue(
     }
 }
 
+/// Build a [`notifications::PermissionRequest`] from a tool use hook input.
+fn build_permission_request(input: &ToolUseHookInput) -> notifications::PermissionRequest {
+    notifications::PermissionRequest {
+        tool_name: input.tool_name.clone(),
+        tool_input: input.tool_input.clone(),
+        session_id: input.session_id.clone(),
+        cwd: input.cwd.clone(),
+    }
+}
+
+/// Map a Zulip resolution result to a [`HookOutput`].
+///
+/// Returns `Some(output)` for a definitive approve/deny, or `None` when the
+/// resolution timed out or failed (caller should fall through to the next strategy).
+fn zulip_result_to_output(
+    result: anyhow::Result<Option<notifications::PermissionResponse>>,
+) -> Option<HookOutput> {
+    match result {
+        Ok(Some(notifications::PermissionResponse::Approve)) => {
+            Some(HookOutput::approve_permission(None))
+        }
+        Ok(Some(notifications::PermissionResponse::Deny(reason))) => {
+            Some(HookOutput::deny_permission(reason, false))
+        }
+        Ok(None) => None,
+        Err(_) => None,
+    }
+}
+
 fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
     let Some(ref zulip_config) = settings.notifications.zulip else {
         return;
     };
 
-    let request = notifications::PermissionRequest {
-        tool_name: input.tool_name.clone(),
-        tool_input: input.tool_input.clone(),
-        session_id: input.session_id.clone(),
-        cwd: input.cwd.clone(),
-    };
-
+    let request = build_permission_request(input);
     let config = zulip_config.clone();
 
     std::thread::spawn(move || {
         let client = notifications::ZulipClient::new(&config);
-        match client.resolve_permission(&request) {
+        let result = client.resolve_permission(&request);
+        match &result {
             Ok(Some(notifications::PermissionResponse::Approve)) => {
                 info!("Permission approved via Zulip (background), exiting hook");
-                let output = HookOutput::approve_permission(None);
-                if output.write_stdout().is_ok() {
-                    std::process::exit(0);
-                }
             }
-            Ok(Some(notifications::PermissionResponse::Deny(reason))) => {
+            Ok(Some(notifications::PermissionResponse::Deny(_))) => {
                 info!("Permission denied via Zulip (background), exiting hook");
-                let output = HookOutput::deny_permission(reason, false);
-                if output.write_stdout().is_ok() {
-                    std::process::exit(0);
-                }
             }
-            Ok(None) => {
-                info!("Zulip resolution timed out (background)");
-            }
-            Err(e) => {
-                warn!(error = %e, "Zulip resolution failed (background)");
-            }
+            Ok(None) => info!("Zulip resolution timed out (background)"),
+            Err(e) => warn!(error = %e, "Zulip resolution failed (background)"),
+        }
+        if let Some(output) = zulip_result_to_output(result)
+            && output.write_stdout().is_ok()
+        {
+            std::process::exit(0);
         }
     });
 }
@@ -182,30 +199,14 @@ fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSetti
         return HookOutput::continue_execution();
     };
 
-    let request = notifications::PermissionRequest {
-        tool_name: input.tool_name.clone(),
-        tool_input: input.tool_input.clone(),
-        session_id: input.session_id.clone(),
-        cwd: input.cwd.clone(),
-    };
-
     let client = notifications::ZulipClient::new(zulip_config);
-    match client.resolve_permission(&request) {
-        Ok(Some(notifications::PermissionResponse::Approve)) => {
-            HookOutput::approve_permission(None)
-        }
-        Ok(Some(notifications::PermissionResponse::Deny(reason))) => {
-            HookOutput::deny_permission(reason, false)
-        }
-        Ok(None) => {
-            info!("Zulip resolution timed out, falling through to terminal");
-            HookOutput::continue_execution()
-        }
-        Err(e) => {
-            warn!(error = %e, "Zulip resolution failed, falling through to terminal");
-            HookOutput::continue_execution()
-        }
+    let result = client.resolve_permission(&build_permission_request(input));
+
+    if result.is_err() || matches!(result, Ok(None)) {
+        info!("Zulip resolution timed out or failed, falling through to terminal");
     }
+
+    zulip_result_to_output(result).unwrap_or_else(HookOutput::continue_execution)
 }
 
 /// Handle a session start event — validate policy/settings and report status to Claude.
@@ -224,7 +225,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
         lines.push(format!(
             "Welcome to Clash! A default policy has been created at {}. \
              It starts with deny-all and allows reading files in your project. \
-             Use /clash:status to see what's allowed, or /clash:edit to customize.",
+             Run `clash status` to see what's allowed, or edit the policy file to customize.",
             path.display()
         ));
     }
@@ -340,6 +341,16 @@ fn finish_session_start(lines: Vec<String>) -> anyhow::Result<HookOutput> {
 mod tests {
     use super::*;
 
+    fn session_start_context(input: &SessionStartHookInput) -> String {
+        let output = handle_session_start(input).expect("session start should succeed");
+        match &output.hook_specific_output {
+            Some(HookSpecificOutput::SessionStart(s)) => {
+                s.additional_context.clone().expect("should have context")
+            }
+            _ => panic!("expected SessionStart output"),
+        }
+    }
+
     fn default_session_start_input() -> SessionStartHookInput {
         SessionStartHookInput {
             session_id: "test-session".into(),
@@ -354,13 +365,7 @@ mod tests {
 
     #[test]
     fn test_session_start_reports_sandbox_support() {
-        let input = default_session_start_input();
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = session_start_context(&default_session_start_input());
         assert!(
             ctx.contains("sandbox:"),
             "should report sandbox status, got: {ctx}"
@@ -369,13 +374,7 @@ mod tests {
 
     #[test]
     fn test_session_start_reports_session_metadata() {
-        let input = default_session_start_input();
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = session_start_context(&default_session_start_input());
         assert!(ctx.contains("session source: startup"), "got: {ctx}");
         assert!(
             ctx.contains("model: claude-sonnet-4-20250514"),
@@ -385,13 +384,7 @@ mod tests {
 
     #[test]
     fn test_session_start_recommends_skip_permissions_in_default_mode() {
-        let input = default_session_start_input();
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = session_start_context(&default_session_start_input());
         assert!(
             ctx.contains("--dangerously-skip-permissions"),
             "should recommend --dangerously-skip-permissions when not in skip mode, got: {ctx}"
@@ -402,12 +395,7 @@ mod tests {
     fn test_session_start_no_recommendation_when_skip_permissions() {
         let mut input = default_session_start_input();
         input.permission_mode = Some("dangerously-skip-permissions".into());
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = session_start_context(&input);
         assert!(
             !ctx.contains("NOTE: Clash is managing permissions"),
             "should NOT recommend when already in skip mode, got: {ctx}"
@@ -418,12 +406,7 @@ mod tests {
     fn test_session_start_injects_instructions_when_skip_permissions() {
         let mut input = default_session_start_input();
         input.permission_mode = Some("dangerously-skip-permissions".into());
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = session_start_context(&input);
         assert!(ctx.contains("policy enforcement is DISABLED"), "got: {ctx}");
         assert!(ctx.contains("Filesystem sandboxing"), "got: {ctx}");
     }

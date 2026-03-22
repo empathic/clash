@@ -1,3 +1,5 @@
+set unstable
+set script-interpreter := ['uv', 'run', '--script']
 
 plugin_target := "./target/clash-dev"
 plugin_dir := plugin_target + "/clash-plugin/"
@@ -72,67 +74,65 @@ clash *ARGS:
     cargo run -p clash -- {{ARGS}}
 
 # Prepare a release: bump versions, freeze site docs, commit on a release branch.
-# Usage: just release 0.4.0
+# Usage: just release 0.5.1
 release VERSION:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    version="{{VERSION}}"
-    # Strip leading 'v' if provided
-    version="${version#v}"
-    tag="v${version}"
-    branch="release/${tag}"
+    new_version="{{VERSION}}"
+    tag="v$new_version"
+    branch="release/$tag"
 
-    # Ensure were on a clean working tree
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-        echo "Error: working tree is not clean" >&2
-        exit 1
-    fi
+    # Ensure clean working tree
+    git diff --quiet && git diff --cached --quiet || { echo "Error: working tree is not clean" >&2; exit 1; }
 
-    # Create release branch from current HEAD
+    # Create release branch
     git checkout -b "$branch"
 
-    # Bump version in all workspace Cargo.toml files
-    old_version=$(grep -m1 '^version = ' clash/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-    echo "Bumping ${old_version} → ${version}"
+    # Bump all workspace crate versions + inter-crate dependency references
+    cargo workspaces version custom "$new_version" --no-git-commit --yes
 
-    for toml in **/Cargo.toml; do
-        sed -i '' "s/^version = \"${old_version}\"/version = \"${version}\"/" "$toml"
-    done
+    # Freeze site docs
+    cd site && bun run freeze "$tag" && cd ..
 
-    # Bump workspace dependency versions in root Cargo.toml
-    sed -i '' "s/version = \"${old_version}\" }/version = \"${version}\" }/" Cargo.toml
-
-    # Freeze site docs for this version
-    cd site && bun run freeze "${tag}" && cd ..
-
-    # Commit everything
+    # Commit, push, and create PR
     git add -A
     git commit -m "chore: release ${tag}"
+    git push -u origin "$branch"
+    gh pr create --title "chore: release ${tag}" --body "Version bump and frozen docs for ${tag}"
 
-    echo ""
-    echo "Release branch '${branch}' ready."
-    echo "Next steps:"
-    echo "  git push -u origin ${branch}"
-    echo "  gh pr create --title 'chore: release ${tag}' --body 'Version bump and frozen docs for ${tag}'"
-    echo ""
-    echo "After the PR is merged, tag from main:"
-    echo "  just tag ${version}"
+# Fast targeted testing for a specific module (default: all clash lib tests)
+quick MODULE="":
+    cargo test -p clash --lib {{MODULE}}
 
-# Tag and push a release after the release PR has been merged.
-# Usage: just tag 0.4.0
-tag VERSION:
+# Run clippy lints only (no tests)
+lint:
+    cargo clippy --workspace --all-targets
+
+# Run unit tests only across the workspace (no e2e)
+test-unit:
+    cargo test --workspace --lib
+
+# Generate test coverage report (requires cargo-llvm-cov)
+coverage:
     #!/usr/bin/env bash
     set -euo pipefail
+    if ! cargo llvm-cov --version &>/dev/null; then
+        echo "Error: cargo-llvm-cov is not installed."
+        echo "Install it with: cargo install cargo-llvm-cov"
+        echo "Or via rustup: rustup component add llvm-tools-preview && cargo install cargo-llvm-cov"
+        exit 1
+    fi
+    cargo llvm-cov --workspace --html
+    open target/llvm-cov/html/index.html
 
-    version="{{VERSION}}"
-    version="${version#v}"
-    tag="v${version}"
+# Run benchmarks across the workspace
+bench:
+    cargo bench --workspace
 
-    git fetch origin main
-    git tag "${tag}" origin/main
-    echo "Tagged ${tag} at origin/main"
-    echo "Run 'git push origin ${tag}' to trigger the release workflows."
+# Full CI: alias for `just ci`
+test-all:
+    just ci
 
 fix:
     cargo fix --allow-dirty

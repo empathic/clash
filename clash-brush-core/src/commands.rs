@@ -36,7 +36,7 @@ pub enum CommandWaitResult {
 pub struct ExecutionContext<'a, SE: ShellExtensions = extensions::DefaultShellExtensions> {
     /// The shell in which the command is being executed.
     pub shell: &'a mut Shell<SE>,
-    /// The name of the command being executed.    
+    /// The name of the command being executed.
     pub command_name: String,
     /// The parameters for the execution.
     pub params: ExecutionParameters,
@@ -402,20 +402,19 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 
         // Assuming we weren't requested not to do so, check if it's the name of
         // a shell function.
-        if self.use_functions {
-            if let Some(func_registration) =
+        if self.use_functions
+            && let Some(func_registration) =
                 self.shell.funcs().get(self.command_name.as_str()).cloned()
-            {
-                return self.execute_via_function(func_registration).await;
-            }
+        {
+            return self.execute_via_function(func_registration).await;
         }
 
         // If we haven't yet resolved the command name and found a builtin that's not disabled,
         // then invoke it.
-        if let Some(builtin) = builtin {
-            if !builtin.disabled {
-                return self.execute_via_builtin(builtin).await;
-            }
+        if let Some(builtin) = builtin
+            && !builtin.disabled
+        {
+            return self.execute_via_builtin(builtin).await;
         }
 
         // We still haven't found a command to invoke. We'll need to look for an external command.
@@ -703,10 +702,10 @@ async fn execute_builtin_command<SE: extensions::ShellExtensions>(
         Ok(result) => Ok(result),
         Err(e) => {
             // Broken pipe errors should silently return the appropriate exit code
-            if let Some(io_err) = e.as_io_error() {
-                if io_err.kind() == std::io::ErrorKind::BrokenPipe {
-                    return Ok(ExecutionExitCode::from(io_err).into());
-                }
+            if let Some(io_err) = e.as_io_error()
+                && io_err.kind() == std::io::ErrorKind::BrokenPipe
+            {
+                return Ok(ExecutionExitCode::from(io_err).into());
             }
 
             Err(if mark_errors_fatal { e.into_fatal() } else { e })
@@ -827,12 +826,12 @@ async fn run_substitution_command(
     // Check for a command that is only an input redirection ("< file").
     // If detected, emulate `cat file` to stdout and return immediately.
     // If we failed to parse, then we'll fall below and handle it there.
-    if let Ok(program) = &parse_result {
-        if let Some(redir) = try_unwrap_bare_input_redir_program(program) {
-            interp::setup_redirect(&mut shell, &mut params, redir).await?;
-            std::io::copy(&mut params.stdin(&shell), &mut params.stdout(&shell))?;
-            return Ok(ExecutionResult::new(0));
-        }
+    if let Ok(program) = &parse_result
+        && let Some(redir) = try_unwrap_bare_input_redir_program(program)
+    {
+        interp::setup_redirect(&mut shell, &mut params, redir).await?;
+        std::io::copy(&mut params.stdin(&shell), &mut params.stdout(&shell))?;
+        return Ok(ExecutionResult::new(0));
     }
 
     // TODO(source-info): review this

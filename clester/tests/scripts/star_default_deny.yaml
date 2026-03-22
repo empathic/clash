@@ -4,9 +4,9 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "exe", "policy")
+    load("@clash//std.star", "exe", "policy", "deny")
     def main():
-        return policy(default=deny, rules=[exe("git").allow()])
+        return policy(default=deny(), rules=[exe("git").allow()])
 
 steps:
   - name: git allowed

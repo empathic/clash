@@ -40,13 +40,13 @@ The plugin registers four hook types via `hooks/hooks.json`:
 
 ## Policy Basics
 
-Policies are written in Starlark (`.star` files), a Python-like configuration language. The `.star` file defines a `main()` function that returns a policy. Policy files are read from `~/.clash/policy.star` (user-level) or `<project>/.clash/policy.star` (project-level). JSON (`.json`) is also supported as raw IR.
+Policies can be managed via `policy.json` (machine-readable, CLI-friendly) or written in Starlark (`.star` files) for power users. Policy files are read from `~/.clash/policy.json` or `~/.clash/policy.star` (user-level) and `<project>/.clash/policy.json` or `<project>/.clash/policy.star` (project-level). When both exist at the same level, `.json` takes precedence.
 
 ### Policy File Structure
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home", "domains")
+load("@clash//std.star", "allow", "ask", "deny", "exe", "tool", "policy", "sandbox", "cwd", "home", "domains")
 
 def main():
     fs_access = sandbox(fs=[
@@ -54,13 +54,13 @@ def main():
         home().child(".ssh").allow(read = True),
     ])
 
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         tool(["Read", "Glob", "Grep"]).sandbox(fs_access).allow(),
         tool(["Write", "Edit"]).sandbox(fs_access).allow(),
         exe("git").allow(),
         exe("git", args = ["push"]).deny(),
         tool().allow(),
-        domains({"github.com": allow}),
+        domains({"github.com": allow()}),
     ])
 ```
 
@@ -76,7 +76,7 @@ Note: Filesystem path entries (`cwd`, `home`, `tempdir`, `path`) cannot appear d
 | Multiple binaries | `exe(["cargo", "rustc"]).allow()` |
 | Filesystem (via sandbox) | `tool(["Read"]).sandbox(sandbox(fs=[cwd().allow(read = True)])).allow()` |
 | Home subdir (via sandbox) | `exe("ssh").sandbox(sandbox(fs=[home().child(".ssh").allow(read = True)])).allow()` |
-| Network domains | `domains({"github.com": allow})` |
+| Network domains | `domains({"github.com": allow()})` |
 | Tool access | `tool().allow()` |
 | Sandbox on exec | `exe("cargo").sandbox(sb).allow()` |
 
@@ -84,9 +84,9 @@ Note: Filesystem path entries (`cwd`, `home`, `tempdir`, `path`) cannot appear d
 
 ```python
 sb = sandbox(
-    default = deny,
+    default = deny(),
     fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
-    net = allow,
+    net = allow(),
 )
 exe("cargo").sandbox(sb).allow()
 ```
@@ -95,20 +95,21 @@ Note: `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
 
 ### Policy File Paths
 
-- User-level: `~/.clash/policy.star`
-- Project-level: `<project>/.clash/policy.star`
+- User-level: `~/.clash/policy.json` (preferred) or `~/.clash/policy.star`
+- Project-level: `<project>/.clash/policy.json` (preferred) or `<project>/.clash/policy.star`
 - Session-scoped rules can be added via `/clash:allow` or `/clash:deny` skills during a session
+- CLI commands (`clash policy allow/deny/remove`) operate on `policy.json` files
 
 ### Fixing Sandbox Errors
 
 If a command fails because of sandbox restrictions, update the policy's sandbox definition to grant the needed access:
 
 ```python
-# If cargo needs network access, add net = allow to its sandbox
+# If cargo needs network access, add net = allow() to its sandbox
 cargo_env = sandbox(
-    default = deny,
+    default = deny(),
     fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
-    net = allow,
+    net = allow(),
 )
 exe("cargo").sandbox(cargo_env).allow()
 ```

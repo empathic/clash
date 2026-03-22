@@ -30,9 +30,11 @@
 //! ```
 
 pub mod audit;
+pub mod claude;
 pub mod cli;
 pub mod cmd;
 pub mod debug;
+pub mod dialog;
 pub mod display;
 pub mod errors;
 pub mod git;
@@ -45,12 +47,19 @@ pub mod policy;
 pub mod policy_loader;
 pub mod sandbox;
 pub mod sandbox_cmd;
-pub mod sandbox_fs_hints;
+pub mod sandbox_hints;
 pub mod schema;
+pub mod session_dir;
 pub mod session_policy;
 pub mod settings;
 pub mod shell_cmd;
 pub mod style;
 pub mod trace;
+pub mod trace_display;
 pub mod tracing_init;
+pub mod tui;
+pub mod ui;
 pub mod version;
+
+#[cfg(test)]
+pub mod test_utils;

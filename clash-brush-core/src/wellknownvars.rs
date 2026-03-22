@@ -525,14 +525,13 @@ fn get_current_user_gids() -> Vec<u32> {
 
     // If the effective GID is present but not in the first position in the list, then move
     // it there.
-    if let Ok(gid) = sys::users::get_effective_gid() {
-        if let Some(index) = groups.iter().position(|&g| g == gid) {
-            if index > 0 {
-                // Move it to the front.
-                groups.remove(index);
-                groups.insert(0, gid);
-            }
-        }
+    if let Ok(gid) = sys::users::get_effective_gid()
+        && let Some(index) = groups.iter().position(|&g| g == gid)
+        && index > 0
+    {
+        // Move it to the front.
+        groups.remove(index);
+        groups.insert(0, gid);
     }
 
     groups

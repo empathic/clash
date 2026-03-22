@@ -1,70 +1,26 @@
-use anyhow::{Context, Result};
-use serde::Deserialize;
+use anyhow::Result;
 use tracing::{Level, instrument};
 
+use crate::debug::replay;
 use crate::display;
+use crate::policy::match_tree::QueryContext;
 use crate::settings::ClashSettings;
 use crate::style;
-
-#[derive(Deserialize)]
-pub struct ExplainInput {
-    tool_name: String,
-    tool_input: serde_json::Value,
-    #[serde(default = "default_cwd")]
-    #[allow(dead_code)]
-    cwd: String,
-}
-
-fn default_cwd() -> String {
-    std::env::current_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default()
-}
+use crate::trace_display;
+use crate::ui;
 
 /// Explain which policy rule would match a given tool invocation.
 ///
 /// Accepts CLI args (`clash explain bash "git push"`) or JSON from stdin.
+/// With `--trace`, shows a detailed per-condition decision trace.
 #[instrument(level = Level::TRACE)]
-pub fn run(json_output: bool, tool: Option<String>, input_arg: Option<String>) -> Result<()> {
-    let input: ExplainInput = if let Some(tool_str) = tool {
-        if tool_str.to_lowercase() == "tool" {
-            let tool_name = input_arg.unwrap_or_default();
-            ExplainInput {
-                tool_name,
-                tool_input: serde_json::json!({}),
-                cwd: default_cwd(),
-            }
-        } else {
-            let (tool_name, input_field) = match tool_str.to_lowercase().as_str() {
-                "bash" => ("Bash", "command"),
-                "read" => ("Read", "file_path"),
-                "write" => ("Write", "file_path"),
-                "edit" => ("Edit", "file_path"),
-                _ => {
-                    let field = match tool_str.as_str() {
-                        "Bash" => "command",
-                        "Read" | "Write" | "Edit" | "NotebookEdit" => "file_path",
-                        "Glob" | "Grep" => "pattern",
-                        "WebFetch" => "url",
-                        "WebSearch" => "query",
-                        _ => "command",
-                    };
-                    let name: &'static str = Box::leak(tool_str.into_boxed_str());
-                    (name, field)
-                }
-            };
-            let noun = input_arg.unwrap_or_default();
-            ExplainInput {
-                tool_name: tool_name.to_string(),
-                tool_input: serde_json::json!({ input_field: noun }),
-                cwd: default_cwd(),
-            }
-        }
+pub fn run(json_output: bool, trace_mode: bool, tool: String, input_args: String) -> Result<()> {
+    let input_arg = if input_args.is_empty() {
+        None
     } else {
-        serde_json::from_reader(std::io::stdin().lock()).context(
-            "failed to parse JSON from stdin (expected {\"tool_name\":..., \"tool_input\":...})\n\nUsage: clash explain bash \"git push\"  OR  echo '{...}' | clash explain",
-        )?
+        Some(input_args.as_str())
     };
+    let (tool_name, tool_input) = replay::resolve_tool_input(&tool, input_arg)?;
 
     let settings = ClashSettings::load_or_create()?;
     let tree = match settings.policy_tree() {
@@ -77,30 +33,43 @@ pub fn run(json_output: bool, tool: Option<String>, input_arg: Option<String>) -
                 );
             } else {
                 eprintln!("No compiled policy available.");
-                eprintln!("Create ~/.clash/policy.star or run `clash init`.");
+                eprintln!("run `clash init`.");
             }
             return Ok(());
         }
     };
 
-    let decision = tree.evaluate(&input.tool_name, &input.tool_input);
-    let noun = crate::permissions::extract_noun(&input.tool_name, &input.tool_input);
+    if trace_mode {
+        let ctx = QueryContext::from_tool(&tool_name, &tool_input);
+        let policy_trace = trace_display::build_trace(tree, &ctx);
 
-    if json_output {
-        let output = display::decision_to_json(&decision);
-        println!("{}", serde_json::to_string_pretty(&output)?);
-    } else {
-        let mut lines = display::format_tool_header("Input:", &input.tool_name, &noun);
-        lines.push(String::new());
-        lines.extend(display::format_decision(&decision));
-
-        if let Some(ref sandbox) = decision.sandbox {
-            lines.push(String::new());
-            lines.push(style::header("Sandbox policy:").to_string());
-            lines.extend(display::format_sandbox_summary(sandbox));
+        if json_output {
+            let output = trace_display::trace_to_json(&policy_trace);
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            ui::print_tool_header("Input:", &tool_name, &tool_input);
+            println!();
+            for line in trace_display::render_trace(&policy_trace) {
+                println!("{line}");
+            }
         }
+    } else {
+        let decision = tree.evaluate(&tool_name, &tool_input);
 
-        println!("{}", lines.join("\n"));
+        if json_output {
+            let output = display::decision_to_json(&decision);
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            ui::print_tool_header("Input:", &tool_name, &tool_input);
+            println!();
+            ui::print_decision(&decision);
+
+            if let Some(ref sandbox) = decision.sandbox {
+                println!();
+                println!("{}", style::header("Sandbox policy:"));
+                ui::print_sandbox_summary(sandbox);
+            }
+        }
     }
 
     Ok(())

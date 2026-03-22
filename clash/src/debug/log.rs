@@ -7,7 +7,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::audit;
 use crate::debug::AuditLogEntry;
 use crate::style;
 
@@ -50,7 +49,7 @@ pub fn read_log_file(path: &Path) -> Result<Vec<AuditLogEntry>> {
 
 /// Read audit log entries for a specific session.
 pub fn read_session_log(session_id: &str) -> Result<Vec<AuditLogEntry>> {
-    let path = audit::session_dir(session_id).join("audit.jsonl");
+    let path = crate::session_dir::SessionDir::new(session_id).audit_log();
     if !path.exists() {
         anyhow::bail!(
             "no audit log found for session {session_id} (expected {})",
@@ -134,7 +133,8 @@ pub fn find_by_hash(hash: &str) -> Result<AuditLogEntry> {
         .collect();
     match matches.len() {
         0 => anyhow::bail!("no audit log entry matching '{hash}'"),
-        1 => Ok(matches.into_iter().next().unwrap()),
+        // Safety: the match arm guarantees exactly one element.
+        1 => Ok(matches.into_iter().next().expect("len == 1")),
         n => anyhow::bail!("ambiguous hash '{hash}' matches {n} entries — use more characters"),
     }
 }

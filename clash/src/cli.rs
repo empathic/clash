@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::cmd::debug::DebugCmd;
+use crate::cmd::session::SessionCmd;
 use crate::cmd::statusline::StatuslineCmd;
 use crate::cmd::trace::TraceCmd;
 use crate::sandbox_cmd::SandboxCmd;
@@ -56,9 +57,73 @@ pub enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Open the policy file in $EDITOR
+    /// Open the interactive policy editor (or $EDITOR with --raw)
     Edit {
         /// Policy scope to edit: "user" or "project" (default: auto-detect)
+        #[arg(long)]
+        scope: Option<String>,
+        /// Open in $EDITOR instead of the interactive TUI
+        #[arg(long)]
+        raw: bool,
+    },
+    /// Add an allow rule for a tool or binary
+    ///
+    /// Examples:
+    ///   clash policy allow "gh pr create"
+    ///   clash policy allow --tool Read
+    ///   clash policy allow --bin grep --sandbox cwd
+    Allow {
+        /// Command to allow (e.g. "gh pr create" → bin=gh, args=[pr, create])
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+        /// Tool name (e.g. "Bash", "Read", "Write")
+        #[arg(long)]
+        tool: Option<String>,
+        /// Binary name (implies --tool Bash)
+        #[arg(long)]
+        bin: Option<String>,
+        /// Named sandbox to apply (must be defined in the policy)
+        #[arg(long)]
+        sandbox: Option<String>,
+        /// Policy scope: "user" or "project" (default: auto-detect)
+        #[arg(long)]
+        scope: Option<String>,
+    },
+    /// Add a deny rule for a tool or binary
+    ///
+    /// Examples:
+    ///   clash policy deny "rm -rf"
+    ///   clash policy deny --tool WebSearch
+    Deny {
+        /// Command to deny (e.g. "git push" → bin=git, args=[push])
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+        /// Tool name (e.g. "Bash", "Read", "Write")
+        #[arg(long)]
+        tool: Option<String>,
+        /// Binary name (implies --tool Bash)
+        #[arg(long)]
+        bin: Option<String>,
+        /// Policy scope: "user" or "project" (default: auto-detect)
+        #[arg(long)]
+        scope: Option<String>,
+    },
+    /// Remove a rule matching a tool or binary
+    ///
+    /// Examples:
+    ///   clash policy remove "gh pr create"
+    ///   clash policy remove --tool Read
+    Remove {
+        /// Command to match (e.g. "gh pr create")
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+        /// Tool name (e.g. "Bash", "Read", "Write")
+        #[arg(long)]
+        tool: Option<String>,
+        /// Binary name (implies --tool Bash)
+        #[arg(long)]
+        bin: Option<String>,
+        /// Policy scope: "user" or "project" (default: auto-detect)
         #[arg(long)]
         scope: Option<String>,
     },
@@ -81,6 +146,9 @@ pub enum PolicyCmd {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
         json: bool,
+        /// Show detailed decision trace with per-condition match details
+        #[arg(long)]
+        trace: bool,
         /// Tool type: bash, read, write, edit, tool (or full tool name like Bash, Read, etc.)
         tool: Option<String>,
         /// The command, file path, or noun to check (remaining args joined)
@@ -164,8 +232,11 @@ pub enum Commands {
     },
 
     /// Apply sandbox restrictions and exec commands
-    #[command(subcommand)]
+    #[command(subcommand, alias = "box")]
     Sandbox(SandboxCmd),
+
+    /// Interactive policy sandbox — write rules and test them against tool invocations
+    Playground,
 
     /// Diagnose common setup issues and report fix instructions
     Doctor,
@@ -177,6 +248,10 @@ pub enum Commands {
     /// View and export session traces
     #[command(subcommand)]
     Trace(TraceCmd),
+
+    /// List, inspect, and locate session directories
+    #[command(subcommand)]
+    Session(SessionCmd),
 
     // --- Hidden/internal commands ---
     /// Agent hook callbacks
@@ -211,6 +286,9 @@ pub enum Commands {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
         json: bool,
+        /// Show detailed decision trace with per-condition match details
+        #[arg(long)]
+        trace: bool,
         /// Tool type: bash, read, write, edit, tool (or full tool name like Bash, Read, etc.)
         tool: String,
         /// The command, file path, or noun to check (remaining args joined)

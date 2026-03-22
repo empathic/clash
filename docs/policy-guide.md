@@ -10,14 +10,14 @@ Clash policies use Starlark (`.star` files) with three capability domains: **exe
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe("git", args = ["push"]).deny(),
         exe("git").allow(),
         cwd().allow(read = True, write = True),
-        domains({"github.com": allow}),
+        domains({"github.com": allow()}),
     ])
 ```
 
@@ -57,10 +57,38 @@ The Starlark policy above compiles to the following JSON intermediate representa
 
 | Path | Scope |
 |------|-------|
-| `~/.clash/policy.star` | User-level (applies to all projects) |
-| `~/.clash/policy.json` | User-level (JSON IR, also supported) |
+| `~/.clash/policy.json` | User-level (machine-readable, preferred) |
+| `~/.clash/policy.star` | User-level (Starlark, for power users) |
+| `<project>/.clash/policy.json` | Project-level (machine-readable, preferred) |
+| `<project>/.clash/policy.star` | Project-level (Starlark, for power users) |
 
-Starlark (`.star`) is the preferred format. If both `.star` and `.json` exist, the `.star` file takes precedence. Clash reads the policy on every hook invocation, so changes take effect immediately.
+JSON (`.json`) is the preferred format. If both `.json` and `.star` exist at the same level, the `.json` file takes precedence. Clash reads the policy on every hook invocation, so changes take effect immediately.
+
+CLI commands like `clash policy allow`, `clash policy deny`, and `clash policy remove` operate on `policy.json` files. If only a `policy.star` exists, these commands will auto-create a `policy.json` that includes the existing `.star` file.
+
+### policy.json Format
+
+The `policy.json` file extends the v5 compiled policy format with an `includes` field for referencing Starlark files:
+
+```json
+{
+  "schema_version": 5,
+  "default_effect": "deny",
+  "default_sandbox": "cwd",
+  "sandboxes": {},
+  "includes": [
+    { "path": "@clash//builtin.star" },
+    { "path": "team-rules.star" }
+  ],
+  "tree": []
+}
+```
+
+- **`includes`** — References to `.star` files that are compiled and merged at load time. Use `@clash//` for stdlib modules or relative paths for local files.
+- **`tree`** — Inline rules managed by CLI commands. These take precedence over included rules.
+- **`sandboxes`** — Named sandbox definitions, also CLI-managed.
+
+Included `.star` files are evaluated and their rules are appended after the inline `tree` rules, so inline rules always have higher priority.
 
 ---
 
@@ -98,8 +126,8 @@ The fs domain maps to these tools:
 ### Net -- Network Access
 
 ```python
-domains({"github.com": allow})
-domains({"github.com": allow, "crates.io": allow})
+domains({"github.com": allow()})
+domains({"github.com": allow(), "crates.io": allow()})
 ```
 
 The net domain maps to:
@@ -145,7 +173,7 @@ If no rules match, the `default` effect applies.
 Starlark policies compose naturally using functions and variables:
 
 ```python
-load("@clash//std.star", "exe", "policy", "cwd")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd")
 
 def cwd_access():
     return [
@@ -160,33 +188,33 @@ def safe_git():
     ]
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         *cwd_access(),
         *safe_git(),
-        domains({"github.com": allow, "crates.io": allow}),
+        domains({"github.com": allow(), "crates.io": allow()}),
     ])
 ```
 
 You can also use `load()` to import from other `.star` files.
 
-### Merging Policies
+### Updating Policies
 
-The `merge()` method combines two policies. In `a.merge(b)`, `b` is merged on top of `a`: `b`'s default effect is used, tree nodes from both are concatenated (`a`'s rules first, then `b`'s), and sandboxes are merged (first defined wins on name conflicts).
+The `update()` method combines two policies. In `a.update(b)`, `b`'s default effect is used, tree nodes from both are concatenated (`a`'s first, then `b`'s), and sandboxes are merged (first defined wins on name conflicts).
 
 ```python
 load("@clash//builtin.star", "base")
-load("@clash//std.star", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
 
 def main():
-    my_policy = policy(default = deny, rules = [
+    my_policy = policy(default = deny(), rules = [
         cwd().allow(read = True, write = True),
         exe("git").allow(),
-        domains({"github.com": allow}),
+        domains({"github.com": allow()}),
     ])
-    return my_policy.merge(base)
+    return base.update(my_policy)
 ```
 
-The `base` policy from `@clash//builtin.star` includes built-in rules for clash CLI commands and Claude Code interactive tools (Agent, Skill, etc.). Merging with `base` ensures these tools work correctly alongside your custom rules.
+The `base` policy from `@clash//builtin.star` includes built-in rules for clash CLI commands and Claude Code interactive tools (Agent, Skill, etc.). Updating `base` with your policy ensures these tools work correctly alongside your custom rules.
 
 ### Built-in Policy (`@clash//builtin.star`)
 
@@ -195,13 +223,13 @@ The `@clash//builtin.star` module exports a `base` policy that bundles rules for
 - **Clash CLI** — allows `clash status`, `clash policy list`, `clash policy show`, `clash explain`, and `clash bug` with appropriate sandboxes
 - **Claude Code tools** — allows interactive tools (`Agent`, `AskUserQuestion`, `EnterPlanMode`, `Skill`, `ToolSearch`, etc.) with a sandbox scoped to `~/.claude`
 
-Load and merge it into your policy to get sensible defaults for these tools:
+Load and update it with your policy to get sensible defaults for these tools:
 
 ```python
 load("@clash//builtin.star", "base")
 ```
 
-If you don't merge with `base`, you'll need to write your own rules for clash CLI commands and Claude Code interactive tools.
+If you don't use `base`, you'll need to write your own rules for clash CLI commands and Claude Code interactive tools.
 
 ---
 
@@ -212,31 +240,31 @@ Exec rules can attach a **sandbox policy** that defines what filesystem and netw
 ### Defining sandboxes
 
 ```python
-load("@clash//std.star", "exe", "sandbox", "cwd", "home", "policy", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "sandbox", "cwd", "home", "policy", "domains")
 
 def main():
     cargo_env = sandbox(
-        default = deny,
+        default = deny(),
         fs = [
             cwd().allow(read = True),
             path("./target").allow(write = True),
         ],
-        net = allow,
+        net = allow(),
     )
 
     git_env = sandbox(
-        default = deny,
+        default = deny(),
         fs = [
             cwd().allow(read = True),
         ],
     )
 
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe("git", args = ["push"]).deny(),
         exe("cargo").sandbox(cargo_env).allow(),
         exe("git").sandbox(git_env).allow(),
         cwd().allow(read = True),
-        domains({"github.com": allow}),
+        domains({"github.com": allow()}),
     ])
 ```
 
@@ -244,7 +272,30 @@ When `cargo build` matches the exec rule, the `cargo_env` sandbox defines the re
 
 Note: `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
 
-### Pre-built sandboxes
+### Sandbox presets
+
+Intent-based sandbox presets express what you trust a command to do:
+
+| Preset | Filesystem | Network | Use case |
+|---|---|---|---|
+| `restricted` | Read-only project | Deny | Untrusted scripts |
+| `read_only` | Read project + home, write temp | Deny | Linters, analyzers |
+| `dev` | Read+write project, read home | Deny | Build tools, git |
+| `dev_network` | Read+write project, read home | Allow | Package managers, gh |
+| `unrestricted` | Full project + home access | Allow | Fully trusted tools |
+
+```python
+load("@clash//sandboxes.star", "dev", "dev_network")
+
+def main():
+    return policy(default = deny(), rules = [
+        exe("gh").sandbox(dev_network).allow(),
+        exe("git").sandbox(dev).allow(),
+        exe().sandbox(dev).allow(),
+    ])
+```
+
+### Language-specific sandboxes
 
 Load pre-built sandbox configurations for common toolchains:
 
@@ -252,7 +303,7 @@ Load pre-built sandbox configurations for common toolchains:
 load("@clash//rust.star", "rust_sandbox")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe(["cargo", "rustc"]).sandbox(rust_sandbox).allow(),
     ])
 ```
@@ -275,7 +326,7 @@ Sandboxes automatically grant access to:
 
 Sandbox network access has four modes:
 
-- `net = allow` -- sandbox **allows** all network access (no restrictions)
+- `net = allow()` -- sandbox **allows** all network access (no restrictions)
 - Localhost-only -- sandbox allows **localhost-only** connections, enforced at the kernel level without a proxy
 - Domain list -- sandbox allows network access **only to listed domains** via a local HTTP proxy
 - No net rule -- sandbox **denies** all network access
@@ -295,7 +346,7 @@ Subdomain matching is supported: `"github.com"` also permits `api.github.com`.
 ```python
 # Literal match (exact binary name or domain)
 exe("git")
-domains({"github.com": allow})
+domains({"github.com": allow()})
 
 # Regex match
 exe(regex("^cargo-.*"))
@@ -351,7 +402,7 @@ tool("WebSearch", doc = "No external searches needed").deny()
 sandbox(
     name = "dev",
     doc = "Development sandbox for project work",
-    default = deny,
+    default = deny(),
     fs = [
         cwd().allow(read = True, write = True, doc = "Project source files"),
         home().child(".ssh").allow(read = True, doc = "SSH keys for git auth"),
@@ -438,10 +489,10 @@ Values appear inside `Literal` patterns and resolve at eval time:
 Deny everything by default, explicitly allow only safe operations:
 
 ```python
-load("@clash//std.star", "policy", "cwd")
+load("@clash//std.star", "deny", "policy", "cwd")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         cwd().allow(read = True),
     ])
 ```
@@ -451,10 +502,10 @@ def main():
 Allow reads and common dev tools, deny destructive operations:
 
 ```python
-load("@clash//std.star", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         cwd().allow(read = True, write = True),
         exe("cargo").allow(),
         exe("npm").allow(),
@@ -466,7 +517,7 @@ def main():
         exe("git", args = ["reset"]).deny(),
         exe("sudo").deny(),
         exe("rm", args = ["-rf"]).deny(),
-        domains({"github.com": allow, "crates.io": allow, "npmjs.com": allow}),
+        domains({"github.com": allow(), "crates.io": allow(), "npmjs.com": allow()}),
     ])
 ```
 
@@ -475,10 +526,10 @@ def main():
 Allow almost everything, but block the truly dangerous:
 
 ```python
-load("@clash//std.star", "exe", "policy", "cwd", "home", "path")
+load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "home", "path")
 
 def main():
-    return policy(default = allow, rules = [
+    return policy(default = allow(), rules = [
         exe("git", args = ["push", "--force"]).deny(),
         exe("git", args = ["reset", "--hard"]).deny(),
         exe("sudo").deny(),
@@ -492,10 +543,10 @@ def main():
 Allow reading only, deny all modifications:
 
 ```python
-load("@clash//std.star", "exe", "policy", "cwd")
+load("@clash//std.star", "deny", "exe", "policy", "cwd")
 
 def main():
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         cwd().allow(read = True),
         exe("cat").allow(),
         exe("ls").allow(),
@@ -508,28 +559,28 @@ def main():
 Allow build tools with constrained sandbox environments:
 
 ```python
-load("@clash//std.star", "exe", "sandbox", "cwd", "path", "policy", "domains")
+load("@clash//std.star", "allow", "deny", "exe", "sandbox", "cwd", "path", "policy", "domains")
 
 def main():
     cargo_env = sandbox(
-        default = deny,
+        default = deny(),
         fs = [
             cwd().allow(read = True),
             path("./target").allow(write = True),
         ],
-        net = allow,
+        net = allow(),
     )
 
     npm_env = sandbox(
-        default = deny,
+        default = deny(),
         fs = [
             cwd().allow(read = True),
             path("./node_modules").allow(write = True),
         ],
-        net = domains({"registry.npmjs.org": allow}),
+        net = domains({"registry.npmjs.org": allow()}),
     )
 
-    return policy(default = deny, rules = [
+    return policy(default = deny(), rules = [
         exe("cargo").sandbox(cargo_env).allow(),
         exe("npm").sandbox(npm_env).allow(),
         cwd().allow(read = True),
@@ -562,6 +613,7 @@ clash policy show
 
 - `@clash//std.star` -- built-in standard library (loaded via `load()` in policy files)
 - `@clash//builtin.star` -- built-in policy for clash CLI and Claude Code tools (exports `base`)
-- `@clash//rust.star`, `@clash//python.star` -- pre-built sandbox configurations for common toolchains
+- `@clash//sandboxes.star` -- intent-based sandbox presets: `restricted`, `read_only`, `dev`, `dev_network`, `unrestricted`
+- `@clash//rust.star`, `@clash//python.star`, `@clash//node.star` -- pre-built sandbox configurations for common toolchains
 - [Policy Semantics](./policy-semantics.md) -- compilation pipeline and evaluation algorithm
 - [CLI Reference](./cli-reference.md) -- full command documentation

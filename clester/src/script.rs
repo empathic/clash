@@ -41,13 +41,11 @@ pub struct ClashConfig {
     /// Starlark policy string written to ~/.clash/policy.star.
     /// When present, this is the primary policy engine input.
     #[serde(default)]
-    #[serde(alias = "policy_sexpr")]
     pub policy_star: Option<String>,
 
     /// Starlark policy string written to <project>/.clash/policy.star (project-level).
     /// When present alongside `policy_star`, enables multi-level policy testing.
     #[serde(default)]
-    #[serde(alias = "project_policy_sexpr")]
     pub project_policy_star: Option<String>,
 }
 
@@ -478,16 +476,16 @@ clash:
 
 steps:
   - name: add allow rule
-    command: policy allow '(exec "npm" *)' --dry-run
+    command: policy allow --bin npm --dry-run
     expect:
       exit_code: 0
-      stdout_contains: "(allow (exec"
+      stdout_contains: "allow"
 "#;
 
         let script = TestScript::from_str(yaml).unwrap();
         assert_eq!(
             script.steps[0].command.as_deref(),
-            Some("policy allow '(exec \"npm\" *)' --dry-run")
+            Some("policy allow --bin npm --dry-run")
         );
         assert!(script.steps[0].hook.is_none());
         assert!(script.steps[0].expect.stdout_contains.is_some());

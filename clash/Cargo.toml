@@ -1,6 +1,6 @@
 [package]
 name = "clash"
-version = "0.4.2"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Command Line Agent Safety Harness — permission policies for coding agents"
@@ -46,6 +46,9 @@ tar = { workspace = true }
 chrono = { workspace = true }
 toolpath = { workspace = true }
 toolpath-claude = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+similar = { workspace = true }
 
 # from the workspace
 clash_notify = { workspace = true }

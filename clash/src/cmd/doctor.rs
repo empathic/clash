@@ -4,6 +4,7 @@ use tracing::{Level, instrument};
 use crate::sandbox;
 use crate::settings::ClashSettings;
 use crate::style;
+use crate::ui;
 
 /// Outcome of a single diagnostic check.
 enum CheckResult {
@@ -57,14 +58,11 @@ impl CheckResult {
 /// Run all diagnostic checks and report results.
 #[instrument(level = Level::TRACE)]
 pub fn run() -> Result<()> {
-    println!("{}", style::banner());
-    println!();
-    println!("{}", style::header("Doctor"));
-    println!("{}", style::dim("──────"));
-    println!();
+    ui::banner_section("Doctor");
 
     let checks = vec![
         ("Disabled", check_disabled()),
+        ("Passthrough", check_passthrough()),
         ("Policy files", check_policy_files()),
         ("Policy parsing", check_policy_parsing()),
         ("Plugin installed", check_plugin_installed()),
@@ -123,6 +121,19 @@ fn check_disabled() -> CheckResult {
     }
 }
 
+/// Check: Is CLASH_PASSTHROUGH set?
+fn check_passthrough() -> CheckResult {
+    if crate::settings::is_passthrough() {
+        CheckResult::Warn(format!(
+            "{} is set — permission decisions are deferred to Claude Code's native system. \
+             Unset to re-enable policy enforcement.",
+            crate::settings::CLASH_PASSTHROUGH_ENV,
+        ))
+    } else {
+        CheckResult::Pass("Policy enforcement is active.".into())
+    }
+}
+
 /// Check 1: Do policy files exist?
 fn check_policy_files() -> CheckResult {
     let levels = ClashSettings::available_policy_levels();
@@ -150,7 +161,7 @@ fn check_policy_parsing() -> CheckResult {
     let mut errors = Vec::new();
 
     for (level, path) in &levels {
-        match crate::settings::evaluate_star_policy(path) {
+        match crate::settings::evaluate_policy_file(path) {
             Ok(json) => {
                 if let Err(e) = crate::policy::compile::compile_to_tree(&json) {
                     errors.push(format!("{}: {}", level, e));

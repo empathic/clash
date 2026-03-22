@@ -9,11 +9,15 @@ use crate::policy::sandbox_types::SandboxPolicy;
 use crate::style;
 
 /// Format the "Input:" header block (tool + noun).
-pub fn format_tool_header(title: &str, tool_name: &str, noun: &str) -> Vec<String> {
+pub fn format_tool_header(
+    title: &str,
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> Vec<String> {
     vec![
         style::bold(title).to_string(),
         format!("  {}   {}", style::cyan("tool:"), tool_name),
-        format!("  {}   {}", style::cyan("noun:"), noun),
+        format!("  {}   {}", style::cyan("arguments:"), arguments),
     ]
 }
 
@@ -68,7 +72,7 @@ pub fn format_sandbox_summary(sandbox: &SandboxPolicy) -> Vec<String> {
     lines.push(format!(
         "  {}: {}",
         style::cyan("default"),
-        sandbox.default.display()
+        sandbox.default.short()
     ));
     lines.push(format!(
         "  {}: {:?}",
@@ -79,7 +83,7 @@ pub fn format_sandbox_summary(sandbox: &SandboxPolicy) -> Vec<String> {
         lines.push(format!(
             "  {:?} {} in {}",
             rule.effect,
-            rule.caps.display(),
+            rule.caps.short(),
             rule.path
         ));
     }
@@ -116,12 +120,12 @@ pub fn decision_to_json(decision: &PolicyDecision) -> serde_json::Value {
 /// green and leave `" (sandbox: test)"` unstyled.  This replaces the inline
 /// reimplementation that was previously in `cmd::status::colorize_tree_line`.
 pub fn colorize_effect_prefix(text: &str) -> String {
-    if text.starts_with("allow") {
-        format!("{}{}", style::green("allow"), &text["allow".len()..])
-    } else if text.starts_with("deny") {
-        format!("{}{}", style::red("deny"), &text["deny".len()..])
-    } else if text.starts_with("ask") {
-        format!("{}{}", style::yellow("ask"), &text["ask".len()..])
+    if let Some(rest) = text.strip_prefix("allow") {
+        format!("{}{}", style::green("allow"), rest)
+    } else if let Some(rest) = text.strip_prefix("deny") {
+        format!("{}{}", style::red("deny"), rest)
+    } else if let Some(rest) = text.strip_prefix("ask") {
+        format!("{}{}", style::yellow("ask"), rest)
     } else {
         text.to_string()
     }

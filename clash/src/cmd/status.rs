@@ -5,26 +5,11 @@ use crate::display;
 use crate::policy::Effect;
 use crate::settings::{ClashSettings, PolicyLevel};
 use crate::style;
+use crate::ui;
 
 /// Show policy status: layers, rules, and potential issues.
 #[instrument(level = Level::TRACE)]
 pub fn run(_json: bool, verbose: bool) -> Result<()> {
-    if crate::settings::is_disabled() {
-        println!("{}", style::banner());
-        println!();
-        println!(
-            "  {} Clash is {}",
-            style::yellow_bold("!"),
-            style::yellow_bold("DISABLED")
-        );
-        println!(
-            "  {} is set — all hooks are pass-through, no policy enforcement is active.",
-            style::cyan("CLASH_DISABLE")
-        );
-        println!("  Unset the variable to re-enable clash.");
-        return Ok(());
-    }
-
     let settings = ClashSettings::load_or_create()?;
     let policy = match settings.policy_tree() {
         Some(t) => t,
@@ -38,9 +23,33 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
         }
     };
 
-    // Banner
-    println!("{}", style::banner());
-    println!();
+    ui::banner();
+
+    if crate::settings::is_disabled() {
+        println!(
+            "  {} Clash is {}",
+            style::yellow_bold("!"),
+            style::yellow_bold("DISABLED")
+        );
+        println!(
+            "  {} is set — all hooks are pass-through, no policy enforcement is active.",
+            style::cyan("CLASH_DISABLE")
+        );
+        println!("  Unset the variable to re-enable clash.");
+        return Ok(());
+    } else if crate::settings::is_passthrough() {
+        println!(
+            "  {} Clash is in {} mode",
+            style::yellow_bold("!"),
+            style::yellow_bold("PASSTHROUGH")
+        );
+        println!(
+            "  {} is set — permission decisions are deferred to Claude Code's native permission system.",
+            style::cyan("CLASH_PASSTHROUGH")
+        );
+        println!("  Unset the variable to re-enable policy enforcement.");
+        println!();
+    }
 
     // Policy version
     println!(
@@ -60,8 +69,7 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
             .map(|lp| lp.path.display().to_string())
     };
 
-    println!("{}", style::header("Policy layers"));
-    println!("{}", style::dim("─────────────"));
+    ui::section("Policy layers");
     for &level in &[
         PolicyLevel::User,
         PolicyLevel::Project,
@@ -117,55 +125,19 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     };
     println!("\n  Everything else: {}", everything_else);
     println!();
-    println!("{}", style::header("Sandboxes"));
+    println!(
+        "{}  {}",
+        style::header("Sandboxes"),
+        style::dim("r=read w=write c=create d=delete x=execute")
+    );
     println!("{}", style::dim("─────────────────────────────────"));
     if policy.sandboxes.is_empty() {
         println!("  {}", style::dim("(no sandboxes defined)"));
-    }
-    for (name, sb) in policy.sandboxes.iter() {
-        let sb_doc = sb
-            .doc
-            .as_deref()
-            .map(|d| format!("  {}", style::dim(&format!("# {d}"))))
-            .unwrap_or_default();
-        println!("  {}{}", style::cyan(name), sb_doc);
-        println!("    default: {}", style::dim(&sb.default.display()));
-        for rule in &sb.rules {
-            let effect_str = match rule.effect {
-                crate::policy::sandbox_types::RuleEffect::Allow => style::green("allow"),
-                crate::policy::sandbox_types::RuleEffect::Deny => style::red("deny"),
-            };
-            let match_suffix = match rule.path_match {
-                crate::policy::sandbox_types::PathMatch::Subpath => "/**",
-                crate::policy::sandbox_types::PathMatch::Literal => "",
-                crate::policy::sandbox_types::PathMatch::Regex => " (regex)",
-            };
-            let rule_doc = rule
-                .doc
-                .as_deref()
-                .map(|d| format!("  {}", style::dim(&format!("# {d}"))))
-                .unwrap_or_default();
-            println!(
-                "    {} {} {}{}",
-                effect_str,
-                rule.caps.display(),
-                style::dim(&format!("{}{}", rule.path, match_suffix)),
-                rule_doc,
-            );
-        }
-        let net_str = match &sb.network {
-            crate::policy::sandbox_types::NetworkPolicy::Deny => style::red("deny"),
-            crate::policy::sandbox_types::NetworkPolicy::Allow => style::green("allow"),
-            crate::policy::sandbox_types::NetworkPolicy::Localhost => style::yellow("localhost"),
-            crate::policy::sandbox_types::NetworkPolicy::AllowDomains(domains) => {
-                style::green(&format!("allow [{}]", domains.join(", ")))
-            }
-        };
-        println!("    network: {}", net_str);
+    } else {
+        ui::print_sandbox_table(&policy.sandboxes);
     }
 
-    println!("{}", style::header("Potential issues"));
-    println!("{}", style::dim("────────────────"));
+    ui::section("Potential issues");
 
     let mut issues = Vec::new();
 

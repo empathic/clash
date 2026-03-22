@@ -1,34 +1,37 @@
-load("@clash//std.star", "exe", "policy", "sandbox", "home", "path", "tool")
+load("@clash//std.star", "allow", "ask", "cmd", "deny", "home", "path", "sandbox", "tools")
 
 clashbox = sandbox(
-    name = "clash_box",
-    default = deny,
-    fs = [
-        home().child(".clash").recurse().allow(read = True),
+    name="clash_box",
+    default=deny(),
+    fs=[
+        home().child(".clash").recurse().allow(read=True),
+        home().recurse().allow(read=True, execute=True),
     ],
-    net = allow,
+    net=allow(),
 )
 
-clash = policy(
-    default = deny,
-    rules = [
-        exe("clash", args = ["bug"]).sandbox(clashbox).allow(),
-        exe("clash", args = ["status"]).sandbox(clashbox).allow(),
-        exe("clash", args = ["policy", "list"]).sandbox(clashbox).allow(),
-        exe("clash", args = ["policy", "show"]).sandbox(clashbox).allow(),
-        exe("clash", args = ["policy", "explain"]).sandbox(clashbox).allow(),
-        exe("clash", args = ["policy", "schema"]).allow(),
-        exe("clash", args = ["policy", "setup"]).sandbox(clashbox).ask(),
+clash = cmd(
+    "clash",
+    {
+        ("bug", "status"): allow(sandbox=clashbox),
+        "policy": {
+            ("list", "show", "explain"): allow(sandbox=clashbox),
+            "schema": allow(),
+            "edit": ask(sandbox=clashbox),
+        },
+    },
+)
+
+_claude_fs = sandbox(
+    name="claude_fs",
+    fs=[
+        home().child(".claude").allow(read=True, write=True),
+        path(env="TRANSCRIPT_DIR").allow(read=True),
     ],
 )
 
-_claude_fs = sandbox(name = "claude_fs", fs = [
-    home().child(".claude").allow(read = True, write = True),
-    path(env = "TRANSCRIPT_DIR").allow(read = True),
-])
-
-claude = policy(default = deny, rules = [
-    tool([
+claude = tools({
+    (
         "Agent",
         "AskUserQuestion",
         "EnterPlanMode",
@@ -42,8 +45,8 @@ claude = policy(default = deny, rules = [
         "TaskOutput",
         "TaskStop",
         "TaskUpdate",
-        "ToolSearch",
-    ]).sandbox(_claude_fs).allow(),
-])
+    ): allow(sandbox=_claude_fs),
+})
 
-base = clash.merge(claude)
+# Flat list of all builtin rule nodes
+builtins = [clash] + claude

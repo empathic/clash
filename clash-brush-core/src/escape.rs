@@ -256,10 +256,10 @@ pub fn expand_backslash_escapes(
     }
 
     // In ANSI-C quotes, we crop the result at the first NUL.
-    if matches!(mode, EscapeExpansionMode::AnsiCQuotes) {
-        if let Some(nul_index) = result.iter().position(|&b| b == 0) {
-            result.truncate(nul_index);
-        }
+    if matches!(mode, EscapeExpansionMode::AnsiCQuotes)
+        && let Some(nul_index) = result.iter().position(|&b| b == 0)
+    {
+        result.truncate(nul_index);
     }
 
     Ok((result, true))
