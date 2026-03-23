@@ -347,7 +347,9 @@ fn load_meta(session_id: &str) -> anyhow::Result<TraceMeta> {
 fn save_meta(session_id: &str, meta: &TraceMeta) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(meta).context("serializing trace metadata")?;
     let out = trace_meta_path(session_id);
-    let dir = out.parent().unwrap();
+    let dir = out
+        .parent()
+        .context("trace meta path has no parent directory")?;
     let tmp = dir.join(".trace.json.tmp");
     std::fs::write(&tmp, &json).context("writing trace meta tmp file")?;
     std::fs::rename(&tmp, &out).context("renaming trace tmp to trace.json")?;

@@ -24,9 +24,10 @@ const GITHUB_MARKETPLACE: &str = "empathic/clash";
 /// directly. When omitted, runs the interactive wizard.
 /// Only one scope is initialized per invocation.
 #[instrument(level = Level::TRACE)]
-pub fn run(no_bypass: Option<bool>, scope: Option<String>) -> Result<()> {
+pub fn run(no_bypass: Option<bool>, scope: Option<String>, quick: bool) -> Result<()> {
     match scope.as_deref() {
         Some("project") => run_init_project(),
+        _ if quick => run_init_quick(no_bypass),
         _ => run_init_user(no_bypass),
     }
 }
@@ -96,6 +97,96 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     }
 
     print_user_summary(&actions);
+
+    Ok(())
+}
+
+/// Quick-init: skip the wizard and write a sensible default policy directly.
+fn run_init_quick(no_bypass: Option<bool>) -> Result<()> {
+    let settings_dir = ClashSettings::settings_dir()
+        .context("could not determine clash settings directory")?;
+
+    std::fs::create_dir_all(&settings_dir)
+        .with_context(|| format!("failed to create {}", settings_dir.display()))?;
+
+    let policy_path = settings_dir.join("policy.star");
+
+    let quick_policy = r#"load("@clash//std.star", "exe", "tool", "policy", "allow", "ask")
+
+def main():
+    return policy(
+        default = ask(),
+        rules = [
+            exe("git").allow(),
+            exe("cargo").allow(),
+            exe("npm").allow(),
+            exe("npx").allow(),
+            exe("node").allow(),
+            exe("bun").allow(),
+            exe("python").allow(),
+            exe("pip").allow(),
+            exe("uv").allow(),
+            tool("Read").allow(),
+            tool("Glob").allow(),
+            tool("Grep").allow(),
+        ],
+    )
+"#;
+
+    std::fs::write(&policy_path, quick_policy)
+        .with_context(|| format!("failed to write {}", policy_path.display()))?;
+
+    ui::success(&format!(
+        "Quick setup: policy created at {}",
+        policy_path.display()
+    ));
+
+    // Ensure settings.json records clash as an enabled plugin.
+    let claude = claude_settings::ClaudeSettings::new();
+    if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true) {
+        warn!(error = %e, "Could not set enabledPlugins in Claude Code settings");
+    }
+
+    // Install the Claude Code plugin from GitHub.
+    let plugin_installed = match install_plugin() {
+        Ok(()) => true,
+        Err(e) => {
+            error!(error = %e, "Could not install clash plugin");
+            ui::warn(&format!(
+                "Could not install the clash plugin: {e}\n  \
+                 You can install it manually later:\n    \
+                 claude plugin marketplace add {GITHUB_MARKETPLACE}\n    \
+                 claude plugin install clash"
+            ));
+            false
+        }
+    };
+
+    if plugin_installed {
+        let skip_bypass = no_bypass.unwrap_or_else(|| {
+            !dialog::confirm(
+                "Use clash as your default permissions provider in Claude Code? \
+                 (This sets bypassPermissions so clash handles all permission decisions)",
+                false,
+            )
+            .unwrap_or(true)
+        });
+
+        if !skip_bypass && let Err(e) = set_bypass_permissions() {
+            warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
+            eprintln!(
+                "warning: could not configure Claude Code to use clash as sole permission handler.\n\
+                 You may see double prompts. Run with --dangerously-skip-permissions to avoid this."
+            );
+        }
+    } else {
+        ui::skip("Skipping bypassPermissions — the clash plugin must be installed first.");
+    }
+
+    // Install the status line so the user gets ambient policy visibility.
+    if let Err(e) = super::statusline::install() {
+        warn!(error = %e, "Could not install status line");
+    }
 
     Ok(())
 }

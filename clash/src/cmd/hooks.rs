@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::{Level, info, instrument};
 
 use crate::cli::HooksCmd;
@@ -32,7 +32,9 @@ impl HooksCmd {
                 HookOutput::continue_execution()
             }
         };
-        output.write_stdout()?;
+        output
+            .write_stdout()
+            .context("serializing disabled-mode hook response to stdout")?;
         Ok(())
     }
 
@@ -46,7 +48,8 @@ impl HooksCmd {
 
         let output = match self {
             Self::PreToolUse => {
-                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
+                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())
+                    .context("parsing PreToolUse hook input from stdin — expected JSON with tool_name and tool_input fields")?;
 
                 if passthrough {
                     info!(
@@ -117,7 +120,8 @@ impl HooksCmd {
                 }
             }
             Self::PostToolUse => {
-                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
+                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())
+                    .context("parsing PostToolUse hook input from stdin")?;
 
                 // Check if this tool use was previously "ask"ed and the user
                 // accepted. If so, return advisory context suggesting a session
@@ -174,7 +178,8 @@ impl HooksCmd {
                 HookOutput::post_tool_use(context)
             }
             Self::PermissionRequest => {
-                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
+                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())
+                    .context("parsing PermissionRequest hook input from stdin")?;
                 if passthrough {
                     info!(
                         tool = %input.tool_name,
@@ -192,12 +197,14 @@ impl HooksCmd {
             }
             Self::SessionStart => {
                 let input =
-                    crate::hooks::SessionStartHookInput::from_reader(std::io::stdin().lock())?;
+                    crate::hooks::SessionStartHookInput::from_reader(std::io::stdin().lock())
+                        .context("parsing SessionStart hook input from stdin")?;
                 crate::handlers::handle_session_start(&input)?
             }
             Self::Stop => {
                 // Read stdin to avoid broken pipe, extract session_id.
-                let input = crate::hooks::StopHookInput::from_reader(std::io::stdin().lock())?;
+                let input = crate::hooks::StopHookInput::from_reader(std::io::stdin().lock())
+                    .context("parsing Stop hook input from stdin")?;
 
                 // Final catch-up sync for non-tool conversation turns.
                 if let Err(e) = trace::sync_trace(&input.session_id, None) {
@@ -208,7 +215,9 @@ impl HooksCmd {
             }
         };
 
-        output.write_stdout()?;
+        output
+            .write_stdout()
+            .context("serializing hook response to stdout")?;
         Ok(())
     }
 }

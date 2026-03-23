@@ -83,7 +83,10 @@ impl ClashSettings {
     /// Write the active session ID to `~/.clash/active_session`.
     pub fn set_active_session(session_id: &str) -> Result<()> {
         let path = Self::active_session_file()?;
-        std::fs::create_dir_all(path.parent().unwrap())?;
+        let parent = path
+            .parent()
+            .context("active session file path has no parent directory")?;
+        std::fs::create_dir_all(parent)?;
         std::fs::write(&path, session_id)?;
         Ok(())
     }
@@ -187,7 +190,8 @@ impl ClashSettings {
     /// Returns `Ok(Some(path))` if a new file was created, `Ok(None)` if one already existed.
     /// The created file uses the embedded `DEFAULT_POLICY` (deny-all with read access to CWD).
     pub fn ensure_user_policy_exists() -> Result<Option<PathBuf>> {
-        let path = Self::policy_file().context("failed to determine user policy file path")?;
+        let path = Self::policy_file()
+            .context("resolving user policy file path (~/.clash/policy.json or CLASH_POLICY_FILE)")?;
         Self::ensure_policy_at(path)
     }
 
@@ -217,7 +221,7 @@ impl ClashSettings {
         }
 
         let json =
-            compile_default_policy_to_json().context("failed to compile default policy to JSON")?;
+            compile_default_policy_to_json().context("compiling embedded default policy (std.star) to JSON")?;
         std::fs::write(&json_path, &json).with_context(|| {
             format!("failed to write default policy to {}", json_path.display())
         })?;

@@ -43,12 +43,14 @@ fn full_body(msg: impl Into<Bytes>) -> BoxBody {
 
 fn error_response(status: u16, reason: &str) -> Response<BoxBody> {
     let body_text = format!("{status} {reason}\r\n");
+    // The builder only fails if the status code is invalid; we control all
+    // call sites and always pass valid HTTP status codes.
     Response::builder()
         .status(status)
         .header("Content-Type", "text/plain")
         .header("Connection", "close")
         .body(full_body(body_text))
-        .unwrap()
+        .expect("constructing error response with valid status code")
 }
 
 // ---------------------------------------------------------------------------

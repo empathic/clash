@@ -414,8 +414,9 @@ fn condition_terminal(
         "children": children
     });
     if terminal {
+        // Safety: `cond` is constructed via `json!({...})` above, always an object.
         cond.as_object_mut()
-            .unwrap()
+            .expect("json!({}) always produces an object")
             .insert("terminal".into(), json!(true));
     }
     json!({ "condition": cond })
@@ -504,7 +505,9 @@ pub fn wiz() -> Result<()> {
         Start::Manual => {
             let policy_path = ClashSettings::policy_file()?;
             let policy_path = policy_path.with_extension("json");
-            let dir = policy_path.parent().unwrap();
+            let dir = policy_path
+                .parent()
+                .context("policy file path has no parent directory")?;
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("failed to create {}", dir.display()))?;
 
@@ -602,7 +605,9 @@ fn guided() -> Result<()> {
 
     let policy_path = ClashSettings::policy_file()?;
     let policy_path = policy_path.with_extension("json");
-    let dir = policy_path.parent().unwrap();
+    let dir = policy_path
+        .parent()
+        .context("policy file path has no parent directory")?;
     std::fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
     let tree: Vec<serde_json::Value> = rules.into_iter().map(|r| r.node).collect();

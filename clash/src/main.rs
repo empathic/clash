@@ -14,13 +14,18 @@ fn main() -> Result<()> {
 
     debug_span!("main", cmd = ?cli.command).in_scope(|| {
         let resp = match cli.command {
-            Commands::Init { no_bypass, scope } => cmd::init::run(no_bypass, scope),
+            Commands::Init { no_bypass, scope, quick } => cmd::init::run(no_bypass, scope, quick),
             Commands::Uninstall { yes } => cmd::uninstall::run(yes),
             Commands::Status { json } => cmd::status::run(json, cli.verbose),
             Commands::ShowCommands { json, all } => cmd::commands::run(json, all),
-            Commands::Explain { json, tool, args } => {
+            Commands::Explain {
+                json,
+                trace,
+                tool,
+                args,
+            } => {
                 let input = args.join(" ");
-                cmd::explain::run(json, tool, input)
+                cmd::explain::run(json, trace, tool, input)
             }
             Commands::Fmt { check, files } => cmd::fmt::run(check, files),
             Commands::Policy(policy_cmd) => cmd::policy::run(policy_cmd),

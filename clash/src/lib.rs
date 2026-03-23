@@ -55,6 +55,7 @@ pub mod settings;
 pub mod shell_cmd;
 pub mod style;
 pub mod trace;
+pub mod trace_display;
 pub mod tracing_init;
 pub mod tui;
 pub mod ui;
