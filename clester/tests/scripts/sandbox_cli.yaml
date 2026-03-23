@@ -1,0 +1,52 @@
+meta:
+  name: sandbox CLI — create, list, delete workflow
+  description: Test sandbox management commands via the CLI
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "policy", "deny")
+    def main():
+        return policy(default = deny(), rules = [])
+
+steps:
+  - name: create a sandbox named dev
+    command: sandbox create dev --default "read + execute" --network deny --scope user
+    expect:
+      exit_code: 0
+      stdout_contains: dev
+
+  - name: list sandboxes shows dev
+    command: sandbox list
+    expect:
+      exit_code: 0
+      stdout_contains: dev
+
+  - name: add a rule to the dev sandbox
+    command: sandbox add-rule dev --allow "read + write" --path /tmp --scope user
+    expect:
+      exit_code: 0
+      stdout_contains: dev
+
+  - name: list sandboxes still shows dev
+    command: sandbox list
+    expect:
+      exit_code: 0
+      stdout_contains: dev
+
+  - name: remove the rule from dev sandbox
+    command: sandbox remove-rule dev --path /tmp --scope user
+    expect:
+      exit_code: 0
+      stdout_contains: dev
+
+  - name: delete the dev sandbox
+    command: sandbox delete dev --scope user
+    expect:
+      exit_code: 0
+      stdout_contains: dev
+
+  - name: list after delete shows no sandboxes
+    command: sandbox list
+    expect:
+      exit_code: 0
+      stdout_contains: No sandboxes defined
