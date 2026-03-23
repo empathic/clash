@@ -47,11 +47,96 @@ pub fn evaluate_star_policy(path: &Path) -> Result<String> {
     Ok(output.json)
 }
 
+/// Migrate legacy string-style capability values in a policy JSON to the
+/// current array format.
+///
+/// Old format: `"caps": "read + write"`, `"default": "all - delete"`
+/// New format: `"caps": ["read", "write"]`, `"default": ["read", "write", "create", "execute"]`
+///
+/// If any values are migrated, the fixed JSON is written back to disk so
+/// the migration is transparent and one-time.
+fn migrate_legacy_caps(path: &Path, raw: String) -> Result<String> {
+    let mut value: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+
+    let mut changed = false;
+
+    if let Some(sandboxes) = value.get_mut("sandboxes").and_then(|v| v.as_object_mut()) {
+        for (_name, sandbox) in sandboxes.iter_mut() {
+            let Some(sandbox_obj) = sandbox.as_object_mut() else {
+                continue;
+            };
+
+            // Migrate "default" field
+            if let Some(default_val) = sandbox_obj.get("default") {
+                if let Some(migrated) = migrate_cap_value(default_val) {
+                    sandbox_obj.insert("default".into(), migrated);
+                    changed = true;
+                }
+            }
+
+            // Migrate "caps" in each rule
+            if let Some(rules) = sandbox_obj.get_mut("rules").and_then(|v| v.as_array_mut()) {
+                for rule in rules.iter_mut() {
+                    if let Some(rule_obj) = rule.as_object_mut() {
+                        if let Some(caps_val) = rule_obj.get("caps") {
+                            if let Some(migrated) = migrate_cap_value(caps_val) {
+                                rule_obj.insert("caps".into(), migrated);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !changed {
+        return Ok(raw);
+    }
+
+    let fixed =
+        serde_json::to_string_pretty(&value).context("failed to serialize migrated policy")?;
+
+    // Write the migrated policy back so this is a one-time fixup.
+    if let Err(e) = std::fs::write(path, &fixed) {
+        warn!(path = %path.display(), error = %e, "Failed to write migrated policy back to disk");
+    } else {
+        warn!(
+            path = %path.display(),
+            "Migrated legacy string-style caps to array format"
+        );
+    }
+
+    Ok(fixed)
+}
+
+/// If a JSON value is a string that looks like a legacy cap expression
+/// (e.g. "read + write"), parse it and return the equivalent array value.
+/// Returns `None` if the value is already an array or not a valid cap string.
+fn migrate_cap_value(value: &serde_json::Value) -> Option<serde_json::Value> {
+    use crate::policy::sandbox_types::Cap;
+
+    let s = value.as_str()?;
+    let cap = Cap::parse(s).ok()?;
+    let names: Vec<serde_json::Value> = cap
+        .to_list()
+        .into_iter()
+        .map(|n| serde_json::Value::String(n.into()))
+        .collect();
+    Some(serde_json::Value::Array(names))
+}
+
 /// Load a `policy.json` manifest: parse the JSON, resolve includes, and return
 /// a merged JSON source string suitable for [`compile::compile_to_tree`].
 pub fn load_json_policy(path: &Path) -> Result<String> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
+
+    // Migrate legacy string-style caps (e.g. "read + write") to array format
+    // (e.g. ["read", "write"]) before parsing. Writes the fixed file back if changed.
+    let raw = migrate_legacy_caps(path, raw)?;
+
     let manifest: PolicyManifest = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse {}", path.display()))?;
 
@@ -523,5 +608,80 @@ def main():
         let loaded = read_manifest(&json_path).unwrap();
         assert_eq!(loaded.includes.len(), 1);
         assert_eq!(loaded.includes[0].path, "@clash//builtin.star");
+    }
+
+    #[test]
+    fn migrate_legacy_string_caps_to_array() {
+        let dir = tempfile::tempdir().unwrap();
+        let json_path = dir.path().join("policy.json");
+        std::fs::write(
+            &json_path,
+            r#"{
+                "default_effect": "deny",
+                "sandboxes": {
+                    "dev": {
+                        "default": "read + execute",
+                        "rules": [
+                            {
+                                "effect": "allow",
+                                "caps": "all - delete",
+                                "path": "/tmp",
+                                "path_match": "subpath"
+                            }
+                        ]
+                    }
+                },
+                "tree": []
+            }"#,
+        )
+        .unwrap();
+
+        let source = load_json_policy(&json_path).unwrap();
+        let policy: CompiledPolicy = serde_json::from_str(&source).unwrap();
+
+        // The sandbox should have parsed successfully after migration.
+        let dev = policy.sandboxes.get("dev").expect("dev sandbox");
+        assert_eq!(
+            dev.default,
+            crate::policy::sandbox_types::Cap::READ | crate::policy::sandbox_types::Cap::EXECUTE
+        );
+        assert_eq!(
+            dev.rules[0].caps,
+            crate::policy::sandbox_types::Cap::READ
+                | crate::policy::sandbox_types::Cap::WRITE
+                | crate::policy::sandbox_types::Cap::CREATE
+                | crate::policy::sandbox_types::Cap::EXECUTE
+        );
+
+        // The file on disk should have been rewritten with array format.
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+        let dev_default = &on_disk["sandboxes"]["dev"]["default"];
+        assert!(dev_default.is_array(), "default should be an array on disk");
+        let rule_caps = &on_disk["sandboxes"]["dev"]["rules"][0]["caps"];
+        assert!(rule_caps.is_array(), "caps should be an array on disk");
+    }
+
+    #[test]
+    fn no_migration_when_already_array_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let json_path = dir.path().join("policy.json");
+        let original = r#"{
+                "default_effect": "deny",
+                "sandboxes": {
+                    "dev": {
+                        "default": ["read", "execute"],
+                        "rules": []
+                    }
+                },
+                "tree": []
+            }"#;
+        std::fs::write(&json_path, original).unwrap();
+
+        let _source = load_json_policy(&json_path).unwrap();
+
+        // File should not have been rewritten (content preserved exactly).
+        let on_disk = std::fs::read_to_string(&json_path).unwrap();
+        assert_eq!(on_disk, original);
     }
 }
