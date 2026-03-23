@@ -14,7 +14,7 @@ fn main() -> Result<()> {
 
     debug_span!("main", cmd = ?cli.command).in_scope(|| {
         let resp = match cli.command {
-            Commands::Init { no_bypass, scope } => cmd::init::run(no_bypass, scope),
+            Commands::Init { no_bypass, scope, quick } => cmd::init::run(no_bypass, scope, quick),
             Commands::Uninstall { yes } => cmd::uninstall::run(yes),
             Commands::Status { json } => cmd::status::run(json, cli.verbose),
             Commands::ShowCommands { json, all } => cmd::commands::run(json, all),

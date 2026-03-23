@@ -168,6 +168,9 @@ pub enum Commands {
         no_bypass: Option<bool>,
         /// Scope to initialize: "user" (global) or "project" (this repo)
         scope: Option<String>,
+        /// Skip the interactive wizard and create a sensible default policy
+        #[arg(long)]
+        quick: bool,
     },
 
     /// Remove clash: undo bypass permissions, uninstall plugin, remove config and binary
