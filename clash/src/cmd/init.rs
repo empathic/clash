@@ -232,7 +232,7 @@ fn run_init_project() -> Result<()> {
 }
 
 /// Configure Claude Code to let Clash handle all permission decisions.
-fn set_bypass_permissions() -> Result<()> {
+pub fn set_bypass_permissions() -> Result<()> {
     let claude = claude_settings::ClaudeSettings::new();
     claude.set_bypass_permissions(claude_settings::SettingsLevel::User, true)?;
     claude
@@ -281,7 +281,7 @@ fn print_user_summary(actions: &InitActions) {
 }
 
 /// Install the clash plugin into Claude Code from the GitHub marketplace.
-fn install_plugin() -> Result<()> {
+pub fn install_plugin() -> Result<()> {
     ui::progress(&format!(
         "Installing clash plugin from {}...",
         GITHUB_MARKETPLACE,

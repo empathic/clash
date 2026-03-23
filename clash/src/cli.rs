@@ -242,7 +242,11 @@ pub enum Commands {
     Playground,
 
     /// Diagnose common setup issues and report fix instructions
-    Doctor,
+    Doctor {
+        /// Run interactive onboarding: diagnose issues and offer to fix them
+        #[arg(long)]
+        onboard: bool,
+    },
 
     /// Debug policy enforcement: view logs, replay commands, inspect sandbox
     #[command(subcommand)]

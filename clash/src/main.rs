@@ -38,7 +38,7 @@ fn main() -> Result<()> {
             } => clash::shell_cmd::run_shell(command, args, cwd, sandbox, debug),
             Commands::Sandbox(sandbox_cmd) => run_sandbox(sandbox_cmd),
             Commands::Playground => cmd::playground::run(),
-            Commands::Doctor => cmd::doctor::run(),
+            Commands::Doctor { onboard } => cmd::doctor::run(onboard),
             Commands::Debug(cmd) => cmd::debug::run(cmd),
             Commands::Trace(cmd) => cmd::trace::run(cmd),
             Commands::Session(cmd) => cmd::session::run(cmd),

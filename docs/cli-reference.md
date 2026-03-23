@@ -96,8 +96,14 @@ clash status --verbose  # all rules including builtin rules expanded
 Diagnose common setup issues and report fix instructions. Runs a series of checks and reports pass/warn/fail status for each.
 
 ```
-clash doctor
+clash doctor [--onboard]
 ```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--onboard` | Run interactive onboarding: diagnose issues and offer to fix them automatically |
 
 **Checks performed:**
 
@@ -112,10 +118,16 @@ clash doctor
 
 Each check outputs a status (**PASS**, **WARN**, or **FAIL**) with a message. Failures include concrete fix commands or instructions.
 
+With `--onboard`, failing checks prompt the user to fix the issue interactively (install the plugin, configure bypassPermissions, create a policy, install the status line). This collapses the multi-step `clash init` flow into a single guided command.
+
 **Examples:**
 
 ```bash
+# Standard diagnostics
 clash doctor
+
+# Interactive onboarding — diagnose and fix
+clash doctor --onboard
 ```
 
 ---
