@@ -276,7 +276,7 @@ mod tests {
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
             r#"{"schema_version":5,"default_effect":"deny",
-  "sandboxes":{"restricted":{"default":"read + execute","rules":[],"network":"deny"}},
+  "sandboxes":{"restricted":{"default":["read","execute"],"rules":[],"network":"deny"}},
   "tree":[
     {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
       {"decision":{"allow":"restricted"}}
@@ -305,7 +305,7 @@ mod tests {
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
             r#"{"schema_version":5,"default_effect":"deny",
-  "sandboxes":{"restricted":{"default":"read + execute","rules":[],"network":"deny"}},
+  "sandboxes":{"restricted":{"default":["read","execute"],"rules":[],"network":"deny"}},
   "tree":[
     {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
       {"condition":{"observe":{"positional_arg":0},"pattern":{"literal":{"literal":"curl"}},"children":[
@@ -336,7 +336,7 @@ mod tests {
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
             r#"{"schema_version":5,"default_effect":"deny",
-  "sandboxes":{"with-net":{"default":"read + execute","rules":[],"network":"allow"}},
+  "sandboxes":{"with-net":{"default":["read","execute"],"rules":[],"network":"allow"}},
   "tree":[
     {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
       {"condition":{"observe":{"positional_arg":0},"pattern":{"literal":{"literal":"curl"}},"children":[
@@ -361,7 +361,7 @@ mod tests {
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
             r#"{"schema_version":5,"default_effect":"deny",
-  "sandboxes":{"with-net":{"default":"read + execute","rules":[],"network":{"allow_domains":["example.com"]}}},
+  "sandboxes":{"with-net":{"default":["read","execute"],"rules":[],"network":{"allow_domains":["example.com"]}}},
   "tree":[
     {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
       {"condition":{"observe":{"positional_arg":0},"pattern":{"literal":{"literal":"curl"}},"children":[
