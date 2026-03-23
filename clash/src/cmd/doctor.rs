@@ -65,8 +65,11 @@ pub fn run() -> Result<()> {
         ("Passthrough", check_passthrough()),
         ("Policy files", check_policy_files()),
         ("Policy parsing", check_policy_parsing()),
+        ("Policy health", check_policy_health()),
+        ("Default effect", check_default_effect()),
         ("Plugin installed", check_plugin_installed()),
         ("Binary on PATH", check_binary_on_path()),
+        ("Claude Code", check_claude_code()),
         ("File permissions", check_file_permissions()),
         ("Sandbox support", check_sandbox_support()),
     ];
@@ -404,6 +407,74 @@ fn check_sandbox_support() -> CheckResult {
     }
 }
 
+/// Check: Do the compiled rules look healthy?
+fn check_policy_health() -> CheckResult {
+    let settings = match crate::settings::ClashSettings::load_or_create() {
+        Ok(s) => s,
+        Err(_) => {
+            return CheckResult::Warn("Could not load settings to check policy health.".into())
+        }
+    };
+
+    let tree = match settings.policy_tree() {
+        Some(t) => t,
+        None => return CheckResult::Warn("No compiled policy available.".into()),
+    };
+
+    let rules = tree.format_rules();
+    if rules.is_empty() {
+        return CheckResult::Warn(
+            "Policy has no rules — all tool uses will use the default effect. \
+             Add rules with `clash policy allow` or `clash policy deny`."
+                .into(),
+        );
+    }
+
+    CheckResult::Pass(format!("{} rule(s) configured.", rules.len()))
+}
+
+/// Check: Is the default effect safe?
+fn check_default_effect() -> CheckResult {
+    let settings = match crate::settings::ClashSettings::load_or_create() {
+        Ok(s) => s,
+        Err(_) => return CheckResult::Warn("Could not load settings.".into()),
+    };
+
+    let tree = match settings.policy_tree() {
+        Some(t) => t,
+        None => return CheckResult::Warn("No compiled policy available.".into()),
+    };
+
+    let effect = tree.default_effect;
+    match effect {
+        crate::policy::Effect::Allow => CheckResult::Warn(
+            "Default effect is 'allow' — unmatched tool uses are permitted without prompting. \
+             Consider using 'deny' or 'ask' as the default."
+                .into(),
+        ),
+        _ => CheckResult::Pass(format!("Default effect is '{}'.", effect)),
+    }
+}
+
+/// Check: Is Claude Code installed and reachable?
+fn check_claude_code() -> CheckResult {
+    match std::process::Command::new("claude")
+        .arg("--version")
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            CheckResult::Pass(format!("Claude Code {}", version))
+        }
+        Ok(_) => CheckResult::Warn("claude command found but --version failed.".into()),
+        Err(_) => CheckResult::Warn(
+            "Claude Code not found on PATH. \
+             Install from https://docs.anthropic.com/en/docs/claude-code"
+                .into(),
+        ),
+    }
+}
+
 /// Check that the user-level settings dir (~/.clash/) exists.
 ///
 /// Not used as a top-level check but available as a helper.
@@ -520,5 +591,25 @@ mod tests {
     #[test]
     fn check_binary_on_path_does_not_panic() {
         let _ = check_binary_on_path();
+    }
+
+    #[test]
+    fn check_policy_health_does_not_panic() {
+        // May return Pass or Warn depending on whether policy files exist
+        let result = check_policy_health();
+        assert!(!result.is_fail());
+    }
+
+    #[test]
+    fn check_default_effect_does_not_panic() {
+        let result = check_default_effect();
+        assert!(!result.is_fail());
+    }
+
+    #[test]
+    fn check_claude_code_does_not_panic() {
+        // May return Pass or Warn depending on whether claude is installed
+        let result = check_claude_code();
+        assert!(!result.is_fail());
     }
 }
