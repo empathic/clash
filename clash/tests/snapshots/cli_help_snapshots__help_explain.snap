@@ -1,6 +1,5 @@
 ---
 source: clash/tests/cli_help_snapshots.rs
-assertion_line: 73
 expression: "get_subcommand_help(\"explain\")"
 ---
 Explain which policy rule would match a given tool invocation
@@ -12,5 +11,6 @@ Arguments:
   [ARGS]...  The command, file path, or noun to check (remaining args joined)
 
 Options:
-      --json  Output as JSON instead of human-readable text
-  -h, --help  Print help
+      --json   Output as JSON instead of human-readable text
+      --trace  Show detailed decision trace with per-condition match details
+  -h, --help   Print help
