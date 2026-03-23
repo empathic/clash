@@ -1,11 +1,11 @@
 ---
 layout: base.njk
-title: Policy Language
-description: How to write clash policies — effects, domains, patterns, composition, and sandboxes.
-permalink: /policy/
+title: Reference
+description: Complete reference for Clash policy language, sandboxes, and compiled schema
+permalink: /reference/
 ---
 
-<h1 class="page-title">Policy Language</h1>
+<h1 class="page-title">Reference</h1>
 <p class="page-desc">Everything you need to write clash policies. Use Starlark (<code>.star</code>) for expressive, hand-crafted policies. Use <code>policy.json</code> for CLI-driven and tool-managed rules.</p>
 
 ## Effects
@@ -21,20 +21,6 @@ exe("git").allow()
 exe("git", args = ["push"]).deny()
 exe("git", args = ["commit"]).ask()
 ```
-
-<details>
-<summary>Compiled JSON IR</summary>
-
-```json
-{ "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } }, "children": [
-    { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } }, "children": [
-        { "decision": { "allow": null } }
-    ] } }
-] } }
-{ "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "push" } }, "children": [{ "decision": "deny" }] } }
-{ "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "commit" } }, "children": [{ "decision": { "ask": null } }] } }
-```
-</details>
 
 **First match wins.** Rules are evaluated in order — the first matching rule determines the effect. Put specific rules (like denies) before broad ones (like allows).
 
@@ -53,27 +39,23 @@ exe("cargo", args = ["test"]).allow()
 exe(["cargo", "rustc"]).allow()  # multiple binaries
 ```
 
-<details>
-<summary>Compiled JSON IR</summary>
-
-```json
-{ "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } }, "children": [
-    { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } }, "children": [
-        { "decision": { "allow": null } }
-    ] } }
-] } }
-{ "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } }, "children": [
-    { "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "push" } }, "children": [{ "decision": "deny" }] } }
-] } }
-{ "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "cargo" } }, "children": [
-    { "condition": { "observe": { "positional_arg": 1 }, "pattern": { "literal": { "literal": "test" } }, "children": [{ "decision": { "allow": null } }] } }
-] } }
-```
-</details>
-
 The `exe()` builder matches binary names. The `args` parameter matches positional arguments. More arguments = more specific.
 
 **Scope:** Exec rules evaluate the top-level command the agent invokes. They do not apply to child processes spawned by that command. Sandbox restrictions on filesystem and network access *are* enforced on all child processes at the kernel level.
+
+#### Command trees with `cmd()`
+
+For commands with many subcommands, `cmd()` provides a cleaner tree syntax:
+
+```python
+cmd("git", {
+    "push": deny(),
+    ("pull", "fetch"): allow(),
+    "remote": {
+        "add": ask(),
+    },
+})
+```
 
 ### Fs — file operations
 
@@ -84,12 +66,6 @@ cwd(follow_worktrees = True).allow(read = True)    # git worktree-aware
 home().child(".ssh").allow(read = True)             # read under ~/.ssh
 ```
 
-<details>
-<summary>Compiled JSON IR</summary>
-
-Filesystem rules are compiled by Starlark into condition nodes that observe tool names and named arguments. The `cwd()` builder generates conditions matching Read/Write/Edit/Glob/Grep tools with path checks via `named_arg` or `nested_field` observables.
-</details>
-
 The fs domain maps to agent tools: `Read` / `Glob` / `Grep` → `fs read`, `Write` / `Edit` → `fs write`.
 
 ### Net — network access
@@ -98,12 +74,6 @@ The fs domain maps to agent tools: `Read` / `Glob` / `Grep` → `fs read`, `Writ
 domains({"github.com": allow()})
 domains({"github.com": allow(), "crates.io": allow()})
 ```
-
-<details>
-<summary>Compiled JSON IR</summary>
-
-Network rules are compiled by Starlark into condition nodes that observe the tool name (WebFetch/WebSearch) and extract the domain via `nested_field` or `named_arg` observables.
-</details>
 
 The net domain maps to: `WebFetch` → `net` with the URL's domain, `WebSearch` → `net` with wildcard domain.
 
@@ -296,28 +266,6 @@ def main():
 
 Note that `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
 
-<details>
-<summary>Compiled JSON IR</summary>
-
-```json
-{
-  "default_effect": "deny",
-  "sandboxes": {
-    "cargo-env": { "fs": [...], "net": "allow" }
-  },
-  "tree": [
-    { "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } },
-        "children": [
-          { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "cargo" } },
-              "children": [{ "decision": { "allow": "cargo-env" } }] } }
-        ] } }
-  ]
-}
-```
-
-Sandboxes are declared in the top-level `sandboxes` map and referenced by name in decision nodes.
-</details>
-
 ### What sandboxes enforce
 
 Sandbox restrictions on **filesystem and network access** are inherited by all child processes and cannot be bypassed. However, sandboxes do not enforce exec-level argument matching on child processes.
@@ -403,3 +351,99 @@ def main():
         cwd().allow(read = True),
     ])
 ```
+
+---
+
+## Policy schema (JSON IR)
+
+JSON IR schema for compiled clash policies. Policies are authored as Starlark (.star) files or managed via `policy.json`, and compiled to this format.
+
+### Document structure
+
+```json
+{
+  "schema_version": 5,
+  "default_effect": "<effect>",
+  "sandboxes": { "<name>": <sandbox-policy> },
+  "tree": [ <node>, ... ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `schema_version` | integer | Internal version identifier |
+| `default_effect` | string | Effect when no rule matches: `"allow"`, `"deny"`, or `"ask"` |
+| `sandboxes` | object | Named sandbox definitions (may be empty) |
+| `tree` | array | Root-level nodes of the match tree |
+
+### Nodes
+
+The tree is a uniform trie of two node types:
+
+#### Condition
+
+Observe a value from the query context, test against a pattern, recurse into children on match:
+
+```json
+{ "condition": { "observe": <observable>, "pattern": <pattern>, "children": [ <node>, ... ] } }
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `observe` | observable | What to extract from the query context |
+| `pattern` | pattern | What to test the observed value against |
+| `children` | array of nodes | Evaluated (in order) if the pattern matches |
+
+#### Decision
+
+A leaf node that produces an effect:
+
+```json
+{ "decision": { "allow": null } }
+{ "decision": "deny" }
+{ "decision": { "ask": null } }
+{ "decision": { "allow": "<sandbox-name>" } }
+```
+
+| Form | Description |
+|---|---|
+| `{ "allow": null }` | Allow without sandbox |
+| `{ "allow": "<name>" }` | Allow with named sandbox |
+| `"deny"` | Deny |
+| `{ "ask": null }` | Ask the user |
+| `{ "ask": "<name>" }` | Ask the user, with sandbox if approved |
+
+### Observables
+
+What to extract from the query context for pattern matching.
+
+```json
+"tool_name"
+"hook_type"
+"agent_name"
+{ "positional_arg": 0 }
+"has_arg"
+{ "named_arg": "file_path" }
+{ "nested_field": ["input", "url"] }
+```
+
+| Observable | JSON | Description |
+|---|---|---|
+| Tool name | `"tool_name"` | The agent tool being invoked (e.g. "Bash", "Read") |
+| Hook type | `"hook_type"` | The hook event type |
+| Agent name | `"agent_name"` | The agent identifier |
+| Positional arg | `{ "positional_arg": N }` | Nth positional argument (0-indexed) |
+| Has arg | `"has_arg"` | True if any positional arg matches the pattern |
+| Named arg | `{ "named_arg": "key" }` | Value of a named argument |
+| Nested field | `{ "nested_field": ["a", "b"] }` | Path into structured tool_input JSON |
+
+### Evaluation
+
+Evaluation is a single DFS pass over the tree:
+
+1. For each node in children (in order):
+   - **Decision**: return the decision immediately
+   - **Condition**: extract the observable value from the query context, test against the pattern. If it matches, recurse into children. If a child produces a decision, return it. Otherwise, backtrack and try the next sibling.
+2. If no node produces a decision, return the `default_effect`.
+
+First-match semantics: the first matching path through the tree wins. Specificity is encoded by sibling order — put more specific conditions before broader ones.

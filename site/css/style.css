@@ -292,22 +292,15 @@ main {
   margin: 0 auto var(--space-xl);
 }
 
-/* ── Traffic-light divider ───────────────────────────────────── */
+/* ── Section divider ─────────────────────────────────────────── */
 
-.divider {
-  display: flex;
-  justify-content: center;
-  gap: var(--space-sm);
-  margin: var(--space-2xl) 0;
+hr {
+  border: none;
+  width: 3rem;
+  height: 1px;
+  background: var(--fence);
+  margin: var(--space-2xl) auto;
 }
-.divider-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-.divider-dot--green  { background: var(--grass); }
-.divider-dot--amber  { background: var(--amber); }
-.divider-dot--red    { background: var(--rust); }
 
 /* ── Concept cards ───────────────────────────────────────────── */
 

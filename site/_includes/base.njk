@@ -15,9 +15,9 @@
     <div class="nav-inner">
       <a href="{{ version.pathPrefix }}/" class="nav-wordmark">clash</a>
       <div class="nav-links">
-        <a href="{{ version.pathPrefix }}/policy/"{% if page.url === "/policy/" or page.url === "/policy/grammar/" %} aria-current="page"{% endif %}>Policy</a>
-        <a href="{{ version.pathPrefix }}/cli/"{% if page.url === "/cli/" %} aria-current="page"{% endif %}>CLI</a>
-        <a href="{{ version.pathPrefix }}/migration/"{% if page.url === "/migration/" %} aria-current="page"{% endif %}>Migration</a>
+        <a href="{{ version.pathPrefix }}/quick-start/"{% if page.url === "/quick-start/" %} aria-current="page"{% endif %}>Quick Start</a>
+        <a href="{{ version.pathPrefix }}/tutorial/"{% if page.url === "/tutorial/" %} aria-current="page"{% endif %}>Tutorial</a>
+        <a href="{{ version.pathPrefix }}/reference/"{% if page.url === "/reference/" %} aria-current="page"{% endif %}>Reference</a>
         <a href="{{ version.pathPrefix }}/faq/"{% if page.url === "/faq/" %} aria-current="page"{% endif %}>FAQ</a>
         {% if version.all.length > 0 %}
         <div class="version-selector">
