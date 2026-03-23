@@ -4,11 +4,11 @@
 //! rendering showing every rule considered, why each condition matched or
 //! was skipped, and which rule ultimately won.
 
+use crate::policy::Effect;
 use crate::policy::format::format_condition;
 use crate::policy::match_tree::{
     CompiledPolicy, Decision, Node, Observable, Pattern, QueryContext,
 };
-use crate::policy::Effect;
 use crate::style;
 
 /// A single condition step in the trace for a rule branch.
@@ -347,11 +347,7 @@ pub fn render_trace(trace: &PolicyTrace) -> Vec<String> {
                     .unwrap_or_else(|| " (absent)".to_string());
                 (
                     style::red("\u{2717}"),
-                    format!(
-                        "{} does not match{}",
-                        style::red(&cond.label),
-                        value_str
-                    ),
+                    format!("{} does not match{}", style::red(&cond.label), value_str),
                 )
             };
             lines.push(format!("  {pipe}    {symbol} {detail}"));

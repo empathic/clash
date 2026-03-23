@@ -19,9 +19,7 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
             trace,
             tool,
             args,
-        } => {
-            super::explain::run(json, trace, tool.unwrap_or_default(), args.join(" "))
-        }
+        } => super::explain::run(json, trace, tool.unwrap_or_default(), args.join(" ")),
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Validate { file, json } => handle_validate(file, json),
         PolicyCmd::Show { json } => handle_show(json),

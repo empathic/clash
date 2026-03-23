@@ -103,8 +103,8 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
 
 /// Quick-init: skip the wizard and write a sensible default policy directly.
 fn run_init_quick(no_bypass: Option<bool>) -> Result<()> {
-    let settings_dir = ClashSettings::settings_dir()
-        .context("could not determine clash settings directory")?;
+    let settings_dir =
+        ClashSettings::settings_dir().context("could not determine clash settings directory")?;
 
     std::fs::create_dir_all(&settings_dir)
         .with_context(|| format!("failed to create {}", settings_dir.display()))?;
@@ -222,11 +222,22 @@ fn run_init_project() -> Result<()> {
     println!();
     println!("{}", style::bold("Setup complete!"));
     println!();
-    ui::success(&format!("Project policy created at {}", policy_path.display()));
+    ui::success(&format!(
+        "Project policy created at {}",
+        policy_path.display()
+    ));
     println!();
     println!("{}:", style::bold("Next steps"));
-    println!("  {}  {}", style::dim("clash policy show"), style::dim("# view the compiled policy"));
-    println!("  {}  {}", style::dim("clash policy validate"), style::dim("# check for errors"));
+    println!(
+        "  {}  {}",
+        style::dim("clash policy show"),
+        style::dim("# view the compiled policy")
+    );
+    println!(
+        "  {}  {}",
+        style::dim("clash policy validate"),
+        style::dim("# check for errors")
+    );
 
     Ok(())
 }
@@ -242,12 +253,19 @@ pub fn set_bypass_permissions() -> Result<()> {
 }
 
 fn print_user_summary(actions: &InitActions) {
-    let any_action = actions.policy_created || actions.plugin_installed
-        || actions.bypass_set || actions.statusline_installed;
-    if !any_action { return; }
+    let any_action = actions.policy_created
+        || actions.plugin_installed
+        || actions.bypass_set
+        || actions.statusline_installed;
+    if !any_action {
+        return;
+    }
 
     println!();
-    println!("{}", style::bold("Setup complete! Here's what was configured:"));
+    println!(
+        "{}",
+        style::bold("Setup complete! Here's what was configured:")
+    );
     println!();
 
     if actions.policy_created {
@@ -265,19 +283,43 @@ fn print_user_summary(actions: &InitActions) {
 
     println!();
     println!("{}:", style::bold("To undo"));
-    println!("  {}  {}", style::dim("clash uninstall"), style::dim("# remove everything"));
+    println!(
+        "  {}  {}",
+        style::dim("clash uninstall"),
+        style::dim("# remove everything")
+    );
     if actions.policy_created {
-        println!("  {}  {}", style::dim("clash policy edit"), style::dim("# modify your policy"));
+        println!(
+            "  {}  {}",
+            style::dim("clash policy edit"),
+            style::dim("# modify your policy")
+        );
     }
     if actions.bypass_set {
-        println!("  {}  {}", style::dim("clash init --no-bypass"), style::dim("# re-run without bypassPermissions"));
+        println!(
+            "  {}  {}",
+            style::dim("clash init --no-bypass"),
+            style::dim("# re-run without bypassPermissions")
+        );
     }
 
     println!();
     println!("{}:", style::bold("Next steps"));
-    println!("  {}  {}", style::dim("claude"), style::dim("# start a session with clash active"));
-    println!("  {}  {}", style::dim("/clash:status"), style::dim("# check policy status inside a session"));
-    println!("  {}  {}", style::dim("/clash:edit"), style::dim("# interactively edit your policy"));
+    println!(
+        "  {}  {}",
+        style::dim("claude"),
+        style::dim("# start a session with clash active")
+    );
+    println!(
+        "  {}  {}",
+        style::dim("/clash:status"),
+        style::dim("# check policy status inside a session")
+    );
+    println!(
+        "  {}  {}",
+        style::dim("/clash:edit"),
+        style::dim("# interactively edit your policy")
+    );
 }
 
 /// Install the clash plugin into Claude Code from the GitHub marketplace.
