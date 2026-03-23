@@ -197,6 +197,16 @@ Even if a command is allowed by policy, the sandbox ensures it can only access t
 
 For the full rule syntax, see the [Policy Writing Guide](docs/policy-guide.md).
 
+### Examples
+
+See the [`examples/`](examples/) directory for ready-to-use policies:
+
+- **[rust-dev.star](examples/rust-dev.star)** — Rust development with cargo sandboxing
+- **[node-dev.star](examples/node-dev.star)** — Node.js development with npm/bun
+- **[python-dev.star](examples/python-dev.star)** — Python development with pip/uv
+- **[paranoid.star](examples/paranoid.star)** — Maximum security, read-only access
+- **[permissive.star](examples/permissive.star)** — Minimal friction, common tools allowed
+
 ---
 
 ## Useful Commands
