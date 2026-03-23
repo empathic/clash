@@ -107,15 +107,15 @@ Clash supports three policy levels, each automatically included and evaluated in
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "deny", "ask")
 
 def main():
     cwd_access = sandbox(
-        default = deny,
+        default = deny(),
         fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
     )
     return policy(
-        default = ask,
+        default = ask(),
         rules = [
             exe("cargo").sandbox(cwd_access).allow(),
             exe("git").sandbox(cwd_access).allow(),
@@ -157,14 +157,14 @@ Starlark replaces JSON's named policy blocks and `include` with standard `load()
 
 ```python
 load("@clash//rust.star", "rust_sandbox")
-load("@clash//std.star", "exe", "policy", "sandbox", "cwd")
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "deny")
 
 def main():
     return policy(
-        default = deny,
+        default = deny(),
         rules = [
             exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow(),
-            exe("git").sandbox(sandbox(default = deny, fs = [cwd().allow(read = True)])).allow(),
+            exe("git").sandbox(sandbox(default = deny(), fs = [cwd().allow(read = True)])).allow(),
         ],
     )
 ```
@@ -176,19 +176,19 @@ The `@clash//` prefix loads from the built-in standard library, which includes s
 Exec rules can carry sandbox constraints that clash compiles into OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS):
 
 ```python
-load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "path", "tempdir")
+load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "path", "tempdir", "allow", "deny")
 
 def main():
     cargo_box = sandbox(
-        default = deny,
+        default = deny(),
         fs = [
             cwd().allow(read = True),
             path("./target").allow(write = True),
             tempdir().allow(),
         ],
-        net = allow,
+        net = allow(),
     )
-    return policy(default = deny, rules = [exe("cargo").sandbox(cargo_box).allow()])
+    return policy(default = deny(), rules = [exe("cargo").sandbox(cargo_box).allow()])
 ```
 
 Even if a command is allowed by policy, the sandbox ensures it can only access the paths you specify.

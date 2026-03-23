@@ -146,6 +146,9 @@ pub enum PolicyCmd {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
         json: bool,
+        /// Show detailed decision trace with per-condition match details
+        #[arg(long)]
+        trace: bool,
         /// Tool type: bash, read, write, edit, tool (or full tool name like Bash, Read, etc.)
         tool: Option<String>,
         /// The command, file path, or noun to check (remaining args joined)
@@ -173,6 +176,9 @@ pub enum Commands {
         /// Pass a path to trace.jsonl or audit.jsonl, or "latest" to auto-detect.
         #[arg(long = "from-trace", value_name = "PATH")]
         from_trace: Option<std::path::PathBuf>,
+        /// Skip the interactive wizard and create a sensible default policy
+        #[arg(long)]
+        quick: bool,
     },
 
     /// Remove clash: undo bypass permissions, uninstall plugin, remove config and binary
@@ -237,6 +243,9 @@ pub enum Commands {
     #[command(subcommand, alias = "box")]
     Sandbox(SandboxCmd),
 
+    /// Interactive policy sandbox — write rules and test them against tool invocations
+    Playground,
+
     /// Diagnose common setup issues and report fix instructions
     Doctor,
 
@@ -285,6 +294,9 @@ pub enum Commands {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
         json: bool,
+        /// Show detailed decision trace with per-condition match details
+        #[arg(long)]
+        trace: bool,
         /// Tool type: bash, read, write, edit, tool (or full tool name like Bash, Read, etc.)
         tool: String,
         /// The command, file path, or noun to check (remaining args joined)

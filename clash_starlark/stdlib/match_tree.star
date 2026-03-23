@@ -1,7 +1,7 @@
 # Clash match tree DSL — tree-shaped policy builders.
 #
 # Rust globals available: _mt_node, _mt_condition, _mt_pattern, _mt_prefix,
-# _mt_policy, allow, deny, ask
+# _mt_policy, _ALLOW, _DENY, _ASK
 
 # ---------------------------------------------------------------------------
 # Pattern helpers (reuse from std.star concepts)

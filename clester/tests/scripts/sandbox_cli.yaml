@@ -1,0 +1,72 @@
+meta:
+  name: sandbox CLI — create, list, delete workflow
+  description: Test sandbox create/list/delete commands via the clash CLI
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "exe", "policy", "deny")
+    def main():
+        return policy(default=deny(), rules=[
+            exe("git").allow(),
+        ])
+
+steps:
+  - name: sandbox list shows no sandboxes initially
+    command: sandbox list
+    expect:
+      exit_code: 0
+      stdout_contains: "No sandboxes defined"
+
+  - name: create a sandbox named "ci"
+    command: sandbox create ci --default "read + execute" --network deny --scope user
+    expect:
+      exit_code: 0
+      stdout_contains: "ci"
+
+  - name: sandbox list shows the new sandbox
+    command: sandbox list
+    expect:
+      exit_code: 0
+      stdout_contains: "ci"
+
+  - name: create a second sandbox named "dev"
+    command: sandbox create dev --default "read + write + execute" --network localhost --scope user
+    expect:
+      exit_code: 0
+      stdout_contains: "dev"
+
+  - name: sandbox list shows both sandboxes
+    command: sandbox list
+    expect:
+      exit_code: 0
+      stdout_contains: "ci"
+
+  - name: add a filesystem rule to the ci sandbox
+    command: sandbox add-rule ci --allow "read + write" --path "$HOME/.cache" --scope user
+    expect:
+      exit_code: 0
+      stdout_contains: "Rule added"
+
+  - name: remove the filesystem rule from ci sandbox
+    command: sandbox remove-rule ci --path "$HOME/.cache" --scope user
+    expect:
+      exit_code: 0
+      stdout_contains: "Rule removed"
+
+  - name: delete the ci sandbox
+    command: sandbox delete ci --scope user
+    expect:
+      exit_code: 0
+      stdout_contains: "ci"
+
+  - name: delete the dev sandbox
+    command: sandbox delete dev --scope user
+    expect:
+      exit_code: 0
+      stdout_contains: "dev"
+
+  - name: sandbox list shows no sandboxes after deletion
+    command: sandbox list
+    expect:
+      exit_code: 0
+      stdout_contains: "No sandboxes defined"

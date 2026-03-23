@@ -9,11 +9,11 @@
 #   dev_network  — package managers, gh: read+write project + network
 #   unrestricted — fully trusted: all filesystem + network access
 
-load("@clash//std.star", "sandbox", "cwd", "home", "tempdir")
+load("@clash//std.star", "deny", "sandbox", "cwd", "home", "tempdir")
 
 restricted = sandbox(
     name="restricted",
-    default=deny,
+    default=deny(),
     fs=[
         cwd().allow(read=True, execute=True),
         tempdir().allow(read=True, execute=True),
@@ -23,7 +23,7 @@ restricted = sandbox(
 
 read_only = sandbox(
     name="read_only",
-    default=deny,
+    default=deny(),
     fs=[
         cwd(follow_worktrees=True).allow(read=True, execute=True),
         home().allow(read=True, execute=True),
@@ -34,7 +34,7 @@ read_only = sandbox(
 
 dev = sandbox(
     name="dev",
-    default=deny,
+    default=deny(),
     fs=[
         cwd(follow_worktrees=True).recurse().allow(read=True, write=True, execute=True),
         home().recurse().allow(read=True, execute=True),
@@ -45,7 +45,7 @@ dev = sandbox(
 
 dev_network = sandbox(
     name="dev_network",
-    default=deny,
+    default=deny(),
     fs=[
         cwd(follow_worktrees=True).allow(read=True, write=True, execute=True),
         home().allow(read=True, execute=True),
@@ -57,7 +57,7 @@ dev_network = sandbox(
 
 unrestricted = sandbox(
     name="unrestricted",
-    default=deny,
+    default=deny(),
     fs=[
         cwd(follow_worktrees=True).allow(),
         home().allow(),

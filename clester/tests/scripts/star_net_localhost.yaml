@@ -4,10 +4,10 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "policy", "domains")
+    load("@clash//std.star", "policy", "domains", "allow", "deny")
     def main():
-        return policy(default=deny, rules=[
-            domains({"localhost": allow}),
+        return policy(default=deny(), rules=[
+            domains({"localhost": allow()}),
         ])
 
 steps:

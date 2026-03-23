@@ -42,10 +42,10 @@ fn starlark_to_json(value: Value) -> anyhow::Result<serde_json::Value> {
 
 #[starlark_module]
 fn register_globals(builder: &mut GlobalsBuilder) {
-    // Effect constants
-    const allow: &str = "allow";
-    const deny: &str = "deny";
-    const ask: &str = "ask";
+    // Effect constants (internal — callable versions are in std.star)
+    const _ALLOW: &str = "allow";
+    const _DENY: &str = "deny";
+    const _ASK: &str = "ask";
 
     // -- Minimal Rust primitives (everything else is in @clash//std.star) --
 

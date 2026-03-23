@@ -18,19 +18,25 @@ fn main() -> Result<()> {
                 no_bypass,
                 scope,
                 from_trace,
+                quick,
             } => {
                 if let Some(trace_path) = from_trace {
                     cmd::from_trace::run(&trace_path).map(|_| ())
                 } else {
-                    cmd::init::run(no_bypass, scope)
+                    cmd::init::run(no_bypass, scope, quick)
                 }
             }
             Commands::Uninstall { yes } => cmd::uninstall::run(yes),
             Commands::Status { json } => cmd::status::run(json, cli.verbose),
             Commands::ShowCommands { json, all } => cmd::commands::run(json, all),
-            Commands::Explain { json, tool, args } => {
+            Commands::Explain {
+                json,
+                trace,
+                tool,
+                args,
+            } => {
                 let input = args.join(" ");
-                cmd::explain::run(json, tool, input)
+                cmd::explain::run(json, trace, tool, input)
             }
             Commands::Fmt { check, files } => cmd::fmt::run(check, files),
             Commands::Policy(policy_cmd) => cmd::policy::run(policy_cmd),
@@ -42,6 +48,7 @@ fn main() -> Result<()> {
                 args,
             } => clash::shell_cmd::run_shell(command, args, cwd, sandbox, debug),
             Commands::Sandbox(sandbox_cmd) => run_sandbox(sandbox_cmd),
+            Commands::Playground => cmd::playground::run(),
             Commands::Doctor => cmd::doctor::run(),
             Commands::Debug(cmd) => cmd::debug::run(cmd),
             Commands::Trace(cmd) => cmd::trace::run(cmd),

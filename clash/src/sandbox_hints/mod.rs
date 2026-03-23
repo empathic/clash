@@ -699,7 +699,7 @@ mod tests {
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
             r#"{"schema_version":5,"default_effect":"deny",
-  "sandboxes":{"restricted":{"default":"read + execute","rules":[{"effect":"allow","caps":"read","path":"/tmp"}],"network":"deny"}},
+  "sandboxes":{"restricted":{"default":["read","execute"],"rules":[{"effect":"allow","caps":["read"],"path":"/tmp"}],"network":"deny"}},
   "tree":[
     {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
       {"decision":{"allow":"restricted"}}
@@ -731,7 +731,7 @@ mod tests {
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
             r#"{"schema_version":5,"default_effect":"deny",
-  "sandboxes":{"permissive":{"default":"read + execute","rules":[{"effect":"allow","caps":"read + write + create","path":"/Users/emschwartz/.fly"}],"network":"deny"}},
+  "sandboxes":{"permissive":{"default":["read","execute"],"rules":[{"effect":"allow","caps":["read","write","create"],"path":"/Users/emschwartz/.fly"}],"network":"deny"}},
   "tree":[
     {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
       {"decision":{"allow":"permissive"}}
@@ -760,7 +760,7 @@ mod tests {
         let mut settings = ClashSettings::default();
         settings.set_policy_source(
             r#"{"schema_version":5,"default_effect":"deny",
-  "sandboxes":{"restricted":{"default":"read + execute","rules":[{"effect":"allow","caps":"read","path":"/project"}],"network":"deny"}},
+  "sandboxes":{"restricted":{"default":["read","execute"],"rules":[{"effect":"allow","caps":["read"],"path":"/project"}],"network":"deny"}},
   "tree":[
     {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
       {"condition":{"observe":{"positional_arg":0},"pattern":{"literal":{"literal":"fly"}},"children":[
