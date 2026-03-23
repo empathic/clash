@@ -1,0 +1,17 @@
+---
+source: clash/tests/cli_help_snapshots.rs
+assertion_line: 53
+expression: "get_subcommand_help(\"debug\")"
+---
+Debug policy enforcement: view logs, replay commands, inspect sandbox
+
+Usage: debug <COMMAND>
+
+Commands:
+  log      View audit log entries
+  replay   Re-evaluate a command against the current policy
+  sandbox  Show sandbox enforcement details for a command
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help

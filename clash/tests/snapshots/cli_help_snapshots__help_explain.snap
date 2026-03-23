@@ -1,0 +1,16 @@
+---
+source: clash/tests/cli_help_snapshots.rs
+assertion_line: 73
+expression: "get_subcommand_help(\"explain\")"
+---
+Explain which policy rule would match a given tool invocation
+
+Usage: explain [OPTIONS] <TOOL> [ARGS]...
+
+Arguments:
+  <TOOL>     Tool type: bash, read, write, edit, tool (or full tool name like Bash, Read, etc.)
+  [ARGS]...  The command, file path, or noun to check (remaining args joined)
+
+Options:
+      --json  Output as JSON instead of human-readable text
+  -h, --help  Print help

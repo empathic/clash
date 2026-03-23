@@ -1,0 +1,22 @@
+---
+source: clash/tests/cli_help_snapshots.rs
+assertion_line: 43
+expression: "get_subcommand_help(\"sandbox\")"
+---
+Apply sandbox restrictions and exec commands
+
+Usage: sandbox <COMMAND>
+
+Commands:
+  exec         Apply sandbox restrictions and exec a command
+  test         Test sandbox enforcement interactively
+  check        Check if sandboxing is supported on this platform
+  create       Create a new named sandbox profile
+  delete       Delete a named sandbox profile
+  list         List all named sandbox profiles
+  add-rule     Add a filesystem rule to a named sandbox
+  remove-rule  Remove a filesystem rule from a named sandbox by path
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help

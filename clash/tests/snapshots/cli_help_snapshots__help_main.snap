@@ -1,0 +1,31 @@
+---
+source: clash/tests/cli_help_snapshots.rs
+assertion_line: 18
+expression: get_help(&cmd)
+---
+Command line agent safety harness
+
+Usage: clash [OPTIONS] <COMMAND>
+
+Commands:
+  init        Initialize a new clash policy with a safe default configuration
+  uninstall   Remove clash: undo bypass permissions, uninstall plugin, remove config and binary
+  status      Show policy status: layers, rules with shadowing, and potential issues
+  policy      View and manage policy rules
+  commands    Print the full command and subcommand hierarchy
+  shell       Run a bash-compatible shell with per-command sandbox enforcement
+  sandbox     Apply sandbox restrictions and exec commands
+  doctor      Diagnose common setup issues and report fix instructions
+  debug       Debug policy enforcement: view logs, replay commands, inspect sandbox
+  trace       View and export session traces
+  session     List, inspect, and locate session directories
+  fmt         Format Starlark policy files using ruff
+  explain     Explain which policy rule would match a given tool invocation
+  update      Update clash to the latest release (or a specific version)
+  statusline  Display clash status in the Claude Code status line
+  help        Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose  
+  -h, --help     Print help
+  -V, --version  Print version

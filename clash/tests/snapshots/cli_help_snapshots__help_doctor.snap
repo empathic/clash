@@ -1,0 +1,11 @@
+---
+source: clash/tests/cli_help_snapshots.rs
+assertion_line: 48
+expression: "get_subcommand_help(\"doctor\")"
+---
+Diagnose common setup issues and report fix instructions
+
+Usage: doctor
+
+Options:
+  -h, --help  Print help

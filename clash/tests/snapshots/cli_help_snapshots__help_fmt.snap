@@ -1,0 +1,15 @@
+---
+source: clash/tests/cli_help_snapshots.rs
+assertion_line: 68
+expression: "get_subcommand_help(\"fmt\")"
+---
+Format Starlark policy files using ruff
+
+Usage: fmt [OPTIONS] [FILES]...
+
+Arguments:
+  [FILES]...  Policy files to format (default: all active policy files)
+
+Options:
+      --check  Check formatting without modifying files (exit 1 if unformatted)
+  -h, --help   Print help

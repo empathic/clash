@@ -1,0 +1,19 @@
+---
+source: clash/tests/cli_help_snapshots.rs
+assertion_line: 83
+expression: "get_subcommand_help(\"shell\")"
+---
+Run a bash-compatible shell with per-command sandbox enforcement
+
+Usage: shell [OPTIONS] [ARGS]...
+
+Arguments:
+  [ARGS]...  Script path and arguments
+
+Options:
+  -c <COMMAND>             Execute a command string and exit (like bash -c)
+      --cwd <CWD>          Working directory for sandbox path resolution [default: .]
+      --sandbox <SANDBOX>  Default sandbox name from the policy (used when no rule-specific sandbox
+                           matches)
+      --debug              Print the sandbox policy matched for each command before execution
+  -h, --help               Print help (see more with '--help')

@@ -1,0 +1,16 @@
+---
+source: clash/tests/cli_help_snapshots.rs
+assertion_line: 23
+expression: "get_subcommand_help(\"init\")"
+---
+Initialize a new clash policy with a safe default configuration
+
+Usage: init [OPTIONS] [SCOPE]
+
+Arguments:
+  [SCOPE]  Scope to initialize: "user" (global) or "project" (this repo)
+
+Options:
+      --no-bypass [<NO_BYPASS>]  Skip setting bypassPermissions in Claude Code settings [possible
+                                 values: true, false]
+  -h, --help                     Print help (see more with '--help')

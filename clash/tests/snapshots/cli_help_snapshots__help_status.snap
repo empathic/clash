@@ -1,0 +1,12 @@
+---
+source: clash/tests/cli_help_snapshots.rs
+assertion_line: 33
+expression: "get_subcommand_help(\"status\")"
+---
+Show policy status: layers, rules with shadowing, and potential issues
+
+Usage: status [OPTIONS]
+
+Options:
+      --json  Output as JSON instead of human-readable text
+  -h, --help  Print help

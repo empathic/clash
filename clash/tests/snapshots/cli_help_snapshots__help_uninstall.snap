@@ -1,0 +1,12 @@
+---
+source: clash/tests/cli_help_snapshots.rs
+assertion_line: 28
+expression: "get_subcommand_help(\"uninstall\")"
+---
+Remove clash: undo bypass permissions, uninstall plugin, remove config and binary
+
+Usage: uninstall [OPTIONS]
+
+Options:
+  -y, --yes   Skip confirmation prompts
+  -h, --help  Print help

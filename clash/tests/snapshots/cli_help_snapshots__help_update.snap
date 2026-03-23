@@ -1,0 +1,14 @@
+---
+source: clash/tests/cli_help_snapshots.rs
+assertion_line: 78
+expression: "get_subcommand_help(\"update\")"
+---
+Update clash to the latest release (or a specific version)
+
+Usage: update [OPTIONS]
+
+Options:
+      --check              Only check for updates, don't install
+  -y, --yes                Skip confirmation prompt
+      --version <VERSION>  Update to a specific version (e.g., 0.4.0)
+  -h, --help               Print help
