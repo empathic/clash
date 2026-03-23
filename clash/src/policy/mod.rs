@@ -12,6 +12,7 @@ pub mod match_tree;
 pub mod path;
 pub mod sandbox_edit;
 pub mod sandbox_types;
+pub mod test_eval;
 
 #[cfg(test)]
 mod proptests;

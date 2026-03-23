@@ -65,6 +65,9 @@ pub enum PolicyCmd {
         /// Open in $EDITOR instead of the interactive TUI
         #[arg(long)]
         raw: bool,
+        /// Open with the test console panel visible
+        #[arg(long)]
+        test: bool,
     },
     /// Add an allow rule for a tool or binary
     ///
