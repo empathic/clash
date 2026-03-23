@@ -11,7 +11,6 @@ use reedline::{
 };
 use tracing::{Level, instrument};
 
-use crate::debug::replay;
 use crate::display;
 use crate::policy::compile;
 use crate::policy::match_tree::CompiledPolicy;
@@ -923,17 +922,16 @@ fn handle_test(input: &str, state: &PlaygroundState) -> String {
         None => return "No policy loaded. Use 'add rule' first.".to_string(),
     };
 
-    let (tool_name, tool_input) = match parse_test_input(input) {
-        Ok(pair) => pair,
-        Err(e) => return format!("Failed to parse test input: {e}"),
-    };
-
-    let decision = tree.evaluate(&tool_name, &tool_input);
-
-    let mut lines = display::format_tool_header("Input:", &tool_name, &tool_input);
-    lines.push(String::new());
-    lines.extend(display::format_decision(&decision));
-    lines.join("\n")
+    match crate::policy::test_eval::evaluate_test(input, tree) {
+        Ok(result) => {
+            let mut lines =
+                display::format_tool_header("Input:", &result.tool_name, &result.tool_input);
+            lines.push(String::new());
+            lines.extend(display::format_decision(&result.decision));
+            lines.join("\n")
+        }
+        Err(e) => format!("Failed to parse test input: {e}"),
+    }
 }
 
 fn handle_show(state: &PlaygroundState) -> String {
@@ -978,34 +976,6 @@ fn handle_show(state: &PlaygroundState) -> String {
     }
 
     lines.join("\n")
-}
-
-// ---------------------------------------------------------------------------
-// Test input parsing
-// ---------------------------------------------------------------------------
-
-/// Parse `ToolName { json }` or `tool_shorthand "args"` formats.
-///
-/// Supports:
-///   - `Bash { "command": "git status" }`
-///   - `bash "git status"` (shorthand resolved via replay::resolve_tool_input)
-fn parse_test_input(input: &str) -> Result<(String, serde_json::Value)> {
-    // Try "ToolName { json }" format first
-    if let Some(brace_pos) = input.find('{') {
-        let tool_name = input[..brace_pos].trim().to_string();
-        let json_str = input[brace_pos..].trim();
-        if !tool_name.is_empty() {
-            let tool_input: serde_json::Value =
-                serde_json::from_str(json_str).context("invalid JSON in tool input")?;
-            return Ok((tool_name, tool_input));
-        }
-    }
-
-    // Fall back to the same resolution used by `clash explain`
-    let parts: Vec<&str> = input.splitn(2, ' ').collect();
-    let tool = parts[0];
-    let args = parts.get(1).copied();
-    replay::resolve_tool_input(tool, args)
 }
 
 // ---------------------------------------------------------------------------
@@ -1086,32 +1056,7 @@ pub fn run() -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_parse_test_input_json_format() {
-        let (name, input) = parse_test_input(r#"Bash { "command": "git status" }"#).unwrap();
-        assert_eq!(name, "Bash");
-        assert_eq!(input["command"], "git status");
-    }
-
-    #[test]
-    fn test_parse_test_input_shorthand() {
-        let (name, input) = parse_test_input("bash \"git push\"").unwrap();
-        assert_eq!(name, "Bash");
-        assert_eq!(input["command"], "\"git push\"");
-    }
-
-    #[test]
-    fn test_parse_test_input_read() {
-        let (name, input) = parse_test_input(r#"Read { "file_path": "/etc/passwd" }"#).unwrap();
-        assert_eq!(name, "Read");
-        assert_eq!(input["file_path"], "/etc/passwd");
-    }
-
-    #[test]
-    fn test_parse_test_input_invalid_json() {
-        let result = parse_test_input("Bash { invalid }");
-        assert!(result.is_err());
-    }
+    // parse_test_input tests have moved to policy::test_eval::tests
 
     #[test]
     fn test_dispatch_help() {

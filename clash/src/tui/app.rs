@@ -22,6 +22,7 @@ use super::inline_form::{FormEvent, FormState};
 use super::sandbox_view::SandboxView;
 use super::settings_view::SettingsView;
 use super::tea::{Action, Component};
+use super::test_panel::{self, TestPanel, TestPanelAction};
 use super::tree_view::TreeView;
 use super::widgets::{self, DiffLine};
 
@@ -62,6 +63,8 @@ pub enum Msg {
     Save,
     Quit,
     ToggleHelp,
+    ToggleTestPanel,
+    ToggleTestFocus,
     ConfirmYes,
     ConfirmNo,
     DiffScrollDown,
@@ -70,6 +73,7 @@ pub enum Msg {
     SandboxMsg(<SandboxView as Component>::Msg),
     IncludesMsg(<IncludesView as Component>::Msg),
     SettingsMsg(<SettingsView as Component>::Msg),
+    TestPanelMsg(test_panel::Msg),
 }
 
 pub struct App {
@@ -83,6 +87,9 @@ pub struct App {
     sandbox_view: SandboxView,
     includes_view: IncludesView,
     settings_view: SettingsView,
+    test_panel: TestPanel,
+    /// Whether the test panel currently has keyboard focus.
+    test_focused: bool,
     mode: Mode,
     dirty: bool,
     flash: Option<(String, Instant)>,
@@ -133,10 +140,19 @@ impl App {
             sandbox_view,
             includes_view,
             settings_view,
+            test_panel: TestPanel::new(),
+            test_focused: false,
             mode: Mode::Normal,
             dirty: false,
             flash,
         })
+    }
+
+    /// Show the test panel and focus it (called by --test flag).
+    pub fn show_test_panel(&mut self) {
+        self.test_panel.visible = true;
+        self.test_panel.input_active = true;
+        self.test_focused = true;
     }
 
     /// Run the main event loop.
@@ -155,6 +171,38 @@ impl App {
                 if matches!(self.mode, Mode::Form(_)) {
                     let FormHandled::Continue = self.handle_form_key(key);
                     continue;
+                }
+
+                // Test panel focused: route keys to the test panel.
+                // Esc returns focus to the left pane. Tab toggles input/history.
+                if self.test_panel.visible
+                    && self.test_focused
+                    && matches!(self.mode, Mode::Normal)
+                {
+                    match key.code {
+                        KeyCode::Esc => {
+                            // Return focus to the left pane
+                            self.test_focused = false;
+                            continue;
+                        }
+                        KeyCode::Tab => {
+                            // Toggle between input and history within test panel
+                            self.test_panel.toggle_input_focus();
+                            continue;
+                        }
+                        _ => {
+                            if let Some(msg) = self.test_panel.handle_key(key) {
+                                let compiled = self.current_compiled_policy();
+                                match self.test_panel.update(msg, compiled.as_ref()) {
+                                    TestPanelAction::Flash(s) => {
+                                        self.flash = Some((s, Instant::now()));
+                                    }
+                                    TestPanelAction::None => {}
+                                }
+                            }
+                            continue;
+                        }
+                    }
                 }
 
                 if let Some(msg) = self.handle_key(key) {
@@ -276,6 +324,7 @@ impl App {
         match key.code {
             KeyCode::Char('q') => return Some(Msg::Quit),
             KeyCode::Char('s') => return Some(Msg::Save),
+            KeyCode::Char('t') => return Some(Msg::ToggleTestPanel),
             KeyCode::Char('?') => return Some(Msg::ToggleHelp),
             KeyCode::Char('1') => return Some(Msg::SwitchTab(Tab::Tree)),
             KeyCode::Char('2') => return Some(Msg::SwitchTab(Tab::Sandboxes)),
@@ -406,11 +455,46 @@ impl App {
                 }
                 Action::None
             }
+            Msg::ToggleTestPanel => {
+                if self.test_panel.visible {
+                    // Panel visible: toggle focus to test panel
+                    self.test_focused = true;
+                    self.test_panel.input_active = true;
+                } else {
+                    // Panel hidden: show it and focus it
+                    self.test_panel.visible = true;
+                    self.test_focused = true;
+                    self.test_panel.input_active = true;
+                }
+                Action::None
+            }
+            Msg::ToggleTestFocus => {
+                self.test_panel.toggle_input_focus();
+                Action::None
+            }
             Msg::TreeMsg(m) => self.tree_view.update(m, &mut self.manifest),
             Msg::SandboxMsg(m) => self.sandbox_view.update(m, &mut self.manifest),
             Msg::IncludesMsg(m) => self.includes_view.update(m, &mut self.manifest),
             Msg::SettingsMsg(m) => self.settings_view.update(m, &mut self.manifest),
+            Msg::TestPanelMsg(m) => {
+                let compiled = self.current_compiled_policy();
+                match self.test_panel.update(m, compiled.as_ref()) {
+                    TestPanelAction::Flash(s) => Action::Flash(s),
+                    TestPanelAction::None => Action::None,
+                }
+            }
         }
+    }
+
+    /// Build a merged compiled policy (inline + included) for test evaluation.
+    fn current_compiled_policy(&self) -> Option<CompiledPolicy> {
+        let mut merged = self.manifest.policy.clone();
+        // Append included rules so tests see the full picture
+        merged.tree.extend(self.included.tree.clone());
+        for (k, v) in &self.included.sandboxes {
+            merged.sandboxes.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        Some(merged)
     }
 
     fn rebuild_views(&mut self) {
@@ -418,6 +502,13 @@ impl App {
             .rebuild_with_included(&self.manifest, &self.included);
         self.sandbox_view
             .rebuild_with_included(&self.manifest, &self.included);
+
+        // Re-evaluate test cases against updated policy
+        if self.test_panel.visible {
+            if let Some(compiled) = self.current_compiled_policy() {
+                self.test_panel.re_evaluate(&compiled);
+            }
+        }
     }
 
     fn view(&self, frame: &mut Frame, area: Rect, manifest: &PolicyManifest) {
@@ -454,12 +545,29 @@ impl App {
             self.dirty,
         );
 
-        // Content area — delegate to active tab
+        // Content area — split horizontally if test panel is visible
+        let (content_area, test_area) = if self.test_panel.visible {
+            let split = Layout::horizontal([
+                Constraint::Percentage(68),
+                Constraint::Percentage(32),
+            ])
+            .split(chunks[1]);
+            (split[0], Some(split[1]))
+        } else {
+            (chunks[1], None)
+        };
+
+        // Active tab content
         match self.active_tab {
-            Tab::Tree => self.tree_view.view(frame, chunks[1], manifest),
-            Tab::Sandboxes => self.sandbox_view.view(frame, chunks[1], manifest),
-            Tab::Includes => self.includes_view.view(frame, chunks[1], manifest),
-            Tab::Settings => self.settings_view.view(frame, chunks[1], manifest),
+            Tab::Tree => self.tree_view.view(frame, content_area, manifest),
+            Tab::Sandboxes => self.sandbox_view.view(frame, content_area, manifest),
+            Tab::Includes => self.includes_view.view(frame, content_area, manifest),
+            Tab::Settings => self.settings_view.view(frame, content_area, manifest),
+        }
+
+        // Test panel (side panel)
+        if let Some(area) = test_area {
+            self.test_panel.view_with_focus(frame, area, self.test_focused);
         }
 
         // Status bar
@@ -471,6 +579,12 @@ impl App {
             }
         });
 
+        let test_hint = if self.test_focused {
+            ("Esc", "back to editor")
+        } else {
+            ("t", "test console")
+        };
+
         let hints: &[(&str, &str)] = match self.active_tab {
             Tab::Tree => &[
                 ("j/k", "move"),
@@ -479,6 +593,7 @@ impl App {
                 ("a", "add"),
                 ("d", "delete"),
                 ("c", "copy to inline"),
+                test_hint,
                 ("s", "save"),
             ],
             Tab::Sandboxes => &[
@@ -488,6 +603,7 @@ impl App {
                 ("e", "edit"),
                 ("d", "delete"),
                 ("c", "copy to inline"),
+                test_hint,
                 ("s", "save"),
             ],
             Tab::Includes => &[
@@ -495,9 +611,10 @@ impl App {
                 ("J/K", "reorder"),
                 ("a", "add"),
                 ("d", "delete"),
+                test_hint,
                 ("s", "save"),
             ],
-            Tab::Settings => &[("j/k", "move"), ("Enter", "cycle"), ("s", "save")],
+            Tab::Settings => &[("j/k", "move"), ("Enter", "cycle"), test_hint, ("s", "save")],
         };
 
         widgets::render_status_bar(frame, chunks[2], hints, flash_msg);

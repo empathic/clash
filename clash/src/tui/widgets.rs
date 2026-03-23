@@ -142,6 +142,10 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect) {
             Span::raw("Move item up/down (includes)"),
         ]),
         Line::from(vec![
+            Span::styled("t      ", Style::default().fg(Color::Yellow)),
+            Span::raw("Toggle test console panel"),
+        ]),
+        Line::from(vec![
             Span::styled("s      ", Style::default().fg(Color::Yellow)),
             Span::raw("Save (review diff first)"),
         ]),

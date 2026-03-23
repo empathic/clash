@@ -21,6 +21,9 @@ use crate::tui::tool_registry;
 
 use super::tea::FormRequest;
 
+/// Starlark load preamble used when compiling user-entered expressions.
+const STARLARK_LOAD: &str = r#"load("@clash//std.star", "exe", "tool", "cmd", "tools", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains", "domain", "allow", "deny", "ask")"#;
+
 // ---------------------------------------------------------------------------
 // Field types
 // ---------------------------------------------------------------------------
@@ -164,11 +167,16 @@ impl FormState {
         let fields = vec![
             FormField::Select {
                 label: "Rule type".into(),
-                options: vec!["Tool rule".into(), "Shell command".into()],
+                options: vec![
+                    "Tool rule".into(),
+                    "Shell command".into(),
+                    "Starlark expression".into(),
+                ],
                 selected: 0,
                 hints: vec![
                     "Match a Claude tool like Read, Write, Bash, Edit",
                     "Match a shell command like git, npm, curl",
+                    "Write a raw Starlark policy expression",
                 ],
             },
             FormField::Text {
@@ -207,6 +215,14 @@ impl FormState {
                 options: sandbox_opts,
                 selected: sb_default,
                 hints: vec![],
+            },
+            // Field 6: Starlark expression (only visible when rule_type == 2)
+            FormField::Text {
+                label: "Expression".into(),
+                value: String::new(),
+                cursor: 0,
+                placeholder: r#"e.g. exe("git").allow(), tool("Read").deny()"#.into(),
+                hint: Some("Starlark DSL expression — compiled and added to the policy tree"),
             },
         ];
 
@@ -911,6 +927,13 @@ impl FormState {
                     _ => 0,
                 };
 
+                // Starlark expression mode — only show type selector + expression field
+                if rule_type == 2 {
+                    self.tool_context = None;
+                    self.visible = vec![0, 6];
+                    return;
+                }
+
                 // Update tool context from typed tool name
                 if rule_type == 0 {
                     let name = self.text_value(1);
@@ -1040,6 +1063,12 @@ impl FormState {
             self.fields[self.active_field_index()],
             FormField::Select { .. }
         )
+    }
+
+    /// Whether field at index `fi` should render all options inline.
+    fn is_inline_select(&self, fi: usize) -> bool {
+        // The "Rule type" selector in AddRule shows all options at once
+        matches!((&self.kind, fi), (FormKind::AddRule, 0))
     }
 }
 
@@ -1245,6 +1274,12 @@ impl FormState {
 
     fn apply_add_rule(&self, manifest: &mut PolicyManifest) -> Result<bool, String> {
         let rule_type = self.select_value(0);
+
+        // Starlark expression mode
+        if rule_type == 2 {
+            return self.apply_add_starlark_rule(manifest);
+        }
+
         let effect_idx = tool_registry::filtered_effect_to_canonical(
             self.tool_context.as_deref(),
             self.select_value(4),
@@ -1294,6 +1329,43 @@ impl FormState {
         };
 
         manifest_edit::upsert_rule(manifest, node);
+        Ok(true)
+    }
+
+    fn apply_add_starlark_rule(&self, manifest: &mut PolicyManifest) -> Result<bool, String> {
+        let expr = self.text_value(6);
+        if expr.is_empty() {
+            return Err("Starlark expression is required".into());
+        }
+
+        // Build a minimal Starlark program wrapping the expression
+        let starlark_source = format!(
+            "{STARLARK_LOAD}\n\ndef main():\n    return policy(default = deny(), rules = [\n        {expr},\n    ])\n"
+        );
+
+        let json = clash_starlark::evaluate(
+            &starlark_source,
+            "tui_expression.star",
+            &std::path::PathBuf::from("."),
+        )
+        .map_err(|e| format!("Starlark error: {e:#}"))?;
+
+        let compiled = crate::policy::compile::compile_to_tree(&json.json)
+            .map_err(|e| format!("Compile error: {e:#}"))?;
+
+        if compiled.tree.is_empty() {
+            return Err("Expression produced no rules".into());
+        }
+
+        // Append compiled nodes to the manifest tree
+        for node in compiled.tree {
+            manifest.policy.tree.push(node);
+        }
+        // Merge any sandboxes defined in the expression
+        for (name, sb) in compiled.sandboxes {
+            manifest.policy.sandboxes.entry(name).or_insert(sb);
+        }
+
         Ok(true)
     }
 
@@ -1632,7 +1704,14 @@ impl FormState {
     }
 
     pub fn view(&self, frame: &mut Frame, area: Rect) {
-        let height = (self.visible.len() as u16 * 3) + 6; // fields + hint + spacing + title + footer
+        // Use max possible field count for forms that change visibility dynamically,
+        // so the popup stays in a fixed position when cycling options.
+        let field_count = match &self.kind {
+            FormKind::AddRule => self.fields.len().max(5), // stable at max visible fields
+            FormKind::AddChild { .. } => self.fields.len().max(5),
+            _ => self.visible.len(),
+        };
+        let height = (field_count as u16 * 3) + 6; // fields + hint + spacing + title + footer
         let height_pct = ((height as f32 / area.height as f32) * 100.0)
             .ceil()
             .clamp(30.0, 80.0) as u16;
@@ -1730,40 +1809,76 @@ impl FormState {
                     } else {
                         Style::default().fg(Color::Gray)
                     };
-                    let option = &options[*selected];
-                    let arrows = if is_active {
-                        ("< ", " >")
-                    } else {
-                        ("  ", "  ")
-                    };
-                    let value_style = if is_active {
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::Cyan)
-                    };
 
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("  {label}: "), label_style),
-                        Span::styled(
-                            arrows.0,
-                            Style::default().fg(if is_active {
-                                Color::Yellow
+                    if self.is_inline_select(fi) {
+                        // Inline mode: show all options, highlight selected
+                        let mut spans = vec![Span::styled(
+                            format!("  {label}: "),
+                            label_style,
+                        )];
+                        for (i, opt) in options.iter().enumerate() {
+                            if i > 0 {
+                                spans.push(Span::styled(
+                                    "  ",
+                                    Style::default().fg(Color::DarkGray),
+                                ));
+                            }
+                            let style = if i == *selected {
+                                Style::default()
+                                    .fg(Color::Cyan)
+                                    .add_modifier(Modifier::BOLD)
+                                    .add_modifier(Modifier::UNDERLINED)
+                            } else if is_active {
+                                Style::default().fg(Color::DarkGray)
                             } else {
-                                Color::DarkGray
-                            }),
-                        ),
-                        Span::styled(option.as_str(), value_style),
-                        Span::styled(
-                            arrows.1,
-                            Style::default().fg(if is_active {
-                                Color::Yellow
-                            } else {
-                                Color::DarkGray
-                            }),
-                        ),
-                    ]));
+                                Style::default().fg(Color::DarkGray)
+                            };
+                            spans.push(Span::styled(opt.as_str(), style));
+                        }
+                        if is_active {
+                            spans.push(Span::styled(
+                                "  ←/→",
+                                Style::default().fg(Color::DarkGray),
+                            ));
+                        }
+                        lines.push(Line::from(spans));
+                    } else {
+                        // Default mode: show < selected >
+                        let option = &options[*selected];
+                        let arrows = if is_active {
+                            ("< ", " >")
+                        } else {
+                            ("  ", "  ")
+                        };
+                        let value_style = if is_active {
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::Cyan)
+                        };
+
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("  {label}: "), label_style),
+                            Span::styled(
+                                arrows.0,
+                                Style::default().fg(if is_active {
+                                    Color::Yellow
+                                } else {
+                                    Color::DarkGray
+                                }),
+                            ),
+                            Span::styled(option.as_str(), value_style),
+                            Span::styled(
+                                arrows.1,
+                                Style::default().fg(if is_active {
+                                    Color::Yellow
+                                } else {
+                                    Color::DarkGray
+                                }),
+                            ),
+                        ]));
+                    }
                 }
                 FormField::MultiSelect {
                     label,

@@ -9,6 +9,7 @@ pub mod inline_form;
 pub mod sandbox_view;
 pub mod settings_view;
 pub mod tea;
+pub mod test_panel;
 pub mod tool_registry;
 pub mod tree_view;
 pub mod widgets;
@@ -28,10 +29,18 @@ use crate::policy_loader;
 
 /// Launch the interactive policy editor TUI.
 pub fn run(path: &Path) -> Result<()> {
+    run_with_options(path, false)
+}
+
+/// Launch the TUI with options.
+pub fn run_with_options(path: &Path, show_test_panel: bool) -> Result<()> {
     let manifest = policy_loader::read_manifest(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
 
     let mut app = app::App::new(path.to_path_buf(), manifest)?;
+    if show_test_panel {
+        app.show_test_panel();
+    }
 
     // Setup terminal
     enable_raw_mode()?;

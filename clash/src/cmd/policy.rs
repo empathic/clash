@@ -23,7 +23,7 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Validate { file, json } => handle_validate(file, json),
         PolicyCmd::Show { json } => handle_show(json),
-        PolicyCmd::Edit { scope, raw } => handle_edit(scope, raw),
+        PolicyCmd::Edit { scope, raw, test } => handle_edit(scope, raw, test),
         PolicyCmd::Allow {
             command,
             tool,
@@ -373,7 +373,7 @@ pub fn open_in_editor(path: &Path) -> Result<()> {
 }
 
 /// Handle `clash policy edit`.
-fn handle_edit(scope: Option<String>, raw: bool) -> Result<()> {
+fn handle_edit(scope: Option<String>, raw: bool, test: bool) -> Result<()> {
     if raw {
         // --raw: open in $EDITOR
         let level = match scope.as_deref() {
@@ -397,7 +397,7 @@ fn handle_edit(scope: Option<String>, raw: bool) -> Result<()> {
 
     // Interactive TUI editor
     let path = resolve_manifest_path(scope)?;
-    crate::tui::run(&path)
+    crate::tui::run_with_options(&path, test)
 }
 
 // ---------------------------------------------------------------------------
