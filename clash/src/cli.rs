@@ -146,6 +146,9 @@ pub enum PolicyCmd {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
         json: bool,
+        /// Show detailed decision trace with per-condition match details
+        #[arg(long)]
+        trace: bool,
         /// Tool type: bash, read, write, edit, tool (or full tool name like Bash, Read, etc.)
         tool: Option<String>,
         /// The command, file path, or noun to check (remaining args joined)
@@ -168,6 +171,9 @@ pub enum Commands {
         no_bypass: Option<bool>,
         /// Scope to initialize: "user" (global) or "project" (this repo)
         scope: Option<String>,
+        /// Skip the interactive wizard and create a sensible default policy
+        #[arg(long)]
+        quick: bool,
     },
 
     /// Remove clash: undo bypass permissions, uninstall plugin, remove config and binary
@@ -232,6 +238,9 @@ pub enum Commands {
     #[command(subcommand, alias = "box")]
     Sandbox(SandboxCmd),
 
+    /// Interactive policy sandbox — write rules and test them against tool invocations
+    Playground,
+
     /// Diagnose common setup issues and report fix instructions
     Doctor {
         /// Run interactive onboarding: diagnose issues and offer to fix them
@@ -284,6 +293,9 @@ pub enum Commands {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
         json: bool,
+        /// Show detailed decision trace with per-condition match details
+        #[arg(long)]
+        trace: bool,
         /// Tool type: bash, read, write, edit, tool (or full tool name like Bash, Read, etc.)
         tool: String,
         /// The command, file path, or noun to check (remaining args joined)

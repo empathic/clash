@@ -1,0 +1,39 @@
+meta:
+  name: starlark policy — project default overrides user default
+  description: Project-level default effect takes precedence over user-level default
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "exe", "policy", "allow")
+    def main():
+        return policy(default=allow(), rules=[])
+  project_policy_star: |
+    load("@clash//std.star", "exe", "policy", "deny")
+    def main():
+        return policy(default=deny(), rules=[])
+
+steps:
+  - name: unknown command denied by project default (overrides user allow)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: some-unknown-command --flag
+    expect:
+      decision: deny
+
+  - name: read denied by project default
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/somefile.txt
+    expect:
+      decision: deny
+
+  - name: write denied by project default
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/output.txt
+      content: hello
+    expect:
+      decision: deny

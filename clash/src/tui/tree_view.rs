@@ -224,7 +224,8 @@ impl TreeView {
             return;
         }
         let parent_path = &path[..path.len() - 1];
-        let child_idx = *path.last().unwrap();
+        // Safety: path.len() >= 2 since the len()==1 case returned above.
+        let child_idx = *path.last().expect("path is non-empty");
         if let Some(parent) = Self::get_node_at_path_mut(tree, parent_path)
             && let Node::Condition { children, .. } = parent
             && child_idx < children.len()
@@ -397,7 +398,8 @@ impl Component for TreeView {
                 } else if path.len() >= 2 {
                     // Child node — remove from parent's children
                     let parent_path = &path[..path.len() - 1];
-                    let child_idx = *path.last().unwrap();
+                    // Safety: path.len() >= 2 guarantees non-empty.
+                    let child_idx = *path.last().expect("path is non-empty");
                     if let Some(parent) =
                         Self::get_node_at_path_mut(&mut manifest.policy.tree, parent_path)
                         && let Node::Condition { children, .. } = parent

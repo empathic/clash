@@ -1,8 +1,8 @@
-load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "domains", "exe")
+load("@clash//std.star", "allow", "deny", "sandbox", "cwd", "home", "tempdir", "domains", "exe")
 
 node_sandbox = sandbox(
     name = "node_dev",
-    default = deny,
+    default = deny(),
     fs = [
         cwd().allow(read = True, write = True, execute = True),
         home().child(".npm").allow(),
@@ -11,9 +11,9 @@ node_sandbox = sandbox(
     ],
     net = [
         domains({
-            "registry.npmjs.org": allow,
-            "*.npmjs.org": allow,
-            "github.com": allow,
+            "registry.npmjs.org": allow(),
+            "*.npmjs.org": allow(),
+            "github.com": allow(),
         }),
     ],
     doc = "Node.js development: project + npm cache, npm registry network",

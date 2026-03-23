@@ -1,0 +1,43 @@
+meta:
+  name: starlark policy — project layer overrides user rules
+  description: Project-level policy can add deny rules that override user-level allows
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "exe", "policy", "ask", "allow")
+    def main():
+        return policy(default=ask(), rules=[
+            exe("git").allow(),
+            exe("cargo").allow(),
+        ])
+  project_policy_star: |
+    load("@clash//std.star", "exe", "policy", "deny")
+    def main():
+        return policy(default=deny(), rules=[
+            exe("git", args=["push"]).deny(),
+        ])
+
+steps:
+  - name: git status allowed by user rule (not overridden by project)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: git push denied by project deny rule
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git push origin main
+    expect:
+      decision: deny
+
+  - name: cargo build allowed by user rule
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: cargo build
+    expect:
+      decision: allow

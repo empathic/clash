@@ -693,7 +693,7 @@ clash update --version 0.2.0
 
 ## clash bug
 
-File a bug report to the clash issue tracker.
+File a bug report to both Linear (private, with full diagnostics) and GitHub (public, title and description only).
 
 ```
 clash bug [OPTIONS] <TITLE>
@@ -710,8 +710,11 @@ clash bug [OPTIONS] <TITLE>
 | Flag | Description |
 |------|-------------|
 | `-d`, `--description <DESCRIPTION>` | Detailed description of the bug |
-| `--include-config` | Include the clash policy config in the report |
-| `--include-logs` | Include recent debug logs in the report |
+| `--include-config` | Include the clash policy config in the Linear report |
+| `--include-logs` | Include recent debug logs in the Linear report |
+| `--include-trace` | Include the session trace in the Linear report |
+
+Private data (config, logs, trace) is only sent to the Linear issue. The GitHub issue contains only the title and description.
 
 **Examples:**
 
@@ -723,7 +726,8 @@ clash bug "Sandbox blocks cargo build in target directory"
 clash bug "Policy not matching git commands" \
   -d "The rule on git does not match git status" \
   --include-config \
-  --include-logs
+  --include-logs \
+  --include-trace
 ```
 
 ---

@@ -1,11 +1,10 @@
-use anyhow::{Context, Result, bail};
-use hotln::Attachment;
-use tracing::{Level, instrument};
+use anyhow::{Context, Result};
+use tracing::{Level, instrument, warn};
 
 use crate::settings::ClashSettings;
 use crate::style;
 
-/// File a bug report to Linear.
+/// File a bug report to Linear (with full diagnostics) and GitHub (public, title + description only).
 #[instrument(level = Level::TRACE)]
 pub fn run(
     title: String,
@@ -14,84 +13,67 @@ pub fn run(
     include_logs: bool,
     include_trace: bool,
 ) -> Result<()> {
-    let mut desc_parts: Vec<String> = Vec::new();
-    let mut attachments: Vec<Attachment> = Vec::new();
+    const HOTLINE_PROXY_URL: &str = "https://hotline.emv.workers.dev";
+    const HOTLINE_PROXY_TOKEN: &str = "nkCk16ewj5YDPqhZ7FSBHM44+3y5F5HpH0FdvVrIO8A=";
 
-    if let Some(ref d) = description {
-        desc_parts.push(d.clone());
+    let desc_text = description.as_deref().unwrap_or_default();
+
+    // GitHub issue: public, title + description only
+    let mut github = hotln::github(HOTLINE_PROXY_URL);
+    github.with_token(HOTLINE_PROXY_TOKEN).title(&title);
+    if !desc_text.is_empty() {
+        github.text(desc_text);
     }
+    let github_url = github.create().context("failed to create GitHub issue")?;
 
+    // Linear issue: full diagnostics (private)
+    let mut linear = hotln::linear(HOTLINE_PROXY_URL);
+    linear.with_token(HOTLINE_PROXY_TOKEN).title(&title);
+    if !desc_text.is_empty() {
+        linear.text(desc_text);
+    }
+    linear.text(&format!("GitHub: {github_url}"));
+    linear.text(&format!(
+        "### System Info\n\n| Key | Value |\n|-----|-------|\n| OS | {} |\n| Arch | {} |\n| Version | {} |",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        crate::version::version_long(),
+    ));
     if include_config {
         match ClashSettings::policy_file().and_then(|p| {
             std::fs::read_to_string(&p).with_context(|| format!("failed to read {}", p.display()))
         }) {
             Ok(contents) => {
-                desc_parts.push(format!("### Policy Config\n\n```\n{}\n```", contents));
+                linear.file("policy.star", &contents);
             }
-            Err(e) => eprintln!("Warning: could not read config: {}", e),
+            Err(e) => warn!("could not read config: {e}"),
         }
     }
-
     if include_logs {
         match read_recent_logs(100) {
             Ok(contents) => {
-                attachments.push(Attachment {
-                    filename: "debug.log".into(),
-                    content_type: "text/plain".into(),
-                    data: contents.into_bytes(),
-                });
+                linear.attachment("debug.log", contents.as_bytes());
             }
-            Err(e) => eprintln!("Warning: could not read logs: {}", e),
+            Err(e) => warn!("could not read logs: {e}"),
         }
     }
-
     if include_trace {
         match ClashSettings::active_session_id()
             .and_then(|sid| crate::trace::export_trace(&sid))
             .and_then(|doc| doc.to_json().context("serializing trace"))
         {
             Ok(json) => {
-                attachments.push(Attachment {
-                    filename: "trace.json".into(),
-                    content_type: "application/json".into(),
-                    data: json.into_bytes(),
-                });
+                linear.attachment("trace.json", json.as_bytes());
             }
-            Err(e) => eprintln!("Warning: could not export trace: {}", e),
+            Err(e) => warn!("could not export trace: {e}"),
         }
     }
-
-    let full_description = if desc_parts.is_empty() {
-        None
-    } else {
-        Some(desc_parts.join("\n\n"))
-    };
-
-    let system_info = [
-        ("OS", std::env::consts::OS),
-        ("Arch", std::env::consts::ARCH),
-        ("Version", crate::version::version_long()),
-    ];
-
-    const HOTLINE_PROXY_URL: &str = "https://clash-hotline.emv.workers.dev/";
-    const HOTLINE_PROXY_TOKEN: &str = "nkCk16ewj5YDPqhZ7FSBHM44+3y5F5HpH0FdvVrIO8A=";
-
-    let result = hotln::proxy(HOTLINE_PROXY_URL)
-        .with_token(HOTLINE_PROXY_TOKEN)
-        .create_issue(
-            &title,
-            full_description.as_deref(),
-            &system_info,
-            &attachments,
-        );
-
-    match result {
-        Ok(url) => {
-            println!("{} Filed bug: {}", style::green_bold("✓"), url);
-            Ok(())
-        }
-        Err(e) => bail!("failed to file bug report: {e}"),
+    if let Err(e) = linear.create() {
+        warn!("failed to create Linear issue: {e}");
     }
+
+    println!("{} Filed bug: {github_url}", style::green_bold("✓"));
+    Ok(())
 }
 
 /// Read the last `n` lines from the clash log file.

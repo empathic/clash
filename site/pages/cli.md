@@ -216,10 +216,10 @@ clash update [OPTIONS]
 
 ## clash bug
 
-File a bug report to the issue tracker.
+File a bug report to both Linear (private, with diagnostics) and GitHub (public, title and description only).
 
 ```bash
-clash bug <TITLE> [-d <DESCRIPTION>] [--include-config] [--include-logs]
+clash bug <TITLE> [-d <DESCRIPTION>] [--include-config] [--include-logs] [--include-trace]
 ```
 
 ---

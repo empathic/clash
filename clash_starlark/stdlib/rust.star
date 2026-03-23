@@ -1,8 +1,8 @@
-load("@clash//std.star", "sandbox", "cwd", "home", "tempdir", "exe", "path")
+load("@clash//std.star", "deny", "sandbox", "cwd", "home", "tempdir", "exe", "path")
 
 rust_sandbox = sandbox(
     name = "rust_dev",
-    default = deny,
+    default = deny(),
     fs = [
         cwd(follow_worktrees = True).allow(),
         home().child(".cargo").allow(),

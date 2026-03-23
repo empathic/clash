@@ -173,7 +173,8 @@ pub fn merge_all(settings: &[(SettingsLevel, Settings)]) -> Settings {
 
     // Start with the lowest precedence and merge up
     let mut iter = settings.iter().rev();
-    let (_, first) = iter.next().unwrap();
+    // Safety: the early return above guarantees at least one element.
+    let (_, first) = iter.next().expect("settings is non-empty");
     let mut result = first.clone();
 
     for (_, higher) in iter {

@@ -172,12 +172,7 @@ impl<'de> Deserialize<'de> for Cap {
             type Value = Cap;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str(r#"a list of capabilities like ["read", "write"] or a string like "read + write""#)
-            }
-
-            // TODO(0.4.1): remove legacy string format support (e.g. "read + write")
-            fn visit_str<E: de::Error>(self, value: &str) -> Result<Cap, E> {
-                Cap::parse(value).map_err(de::Error::custom)
+                formatter.write_str(r#"a list of capabilities like ["read", "write"]"#)
             }
 
             fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Cap, A::Error> {
@@ -741,10 +736,10 @@ mod tests {
     }
 
     #[test]
-    fn test_cap_deserialize_string_compat() {
-        // String format still accepted for backwards compat
-        let caps: Cap = serde_json::from_str(r#""read + write""#).unwrap();
-        assert_eq!(caps, Cap::READ | Cap::WRITE);
+    fn test_cap_deserialize_string_rejected() {
+        // Legacy string format is no longer accepted
+        let result: Result<Cap, _> = serde_json::from_str(r#""read + write""#);
+        assert!(result.is_err());
     }
 
     #[test]

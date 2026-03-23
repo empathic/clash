@@ -13,6 +13,9 @@ pub mod path;
 pub mod sandbox_edit;
 pub mod sandbox_types;
 
+#[cfg(test)]
+mod proptests;
+
 pub use compile::compile_multi_level_to_tree;
 pub use error::{CompileError, PolicyError, PolicyParseError};
 pub use ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
