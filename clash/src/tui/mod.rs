@@ -12,6 +12,7 @@ pub mod tea;
 pub mod test_panel;
 pub mod tool_registry;
 pub mod tree_view;
+pub mod walkthrough;
 pub mod widgets;
 
 use std::path::Path;
@@ -44,17 +45,20 @@ pub(crate) fn restore_terminal() {
 
 /// Launch the interactive policy editor TUI.
 pub fn run(path: &Path) -> Result<()> {
-    run_with_options(path, false)
+    run_with_options(path, false, false)
 }
 
 /// Launch the TUI with options.
-pub fn run_with_options(path: &Path, show_test_panel: bool) -> Result<()> {
+pub fn run_with_options(path: &Path, show_test_panel: bool, onboarding: bool) -> Result<()> {
     let manifest = policy_loader::read_manifest(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
 
     let mut app = app::App::new(path.to_path_buf(), manifest)?;
     if show_test_panel {
         app.show_test_panel();
+    }
+    if onboarding {
+        app.start_walkthrough();
     }
 
     // Install a panic hook that restores the terminal so the user isn't left

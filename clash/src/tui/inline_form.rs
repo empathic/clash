@@ -238,6 +238,87 @@ impl FormState {
         form
     }
 
+    /// Create an AddRule form pre-filled for the walkthrough (Shell command / git / allow).
+    pub fn new_add_rule_prefilled(
+        manifest: &PolicyManifest,
+        included: Option<&crate::policy::match_tree::CompiledPolicy>,
+    ) -> Self {
+        let (sandbox_opts, sb_default) =
+            Self::build_sandbox_options_with_included(manifest, included);
+
+        let fields = vec![
+            FormField::Select {
+                label: "Rule type".into(),
+                options: vec![
+                    "Tool rule".into(),
+                    "Shell command".into(),
+                    "Starlark expression".into(),
+                ],
+                selected: 1, // Shell command
+                hints: vec![
+                    "Match a Claude tool like Read, Write, Bash, Edit",
+                    "Match a shell command like git, npm, curl",
+                    "Write a raw Starlark policy expression",
+                ],
+            },
+            FormField::Text {
+                label: "Tool name".into(),
+                value: String::new(),
+                cursor: 0,
+                placeholder: "e.g. Read, Write, Bash, Edit".into(),
+                hint: Some("e.g. Read, Write, Bash, Edit, Glob, Grep, WebSearch"),
+            },
+            FormField::Text {
+                label: "Command".into(),
+                value: "git".into(),
+                cursor: 3,
+                placeholder: "e.g. git, npm, gh, curl".into(),
+                hint: Some("This allows all git commands (status, commit, push, etc.)"),
+            },
+            FormField::Text {
+                label: "Arguments".into(),
+                value: String::new(),
+                cursor: 0,
+                placeholder: "optional, e.g. push --force".into(),
+                hint: Some("Leave empty to match all git subcommands"),
+            },
+            FormField::Select {
+                label: "When matched".into(),
+                options: vec![
+                    "allow (permit)".into(),
+                    "deny (block)".into(),
+                    "ask (prompt)".into(),
+                ],
+                selected: 0, // allow
+                hints: vec!["", "", ""],
+            },
+            FormField::Select {
+                label: "Sandbox".into(),
+                options: sandbox_opts,
+                selected: sb_default,
+                hints: vec![],
+            },
+            FormField::Text {
+                label: "Expression".into(),
+                value: String::new(),
+                cursor: 0,
+                placeholder: r#"e.g. exe("git").allow(), tool("Read").deny()"#.into(),
+                hint: Some("Starlark DSL expression — compiled and added to the policy tree"),
+            },
+        ];
+
+        let mut form = FormState {
+            title: "Add Rule — allow git".into(),
+            kind: FormKind::AddRule,
+            fields,
+            visible: vec![],
+            active: 0,
+            tool_context: None,
+        };
+        form.recompute_visible();
+        form
+    }
+
     fn new_add_sandbox() -> Self {
         let fields = vec![
             FormField::Text {

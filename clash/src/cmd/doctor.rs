@@ -215,11 +215,17 @@ fn run_onboard() -> Result<()> {
     match &policy_check {
         CheckResult::Fail(_) => {
             if offer_fix(OnboardFix::CreatePolicy)? {
-                ui::progress("Launching policy wizard...");
-                match crate::cmd::wizard::wiz() {
-                    Ok(()) => fixed += 1,
+                ui::progress("Launching policy editor...");
+                match crate::cmd::init::write_starter_policy() {
+                    Ok(path) => match crate::tui::run_with_options(&path, false, true) {
+                        Ok(()) => fixed += 1,
+                        Err(e) => {
+                            warn!(error = %e, "Policy editor failed during onboard");
+                            ui::fail(&format!("Policy creation failed: {e}"));
+                        }
+                    },
                     Err(e) => {
-                        warn!(error = %e, "Policy wizard failed during onboard");
+                        warn!(error = %e, "Could not write starter policy");
                         ui::fail(&format!("Policy creation failed: {e}"));
                     }
                 }

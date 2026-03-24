@@ -397,7 +397,7 @@ fn handle_edit(scope: Option<String>, raw: bool, test: bool) -> Result<()> {
 
     // Interactive TUI editor
     let path = resolve_manifest_path(scope)?;
-    crate::tui::run_with_options(&path, test)
+    crate::tui::run_with_options(&path, test, false)
 }
 
 // ---------------------------------------------------------------------------

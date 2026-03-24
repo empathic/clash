@@ -24,6 +24,7 @@ use super::settings_view::SettingsView;
 use super::tea::{Action, Component};
 use super::test_panel::{self, TestPanel, TestPanelAction};
 use super::tree_view::TreeView;
+use super::walkthrough::{self, WalkthroughState, WalkthroughStep};
 use super::widgets::{self, DiffLine};
 
 /// Which tab is active.
@@ -42,6 +43,7 @@ enum Mode {
     Confirm(ConfirmAction),
     SaveReview(DiffState),
     Form(FormState),
+    Walkthrough,
 }
 
 /// What action to take after confirmation.
@@ -93,6 +95,8 @@ pub struct App {
     mode: Mode,
     dirty: bool,
     flash: Option<(String, Instant)>,
+    /// Onboarding walkthrough state — persists across Mode transitions.
+    walkthrough: Option<WalkthroughState>,
 }
 
 impl App {
@@ -145,6 +149,7 @@ impl App {
             mode: Mode::Normal,
             dirty: false,
             flash,
+            walkthrough: None,
         })
     }
 
@@ -153,6 +158,12 @@ impl App {
         self.test_panel.visible = true;
         self.test_panel.input_active = true;
         self.test_focused = true;
+    }
+
+    /// Start the onboarding walkthrough.
+    pub fn start_walkthrough(&mut self) {
+        self.walkthrough = Some(WalkthroughState::new());
+        self.mode = Mode::Walkthrough;
     }
 
     /// Run the main event loop.
@@ -167,6 +178,66 @@ impl App {
 
             let event = event::read()?;
             if let Event::Key(key) = event {
+                // Walkthrough mode intercepts keys to advance steps.
+                if matches!(self.mode, Mode::Walkthrough) {
+                    if let Some(ref mut wt) = self.walkthrough {
+                        match key.code {
+                            KeyCode::Esc => {
+                                self.walkthrough = None;
+                                self.mode = Mode::Normal;
+                                self.flash = Some((
+                                    "Walkthrough skipped — press ? for help".into(),
+                                    Instant::now(),
+                                ));
+                            }
+                            _ => match wt.step {
+                                WalkthroughStep::Welcome => {
+                                    wt.advance();
+                                    // Stay in Walkthrough mode for AddRule step
+                                }
+                                WalkthroughStep::AddRule if key.code == KeyCode::Char('a') => {
+                                    wt.step = WalkthroughStep::FillForm;
+                                    let form = FormState::new_add_rule_prefilled(
+                                        &self.manifest,
+                                        Some(&self.included),
+                                    );
+                                    self.mode = Mode::Form(form);
+                                }
+                                WalkthroughStep::TestIt if key.code == KeyCode::Char('t') => {
+                                    wt.step = WalkthroughStep::TypeTest;
+                                    self.test_panel.visible = true;
+                                    self.test_panel.input_active = true;
+                                    self.test_focused = true;
+                                    self.mode = Mode::Normal;
+                                }
+                                WalkthroughStep::SaveFinish if key.code == KeyCode::Char('s') => {
+                                    wt.step = WalkthroughStep::Done;
+                                    self.mode = Mode::Normal;
+                                    // Trigger the save flow
+                                    if self.dirty {
+                                        let new_json = serde_json::to_string_pretty(&self.manifest)
+                                            .unwrap_or_default();
+                                        let diff_lines =
+                                            compute_diff(&self.original_json, &new_json);
+                                        self.mode = Mode::SaveReview(DiffState {
+                                            lines: diff_lines,
+                                            scroll: 0,
+                                        });
+                                    } else {
+                                        self.walkthrough = None;
+                                        self.flash = Some((
+                                            "No changes to save — walkthrough complete!".into(),
+                                            Instant::now(),
+                                        ));
+                                    }
+                                }
+                                _ => {} // ignore non-matching keys
+                            },
+                        }
+                    }
+                    continue;
+                }
+
                 // Form mode handles keys directly — not via Msg
                 if matches!(self.mode, Mode::Form(_)) {
                     let FormHandled::Continue = self.handle_form_key(key);
@@ -179,8 +250,18 @@ impl App {
                 {
                     match key.code {
                         KeyCode::Esc => {
-                            // Return focus to the left pane
-                            self.test_focused = false;
+                            // During walkthrough, Esc from test panel cancels walkthrough
+                            if self.walkthrough.is_some() {
+                                self.walkthrough = None;
+                                self.test_focused = false;
+                                self.flash = Some((
+                                    "Walkthrough skipped — press ? for help".into(),
+                                    Instant::now(),
+                                ));
+                            } else {
+                                // Return focus to the left pane
+                                self.test_focused = false;
+                            }
                             continue;
                         }
                         KeyCode::Tab => {
@@ -190,12 +271,23 @@ impl App {
                         }
                         _ => {
                             if let Some(msg) = self.test_panel.handle_key(key) {
+                                let is_submit = matches!(msg, test_panel::Msg::InputSubmit);
                                 let compiled = self.current_compiled_policy();
                                 match self.test_panel.update(msg, compiled.as_ref()) {
                                     TestPanelAction::Flash(s) => {
                                         self.flash = Some((s, Instant::now()));
                                     }
                                     TestPanelAction::None => {}
+                                }
+                                // Advance walkthrough from TypeTest → SaveFinish on submit
+                                if is_submit {
+                                    if let Some(ref mut wt) = self.walkthrough {
+                                        if wt.step == WalkthroughStep::TypeTest {
+                                            wt.step = WalkthroughStep::SaveFinish;
+                                            self.test_focused = false;
+                                            self.mode = Mode::Walkthrough;
+                                        }
+                                    }
                                 }
                             }
                             continue;
@@ -271,7 +363,17 @@ impl App {
         match form.handle_key(key) {
             FormEvent::Continue => FormHandled::Continue,
             FormEvent::Cancel => {
-                self.mode = Mode::Normal;
+                // If walkthrough is active, Esc from form cancels the walkthrough too
+                if self.walkthrough.is_some() {
+                    self.walkthrough = None;
+                    self.mode = Mode::Normal;
+                    self.flash = Some((
+                        "Walkthrough skipped — press ? for help".into(),
+                        Instant::now(),
+                    ));
+                } else {
+                    self.mode = Mode::Normal;
+                }
                 FormHandled::Continue
             }
             FormEvent::Submit => {
@@ -283,7 +385,18 @@ impl App {
                     Ok(true) => {
                         self.dirty = true;
                         self.rebuild_views();
-                        self.flash = Some(("Added".into(), Instant::now()));
+                        // Advance walkthrough from FillForm → TestIt
+                        if let Some(ref mut wt) = self.walkthrough {
+                            if wt.step == WalkthroughStep::FillForm {
+                                wt.step = WalkthroughStep::TestIt;
+                                self.mode = Mode::Walkthrough;
+                                self.flash = Some(("Rule added!".into(), Instant::now()));
+                            } else {
+                                self.flash = Some(("Added".into(), Instant::now()));
+                            }
+                        } else {
+                            self.flash = Some(("Added".into(), Instant::now()));
+                        }
                     }
                     Ok(false) => {}
                     Err(msg) => {
@@ -314,7 +427,8 @@ impl App {
                     _ => None,
                 };
             }
-            Mode::Form(_) => return None, // handled separately
+            Mode::Form(_) => return None,     // handled separately
+            Mode::Walkthrough => return None, // handled in event loop
             Mode::Normal => {}
         }
 
@@ -409,6 +523,10 @@ impl App {
                                     .unwrap_or_default();
                                 self.dirty = false;
 
+                                // Clear walkthrough on successful save
+                                let was_walkthrough = self.walkthrough.is_some();
+                                self.walkthrough = None;
+
                                 // Post-save validation
                                 let new_json = serde_json::to_string_pretty(&self.manifest)
                                     .unwrap_or_default();
@@ -416,7 +534,11 @@ impl App {
                                     Ok(policy) => {
                                         let warnings = policy.platform_warnings();
                                         if warnings.is_empty() {
-                                            Action::Flash("Saved".into())
+                                            if was_walkthrough {
+                                                Action::Flash("Saved — setup complete! Press q to exit or keep editing.".into())
+                                            } else {
+                                                Action::Flash("Saved".into())
+                                            }
                                         } else {
                                             Action::Flash(format!(
                                                 "Saved (warnings: {})",
@@ -579,47 +701,54 @@ impl App {
             }
         });
 
-        let test_hint = if self.test_focused {
-            ("Esc", "back to editor")
+        // Status bar — use walkthrough hints when active
+        let wt_hints;
+        let hints: &[(&str, &str)] = if let Some(ref wt) = self.walkthrough {
+            wt_hints = walkthrough::walkthrough_status_hints(wt.step);
+            &wt_hints
         } else {
-            ("t", "test console")
-        };
+            let test_hint = if self.test_focused {
+                ("Esc", "back to editor")
+            } else {
+                ("t", "test console")
+            };
 
-        let hints: &[(&str, &str)] = match self.active_tab {
-            Tab::Tree => &[
-                ("j/k", "move"),
-                ("h/l", "collapse/expand"),
-                ("e", "edit"),
-                ("a", "add"),
-                ("d", "delete"),
-                ("c", "copy to inline"),
-                test_hint,
-                ("s", "save"),
-            ],
-            Tab::Sandboxes => &[
-                ("j/k", "move"),
-                ("l/h", "focus rules/back"),
-                ("a", "add"),
-                ("e", "edit"),
-                ("d", "delete"),
-                ("c", "copy to inline"),
-                test_hint,
-                ("s", "save"),
-            ],
-            Tab::Includes => &[
-                ("j/k", "move"),
-                ("J/K", "reorder"),
-                ("a", "add"),
-                ("d", "delete"),
-                test_hint,
-                ("s", "save"),
-            ],
-            Tab::Settings => &[
-                ("j/k", "move"),
-                ("Enter", "cycle"),
-                test_hint,
-                ("s", "save"),
-            ],
+            match self.active_tab {
+                Tab::Tree => &[
+                    ("j/k", "move"),
+                    ("h/l", "collapse/expand"),
+                    ("e", "edit"),
+                    ("a", "add"),
+                    ("d", "delete"),
+                    ("c", "copy to inline"),
+                    test_hint,
+                    ("s", "save"),
+                ],
+                Tab::Sandboxes => &[
+                    ("j/k", "move"),
+                    ("l/h", "focus rules/back"),
+                    ("a", "add"),
+                    ("e", "edit"),
+                    ("d", "delete"),
+                    ("c", "copy to inline"),
+                    test_hint,
+                    ("s", "save"),
+                ],
+                Tab::Includes => &[
+                    ("j/k", "move"),
+                    ("J/K", "reorder"),
+                    ("a", "add"),
+                    ("d", "delete"),
+                    test_hint,
+                    ("s", "save"),
+                ],
+                Tab::Settings => &[
+                    ("j/k", "move"),
+                    ("Enter", "cycle"),
+                    test_hint,
+                    ("s", "save"),
+                ],
+            }
         };
 
         widgets::render_status_bar(frame, chunks[2], hints, flash_msg);
@@ -635,6 +764,11 @@ impl App {
             }
             Mode::Form(form) => {
                 form.view(frame, area);
+            }
+            Mode::Walkthrough => {
+                if let Some(ref wt) = self.walkthrough {
+                    walkthrough::render_walkthrough_overlay(frame, area, wt.step);
+                }
             }
             Mode::Normal => {}
         }

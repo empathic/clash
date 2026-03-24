@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
+use serde_json::json;
 use tracing::{Level, error, info, instrument, warn};
 
-use crate::cmd::wizard;
 use crate::dialog;
 use crate::settings::ClashSettings;
 use crate::style;
@@ -21,7 +21,7 @@ const GITHUB_MARKETPLACE: &str = "empathic/clash";
 /// Initialize clash at the chosen scope.
 ///
 /// When `scope` is provided ("user" or "project"), initializes that scope
-/// directly. When omitted, runs the interactive wizard.
+/// directly. When omitted, runs the interactive policy editor.
 /// Only one scope is initialized per invocation.
 #[instrument(level = Level::TRACE)]
 pub fn run(no_bypass: Option<bool>, scope: Option<String>, quick: bool) -> Result<()> {
@@ -32,15 +32,12 @@ pub fn run(no_bypass: Option<bool>, scope: Option<String>, quick: bool) -> Resul
     }
 }
 
-/// Initialize or reconfigure the user-level policy via the wizard.
+/// Initialize or reconfigure the user-level policy via the interactive editor.
 fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     let mut actions = InitActions::default();
 
-    let wiz_result = wizard::wiz();
-    // Ensure the terminal is sane even if the wizard exited abnormally
-    // (e.g. dialoguer left the cursor hidden or raw mode enabled).
-    crate::tui::restore_terminal();
-    wiz_result?;
+    let policy_path = write_starter_policy()?;
+    crate::tui::run_with_options(&policy_path, false, true)?;
     actions.policy_created = true;
 
     // Always ensure settings.json records clash as an enabled plugin.
@@ -105,7 +102,7 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     Ok(())
 }
 
-/// Quick-init: skip the wizard and write a sensible default policy directly.
+/// Quick-init: skip the interactive editor and write a sensible default policy directly.
 fn run_init_quick(no_bypass: Option<bool>) -> Result<()> {
     let settings_dir =
         ClashSettings::settings_dir().context("could not determine clash settings directory")?;
@@ -246,6 +243,63 @@ fn run_init_project() -> Result<()> {
     Ok(())
 }
 
+/// Build the starter policy JSON value for onboarding.
+fn starter_policy_json() -> serde_json::Value {
+    json!({
+        "schema_version": 5,
+        "default_effect": "ask",
+        "default_sandbox": "default",
+        "includes": [{"path": "@clash//builtin.star"}],
+        "sandboxes": {
+            "default": {
+                "default": ["read", "execute"],
+                "rules": [
+                    {
+                        "effect": "allow",
+                        "caps": ["read", "write", "create"],
+                        "path": "$PWD",
+                        "path_match": "subpath"
+                    },
+                    {
+                        "effect": "allow",
+                        "caps": ["read", "write", "create"],
+                        "path": "$TMPDIR",
+                        "path_match": "subpath"
+                    },
+                    {
+                        "effect": "allow",
+                        "caps": ["read"],
+                        "path": "$HOME",
+                        "path_match": "subpath"
+                    }
+                ],
+                "network": "deny"
+            }
+        },
+        "tree": []
+    })
+}
+
+/// Write a starter policy.json for onboarding.
+///
+/// Creates a minimal policy with `default_effect: "ask"`, the builtin include,
+/// a sensible dev sandbox, and an empty rule tree. Returns the path to the file.
+pub fn write_starter_policy() -> Result<std::path::PathBuf> {
+    let policy_path = ClashSettings::policy_file()?;
+    let policy_path = policy_path.with_extension("json");
+    let dir = policy_path
+        .parent()
+        .context("policy file path has no parent directory")?;
+    std::fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
+
+    let policy = starter_policy_json();
+
+    std::fs::write(&policy_path, serde_json::to_string_pretty(&policy)?)
+        .with_context(|| format!("failed to write {}", policy_path.display()))?;
+
+    Ok(policy_path)
+}
+
 /// Configure Claude Code to let Clash handle all permission decisions.
 pub fn set_bypass_permissions() -> Result<()> {
     let claude = claude_settings::ClaudeSettings::new();
@@ -365,4 +419,17 @@ pub fn install_plugin() -> Result<()> {
 
     ui::success("Clash plugin installed in Claude Code.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn starter_policy_compiles() {
+        let policy = starter_policy_json();
+        let json_str = serde_json::to_string_pretty(&policy).expect("serialize starter policy");
+        crate::policy::compile::compile_to_tree(&json_str)
+            .expect("starter policy must compile without errors");
+    }
 }

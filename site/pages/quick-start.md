@@ -24,7 +24,7 @@ clash init
 
 This creates a policy file at `~/.clash/policy.star`, installs the Claude Code plugin, and configures permissions so Clash is the sole decision-maker.
 
-To skip the wizard and use sensible defaults:
+To skip the interactive editor and use sensible defaults:
 
 ```bash
 clash init --quick
