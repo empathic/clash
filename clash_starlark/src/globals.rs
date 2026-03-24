@@ -47,6 +47,10 @@ fn register_globals(builder: &mut GlobalsBuilder) {
     const _DENY: &str = "deny";
     const _ASK: &str = "ask";
 
+    // Platform constants — let Starlark policies branch on OS/architecture
+    const _OS: &str = std::env::consts::OS;
+    const _ARCH: &str = std::env::consts::ARCH;
+
     // -- Minimal Rust primitives (everything else is in @clash//std.star) --
 
     /// Wrap an arbitrary dict/value as a MatchTreeNode.

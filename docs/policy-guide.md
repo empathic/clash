@@ -358,6 +358,20 @@ exe(["cargo", "rustc"])
 exe("git").also(exe("gh"))
 ```
 
+### Platform Constants
+
+```python
+load("@clash//std.star", "OS", "ARCH")
+
+# OS is "macos" or "linux"; ARCH is "aarch64" or "x86_64"
+if OS == "linux":
+    extra_fs = [path("/opt/tools").allow(read = True)]
+else:
+    extra_fs = []
+```
+
+Use `OS` and `ARCH` to write policies that compile differently per platform.
+
 ### Path Helpers
 
 ```python

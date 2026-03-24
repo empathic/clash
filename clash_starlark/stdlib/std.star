@@ -2,7 +2,14 @@
 #
 # Emits v5 match tree nodes using minimal Rust primitives.
 # Rust globals available: _mt_node, _mt_condition, _mt_pattern, _mt_prefix,
-# _mt_literal, _mt_policy, _ALLOW, _DENY, _ASK
+# _mt_literal, _mt_policy, _ALLOW, _DENY, _ASK, _OS, _ARCH
+
+# ---------------------------------------------------------------------------
+# Platform constants — re-export from Rust for use in policy files
+# ---------------------------------------------------------------------------
+
+OS = _OS      # e.g. "macos", "linux"
+ARCH = _ARCH  # e.g. "aarch64", "x86_64"
 
 # ---------------------------------------------------------------------------
 # Effect constructors
@@ -620,7 +627,10 @@ def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
     fs_rules = []
     if fs == None:
         fs = []
-    fs += [path("/").recurse().allow(read=True), path("/Users").recurse().deny()]
+    # Allow reading the root filesystem but deny access to user home directories.
+    # The home directory root differs by platform: /Users on macOS, /home on Linux.
+    _user_homes = "/Users" if OS == "macos" else "/home"
+    fs += [path("/").recurse().allow(read=True), path(_user_homes).recurse().deny()]
     for entry in fs:
         if hasattr(entry, "_is_path"):
             # Path entry — collect sandbox rules from it
