@@ -2,14 +2,14 @@ use anyhow::{Context, Result};
 use tracing::{Level, info, instrument};
 
 use crate::cli::HooksCmd;
-use crate::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput, is_interactive_tool};
+use crate::hooks::{
+    HookOutput, HookSpecificOutput, PermissionRule, ToolUseHookInput, is_interactive_tool,
+};
 use crate::permissions::check_permission;
 use crate::policy::Effect;
 use crate::session_policy;
 use crate::settings::{ClashSettings, HookContext};
 use crate::trace;
-
-use claude_settings::PermissionRule;
 
 impl HooksCmd {
     /// Handle hook when clash is disabled — drain stdin and return pass-through.

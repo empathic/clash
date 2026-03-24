@@ -3,6 +3,7 @@ members = [
     "clash",
     "clash_notify",
     "claude_settings",
+    "claude_hooks",
     "clash_starlark",
     "clester",
     "clash-brush-parser",
@@ -141,6 +142,7 @@ seccompiler = "0.4"
 clash-brush-builtins = { path = "clash-brush-builtins", version = "0.5.1" }
 clash_notify = { path = "clash_notify", version = "0.5.1" }
 clash_starlark = { path = "clash_starlark", version = "0.5.1" }
+claude_hooks = { path = "claude_hooks", version = "0.1.0" }
 claude_settings = { path = "claude_settings", version = "0.5.1" }
 clash-brush-parser = { path = "clash-brush-parser", version = "0.5.1" }
 clash-brush-core = { path = "clash-brush-core", version = "0.5.1" }

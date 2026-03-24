@@ -65,5 +65,6 @@
 * *clash-starlark* Starlark policy evaluator — compiles `.star` files to JSON policy format
 * *clash-plugin* Claude plugin refered to by the .claude-plugin definitions
 * *clash_notify* Helper crate for extended notifications outside of the terminal
+* *claude_hooks* Standalone crate for building Claude Code hook handlers — types, traits, and runner
 * *claude_settings* Helper crate for interacting with a user's ".claude" settings directories
 * *docs* Project level documentation

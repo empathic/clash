@@ -53,6 +53,7 @@ similar = { workspace = true }
 # from the workspace
 clash_notify = { workspace = true }
 clash_starlark = { workspace = true }
+claude_hooks = { workspace = true }
 claude_settings = { workspace = true }
 clash-brush-parser = { workspace = true }
 clash-brush-builtins = { workspace = true }

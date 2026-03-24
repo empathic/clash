@@ -7,13 +7,12 @@
 use tracing::{Level, info, instrument, warn};
 
 use crate::hooks::{
-    HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput, is_interactive_tool,
+    HookOutput, HookSpecificOutput, PermissionRule, SessionStartHookInput, ToolUseHookInput,
+    is_interactive_tool,
 };
 use crate::notifications;
 use crate::permissions::check_permission;
 use crate::settings::ClashSettings;
-
-use claude_settings::PermissionRule;
 
 /// Handle a permission request — decide whether to approve or deny on behalf of user.
 ///

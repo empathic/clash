@@ -731,6 +731,7 @@ dependencies = [
  "clash-brush-parser",
  "clash_notify",
  "clash_starlark",
+ "claude_hooks",
  "claude_settings",
  "console",
  "crossterm",
@@ -901,6 +902,15 @@ dependencies = [
  "serde_json",
  "starlark",
  "tempfile",
+]
+
+[[package]]
+name = "claude_hooks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

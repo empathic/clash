@@ -243,9 +243,9 @@ pub fn get_effect(output: &HookOutput) -> Option<Effect> {
             pre.permission_decision
                 .as_ref()
                 .and_then(|rule| match rule {
-                    claude_settings::PermissionRule::Allow => Some(Effect::Allow),
-                    claude_settings::PermissionRule::Deny => Some(Effect::Deny),
-                    claude_settings::PermissionRule::Ask => Some(Effect::Ask),
+                    crate::hooks::PermissionRule::Allow => Some(Effect::Allow),
+                    crate::hooks::PermissionRule::Deny => Some(Effect::Deny),
+                    crate::hooks::PermissionRule::Ask => Some(Effect::Ask),
                     _ => None,
                 })
         }
