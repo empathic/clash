@@ -61,7 +61,7 @@ Two new concepts:
 Test it:
 
 ```bash
-clash explain read "src/main.rs"
+clash explain glob "src/**/*.rs"
 ```
 
 You should see an <span class="badge badge--allow">allow</span> decision.
@@ -312,9 +312,9 @@ clash status
 Test specific commands against your rules:
 
 ```bash
-clash explain bash "cargo test"
-clash explain bash "git push --force"
-clash explain read "~/.ssh/id_rsa"
+clash explain bash "cargo test"        # → allow (sandbox: dev)
+clash explain bash "git push --force"  # → deny
+clash explain read "~/.ssh/id_rsa"     # → ask (no rule, falls to default)
 ```
 
 Format your policy file:
