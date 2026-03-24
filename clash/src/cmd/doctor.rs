@@ -270,10 +270,7 @@ fn run_onboard() -> Result<()> {
             already_ok,
         );
     } else {
-        println!(
-            "  {} All checks passed.",
-            style::green_bold("OK"),
-        );
+        println!("  {} All checks passed.", style::green_bold("OK"),);
     }
 
     println!(
@@ -283,9 +280,7 @@ fn run_onboard() -> Result<()> {
 
     // Enable the plugin marker in Claude Code settings (same as init).
     let claude = claude_settings::ClaudeSettings::new();
-    if let Err(e) =
-        claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true)
-    {
+    if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true) {
         warn!(error = %e, "Could not set enabledPlugins during onboard");
     }
 
@@ -328,10 +323,7 @@ fn check_plugin_and_bypass() -> (bool, bool) {
         _ => return (false, false),
     };
 
-    let plugin_ok = settings
-        .hooks
-        .as_ref()
-        .is_some_and(hooks_reference_clash)
+    let plugin_ok = settings.hooks.as_ref().is_some_and(hooks_reference_clash)
         || settings
             .enabled_plugins
             .as_ref()

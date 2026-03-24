@@ -175,9 +175,7 @@ impl App {
 
                 // Test panel focused: route keys to the test panel.
                 // Esc returns focus to the left pane. Tab toggles input/history.
-                if self.test_panel.visible
-                    && self.test_focused
-                    && matches!(self.mode, Mode::Normal)
+                if self.test_panel.visible && self.test_focused && matches!(self.mode, Mode::Normal)
                 {
                     match key.code {
                         KeyCode::Esc => {
@@ -492,7 +490,10 @@ impl App {
         // Append included rules so tests see the full picture
         merged.tree.extend(self.included.tree.clone());
         for (k, v) in &self.included.sandboxes {
-            merged.sandboxes.entry(k.clone()).or_insert_with(|| v.clone());
+            merged
+                .sandboxes
+                .entry(k.clone())
+                .or_insert_with(|| v.clone());
         }
         Some(merged)
     }
@@ -547,11 +548,9 @@ impl App {
 
         // Content area — split horizontally if test panel is visible
         let (content_area, test_area) = if self.test_panel.visible {
-            let split = Layout::horizontal([
-                Constraint::Percentage(68),
-                Constraint::Percentage(32),
-            ])
-            .split(chunks[1]);
+            let split =
+                Layout::horizontal([Constraint::Percentage(68), Constraint::Percentage(32)])
+                    .split(chunks[1]);
             (split[0], Some(split[1]))
         } else {
             (chunks[1], None)
@@ -567,7 +566,8 @@ impl App {
 
         // Test panel (side panel)
         if let Some(area) = test_area {
-            self.test_panel.view_with_focus(frame, area, self.test_focused);
+            self.test_panel
+                .view_with_focus(frame, area, self.test_focused);
         }
 
         // Status bar
@@ -614,7 +614,12 @@ impl App {
                 test_hint,
                 ("s", "save"),
             ],
-            Tab::Settings => &[("j/k", "move"), ("Enter", "cycle"), test_hint, ("s", "save")],
+            Tab::Settings => &[
+                ("j/k", "move"),
+                ("Enter", "cycle"),
+                test_hint,
+                ("s", "save"),
+            ],
         };
 
         widgets::render_status_bar(frame, chunks[2], hints, flash_msg);

@@ -17,6 +17,7 @@ pub mod widgets;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use crossterm::cursor::Show;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -26,6 +27,20 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use crate::policy_loader;
+
+/// Restore the terminal to its normal state.
+///
+/// Idempotent — safe to call even if the terminal was never fully initialised.
+/// Ignores errors so it works as best-effort cleanup in panic hooks.
+pub(crate) fn restore_terminal() {
+    let _ = disable_raw_mode();
+    let _ = execute!(
+        std::io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        Show
+    );
+}
 
 /// Launch the interactive policy editor TUI.
 pub fn run(path: &Path) -> Result<()> {
@@ -42,24 +57,38 @@ pub fn run_with_options(path: &Path, show_test_panel: bool) -> Result<()> {
         app.show_test_panel();
     }
 
-    // Setup terminal
+    // Install a panic hook that restores the terminal so the user isn't left
+    // with an unusable shell if the TUI panics.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        original_hook(info);
+    }));
+
+    let result = setup_and_run(&mut app);
+
+    // Restore the previous panic hook now that the TUI is done.
+    let _ = std::panic::take_hook();
+
+    result
+}
+
+/// Set up the terminal, run the TUI, and always restore before returning.
+fn setup_and_run(app: &mut app::App) -> Result<()> {
     enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
 
-    // Run the app (errors will be handled after cleanup)
-    let result = app.run(&mut terminal);
+    // Once raw mode is active we must restore no matter what, so run the rest
+    // inside a closure — any early `?` returns land here, not the caller.
+    let result = (|| {
+        let mut stdout = std::io::stdout();
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+        app.run(&mut terminal)
+    })();
 
-    // Restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
+    // Always restore, whether the app succeeded or returned an error.
+    restore_terminal();
 
     result
 }

@@ -5,9 +5,9 @@
 
 use anyhow::{Context, Result};
 
+use crate::policy::Effect;
 use crate::policy::ir::PolicyDecision;
 use crate::policy::match_tree::CompiledPolicy;
-use crate::policy::Effect;
 
 /// The result of testing a tool invocation against a policy.
 #[derive(Debug, Clone)]
@@ -83,10 +83,7 @@ pub fn parse_test_input(input: &str) -> Result<(String, serde_json::Value)> {
 ///
 /// Maps lowercase names to their canonical forms (`bash` → `Bash`) and
 /// builds the appropriate JSON input shape for each tool type.
-pub fn resolve_tool_input(
-    tool: &str,
-    input: Option<&str>,
-) -> Result<(String, serde_json::Value)> {
+pub fn resolve_tool_input(tool: &str, input: Option<&str>) -> Result<(String, serde_json::Value)> {
     let noun = input.unwrap_or_default();
 
     if tool.to_lowercase() == "tool" {

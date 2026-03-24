@@ -11,9 +11,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use crate::policy::Effect;
 use crate::policy::match_tree::CompiledPolicy;
 use crate::policy::test_eval;
-use crate::policy::Effect;
 
 /// A single test case in the console history.
 #[derive(Debug, Clone)]
@@ -322,7 +322,11 @@ impl TestPanel {
 
     /// Render the test panel, with focus indicator.
     pub fn view_with_focus(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        let border_color = if focused { Color::Blue } else { Color::DarkGray };
+        let border_color = if focused {
+            Color::Blue
+        } else {
+            Color::DarkGray
+        };
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color))
@@ -373,7 +377,13 @@ impl TestPanel {
         // Render unpinned cases first, then pinned section
         let has_pinned = self.cases.iter().any(|c| c.pinned);
 
-        for (i, case) in self.cases.iter().enumerate().skip(scroll).take(visible_height) {
+        for (i, case) in self
+            .cases
+            .iter()
+            .enumerate()
+            .skip(scroll)
+            .take(visible_height)
+        {
             if case.pinned && has_pinned {
                 continue; // Render pinned separately below
             }
@@ -553,8 +563,8 @@ fn truncate_input(input: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::match_tree::*;
     use crate::policy::manifest_edit;
+    use crate::policy::match_tree::*;
     use std::collections::HashMap;
 
     fn empty_policy() -> CompiledPolicy {

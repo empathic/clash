@@ -1812,16 +1812,11 @@ impl FormState {
 
                     if self.is_inline_select(fi) {
                         // Inline mode: show all options, highlight selected
-                        let mut spans = vec![Span::styled(
-                            format!("  {label}: "),
-                            label_style,
-                        )];
+                        let mut spans = vec![Span::styled(format!("  {label}: "), label_style)];
                         for (i, opt) in options.iter().enumerate() {
                             if i > 0 {
-                                spans.push(Span::styled(
-                                    "  ",
-                                    Style::default().fg(Color::DarkGray),
-                                ));
+                                spans
+                                    .push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
                             }
                             let style = if i == *selected {
                                 Style::default()
@@ -1836,10 +1831,7 @@ impl FormState {
                             spans.push(Span::styled(opt.as_str(), style));
                         }
                         if is_active {
-                            spans.push(Span::styled(
-                                "  ←/→",
-                                Style::default().fg(Color::DarkGray),
-                            ));
+                            spans.push(Span::styled("  ←/→", Style::default().fg(Color::DarkGray)));
                         }
                         lines.push(Line::from(spans));
                     } else {
