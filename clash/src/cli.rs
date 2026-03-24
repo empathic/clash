@@ -179,7 +179,7 @@ pub enum Commands {
         /// Pass a path to trace.jsonl or audit.jsonl, or "latest" to auto-detect.
         #[arg(long = "from-trace", value_name = "PATH")]
         from_trace: Option<std::path::PathBuf>,
-        /// Skip the interactive wizard and create a sensible default policy
+        /// Skip the interactive editor and create a sensible default policy
         #[arg(long)]
         quick: bool,
     },
