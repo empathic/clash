@@ -489,7 +489,7 @@ impl TestPanel {
         };
 
         let input_display = if self.input_line.is_empty() && self.input_active {
-            "bash \"cmd\", Read { ... }".to_string()
+            "tool args — e.g. bash git status".to_string()
         } else {
             self.input_line.clone()
         };

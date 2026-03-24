@@ -128,6 +128,8 @@ def main():
             exe("pip").allow(),
             exe("uv").allow(),
             tool("Read").allow(),
+            tool("Write").allow(),
+            tool("Edit").allow(),
             tool("Glob").allow(),
             tool("Grep").allow(),
         ],
@@ -244,6 +246,10 @@ fn run_init_project() -> Result<()> {
 }
 
 /// Build the starter policy JSON value for onboarding.
+///
+/// Includes pre-configured rules for base Claude tools (Read, Write, Edit,
+/// Glob, Grep) so new users start with a working set of file-operation
+/// permissions out of the box.
 fn starter_policy_json() -> serde_json::Value {
     json!({
         "schema_version": 5,
@@ -276,7 +282,29 @@ fn starter_policy_json() -> serde_json::Value {
                 "network": "deny"
             }
         },
-        "tree": []
+        "tree": [
+            {
+                "condition": {
+                    "observe": "tool_name",
+                    "pattern": { "any_of": [
+                        { "literal": { "literal": "Read" } },
+                        { "literal": { "literal": "Glob" } },
+                        { "literal": { "literal": "Grep" } }
+                    ]},
+                    "children": [{ "decision": { "allow": "default" } }]
+                }
+            },
+            {
+                "condition": {
+                    "observe": "tool_name",
+                    "pattern": { "any_of": [
+                        { "literal": { "literal": "Write" } },
+                        { "literal": { "literal": "Edit" } }
+                    ]},
+                    "children": [{ "decision": { "allow": "default" } }]
+                }
+            }
+        ]
     })
 }
 

@@ -63,12 +63,20 @@ pub enum Msg {
 }
 
 impl TreeView {
+    /// Sentinel path used for the "included" section header so it can be
+    /// independently collapsed/expanded.
+    const INCLUDED_SECTION_PATH: [usize; 1] = [usize::MAX];
+
     pub fn new(manifest: &PolicyManifest, included: &CompiledPolicy) -> Self {
+        let mut collapsed = HashSet::new();
+        // Default the included section to collapsed so new users focus on
+        // their own rules first.
+        collapsed.insert(Self::INCLUDED_SECTION_PATH.to_vec());
         let mut view = TreeView {
             flat_nodes: Vec::new(),
             selected: 0,
             scroll_offset: 0,
-            collapsed: HashSet::new(),
+            collapsed,
             included: included.clone(),
         };
         view.rebuild(manifest);
@@ -111,24 +119,42 @@ impl TreeView {
                 self.flatten_node(node, 1, vec![i], false);
             }
 
-            // Append included rules as read-only
+            // Append included rules as read-only, collapsible section
             if !included.tree.is_empty() {
-                // Separator node for included rules
+                let included_path = Self::INCLUDED_SECTION_PATH.to_vec();
+                let included_collapsed = self.collapsed.contains(&included_path);
+
+                let label = if included_collapsed && !manifest.includes.is_empty() {
+                    let files: Vec<&str> = manifest
+                        .includes
+                        .iter()
+                        .map(|inc| {
+                            // Show just the filename, stripping @clash// prefix and directory
+                            inc.path.rsplit('/').next().unwrap_or(&inc.path)
+                        })
+                        .collect();
+                    format!("── included ({}) ──", files.join(", "))
+                } else {
+                    "── included ──".to_string()
+                };
+
                 self.flat_nodes.push(FlatNode {
                     depth: 1,
-                    label: "── included ──".to_string(),
-                    node_path: vec![],
+                    label,
+                    node_path: included_path,
                     is_leaf: false,
-                    has_children: false,
+                    has_children: true,
                     decision: None,
                     is_root: false,
                     read_only: true,
                     source: None,
                 });
 
-                for (i, node) in included.tree.iter().enumerate() {
-                    // Use a high offset so paths don't collide with inline nodes
-                    self.flatten_node(node, 1, vec![10000 + i], true);
+                if !included_collapsed {
+                    for (i, node) in included.tree.iter().enumerate() {
+                        // Use a high offset so paths don't collide with inline nodes
+                        self.flatten_node(node, 2, vec![10000 + i], true);
+                    }
                 }
             }
         }
@@ -370,8 +396,18 @@ impl Component for TreeView {
                 }
                 let path = node.node_path.clone();
                 if node.is_leaf {
-                    // Inline leaf (condition->decision) or bare decision: edit effect.
-                    Action::RunForm(FormRequest::EditDecision { path })
+                    // Check if this is an inline leaf (Condition→Decision) or a
+                    // bare Decision node.
+                    let is_condition = Self::get_node_at_path_ref(&manifest.policy.tree, &path)
+                        .is_some_and(|n| matches!(n, Node::Condition { .. }));
+
+                    if is_condition {
+                        // Inline leaf: edit the full rule (match + effect).
+                        Action::RunForm(FormRequest::EditRule { path })
+                    } else {
+                        // Bare decision: edit effect only.
+                        Action::RunForm(FormRequest::EditDecision { path })
+                    }
                 } else {
                     // Non-leaf condition: edit the observable/pattern.
                     Action::RunForm(FormRequest::EditCondition { path })
@@ -645,7 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edit_inline_leaf_opens_decision_form() {
+    fn test_edit_inline_leaf_opens_edit_rule_form() {
         let mut manifest = empty_manifest();
         manifest_edit::upsert_rule(
             &mut manifest,
@@ -660,7 +696,7 @@ mod tests {
         let action = view.update(Msg::Edit, &mut manifest);
         assert!(matches!(
             action,
-            Action::RunForm(FormRequest::EditDecision { .. })
+            Action::RunForm(FormRequest::EditRule { .. })
         ));
     }
 

@@ -191,9 +191,9 @@ impl App {
                                 ));
                             }
                             _ => match wt.step {
-                                WalkthroughStep::Welcome => {
+                                WalkthroughStep::Welcome | WalkthroughStep::BaseTools => {
                                     wt.advance();
-                                    // Stay in Walkthrough mode for AddRule step
+                                    // Stay in Walkthrough mode for the next overlay step
                                 }
                                 WalkthroughStep::AddRule if key.code == KeyCode::Char('a') => {
                                     wt.step = WalkthroughStep::FillForm;
