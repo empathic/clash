@@ -9,6 +9,7 @@ members = [
     "clash-brush-core",
     "clash-brush-builtins",
     "clash-brush-interactive",
+    "clash-wasm",
 ]
 resolver = "3"
 
@@ -151,3 +152,6 @@ clash-brush-interactive = { path = "clash-brush-interactive", version = "0.5.1",
 # Workspace crate aliases (used by brush crates internally under original brush-* names)
 brush-parser = { path = "clash-brush-parser", version = "0.5.1", package = "clash-brush-parser" }
 brush-core = { path = "clash-brush-core", version = "0.5.1", package = "clash-brush-core" }
+
+[patch.crates-io]
+starlark = { path = "starlark-wasm-patch" }

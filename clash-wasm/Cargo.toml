@@ -1,0 +1,22 @@
+[package]
+name = "clash-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "WASM build of Clash policy engine for browser-based interactive tutorial"
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[dependencies]
+clash_starlark = { workspace = true }
+wasm-bindgen = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+regex = { workspace = true }
+console_error_panic_hook = "0.1"
