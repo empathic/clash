@@ -1,7 +1,7 @@
 # Rust Development Policy
 # Allows common Rust toolchain commands with filesystem sandboxing.
 # Default: ask for anything not explicitly allowed.
-load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "tempdir", "home", "allow", "deny", "ask")
+load("@clash//std.star", "match", "tool", "policy", "sandbox", "cwd", "tempdir", "home", "allow", "deny", "ask")
 
 def main():
     rust_sandbox = sandbox(
@@ -18,12 +18,14 @@ def main():
     return policy(
         default = ask(),
         rules = [
-            exe("cargo").sandbox(rust_sandbox).allow(),
-            exe("rustc").sandbox(rust_sandbox).allow(),
-            exe("rustup").allow(),
-            exe("rustfmt").sandbox(rust_sandbox).allow(),
-            exe("git").allow(),
-            exe("git", args = ["push", "--force"]).deny(),
+            match({"Bash": {
+                "git": {"push": {"--force": deny()}},
+            }}),
+            match({"Bash": {
+                ("cargo", "rustc", "rustfmt"): allow(sandbox = rust_sandbox),
+                "rustup": allow(),
+                "git": allow(),
+            }}),
             tool("Read").allow(),
             tool("Glob").allow(),
             tool("Grep").allow(),

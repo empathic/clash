@@ -22,7 +22,7 @@ use crate::tui::tool_registry;
 use super::tea::FormRequest;
 
 /// Starlark load preamble used when compiling user-entered expressions.
-const STARLARK_LOAD: &str = r#"load("@clash//std.star", "exe", "tool", "cmd", "tools", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains", "domain", "allow", "deny", "ask")"#;
+const STARLARK_LOAD: &str = r#"load("@clash//std.star", "match", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains", "domain", "allow", "deny", "ask")"#;
 
 // ---------------------------------------------------------------------------
 // Field types
@@ -221,7 +221,8 @@ impl FormState {
                 label: "Expression".into(),
                 value: String::new(),
                 cursor: 0,
-                placeholder: r#"e.g. exe("git").allow(), tool("Read").deny()"#.into(),
+                placeholder: r#"e.g. match({"Bash": {"git": allow()}}), tool("Read").deny()"#
+                    .into(),
                 hint: Some("Starlark DSL expression — compiled and added to the policy tree"),
             },
         ];
@@ -302,7 +303,8 @@ impl FormState {
                 label: "Expression".into(),
                 value: String::new(),
                 cursor: 0,
-                placeholder: r#"e.g. exe("git").allow(), tool("Read").deny()"#.into(),
+                placeholder: r#"e.g. match({"Bash": {"git": allow()}}), tool("Read").deny()"#
+                    .into(),
                 hint: Some("Starlark DSL expression — compiled and added to the policy tree"),
             },
         ];

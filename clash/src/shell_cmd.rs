@@ -369,10 +369,10 @@ mod tests {
     /// Build a test policy that allows Bash with a sandbox.
     fn test_policy() -> Arc<CompiledPolicy> {
         Arc::new(compile_star(
-            r#"load("@clash//std.star", "policy", "sandbox", "cwd", "exe", "deny")
+            r#"load("@clash//std.star", "policy", "sandbox", "cwd", "match", "allow", "deny")
 def main():
     return policy(default = deny(), rules = [
-        exe().sandbox(sandbox(name="test", default=deny(), fs=[cwd().allow(read=True)])).allow(),
+        match({"Bash": allow(sandbox=sandbox(name="test", default=deny(), fs=[cwd().allow(read=True)]))}),
     ])
 "#,
         ))

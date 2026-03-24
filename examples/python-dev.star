@@ -1,6 +1,6 @@
 # Python Development Policy
 # Allows python/pip/uv/pytest with sandboxed filesystem access.
-load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "tempdir", "allow", "deny", "ask")
+load("@clash//std.star", "match", "tool", "policy", "sandbox", "cwd", "tempdir", "allow", "deny", "ask")
 
 def main():
     py_sandbox = sandbox(
@@ -15,13 +15,13 @@ def main():
     return policy(
         default = ask(),
         rules = [
-            exe("python").sandbox(py_sandbox).allow(),
-            exe("python3").sandbox(py_sandbox).allow(),
-            exe("pip").sandbox(py_sandbox).allow(),
-            exe("uv").sandbox(py_sandbox).allow(),
-            exe("pytest").sandbox(py_sandbox).allow(),
-            exe("git").allow(),
-            exe("git", args = ["push", "--force"]).deny(),
+            match({"Bash": {
+                "git": {"push": {"--force": deny()}},
+            }}),
+            match({"Bash": {
+                ("python", "python3", "pip", "uv", "pytest"): allow(sandbox = py_sandbox),
+                "git": allow(),
+            }}),
             tool("Read").allow(),
             tool("Glob").allow(),
             tool("Grep").allow(),

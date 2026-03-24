@@ -4,11 +4,11 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "exe", "policy", "allow")
+    load("@clash//std.star", "policy", "allow")
     def main():
         return policy(default=allow(), rules=[])
   project_policy_star: |
-    load("@clash//std.star", "exe", "policy", "deny")
+    load("@clash//std.star", "policy", "deny")
     def main():
         return policy(default=deny(), rules=[])
 

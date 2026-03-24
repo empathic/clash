@@ -232,13 +232,13 @@ fn audit_section() -> SchemaSection {
 
 fn rule_syntax() -> RuleSyntax {
     RuleSyntax {
-        format: "exe(\"bin\").allow() / cwd().allow(read=True) / domains({...})",
+        format: "match({\"Bash\": {\"bin\": allow()}}) / cwd().allow(read=True) / domains({...})",
         effects: vec!["allow", "deny", "ask"],
         domains: vec![
             SchemaField {
                 key: "exec",
                 type_name: "capability",
-                description: "Command execution: exe(\"binary\", args=[...]). Matches Bash tool invocations.",
+                description: "Command execution: match({\"Bash\": {\"binary\": ...}}). Matches Bash tool invocations.",
                 default: None,
                 values: None,
                 required: false,

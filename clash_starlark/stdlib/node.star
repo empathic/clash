@@ -1,4 +1,4 @@
-load("@clash//std.star", "allow", "deny", "sandbox", "cwd", "home", "tempdir", "domains", "exe")
+load("@clash//std.star", "allow", "deny", "match", "sandbox", "cwd", "home", "tempdir", "domains")
 
 node_sandbox = sandbox(
     name = "node_dev",
@@ -19,4 +19,4 @@ node_sandbox = sandbox(
     doc = "Node.js development: project + npm cache, npm registry network",
 )
 
-node = exe(["node", "bun", "deno"]).sandbox(node_sandbox).allow()
+node = match({"Bash": {("node", "bun", "deno"): allow(sandbox = node_sandbox)}})

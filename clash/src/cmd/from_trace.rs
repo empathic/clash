@@ -103,7 +103,7 @@ pub fn run(trace_path: &Path) -> Result<std::path::PathBuf> {
 
     // Print a summary of what was generated
     for bin in &analysis.binaries {
-        ui::info(&format!("  exe(\"{}\").allow()", bin));
+        ui::info(&format!("  match({{\"Bash\": {{\"{}\": allow()}}}})", bin));
     }
     if !analysis.tools.is_empty() {
         let tool_names: Vec<String> = analysis
@@ -285,7 +285,7 @@ fn analyze(invocations: &[ToolInvocation]) -> TraceAnalysis {
     let saw_bash = invocations.iter().any(|i| i.tool_name == "Bash");
     if saw_bash && binaries.is_empty() {
         // We know Bash was used but don't know which binaries. Still list it.
-        // We'll generate exe().allow() to cover all commands.
+        // We'll generate match({"Bash": allow()}) to cover all commands.
     }
 
     TraceAnalysis {
@@ -302,7 +302,7 @@ fn analyze(invocations: &[ToolInvocation]) -> TraceAnalysis {
 fn generate_starlark(analysis: &TraceAnalysis) -> String {
     let mut lines = vec![
         r#"load("@clash//builtin.star", "base")"#.to_string(),
-        r#"load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "home")"#
+        r#"load("@clash//std.star", "match", "tool", "policy", "sandbox", "cwd", "home", "allow", "ask", "deny")"#
             .to_string(),
         r#"load("@clash//sandboxes.star", "dev")"#.to_string(),
         String::new(),
@@ -398,26 +398,38 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     // Deny destructive git ops if git was observed
     if analysis.binaries.contains("git") {
         lines.push("            # Deny destructive git ops".to_string());
-        lines.push("            exe(\"git\", args=[\"push\", \"--force\"]).deny(),".to_string());
+        lines.push("            match({\"Bash\": {\"git\": {".to_string());
         lines.push(
-            "            exe(\"git\", args=[\"push\", \"--force-with-lease\"]).deny(),".to_string(),
+            "                \"push\": {\"--force\": deny(), \"--force-with-lease\": deny()},"
+                .to_string(),
         );
-        lines.push("            exe(\"git\", args=[\"reset\", \"--hard\"]).deny(),".to_string());
+        lines.push("                \"reset\": {\"--hard\": deny()},".to_string());
+        lines.push("            }}}),".to_string());
         lines.push(String::new());
     }
 
     // Binary-specific rules
     if !analysis.binaries.is_empty() {
+        let bin_list: Vec<String> = analysis
+            .binaries
+            .iter()
+            .map(|b| format!("\"{}\"", b))
+            .collect();
         lines.push("            # Observed binaries — sandboxed".to_string());
-        for bin in &analysis.binaries {
+        if bin_list.len() == 1 {
             lines.push(format!(
-                "            exe(\"{}\").sandbox(dev).allow(),",
-                bin
+                "            match({{\"Bash\": {{{}: allow(sandbox = dev)}}}}),",
+                bin_list[0]
+            ));
+        } else {
+            lines.push(format!(
+                "            match({{\"Bash\": {{({}): allow(sandbox = dev)}}}}),",
+                bin_list.join(", ")
             ));
         }
     }
 
-    // If we saw Bash but no specific binaries, add a generic exe rule
+    // If we saw Bash but no specific binaries, add a generic Bash match rule
     let saw_bash = analysis.total_invocations > 0
         && analysis.binaries.is_empty()
         && analysis.tools.len() < analysis.total_invocations;
@@ -425,7 +437,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
         lines.push(
             "            # Bash commands observed (binaries unknown) — sandboxed".to_string(),
         );
-        lines.push("            exe().sandbox(dev).allow(),".to_string());
+        lines.push("            match({\"Bash\": allow(sandbox = dev)}),".to_string());
     }
 
     lines.push("        ],".to_string());
@@ -601,13 +613,13 @@ mod tests {
         assert!(policy.contains("tool([\"Read\", \"Grep\"]).sandbox(_fs_box).allow()"));
         assert!(policy.contains("tool([\"Write\"]).sandbox(_fs_box).allow()"));
 
-        // Should contain exe rules
-        assert!(policy.contains("exe(\"cargo\").sandbox(dev).allow()"));
-        assert!(policy.contains("exe(\"git\").sandbox(dev).allow()"));
+        // Should contain match rules for binaries
+        assert!(policy.contains("match({\"Bash\":"));
+        assert!(policy.contains("allow(sandbox = dev)"));
 
         // Should contain git safety rules
-        assert!(policy.contains("exe(\"git\", args=[\"push\", \"--force\"]).deny()"));
-        assert!(policy.contains("exe(\"git\", args=[\"reset\", \"--hard\"]).deny()"));
+        assert!(policy.contains("\"--force\": deny()"));
+        assert!(policy.contains("\"--hard\": deny()"));
 
         // Should have default = ask
         assert!(policy.contains("default = ask"));
@@ -628,7 +640,8 @@ mod tests {
         let policy = generate_starlark(&analysis);
         assert!(policy.contains("tool([\"Read\"]).sandbox(_fs_box).allow()"));
         assert!(policy.contains("tool([\"Edit\"]).sandbox(_fs_box).allow()"));
-        assert!(!policy.contains("exe(\""));
+        // No binary-specific rules (no "git", "cargo" etc.)
+        assert!(!policy.contains("# Observed binaries"));
     }
 
     #[test]
@@ -641,9 +654,9 @@ mod tests {
         };
 
         let policy = generate_starlark(&analysis);
-        // Should generate a generic exe() rule since we know bash was used
+        // Should generate a generic Bash match rule since we know bash was used
         // but total_invocations > tools count
-        assert!(policy.contains("exe().sandbox(dev).allow()"));
+        assert!(policy.contains("match({\"Bash\": allow(sandbox = dev)})"));
     }
 
     #[test]

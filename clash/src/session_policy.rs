@@ -114,7 +114,7 @@ pub fn suggest_rule_description(
                 return None;
             }
             let bin_name = std::path::Path::new(bin).file_name()?.to_str()?;
-            Some(format!("exe(\"{}\")", bin_name))
+            Some(format!("match({{\"Bash\": {{\"{}\"}}}})", bin_name))
         }
         "Read" | "Glob" | "Grep" => {
             let path = tool_input
@@ -239,8 +239,9 @@ mod tests {
         let advice = ApprovalAdvice {
             noun: "git status".to_string(),
             tool_name: "Bash".to_string(),
-            suggested_rule: "exe(\"git\")".to_string(),
-            cli_command: "clash policy allow 'exe(\"git\")' --scope session".to_string(),
+            suggested_rule: "match({\"Bash\": {\"git\"}})".to_string(),
+            cli_command: "clash policy allow 'match({\"Bash\": {\"git\"}})' --scope session"
+                .to_string(),
         };
         let ctx = advice.as_context();
         assert!(ctx.contains("Bash"));

@@ -1,24 +1,16 @@
 # Permissive Policy
 # Ask-all default with common dev tools auto-allowed.
 # Denies only truly dangerous operations.
-load("@clash//std.star", "exe", "tool", "policy", "allow", "deny", "ask")
+load("@clash//std.star", "match", "tool", "policy", "allow", "deny", "ask")
 
 def main():
     return policy(
         default = ask(),
         rules = [
-            exe("git").allow(),
-            exe("git", args = ["push", "--force"]).deny(),
-            exe("cargo").allow(),
-            exe("npm").allow(),
-            exe("npx").allow(),
-            exe("node").allow(),
-            exe("bun").allow(),
-            exe("python").allow(),
-            exe("pip").allow(),
-            exe("uv").allow(),
-            exe("make").allow(),
-            exe("just").allow(),
+            match({"Bash": {"git": {"push": {"--force": deny()}}}}),
+            match({"Bash": {
+                ("git", "cargo", "npm", "npx", "node", "bun", "python", "pip", "uv", "make", "just"): allow(),
+            }}),
             tool("Read").allow(),
             tool("Write").allow(),
             tool("Edit").allow(),

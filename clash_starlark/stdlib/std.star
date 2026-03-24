@@ -64,13 +64,6 @@ def _cond(observe, pattern, doc=None):
     return _mt_condition(observe, pattern)
 
 
-def _mt_exe(pattern, doc=None):
-    """Build ToolName=Bash → PosArg(0)=pattern."""
-    inner = _cond({"positional_arg": 0}, pattern, doc=doc)
-    bash_pat = _mt_pattern("Bash")
-    return _mt_condition("tool_name", bash_pat).on([inner])
-
-
 def _mt_tool(pattern, doc=None):
     """Build ToolName=pattern."""
     return _cond("tool_name", pattern, doc=doc)
@@ -151,40 +144,8 @@ def _mt_or(patterns):
 
 
 # ---------------------------------------------------------------------------
-# Exec / tool builders
+# Tool builders
 # ---------------------------------------------------------------------------
-
-
-def exe(name=None, args=None, doc=None):
-    """Build an exec rule.
-
-    Usage:
-        exe("git").allow()
-        exe("git", args=["push"]).deny()
-        exe("cargo").sandbox(my_sandbox).allow()
-        exe(["cargo", "rustc"]).allow()
-        exe().deny()  # deny all exec
-        exe("git", doc="Version control").allow()
-    """
-    node = _mt_exe(_pattern(name), doc=doc)
-
-    if args != None:
-        node = _exe_with_args(name, args, doc=doc)
-
-    return _with_sandbox_support(node)
-
-
-def _exe_with_args(name, args, doc=None):
-    """Build an exe node with positional args already nested."""
-    pat = _pattern(name)
-    result = _mt_exe(pat, doc=doc)
-    if len(args) > 0:
-        # Build nested chain: arg(n, ...) wrapping the innermost
-        innermost = _mt_arg(len(args), _pattern(args[len(args) - 1]))
-        for i in range(len(args) - 2, -1, -1):
-            innermost = _mt_arg(i + 1, _pattern(args[i])).on([innermost])
-        result = _mt_exe(pat, doc=doc).on([innermost])
-    return result
 
 
 def tool(name=None, doc=None):
@@ -200,7 +161,7 @@ def tool(name=None, doc=None):
 
 
 # ---------------------------------------------------------------------------
-# Dict-based builders (cmd, tools)
+# Dict-based match tree builder
 # ---------------------------------------------------------------------------
 
 
@@ -213,7 +174,7 @@ def _collect_effect_sandbox(eff, sandboxes, seen):
             sandboxes.append(_sandbox_to_json(sb))
 
 
-def _cmd_build_tree(tree, arg_index, sandboxes, seen):
+def _match_build_tree(tree, arg_index, sandboxes, seen):
     """Recursively build match tree nodes from a dict tree."""
     nodes = []
     for key, value in tree.items():
@@ -223,74 +184,61 @@ def _cmd_build_tree(tree, arg_index, sandboxes, seen):
             cond = _mt_arg(arg_index, pat)
 
             if type(value) == "dict":
-                children = _cmd_build_tree(value, arg_index + 1, sandboxes, seen)
+                children = _match_build_tree(value, arg_index + 1, sandboxes, seen)
                 nodes.append(cond.on(children))
             elif hasattr(value, "_is_effect"):
                 decision = _effect_to_decision(value)
                 nodes.append(cond.on([decision]))
                 _collect_effect_sandbox(value, sandboxes, seen)
             else:
-                fail("cmd() values must be effect descriptors or dicts")
+                fail("match() values must be effect descriptors or dicts")
     return nodes
 
 
-def cmd(name, tree):
-    """Build a command rule from a nested dict tree.
-
-    Returns a rule node for use in policy(rules=[...]).
-
-    Usage:
-        cmd("git", {
-            "push": deny(),
-            ("pull", "fetch"): allow(),
-            "remote": {
-                "add": ask(),
-            },
-        })
-    """
-    sandboxes = []
-    seen = {}
-    nodes = _cmd_build_tree(tree, 1, sandboxes, seen)
-
-    # Wrap in ToolName=Bash → PosArg(0)=name
-    bash_pat = _mt_pattern("Bash")
-    name_pat = _pattern(name)
-    inner = _mt_condition({"positional_arg": 0}, name_pat).on(nodes)
-    root = _mt_condition("tool_name", bash_pat).on([inner])
-
-    return struct(_node=root, _sandbox=None, _cmd_sandboxes=sandboxes)
-
-
-def tools(mapping):
-    """Build tool rules from a dict.
+def match(tree):
+    """Build rules from a nested dict tree where roots are tool names.
 
     Returns a list of rule nodes for use in policy(rules=[...]).
 
     Usage:
-        tools({
-            ("Agent", "Skill"): allow(sandbox=fs),
-            "Bash": ask(sandbox=project),
+        match({
+            "Bash": {
+                "git": {
+                    "push": deny(),
+                    ("pull", "fetch"): allow(),
+                    "remote": {
+                        "add": ask(),
+                    },
+                },
+            },
+            ("Read", "Glob", "Grep"): allow(),
+            "WebSearch": deny(),
         })
     """
-    result = []
     sandboxes = []
     seen = {}
+    result = []
 
-    for key, eff in mapping.items():
-        if not hasattr(eff, "_is_effect"):
-            fail("tools() values must be effect descriptors")
-
+    for key, value in tree.items():
         names = key if type(key) == "tuple" else (key,)
-        decision = _effect_to_decision(eff)
 
         for name in names:
             pat = _pattern(name)
-            cond = _mt_tool(pat)
-            result.append(struct(_node=cond.on([decision]), _sandbox=None))
+            tool_cond = _mt_tool(pat)
 
-        _collect_effect_sandbox(eff, sandboxes, seen)
+            if type(value) == "dict":
+                children = _match_build_tree(value, 0, sandboxes, seen)
+                node = tool_cond.on(children)
+            elif hasattr(value, "_is_effect"):
+                decision = _effect_to_decision(value)
+                node = tool_cond.on([decision])
+                _collect_effect_sandbox(value, sandboxes, seen)
+            else:
+                fail("match() values must be effect descriptors or dicts")
 
-    # Attach collected sandboxes to the first node for policy() to extract.
+            result.append(struct(_node=node, _sandbox=None))
+
+    # Attach collected sandboxes to the first node for policy() to extract
     if result and sandboxes:
         first = result[0]
         result[0] = struct(_node=first._node, _sandbox=None, _cmd_sandboxes=sandboxes)
@@ -781,8 +729,12 @@ def policy(default="deny", rules=None, default_sandbox=None):
     Usage:
         policy(default=deny(), rules=[
             cwd().allow(read=True, write=True),
-            exe("git", args=["push"]).deny(),
-            exe("git").allow(),
+            match({"Bash": {
+                "git": {
+                    "push": deny(),
+                },
+            }}),
+            match({"Bash": {"git": allow()}}),
             tool("Glob").on([
                 cwd().child("src").allow(read=True),
             ]),
@@ -845,7 +797,7 @@ def _collect_node(item, flat_nodes, sandbox_list, seen):
         if sb._name not in seen:
             seen[sb._name] = True
             sandbox_list.append(_sandbox_to_json(sb))
-    # cmd()/tools() attach pre-built sandbox JSON via _cmd_sandboxes
+    # match() attaches pre-built sandbox JSON via _cmd_sandboxes
     if hasattr(item, "_cmd_sandboxes"):
         for sb_json in item._cmd_sandboxes:
             name = sb_json.get("name", "")
