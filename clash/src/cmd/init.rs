@@ -36,7 +36,11 @@ pub fn run(no_bypass: Option<bool>, scope: Option<String>, quick: bool) -> Resul
 fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     let mut actions = InitActions::default();
 
-    wizard::wiz()?;
+    let wiz_result = wizard::wiz();
+    // Ensure the terminal is sane even if the wizard exited abnormally
+    // (e.g. dialoguer left the cursor hidden or raw mode enabled).
+    crate::tui::restore_terminal();
+    wiz_result?;
     actions.policy_created = true;
 
     // Always ensure settings.json records clash as an enabled plugin.
