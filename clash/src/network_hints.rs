@@ -5,9 +5,10 @@
 //! This module detects those errors in PostToolUse responses and returns
 //! advisory context so Claude can explain the cause and suggest fixes.
 
+use clash_hooks::event::PostToolUse;
+use clash_hooks::ToolEvent;
 use tracing::{Level, info, instrument};
 
-use crate::hooks::ToolUseHookInput;
 use crate::policy::sandbox_types::NetworkPolicy;
 use crate::settings::ClashSettings;
 
@@ -52,16 +53,16 @@ const NETWORK_ERROR_PATTERNS: &[&str] = &[
 /// by sandbox network restrictions. Returns advisory context if so.
 #[instrument(level = Level::TRACE, skip(input, settings))]
 pub fn check_for_sandbox_network_hint(
-    input: &ToolUseHookInput,
+    input: &PostToolUse,
     settings: &ClashSettings,
 ) -> Option<String> {
     // Only check Bash tool responses
-    if input.tool_name != "Bash" {
+    if input.tool_name() != "Bash" {
         return None;
     }
 
     // Extract text from tool_response
-    let response_text = extract_response_text(input.tool_response.as_ref()?)?;
+    let response_text = extract_response_text(input.tool_response()?)?;
 
     // Check for network error patterns
     if !contains_network_error(&response_text) {
@@ -71,7 +72,7 @@ pub fn check_for_sandbox_network_hint(
     // Re-evaluate the policy to check if this command would run under
     // a sandbox with NetworkPolicy::Deny
     let tree = settings.policy_tree()?;
-    let decision = tree.evaluate(&input.tool_name, &input.tool_input);
+    let decision = tree.evaluate(input.tool_name(), input.tool_input_raw());
 
     let network_policy = decision.sandbox.as_ref().map(|s| &s.network);
 
@@ -159,7 +160,31 @@ fn build_network_hint() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clash_hooks::HookEvent;
     use serde_json::json;
+
+    fn make_post_tool_use(
+        tool_name: &str,
+        tool_input: serde_json::Value,
+        tool_response: Option<serde_json::Value>,
+    ) -> PostToolUse {
+        let mut json_val = serde_json::json!({
+            "session_id": "",
+            "transcript_path": "",
+            "cwd": "/tmp",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+        });
+        if let Some(resp) = tool_response {
+            json_val["tool_response"] = resp;
+        }
+        match clash_hooks::recv_from(serde_json::to_vec(&json_val).unwrap().as_slice()).unwrap() {
+            HookEvent::PostToolUse(e) => e,
+            _ => panic!("expected PostToolUse"),
+        }
+    }
 
     #[test]
     fn test_contains_network_error_dns() {
@@ -241,33 +266,29 @@ mod tests {
 
     #[test]
     fn test_check_returns_none_for_non_bash() {
-        let input = ToolUseHookInput {
-            tool_name: "Read".into(),
-            tool_response: Some(json!("Could not resolve host")),
-            ..Default::default()
-        };
+        let input = make_post_tool_use(
+            "Read",
+            json!({"file_path": "/tmp/test.txt"}),
+            Some(json!("Could not resolve host")),
+        );
         let settings = ClashSettings::default();
         assert!(check_for_sandbox_network_hint(&input, &settings).is_none());
     }
 
     #[test]
     fn test_check_returns_none_without_response() {
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_response: None,
-            ..Default::default()
-        };
+        let input = make_post_tool_use("Bash", json!({"command": "ls"}), None);
         let settings = ClashSettings::default();
         assert!(check_for_sandbox_network_hint(&input, &settings).is_none());
     }
 
     #[test]
     fn test_check_returns_none_for_non_network_error() {
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_response: Some(json!("file not found")),
-            ..Default::default()
-        };
+        let input = make_post_tool_use(
+            "Bash",
+            json!({"command": "ls"}),
+            Some(json!("file not found")),
+        );
         let settings = ClashSettings::default();
         assert!(check_for_sandbox_network_hint(&input, &settings).is_none());
     }
@@ -277,12 +298,11 @@ mod tests {
         // No compiled policy → no decision tree → returns None
         let settings = ClashSettings::default();
         assert!(settings.decision_tree().is_none());
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_input: json!({"command": "curl example.com"}),
-            tool_response: Some(json!("Could not resolve host")),
-            ..Default::default()
-        };
+        let input = make_post_tool_use(
+            "Bash",
+            json!({"command": "curl example.com"}),
+            Some(json!("Could not resolve host")),
+        );
         assert!(check_for_sandbox_network_hint(&input, &settings).is_none());
     }
 
@@ -299,13 +319,11 @@ mod tests {
     ]}}
   ]}"#,
         );
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_input: json!({"command": "curl example.com"}),
-            tool_response: Some(json!("curl: (6) Could not resolve host: example.com")),
-            cwd: "/tmp".into(),
-            ..Default::default()
-        };
+        let input = make_post_tool_use(
+            "Bash",
+            json!({"command": "curl example.com"}),
+            Some(json!("curl: (6) Could not resolve host: example.com")),
+        );
         let result = check_for_sandbox_network_hint(&input, &settings);
         assert!(
             result.is_some(),
@@ -330,13 +348,11 @@ mod tests {
     ]}}
   ]}"#,
         );
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_input: json!({"command": "curl example.com"}),
-            tool_response: Some(json!("curl: (6) Could not resolve host: example.com")),
-            cwd: "/tmp".into(),
-            ..Default::default()
-        };
+        let input = make_post_tool_use(
+            "Bash",
+            json!({"command": "curl example.com"}),
+            Some(json!("curl: (6) Could not resolve host: example.com")),
+        );
         let result = check_for_sandbox_network_hint(&input, &settings);
         assert!(
             result.is_some(),
@@ -361,13 +377,11 @@ mod tests {
     ]}}
   ]}"#,
         );
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_input: json!({"command": "curl example.com"}),
-            tool_response: Some(json!("Could not resolve host")),
-            cwd: "/tmp".into(),
-            ..Default::default()
-        };
+        let input = make_post_tool_use(
+            "Bash",
+            json!({"command": "curl example.com"}),
+            Some(json!("Could not resolve host")),
+        );
         assert!(check_for_sandbox_network_hint(&input, &settings).is_none());
     }
 
@@ -386,13 +400,11 @@ mod tests {
     ]}}
   ]}"#,
         );
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_input: json!({"command": "curl example.com"}),
-            tool_response: Some(json!("Could not resolve host")),
-            cwd: "/tmp".into(),
-            ..Default::default()
-        };
+        let input = make_post_tool_use(
+            "Bash",
+            json!({"command": "curl example.com"}),
+            Some(json!("Could not resolve host")),
+        );
         assert!(check_for_sandbox_network_hint(&input, &settings).is_some());
     }
 }

@@ -1,0 +1,8 @@
+{
+  "session_id": "sess_abc123",
+  "transcript_path": "/home/user/.claude/sessions/sess_abc123/transcript.jsonl",
+  "cwd": "/home/user/project",
+  "hook_event_name": "ConfigChange",
+  "source": "project_settings",
+  "file_path": "/home/user/project/.claude/settings.json"
+}

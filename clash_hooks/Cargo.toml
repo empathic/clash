@@ -1,0 +1,14 @@
+[package]
+name = "clash_hooks"
+version = "0.3.6"
+edition = "2024"
+description = "Type-safe Rust library for Claude Code hooks — receive events, send responses"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

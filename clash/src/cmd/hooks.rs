@@ -1,37 +1,30 @@
 use anyhow::Result;
+use clash_hooks::{HookEvent, HookEventCommon, Response, ToolEvent};
 use tracing::{Level, info, instrument};
 
 use crate::cli::HooksCmd;
-use crate::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput, is_interactive_tool};
 use crate::permissions::check_permission;
-use crate::policy::Effect;
+use crate::policy_decision::PolicyDecision;
 use crate::session_policy;
 use crate::settings::{ClashSettings, HookContext};
-
-use claude_settings::PermissionRule;
 
 impl HooksCmd {
     /// Handle hook when clash is disabled — drain stdin and return pass-through.
     fn run_disabled(&self) -> Result<()> {
         info!("Clash is disabled (CLASH_DISABLE), returning pass-through");
-        let output = match self {
-            Self::SessionStart => {
-                // Still read stdin to avoid broken pipe.
-                let _ = crate::hooks::SessionStartHookInput::from_reader(std::io::stdin().lock());
-                HookOutput::session_start(Some(
+        // Read stdin to determine event type (avoids broken pipe).
+        let event = clash_hooks::recv()?;
+        let response = match event {
+            HookEvent::SessionStart(e) => {
+                e.context(
                     "Clash is disabled (CLASH_DISABLE is set). \
                      All hooks are pass-through — no policy enforcement is active. \
-                     Unset CLASH_DISABLE to re-enable."
-                        .into(),
-                ))
+                     Unset CLASH_DISABLE to re-enable.",
+                )
             }
-            _ => {
-                // Drain stdin to avoid broken pipe, but skip parsing.
-                let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
-                HookOutput::continue_execution()
-            }
+            _ => clash_hooks::pass(),
         };
-        output.write_stdout()?;
+        clash_hooks::send(&response)?;
         Ok(())
     }
 
@@ -41,65 +34,63 @@ impl HooksCmd {
             return self.run_disabled();
         }
 
-        let output = match self {
-            Self::PreToolUse => {
-                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
-                let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+        let event = clash_hooks::recv()?;
+        let response = match event {
+            HookEvent::PreToolUse(ref e) => {
+                let hook_ctx = HookContext::from_transcript_path(e.transcript_path());
                 let settings = ClashSettings::load_or_create_with_session(
-                    Some(&input.session_id),
+                    Some(e.session_id()),
                     Some(&hook_ctx),
                 )?;
-                let output = check_permission(&input, &settings)?;
+                let decision = check_permission(e, &settings)?;
 
                 // Interactive tools (e.g., AskUserQuestion) require user input
                 // via Claude Code's native UI. Returning "allow" would skip that
                 // UI entirely, so we pass through for any non-deny decision.
-                if is_interactive_tool(&input.tool_name) && !is_deny_decision(&output) {
-                    info!(tool = %input.tool_name, "Passthrough: interactive tool deferred to Claude Code");
-                    HookOutput::continue_execution()
+                if e.is_interactive_tool() && !decision.is_deny() {
+                    info!(tool = %e.tool_name(), "Passthrough: interactive tool deferred to Claude Code");
+                    clash_hooks::pass()
                 } else {
                     // Update session stats for the status line (only here, not in
                     // log_decision, to avoid double-counting PermissionRequest).
-                    if let Some(effect) = extract_effect(&output) {
+                    if let Some(effect) = decision.effect() {
                         crate::audit::update_session_stats(
-                            &input.session_id,
-                            &input.tool_name,
-                            &input.tool_input,
+                            e.session_id(),
+                            e.tool_name(),
+                            e.tool_input_raw(),
                             effect,
-                            &input.cwd,
+                            e.cwd(),
                         );
                     }
 
                     // If the decision is Ask, record it so PostToolUse can detect
                     // user approval and suggest a session policy rule.
-                    if is_ask_decision(&output)
-                        && let Some(ref tool_use_id) = input.tool_use_id
+                    if decision.is_ask()
+                        && let Some(tool_use_id) = e.tool_use_id()
                     {
                         session_policy::record_pending_ask(
-                            &input.session_id,
+                            e.session_id(),
                             tool_use_id,
-                            &input.tool_name,
-                            &input.tool_input,
-                            &input.cwd,
+                            e.tool_name(),
+                            e.tool_input_raw(),
+                            e.cwd(),
                         );
                     }
 
-                    output
+                    policy_decision_to_pre_tool_use_response(e, decision)
                 }
             }
-            Self::PostToolUse => {
-                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
-
+            HookEvent::PostToolUse(ref e) => {
                 // Check if this tool use was previously "ask"ed and the user
                 // accepted. If so, return advisory context suggesting a session
                 // rule for Claude to offer the user.
-                let session_context = input.tool_use_id.as_deref().and_then(|tool_use_id| {
+                let session_context = e.tool_use_id().and_then(|tool_use_id| {
                     let advice = session_policy::process_post_tool_use(
                         tool_use_id,
-                        &input.session_id,
-                        &input.tool_name,
-                        &input.tool_input,
-                        &input.cwd,
+                        e.session_id(),
+                        e.tool_name(),
+                        e.tool_input_raw(),
+                        e.cwd(),
                     )?;
                     info!(
                         rule = %advice.suggested_rule,
@@ -111,18 +102,18 @@ impl HooksCmd {
                 // Check if a sandboxed Bash command failed with network or
                 // filesystem errors, and provide hints about sandbox restrictions.
                 let (network_context, fs_context) = {
-                    let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+                    let hook_ctx = HookContext::from_transcript_path(e.transcript_path());
                     let settings = ClashSettings::load_or_create_with_session(
-                        Some(&input.session_id),
+                        Some(e.session_id()),
                         Some(&hook_ctx),
                     )
                     .ok();
-                    let net = settings.as_ref().and_then(|s| {
-                        crate::network_hints::check_for_sandbox_network_hint(&input, s)
-                    });
-                    let fs = settings.as_ref().and_then(|s| {
-                        crate::sandbox_fs_hints::check_for_sandbox_fs_hint(&input, s)
-                    });
+                    let net = settings
+                        .as_ref()
+                        .and_then(|s| crate::network_hints::check_for_sandbox_network_hint(e, s));
+                    let fs = settings
+                        .as_ref()
+                        .and_then(|s| crate::sandbox_fs_hints::check_for_sandbox_fs_hint(e, s));
                     (net, fs)
                 };
 
@@ -131,51 +122,64 @@ impl HooksCmd {
                     .into_iter()
                     .flatten()
                     .collect::<Vec<_>>();
-                let context = if context.is_empty() {
-                    None
+                if context.is_empty() {
+                    e.pass()
                 } else {
-                    Some(context.join("\n\n"))
-                };
-
-                HookOutput::post_tool_use(context)
+                    e.context(context.join("\n\n"))
+                }
             }
-            Self::PermissionRequest => {
-                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
-                let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+            HookEvent::PermissionRequest(ref e) => {
+                let hook_ctx = HookContext::from_transcript_path(e.transcript_path());
                 let settings = ClashSettings::load_or_create_with_session(
-                    Some(&input.session_id),
+                    Some(e.session_id()),
                     Some(&hook_ctx),
                 )?;
-                crate::handlers::handle_permission_request(&input, &settings)?
+                crate::handlers::handle_permission_request(e, &settings)?
             }
-            Self::SessionStart => {
-                let input =
-                    crate::hooks::SessionStartHookInput::from_reader(std::io::stdin().lock())?;
-                crate::handlers::handle_session_start(&input)?
+            HookEvent::SessionStart(ref e) => {
+                crate::handlers::handle_session_start(e)?
             }
+            _ => clash_hooks::pass(),
         };
 
-        output.write_stdout()?;
+        clash_hooks::send(&response)?;
         Ok(())
     }
 }
 
-fn extract_effect(output: &HookOutput) -> Option<Effect> {
-    match &output.hook_specific_output {
-        Some(HookSpecificOutput::PreToolUse(pre)) => match pre.permission_decision {
-            Some(PermissionRule::Allow) => Some(Effect::Allow),
-            Some(PermissionRule::Deny) => Some(Effect::Deny),
-            Some(PermissionRule::Ask) => Some(Effect::Ask),
-            Some(PermissionRule::Unset) | None => None,
+/// Convert a [`PolicyDecision`] into a [`Response`] for a PreToolUse event.
+fn policy_decision_to_pre_tool_use_response(
+    event: &clash_hooks::event::PreToolUse,
+    decision: PolicyDecision,
+) -> Response {
+    match decision {
+        PolicyDecision::Allow {
+            reason,
+            context,
+            updated_input,
+        } => {
+            if let Some(updated) = updated_input {
+                // Allow with rewritten input (sandbox wrapping).
+                let mut resp = event.allow_with_modified_input(updated);
+                if let Some(ctx) = context {
+                    resp = resp.with_context(ctx);
+                }
+                resp
+            } else {
+                match context {
+                    Some(ctx) => event.allow_with_context(reason, ctx),
+                    None => event.allow_with_reason(reason),
+                }
+            }
+        }
+        PolicyDecision::Deny { reason, context } => match context {
+            Some(ctx) => event.deny_with_context(reason, ctx),
+            None => event.deny(reason),
         },
-        _ => None,
+        PolicyDecision::Ask { reason, context } => match context {
+            Some(ctx) => event.ask_with_context(reason, ctx),
+            None => event.ask_with_reason(reason),
+        },
+        PolicyDecision::Pass => event.pass(),
     }
-}
-
-fn is_ask_decision(output: &HookOutput) -> bool {
-    matches!(extract_effect(output), Some(Effect::Ask))
-}
-
-fn is_deny_decision(output: &HookOutput) -> bool {
-    matches!(extract_effect(output), Some(Effect::Deny))
 }

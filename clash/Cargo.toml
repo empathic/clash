@@ -43,6 +43,7 @@ flate2 = { workspace = true }
 tar = { workspace = true }
 
 # from the workspace
+clash_hooks = { workspace = true }
 clash_notify = { workspace = true }
 clash_starlark = { workspace = true }
 claude_settings = { workspace = true }

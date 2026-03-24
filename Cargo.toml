@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "clash",
+    "clash_hooks",
     "clash_notify",
     "claude_settings",
     "clash_starlark",
@@ -39,6 +40,7 @@ tracing-subscriber = { version = "0.3.22", features = [
 ] }
 
 # Workspace crates
+clash_hooks = { path = "clash_hooks", version = "0.3.6" }
 clash_notify = { path = "clash_notify", version = "0.3.6" }
 clash_starlark = { path = "clash_starlark", version = "0.3.6" }
 claude_settings = { path = "claude_settings", version = "0.3.6" }

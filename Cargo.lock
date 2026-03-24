@@ -509,6 +509,7 @@ dependencies = [
  "bitflags 2.10.0",
  "bytes",
  "clap",
+ "clash_hooks",
  "clash_notify",
  "clash_starlark",
  "claude_settings",
@@ -545,6 +546,15 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "uuid",
+]
+
+[[package]]
+name = "clash_hooks"
+version = "0.3.6"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

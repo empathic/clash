@@ -4,7 +4,7 @@ use tracing::{debug_span, error, info};
 
 use clash::cli::{Cli, Commands};
 use clash::cmd;
-use clash::hooks::exit_code;
+use clash_hooks::exit_code;
 use clash::sandbox_cmd::run_sandbox;
 use clash::tracing_init::init_tracing;
 

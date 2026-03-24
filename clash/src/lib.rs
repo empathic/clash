@@ -18,14 +18,16 @@
 //! # Example
 //!
 //! ```no_run
-//! use clash::hooks::ToolUseHookInput;
+//! use clash_hooks::{HookEvent, ToolEvent, recv, send};
 //! use clash::permissions::check_permission;
 //! use clash::settings::ClashSettings;
 //!
 //! let settings = ClashSettings::load_or_create().unwrap();
-//! let input = ToolUseHookInput::from_reader(std::io::stdin().lock()).unwrap();
-//! let output = check_permission(&input, &settings).unwrap();
-//! output.write_stdout().unwrap();
+//! let event = recv().unwrap();
+//! if let HookEvent::PreToolUse(ref e) = event {
+//!     let decision = check_permission(e, &settings).unwrap();
+//!     // Convert decision to response...
+//! }
 //! ```
 
 pub mod audit;
@@ -35,11 +37,11 @@ pub mod debug;
 pub mod errors;
 pub mod git;
 pub mod handlers;
-pub mod hooks;
 pub mod network_hints;
 pub mod notifications;
 pub mod permissions;
 pub mod policy;
+pub mod policy_decision;
 pub mod sandbox;
 pub mod sandbox_cmd;
 pub mod sandbox_fs_hints;

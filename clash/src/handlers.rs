@@ -4,16 +4,14 @@
 //! session validation into ready-to-use functions that process Claude Code
 //! hook events.
 
+use clash_hooks::event::{PermissionRequest, SessionStart};
+use clash_hooks::{HookEventCommon, Response, ToolEvent};
 use tracing::{Level, info, instrument, warn};
 
-use crate::hooks::{
-    HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput, is_interactive_tool,
-};
 use crate::notifications;
 use crate::permissions::check_permission;
+use crate::policy_decision::PolicyDecision;
 use crate::settings::ClashSettings;
-
-use claude_settings::PermissionRule;
 
 /// Handle a permission request — decide whether to approve or deny on behalf of user.
 ///
@@ -22,72 +20,58 @@ use claude_settings::PermissionRule;
 /// present or the poll times out, we fall through to let the terminal user decide.
 #[instrument(level = Level::TRACE, skip(input, settings))]
 pub fn handle_permission_request(
-    input: &ToolUseHookInput,
+    input: &PermissionRequest,
     settings: &ClashSettings,
-) -> anyhow::Result<HookOutput> {
+) -> anyhow::Result<Response> {
     // Interactive tools (AskUserQuestion, EnterPlanMode, ExitPlanMode) must be
     // handled by Claude Code's native UI. If the policy doesn't deny them,
     // pass through so the user sees the native prompt / plan review screen.
-    if is_interactive_tool(&input.tool_name) {
-        let pre_tool_result = check_permission(input, settings)?;
-        let is_deny = matches!(
-            pre_tool_result.hook_specific_output,
-            Some(HookSpecificOutput::PreToolUse(ref pre))
-                if matches!(pre.permission_decision, Some(PermissionRule::Deny))
-        );
-        if is_deny {
-            let reason = match &pre_tool_result.hook_specific_output {
-                Some(HookSpecificOutput::PreToolUse(pre)) => pre
-                    .permission_decision_reason
-                    .clone()
-                    .unwrap_or_else(|| "denied by policy".into()),
+    if input.is_interactive_tool() {
+        let decision = check_permission(input, settings)?;
+        if decision.is_deny() {
+            let reason = match &decision {
+                PolicyDecision::Deny { reason, .. } => reason.clone(),
                 _ => "denied by policy".into(),
             };
-            return Ok(HookOutput::deny_permission(reason, false));
+            return Ok(input.deny(reason));
         }
-        info!(tool = %input.tool_name, "Passthrough: interactive tool deferred to Claude Code");
-        return Ok(HookOutput::continue_execution());
+        info!(tool = %input.tool_name(), "Passthrough: interactive tool deferred to Claude Code");
+        return Ok(input.pass());
     }
 
-    let pre_tool_result = check_permission(input, settings)?;
+    let decision = check_permission(input, settings)?;
 
-    // Convert PreToolUse decision to PermissionRequest format.
-    // Claude Code validates that hookEventName matches the event type.
-    Ok(match pre_tool_result.hook_specific_output {
-        Some(HookSpecificOutput::PreToolUse(ref pre)) => match pre.permission_decision {
-            Some(PermissionRule::Allow) => HookOutput::approve_permission(None),
-            Some(PermissionRule::Deny) => {
-                let reason = pre
-                    .permission_decision_reason
-                    .clone()
-                    .unwrap_or_else(|| "denied by policy".into());
-                HookOutput::deny_permission(reason, false)
-            }
-            // Ask or no decision: try interactive desktop prompt first,
-            // then fall through to Zulip / terminal.
-            _ => resolve_via_desktop_or_zulip(input, settings),
-        },
-        _ => pre_tool_result,
+    // Convert policy decision to PermissionRequest format.
+    Ok(match decision {
+        PolicyDecision::Allow { .. } => input.approve(),
+        PolicyDecision::Deny { reason, .. } => input.deny(reason),
+        // Ask or no decision: try interactive desktop prompt first,
+        // then fall through to Zulip / terminal.
+        PolicyDecision::Ask { .. } | PolicyDecision::Pass => {
+            resolve_via_desktop_or_zulip(input, settings)
+        }
     })
 }
 
 /// Build a human-readable summary of the permission request for notifications.
-fn permission_summary(input: &ToolUseHookInput) -> String {
-    match input.tool_name.as_str() {
+fn permission_summary(input: &PermissionRequest) -> String {
+    match input.tool_name() {
         "Bash" => {
-            let cmd = input.tool_input["command"].as_str().unwrap_or("(unknown)");
+            let cmd = input.tool_input_raw()["command"]
+                .as_str()
+                .unwrap_or("(unknown)");
             format!("Bash: {}", cmd)
         }
-        _ => input.tool_name.to_string(),
+        _ => input.tool_name().to_string(),
     }
 }
 
 /// Try to resolve a permission ask via desktop notification and/or Zulip.
 #[instrument(level = Level::TRACE, skip(input, settings))]
 pub fn resolve_via_desktop_or_zulip(
-    input: &ToolUseHookInput,
+    input: &PermissionRequest,
     settings: &ClashSettings,
-) -> HookOutput {
+) -> Response {
     let has_desktop = settings.notifications.desktop;
     let has_zulip = settings.notifications.zulip.is_some();
 
@@ -104,13 +88,13 @@ pub fn resolve_via_desktop_or_zulip(
         return resolve_via_zulip_or_continue(input, settings);
     }
 
-    HookOutput::continue_execution()
+    input.pass()
 }
 
 fn resolve_via_desktop_then_continue(
-    input: &ToolUseHookInput,
+    input: &PermissionRequest,
     settings: &ClashSettings,
-) -> HookOutput {
+) -> Response {
     let summary = permission_summary(input);
     let timeout = std::time::Duration::from_secs(settings.notifications.desktop_timeout_secs);
     let response = clash_notify::prompt("Clash: Permission Request", &summary, timeout);
@@ -118,33 +102,33 @@ fn resolve_via_desktop_then_continue(
     match response {
         clash_notify::PromptResponse::Approved => {
             info!("Permission approved via desktop notification");
-            HookOutput::approve_permission(None)
+            input.approve()
         }
         clash_notify::PromptResponse::Denied => {
             info!("Permission denied via desktop notification");
-            HookOutput::deny_permission("denied via desktop notification".into(), false)
+            input.deny("denied via desktop notification")
         }
         clash_notify::PromptResponse::TimedOut => {
             info!("Desktop notification timed out, falling through to terminal");
-            HookOutput::continue_execution()
+            input.pass()
         }
         clash_notify::PromptResponse::Unavailable => {
             info!("Interactive desktop notifications unavailable, falling through to terminal");
-            HookOutput::continue_execution()
+            input.pass()
         }
     }
 }
 
-fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
+fn start_zulip_background(input: &PermissionRequest, settings: &ClashSettings) {
     let Some(ref zulip_config) = settings.notifications.zulip else {
         return;
     };
 
     let request = notifications::PermissionRequest {
-        tool_name: input.tool_name.clone(),
-        tool_input: input.tool_input.clone(),
-        session_id: input.session_id.clone(),
-        cwd: input.cwd.clone(),
+        tool_name: input.tool_name().to_string(),
+        tool_input: input.tool_input_raw().clone(),
+        session_id: input.session_id().to_string(),
+        cwd: input.cwd().to_string(),
     };
 
     let config = zulip_config.clone();
@@ -154,17 +138,17 @@ fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
         match client.resolve_permission(&request) {
             Ok(Some(notifications::PermissionResponse::Approve)) => {
                 info!("Permission approved via Zulip (background), exiting hook");
-                let output = HookOutput::approve_permission(None);
-                if output.write_stdout().is_ok() {
-                    std::process::exit(0);
-                }
+                let resp = clash_hooks::pass();
+                let _ = clash_hooks::send(&resp);
+                std::process::exit(0);
             }
             Ok(Some(notifications::PermissionResponse::Deny(reason))) => {
                 info!("Permission denied via Zulip (background), exiting hook");
-                let output = HookOutput::deny_permission(reason, false);
-                if output.write_stdout().is_ok() {
-                    std::process::exit(0);
-                }
+                // We can't call input.deny() from this thread since input is not Send,
+                // but we need to exit the process, so use a raw pass + exit approach.
+                // The Zulip deny is best-effort in the background thread.
+                eprintln!("clash: Zulip denied permission: {reason}");
+                std::process::exit(clash_hooks::exit_code::BLOCKING_ERROR);
             }
             Ok(None) => {
                 info!("Zulip resolution timed out (background)");
@@ -177,46 +161,45 @@ fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
 }
 
 #[instrument(level = Level::TRACE, skip(input, settings))]
-fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSettings) -> HookOutput {
+fn resolve_via_zulip_or_continue(
+    input: &PermissionRequest,
+    settings: &ClashSettings,
+) -> Response {
     let Some(ref zulip_config) = settings.notifications.zulip else {
-        return HookOutput::continue_execution();
+        return input.pass();
     };
 
     let request = notifications::PermissionRequest {
-        tool_name: input.tool_name.clone(),
-        tool_input: input.tool_input.clone(),
-        session_id: input.session_id.clone(),
-        cwd: input.cwd.clone(),
+        tool_name: input.tool_name().to_string(),
+        tool_input: input.tool_input_raw().clone(),
+        session_id: input.session_id().to_string(),
+        cwd: input.cwd().to_string(),
     };
 
     let client = notifications::ZulipClient::new(zulip_config);
     match client.resolve_permission(&request) {
-        Ok(Some(notifications::PermissionResponse::Approve)) => {
-            HookOutput::approve_permission(None)
-        }
-        Ok(Some(notifications::PermissionResponse::Deny(reason))) => {
-            HookOutput::deny_permission(reason, false)
-        }
+        Ok(Some(notifications::PermissionResponse::Approve)) => input.approve(),
+        Ok(Some(notifications::PermissionResponse::Deny(reason))) => input.deny(reason),
         Ok(None) => {
             info!("Zulip resolution timed out, falling through to terminal");
-            HookOutput::continue_execution()
+            input.pass()
         }
         Err(e) => {
             warn!(error = %e, "Zulip resolution failed, falling through to terminal");
-            HookOutput::continue_execution()
+            input.pass()
         }
     }
 }
 
 /// Handle a session start event — validate policy/settings and report status to Claude.
 #[instrument(level = Level::TRACE, skip(input))]
-pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOutput> {
+pub fn handle_session_start(input: &SessionStart) -> anyhow::Result<Response> {
     // Ensure the user has a policy file — create one with safe defaults if not.
     let created_policy = ClashSettings::ensure_user_policy_exists()?;
 
-    let hook_ctx = crate::settings::HookContext::from_transcript_path(&input.transcript_path);
+    let hook_ctx = crate::settings::HookContext::from_transcript_path(input.transcript_path());
     let _settings =
-        ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx))?;
+        ClashSettings::load_or_create_with_session(Some(input.session_id()), Some(&hook_ctx))?;
 
     let mut lines = Vec::new();
 
@@ -234,8 +217,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
 
     // Check if user is running without skip-permissions (default mode).
     let is_skip_permissions = input
-        .permission_mode
-        .as_deref()
+        .permission_mode()
         .is_some_and(|m| m == "dangerously-skip-permissions");
 
     if is_skip_permissions {
@@ -254,7 +236,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
 
     check_sandbox_and_session(&mut lines, input);
 
-    finish_session_start(lines)
+    finish_session_start(input, lines)
 }
 
 /// Generate comprehensive context about clash for injection into Claude's session.
@@ -266,7 +248,7 @@ fn clash_session_context() -> &'static str {
 }
 
 /// Check sandbox support, init session, and symlink — shared by both paths.
-fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookInput) {
+fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStart) {
     // 3. Check sandbox support
     let support = crate::sandbox::check_support();
     match support {
@@ -286,10 +268,10 @@ fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookIn
 
     // 4. Initialize per-session history directory
     match crate::audit::init_session(
-        &input.session_id,
-        &input.cwd,
-        input.source.as_deref(),
-        input.model.as_deref(),
+        input.session_id(),
+        input.cwd(),
+        input.source(),
+        input.model(),
     ) {
         Ok(session_dir) => {
             lines.push(format!("session history: {}", session_dir.display()));
@@ -300,56 +282,66 @@ fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookIn
     }
 
     // 4b. Write active session marker so CLI commands can find this session.
-    if let Err(e) = ClashSettings::set_active_session(&input.session_id) {
+    if let Err(e) = ClashSettings::set_active_session(input.session_id()) {
         warn!(error = %e, "Failed to write active session marker");
     }
 
     // 5. Session metadata
-    if let Some(ref source) = input.source {
+    if let Some(source) = input.source() {
         lines.push(format!("session source: {}", source));
     }
-    if let Some(ref model) = input.model {
+    if let Some(model) = input.model() {
         lines.push(format!("model: {}", model));
     }
 }
 
-fn finish_session_start(lines: Vec<String>) -> anyhow::Result<HookOutput> {
+fn finish_session_start(input: &SessionStart, lines: Vec<String>) -> anyhow::Result<Response> {
     info!(context = %lines.join("; "), "SessionStart validation");
 
-    let context = if lines.is_empty() {
-        None
+    let response = if lines.is_empty() {
+        input.pass()
     } else {
-        Some(lines.join("\n"))
+        input.context(lines.join("\n"))
     };
 
-    Ok(HookOutput::session_start(context))
+    Ok(response)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clash_hooks::HookEvent;
 
-    fn default_session_start_input() -> SessionStartHookInput {
-        SessionStartHookInput {
-            session_id: "test-session".into(),
-            transcript_path: "/tmp/transcript.jsonl".into(),
-            cwd: "/tmp".into(),
-            permission_mode: Some("default".into()),
-            hook_event_name: "SessionStart".into(),
-            source: Some("startup".into()),
-            model: Some("claude-sonnet-4-20250514".into()),
+    fn make_session_start_event() -> SessionStart {
+        let json = serde_json::json!({
+            "session_id": "test-session",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": "/tmp",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-20250514",
+        });
+        match clash_hooks::recv_from(serde_json::to_vec(&json).unwrap().as_slice()).unwrap() {
+            HookEvent::SessionStart(e) => e,
+            _ => panic!("expected SessionStart"),
         }
+    }
+
+    fn get_context(response: &Response) -> Option<String> {
+        let mut buf = Vec::new();
+        clash_hooks::send_to(response, &mut buf).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        json["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .map(|s| s.to_string())
     }
 
     #[test]
     fn test_session_start_reports_sandbox_support() {
-        let input = default_session_start_input();
+        let input = make_session_start_event();
         let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = get_context(&output).expect("should have context");
         assert!(
             ctx.contains("sandbox:"),
             "should report sandbox status, got: {ctx}"
@@ -358,13 +350,9 @@ mod tests {
 
     #[test]
     fn test_session_start_reports_session_metadata() {
-        let input = default_session_start_input();
+        let input = make_session_start_event();
         let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = get_context(&output).expect("should have context");
         assert!(ctx.contains("session source: startup"), "got: {ctx}");
         assert!(
             ctx.contains("model: claude-sonnet-4-20250514"),
@@ -374,13 +362,9 @@ mod tests {
 
     #[test]
     fn test_session_start_recommends_skip_permissions_in_default_mode() {
-        let input = default_session_start_input();
+        let input = make_session_start_event();
         let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
-        };
-        let ctx = context.expect("should have context");
+        let ctx = get_context(&output).expect("should have context");
         assert!(
             ctx.contains("--dangerously-skip-permissions"),
             "should recommend --dangerously-skip-permissions when not in skip mode, got: {ctx}"
@@ -389,14 +373,21 @@ mod tests {
 
     #[test]
     fn test_session_start_no_recommendation_when_skip_permissions() {
-        let mut input = default_session_start_input();
-        input.permission_mode = Some("dangerously-skip-permissions".into());
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
+        let json = serde_json::json!({
+            "session_id": "test-session",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": "/tmp",
+            "permission_mode": "dangerously-skip-permissions",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-20250514",
+        });
+        let input = match clash_hooks::recv_from(serde_json::to_vec(&json).unwrap().as_slice()).unwrap() {
+            HookEvent::SessionStart(e) => e,
+            _ => panic!("expected SessionStart"),
         };
-        let ctx = context.expect("should have context");
+        let output = handle_session_start(&input).unwrap();
+        let ctx = get_context(&output).expect("should have context");
         assert!(
             !ctx.contains("NOTE: Clash is managing permissions"),
             "should NOT recommend when already in skip mode, got: {ctx}"
@@ -405,14 +396,21 @@ mod tests {
 
     #[test]
     fn test_session_start_injects_instructions_when_skip_permissions() {
-        let mut input = default_session_start_input();
-        input.permission_mode = Some("dangerously-skip-permissions".into());
-        let output = handle_session_start(&input).unwrap();
-        let context = match &output.hook_specific_output {
-            Some(HookSpecificOutput::SessionStart(s)) => s.additional_context.as_deref(),
-            _ => panic!("expected SessionStart output"),
+        let json = serde_json::json!({
+            "session_id": "test-session",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": "/tmp",
+            "permission_mode": "dangerously-skip-permissions",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-20250514",
+        });
+        let input = match clash_hooks::recv_from(serde_json::to_vec(&json).unwrap().as_slice()).unwrap() {
+            HookEvent::SessionStart(e) => e,
+            _ => panic!("expected SessionStart"),
         };
-        let ctx = context.expect("should have context");
+        let output = handle_session_start(&input).unwrap();
+        let ctx = get_context(&output).expect("should have context");
         assert!(ctx.contains("policy enforcement is DISABLED"), "got: {ctx}");
         assert!(ctx.contains("Filesystem sandboxing"), "got: {ctx}");
     }
