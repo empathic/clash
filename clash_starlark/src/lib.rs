@@ -1013,4 +1013,96 @@ def main():
             "should have tmpdir rule"
         );
     }
+
+    #[test]
+    fn test_os_and_arch_constants() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "deny", "policy", "tool", "OS", "ARCH")
+
+def main():
+    # OS and ARCH should be non-empty strings
+    if not OS or not ARCH:
+        fail("OS and ARCH must be non-empty")
+    return policy(default = deny(), rules = [tool().allow()])
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+    }
+
+    #[test]
+    fn test_os_matches_rust_const() {
+        // Verify the Starlark OS constant matches the Rust compile-time value.
+        // We do this by evaluating a policy that embeds the OS in a sandbox doc field.
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "deny", "exe", "policy", "sandbox", "cwd", "OS")
+
+def main():
+    box = sandbox(
+        name = "test",
+        default = deny(),
+        fs = [cwd().allow(read = True)],
+        doc = OS,
+    )
+    return policy(default = deny(), rules = [exe("test").sandbox(box).allow()])
+"#,
+        );
+        let sandbox = &doc["sandboxes"]["test"];
+        assert_eq!(
+            sandbox["doc"].as_str().unwrap(),
+            std::env::consts::OS,
+            "Starlark OS should match std::env::consts::OS"
+        );
+    }
+
+    #[test]
+    fn test_sandbox_auto_inject_platform_home_deny() {
+        // Verify that sandbox() auto-injects a deny rule for the correct
+        // platform-specific user home directory root.
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "deny", "exe", "policy", "sandbox", "cwd")
+
+def main():
+    box = sandbox(
+        name = "test",
+        default = deny(),
+        fs = [cwd().allow(read = True)],
+    )
+    return policy(default = deny(), rules = [exe("test").sandbox(box).allow()])
+"#,
+        );
+        let sandbox = &doc["sandboxes"]["test"];
+        let rules = sandbox["rules"].as_array().unwrap();
+        let deny_paths: Vec<&str> = rules
+            .iter()
+            .filter(|r| r["effect"].as_str() == Some("deny"))
+            .filter_map(|r| r["path"].as_str())
+            .collect();
+
+        let expected_home = if std::env::consts::OS == "macos" {
+            "/Users"
+        } else {
+            "/home"
+        };
+
+        assert!(
+            deny_paths.iter().any(|p| *p == expected_home),
+            "sandbox should deny {expected_home} on {}, got deny paths: {deny_paths:?}",
+            std::env::consts::OS,
+        );
+
+        // Ensure it does NOT deny the wrong platform's home dir
+        let wrong_home = if std::env::consts::OS == "macos" {
+            "/home"
+        } else {
+            "/Users"
+        };
+        assert!(
+            !deny_paths.iter().any(|p| *p == wrong_home),
+            "sandbox should NOT deny {wrong_home} on {}",
+            std::env::consts::OS,
+        );
+    }
 }
