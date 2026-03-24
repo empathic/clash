@@ -10,9 +10,8 @@
 //! - `clash shell -c "cmd"` — execute a command string
 //! - `clash shell script.sh` — execute a script file
 
-use std::sync::Arc;
-
 use anyhow::{Context, Result};
+use std::sync::{Arc, RwLock};
 use tracing::info;
 
 use crate::policy::CompiledPolicy;
@@ -86,43 +85,117 @@ const SHELL_BUILTINS: &[&str] = &[
     "wait",
 ];
 
+#[derive(Clone)]
+struct PolicySnapshot {
+    compiled: Arc<CompiledPolicy>,
+    default_sandbox: Option<SandboxPolicy>,
+}
+
+struct PolicyCache {
+    inner: RwLock<PolicySnapshot>,
+    /// Instant of the last successful or attempted policy refresh; used to
+    /// throttle reloads so we don't hit the filesystem on every command.
+    last_refresh: std::sync::Mutex<std::time::Instant>,
+}
+
+const POLICY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+impl PolicyCache {
+    fn load_initial(sandbox_name: Option<&str>) -> anyhow::Result<Self> {
+        let snap = Self::reload_snapshot(sandbox_name)?;
+        Ok(Self {
+            inner: RwLock::new(snap),
+            last_refresh: std::sync::Mutex::new(std::time::Instant::now()),
+        })
+    }
+
+    fn current(&self) -> PolicySnapshot {
+        self.inner.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn try_refresh(&self, sandbox_name: Option<&str>, debug: bool) {
+        let now = std::time::Instant::now();
+        {
+            let mut last = self.last_refresh.lock().unwrap_or_else(|e| e.into_inner());
+            if now.duration_since(*last) < POLICY_REFRESH_INTERVAL {
+                return;
+            }
+            *last = now;
+        }
+
+        match Self::reload_snapshot(sandbox_name) {
+            Ok(new_snap) => {
+                *self.inner.write().unwrap_or_else(|e| e.into_inner()) = new_snap;
+            }
+            Err(err) => {
+                if debug {
+                    eprintln!("[clash-shell] policy reload failed; using last-known-good: {err}");
+                }
+            }
+        }
+    }
+
+    fn reload_snapshot(sandbox_name: Option<&str>) -> anyhow::Result<PolicySnapshot> {
+        // NOTE: load_or_create() reads only the persisted (disk) settings. Any
+        // session-level policy overrides (if ever introduced) would need to be
+        // threaded in separately — they are not reloaded here.
+        let settings = ClashSettings::load_or_create()?;
+        let compiled = settings
+            .policy_tree()
+            .context("no compiled policy available")?
+            .clone();
+
+        let effective_name = sandbox_name.or(compiled.default_sandbox.as_deref());
+
+        let default_sandbox = match effective_name {
+            Some(name) => Some(
+                compiled
+                    .sandboxes
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("no sandbox named '{name}' in policy"))?,
+            ),
+            None => None,
+        };
+
+        Ok(PolicySnapshot {
+            compiled: Arc::new(compiled),
+            default_sandbox,
+        })
+    }
+}
+
 fn make_sandbox_hook(
     clash_bin: String,
-    policy: Arc<CompiledPolicy>,
-    default_sandbox: Option<SandboxPolicy>,
+    cache: Arc<PolicyCache>,
+    sandbox_name: Option<String>,
     debug: bool,
 ) -> clash_brush_core::ExternalCommandHook {
     Arc::new(move |executable_path: &str, args: &[String]| {
-        // Don't wrap shell builtins — they must run in the shell process.
         let basename = executable_path
             .rsplit('/')
             .next()
             .unwrap_or(executable_path);
+
         if SHELL_BUILTINS.contains(&basename) {
             return None;
         }
 
-        // Reconstruct the command string as it would appear in a Bash tool call.
-        // Use the basename — brush resolves to full paths (e.g. /bin/cat) but
-        // policies match against bare names (e.g. exe("cat")).
+        #[cfg(not(test))]
+        cache.try_refresh(sandbox_name.as_deref(), debug);
+        let snap = cache.current();
+
         let mut cmd_parts = vec![basename.to_string()];
         cmd_parts.extend(args.iter().cloned());
         let command_str = cmd_parts.join(" ");
 
-        // Build a tool_input that matches what Claude's Bash tool produces.
-        let tool_input = serde_json::json!({
-            "command": command_str,
-        });
+        let tool_input = serde_json::json!({ "command": command_str });
+        let decision = snap.compiled.evaluate("Bash", &tool_input);
 
-        // Evaluate the policy exactly as check_permission would.
-        let decision = policy.evaluate("Bash", &tool_input);
-
-        // Use the policy's sandbox if present, otherwise fall back to the
-        // user-specified default sandbox for the shell session.
         let effective_sandbox;
         let sandbox = match decision.sandbox {
             Some(ref sbx) => sbx,
-            None => match default_sandbox {
+            None => match snap.default_sandbox {
                 Some(ref fallback) => {
                     effective_sandbox = fallback.clone();
                     &effective_sandbox
@@ -136,9 +209,6 @@ fn make_sandbox_hook(
             },
         };
 
-        // Resolve env vars in sandbox paths before serializing.
-        // $HOME and $TMPDIR are process-global; $PWD is resolved by sandbox
-        // exec via its process cwd (which brush sets correctly).
         let mut resolved = sandbox.clone();
         let resolver = crate::policy::path::PathResolver::from_env();
         for rule in &mut resolved.rules {
@@ -148,24 +218,16 @@ fn make_sandbox_hook(
                 .replace("$TMPDIR", resolver.tmpdir());
         }
 
-        if debug {
-            eprintln!(
-                "[clash-shell] {}: effect={:?}",
-                command_str, decision.effect
-            );
-            if let Ok(json) = serde_json::to_string_pretty(&resolved) {
-                eprintln!("[clash-shell] sandbox: {}", json);
-            }
-        }
-
+        // Fail-closed: if the sandbox cannot be serialized the command must be
+        // blocked rather than allowed to run unsandboxed.
         let policy_json = match serde_json::to_string(&resolved) {
             Ok(j) => j,
-            Err(_) => return None,
+            Err(e) => {
+                eprintln!("[clash-shell] sandbox serialization failed; blocking command: {e}");
+                return Some(("false".to_string(), vec![]));
+            }
         };
 
-        // Don't pass --cwd explicitly; brush sets current_dir on the child
-        // process to the shell's working directory, and sandbox exec defaults
-        // --cwd to "." which resolves via the process cwd.
         let mut new_args = vec![
             "sandbox".to_string(),
             "exec".to_string(),
@@ -175,6 +237,7 @@ fn make_sandbox_hook(
             executable_path.to_string(),
         ];
         new_args.extend(args.iter().cloned());
+
         Some((clash_bin.clone(), new_args))
     })
 }
@@ -193,33 +256,19 @@ pub fn run_shell(
         .to_string_lossy()
         .to_string();
 
-    // Load the policy so we can evaluate it per-command.
-    let settings = ClashSettings::load_or_create().context("failed to load clash settings")?;
-    let policy = settings
-        .policy_tree()
-        .context("no compiled policy available — run `clash init` first")?
-        .clone();
+    // Load the policy cache (validated eagerly so we fail fast on bad config).
+    // Hint about `clash init` only when the root cause is a missing policy.
+    let cache = Arc::new(
+        PolicyCache::load_initial(sandbox_name.as_deref()).map_err(|e| {
+            if e.to_string().contains("no compiled policy") {
+                e.context("run `clash init` first to compile a policy")
+            } else {
+                e
+            }
+        })?,
+    );
 
-    // Resolve the default sandbox: CLI --sandbox flag overrides policy's default_sandbox.
-    let effective_name = sandbox_name
-        .as_deref()
-        .or(policy.default_sandbox.as_deref());
-
-    let default_sandbox = match effective_name {
-        Some(name) => {
-            let sbx = policy.sandboxes.get(name).cloned().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "no sandbox named '{}' in policy (available: {:?})",
-                    name,
-                    policy.sandboxes.keys().collect::<Vec<_>>()
-                )
-            })?;
-            Some(sbx)
-        }
-        None => None,
-    };
-
-    let hook = make_sandbox_hook(clash_bin, Arc::new(policy), default_sandbox, debug);
+    let hook = make_sandbox_hook(clash_bin, cache, sandbox_name, debug);
 
     // Build a tokio runtime for brush's async API.
     let rt = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
@@ -366,16 +415,27 @@ mod tests {
         settings.policy_tree().unwrap().clone()
     }
 
+    /// Wrap a CompiledPolicy in a PolicyCache for use in tests.
+    fn policy_cache(policy: Arc<CompiledPolicy>) -> Arc<PolicyCache> {
+        Arc::new(PolicyCache {
+            inner: RwLock::new(PolicySnapshot {
+                compiled: policy,
+                default_sandbox: None,
+            }),
+            last_refresh: std::sync::Mutex::new(std::time::Instant::now()),
+        })
+    }
+
     /// Build a test policy that allows Bash with a sandbox.
-    fn test_policy() -> Arc<CompiledPolicy> {
-        Arc::new(compile_star(
+    fn test_policy() -> Arc<PolicyCache> {
+        policy_cache(Arc::new(compile_star(
             r#"load("@clash//std.star", "policy", "sandbox", "cwd", "exe", "deny")
 def main():
     return policy(default = deny(), rules = [
         exe().sandbox(sandbox(name="test", default=deny(), fs=[cwd().allow(read=True)])).allow(),
     ])
 "#,
-        ))
+        )))
     }
 
     fn test_hook() -> clash_brush_core::ExternalCommandHook {
@@ -417,12 +477,12 @@ def main():
 
     #[test]
     fn hook_returns_none_without_sandbox() {
-        let policy = Arc::new(compile_star(
+        let policy = policy_cache(Arc::new(compile_star(
             r#"load("@clash//std.star", "allow", "policy")
 def main():
     return policy(default = allow(), rules = [])
 "#,
-        ));
+        )));
         let hook = make_sandbox_hook("/usr/bin/clash".to_string(), policy, None, false);
         // No sandbox → command runs unchanged.
         let result = hook("/usr/bin/git", &["push".to_string()]);
