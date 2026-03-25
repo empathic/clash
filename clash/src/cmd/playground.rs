@@ -19,24 +19,14 @@ use crate::style;
 /// Starlark DSL functions available in the playground, with signatures and descriptions.
 const STARLARK_FUNCTIONS: &[(&str, &str, &str)] = &[
     (
-        "exe",
-        r#"exe(name=None, args=None, doc=None)"#,
-        "Build an exec rule for shell commands",
+        "match",
+        r#"match({ "ToolName": { ... }, ... })"#,
+        "Build rules from a nested dict tree (roots are tool names)",
     ),
     (
         "tool",
         r#"tool(name=None, doc=None)"#,
         "Build a tool rule (Read, Write, Glob, etc.)",
-    ),
-    (
-        "cmd",
-        r#"cmd(name, { subcommand: effect, ... })"#,
-        "Build command policy from a nested dict",
-    ),
-    (
-        "tools",
-        r#"tools({ name: effect, ... })"#,
-        "Build tool policy from a dict",
     ),
     ("allow", "allow(sandbox=None)", "Create an allow effect"),
     ("deny", "deny(sandbox=None)", "Create a deny effect"),
@@ -79,10 +69,8 @@ const STARLARK_FUNCTIONS: &[(&str, &str, &str)] = &[
 /// All completable tokens: DSL functions, effects, path methods, and common tool names.
 const COMPLETIONS: &[&str] = &[
     // DSL functions
-    "exe(",
+    "match(",
     "tool(",
-    "cmd(",
-    "tools(",
     "allow(",
     "deny(",
     "ask(",
@@ -240,8 +228,8 @@ impl Completer for PlaygroundCompleter {
 
 /// DSL function names that get highlighted as builtins.
 const DSL_FUNCTIONS: &[&str] = &[
-    "exe", "tool", "cmd", "tools", "allow", "deny", "ask", "cwd", "home", "tempdir", "path",
-    "domains", "domain", "sandbox", "regex", "policy",
+    "match", "tool", "allow", "deny", "ask", "cwd", "home", "tempdir", "path", "domains", "domain",
+    "sandbox", "regex", "policy",
 ];
 
 /// REPL commands that get highlighted as keywords.
@@ -380,7 +368,7 @@ enum PendingSave {
 
 #[derive(Default)]
 struct PlaygroundState {
-    /// Rule snippets (exe, tool, cmd, tools, etc.).
+    /// Rule snippets (match, tool, etc.).
     rules: Vec<String>,
     /// Named sandbox definitions (variable name → expression).
     sandboxes: Vec<(String, String)>,
@@ -394,7 +382,7 @@ struct PlaygroundState {
     pending_save: Option<PendingSave>,
 }
 
-const STARLARK_LOAD: &str = r#"load("@clash//std.star", "exe", "tool", "cmd", "tools", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains", "domain", "allow", "deny", "ask")"#;
+const STARLARK_LOAD: &str = r#"load("@clash//std.star", "match", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains", "domain", "allow", "deny", "ask")"#;
 
 impl PlaygroundState {
     /// Recompile the current state into a CompiledPolicy.
@@ -594,8 +582,8 @@ fn handle_help() -> String {
         "Examples:",
         "  load ~/.clash/policy.star",
         "  add sandbox sb sandbox(\"sb\", fs=[cwd().allow(read=True, write=True)])",
-        "  add rule exe(\"git\").sandbox(sb).allow()",
-        "  add rule cmd(\"git\", { \"push\": deny(), \"pull\": allow() })",
+        "  add rule match({\"Bash\": {\"git\": allow(sandbox=sb)}})",
+        "  add rule match({\"Bash\": {\"git\": {\"push\": deny(), \"pull\": allow()}}})",
         "  test Bash { \"command\": \"git status\" }",
         "",
         "Tab completion is available for Starlark functions and commands.",
@@ -616,19 +604,14 @@ fn handle_functions() -> String {
         ));
         // Add usage hints for key functions
         match name {
-            "exe" => {
-                lines.push("        exe(\"git\").allow()".to_string());
-                lines.push("        exe(\"git\", args=[\"push\", \"--force\"]).deny()".to_string());
-            }
-            "cmd" => {
+            "match" => {
                 lines.push(
-                    "        cmd(\"git\", { \"push\": deny(), (\"pull\", \"fetch\"): allow() })"
+                    "        match({\"Bash\": {\"git\": {\"push\": deny()}, \"cargo\": allow()}})"
                         .to_string(),
                 );
-            }
-            "tools" => {
                 lines.push(
-                    "        tools({ \"Bash\": ask(), (\"Read\", \"Glob\"): allow() })".to_string(),
+                    "        match({(\"Read\", \"Glob\"): allow(), \"WebSearch\": deny()})"
+                        .to_string(),
                 );
             }
             "tool" => {
@@ -1072,9 +1055,8 @@ mod tests {
         let mut state = PlaygroundState::default();
         match dispatch("functions", &mut state) {
             ControlFlow::Continue(output) => {
-                assert!(output.contains("exe"));
-                assert!(output.contains("cmd"));
-                assert!(output.contains("tools"));
+                assert!(output.contains("match"));
+                assert!(output.contains("tool"));
                 assert!(output.contains("allow"));
             }
             ControlFlow::Quit => panic!("unexpected quit"),
@@ -1129,7 +1111,7 @@ mod tests {
         let mut state = PlaygroundState::default();
 
         // Add a policy rule
-        match dispatch(r#"add rule exe("git").allow()"#, &mut state) {
+        match dispatch(r#"add rule match({"Bash": {"git": allow()}})"#, &mut state) {
             ControlFlow::Continue(output) => assert!(output.contains("Rule added")),
             ControlFlow::Quit => panic!("unexpected quit"),
         }
@@ -1177,12 +1159,12 @@ mod tests {
     #[test]
     fn test_show_with_rules() {
         let mut state = PlaygroundState::default();
-        dispatch(r#"add rule exe("git").allow()"#, &mut state);
+        dispatch(r#"add rule match({"Bash": {"git": allow()}})"#, &mut state);
 
         match dispatch("show", &mut state) {
             ControlFlow::Continue(output) => {
                 assert!(output.contains("[1]"));
-                assert!(output.contains("exe(\"git\").allow()"));
+                assert!(output.contains("match("));
                 // Should include the decision tree
                 assert!(
                     output.contains("Decision tree:"),
@@ -1194,18 +1176,19 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn test_build_starlark_source() {
         let mut state = PlaygroundState::default();
-        state.rules.push(r#"exe("git").allow()"#.to_string());
+        state
+            .rules
+            .push(r#"match({"Bash": {"git": allow()}})"#.to_string());
         state.rules.push(r#"tool("Read").allow()"#.to_string());
 
         let source = state.build_starlark_source();
         assert!(source.contains("def main():"));
-        assert!(source.contains(r#"exe("git").allow()"#));
+        assert!(source.contains(r#"match({"Bash": {"git": allow()}})"#));
         assert!(source.contains(r#"tool("Read").allow()"#));
         assert!(source.contains("return policy("));
-        assert!(source.contains("\"cmd\""));
+        assert!(source.contains("\"match\""));
         assert!(source.contains("\"allow\""));
     }
 
@@ -1217,7 +1200,7 @@ mod tests {
             .push(("sb".to_string(), r#"sandbox("sb", fs=[])"#.to_string()));
         state
             .rules
-            .push(r#"exe("git").sandbox(sb).allow()"#.to_string());
+            .push(r#"match({"Bash": {"git": allow(sandbox=sb)}})"#.to_string());
 
         let source = state.build_starlark_source();
         assert!(source.contains(r#"sb = sandbox("sb", fs=[])"#));
@@ -1227,10 +1210,10 @@ mod tests {
     #[test]
     fn test_completer_starlark_functions() {
         let mut completer = PlaygroundCompleter;
-        let suggestions = completer.complete("add rule ex", 11);
+        let suggestions = completer.complete("add rule ma", 11);
         assert!(
-            suggestions.iter().any(|s| s.value == "exe("),
-            "expected exe( completion, got: {:?}",
+            suggestions.iter().any(|s| s.value == "match("),
+            "expected match( completion, got: {:?}",
             suggestions.iter().map(|s| &s.value).collect::<Vec<_>>()
         );
     }
@@ -1252,7 +1235,7 @@ mod tests {
     #[test]
     fn test_completer_dot_methods() {
         let mut completer = PlaygroundCompleter;
-        let suggestions = completer.complete("add rule exe(\"git\").al", 22);
+        let suggestions = completer.complete("add rule tool(\"Read\").al", 24);
         assert!(
             suggestions.iter().any(|s| s.value == ".allow()"),
             "expected .allow() completion, got: {:?}",
@@ -1261,12 +1244,12 @@ mod tests {
     }
 
     #[test]
-    fn test_cmd_toplevel_policy() {
+    fn test_match_toplevel_policy() {
         let mut state = PlaygroundState::default();
 
-        // cmd() should work as a standalone policy
+        // match() should work as a standalone policy
         match dispatch(
-            r#"add rule cmd("git", {"push": deny(), "status": allow()})"#,
+            r#"add rule match({"Bash": {"git": {"push": deny(), "status": allow()}}})"#,
             &mut state,
         ) {
             ControlFlow::Continue(output) => {
@@ -1296,7 +1279,7 @@ mod tests {
         let mut state = PlaygroundState::default();
 
         let result = dispatch(
-            r#"add rule exe("git").sandbox(sandbox("sb", fs=[cwd().allow(read=True, write=True)])).allow()"#,
+            r#"add rule match({"Bash": {"git": allow(sandbox=sandbox("sb", fs=[cwd().allow(read=True, write=True)]))}})"#,
             &mut state,
         );
         match result {
@@ -1319,11 +1302,11 @@ mod tests {
     }
 
     #[test]
-    fn test_sandbox_with_cmd() {
+    fn test_sandbox_with_match() {
         let mut state = PlaygroundState::default();
 
         let result = dispatch(
-            r#"add rule cmd("git", {"push": deny(), "status": allow(sandbox=sandbox("sb", fs=[cwd().allow(read=True)]))})"#,
+            r#"add rule match({"Bash": {"git": {"push": deny(), "status": allow(sandbox=sandbox("sb", fs=[cwd().allow(read=True)]))}}})"#,
             &mut state,
         );
         match result {
@@ -1335,12 +1318,18 @@ mod tests {
     }
 
     #[test]
-    fn test_cmd_mixes_with_rules() {
+    fn test_match_mixes_with_rules() {
         let mut state = PlaygroundState::default();
-        dispatch(r#"add rule exe("cargo").allow()"#, &mut state);
+        dispatch(
+            r#"add rule match({"Bash": {"cargo": allow()}})"#,
+            &mut state,
+        );
 
-        // cmd() is now a regular rule, should mix fine
-        match dispatch(r#"add rule cmd("git", {"push": deny()})"#, &mut state) {
+        // Multiple match() calls should mix fine
+        match dispatch(
+            r#"add rule match({"Bash": {"git": {"push": deny()}}})"#,
+            &mut state,
+        ) {
             ControlFlow::Continue(output) => {
                 assert!(output.contains("Rule added"), "got: {output}");
             }
@@ -1363,7 +1352,10 @@ mod tests {
             ControlFlow::Quit => panic!("unexpected quit"),
         }
 
-        match dispatch(r#"add rule exe("git").sandbox(sb).allow()"#, &mut state) {
+        match dispatch(
+            r#"add rule match({"Bash": {"git": allow(sandbox=sb)}})"#,
+            &mut state,
+        ) {
             ControlFlow::Continue(output) => {
                 assert!(output.contains("Rule added"), "got: {output}");
             }

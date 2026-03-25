@@ -6,16 +6,16 @@ A practical guide to writing clash policies. Clash policies are written in Starl
 
 ## Quick Start
 
-Clash policies use Starlark (`.star` files) with three capability domains: **exec** (shell commands), **fs** (file operations), and **net** (network access).
+Clash policies use Starlark (`.star` files) with three capability domains: **shell commands** (via `match()`), **fs** (file operations), and **net** (network access).
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "cwd", "domains")
 
 def main():
     return policy(default = deny(), rules = [
-        exe("git", args = ["push"]).deny(),
-        exe("git").allow(),
+        match({"Bash": {"git": {"push": deny()}}}),
+        match({"Bash": {"git": allow()}}),
         cwd().allow(read = True, write = True),
         domains({"github.com": allow()}),
     ])
@@ -96,17 +96,17 @@ Included `.star` files are evaluated and their rules are appended after the inli
 
 Clash controls three capability domains, not individual tools. A single rule can cover multiple tools:
 
-### Exec -- Shell Commands
+### Shell Commands
 
 ```python
-exe("git").allow()
-exe("git", args = ["push"]).deny()
-exe("cargo", args = ["test"]).allow()
+match({"Bash": {"git": allow()}})
+match({"Bash": {"git": {"push": deny()}}})
+match({"Bash": {"cargo": {"test": allow()}}})
 ```
 
-The first argument matches the binary name; `args` matches positional arguments. More arguments = more specific.
+The `match()` function maps tool names to nested rules. Keys are matched against positional arguments -- deeper nesting = more specific matches.
 
-> **Scope:** Exec rules evaluate the top-level command that Claude Code invokes via the Bash tool. They do not apply to child processes spawned by that command. For example, a deny rule on `git push` prevents Claude from directly running `git push`, but if an allowed command like `make deploy` internally calls `git push`, the deny rule does not fire -- the policy engine only sees the top-level `make` command. Sandbox restrictions for filesystem and network access *are* enforced on all child processes at the kernel level (see [Sandbox Policies](#sandbox-policies)).
+> **Scope:** Shell command rules evaluate the top-level command that Claude Code invokes via the Bash tool. They do not apply to child processes spawned by that command. For example, a deny rule on `git push` prevents Claude from directly running `git push`, but if an allowed command like `make deploy` internally calls `git push`, the deny rule does not fire -- the policy engine only sees the top-level `make` command. Sandbox restrictions for filesystem and network access *are* enforced on all child processes at the kernel level (see [Sandbox Policies](#sandbox-policies)).
 
 ### Fs -- File Operations
 
@@ -152,13 +152,13 @@ Rules use **first-match semantics**: within a capability domain, the first match
 ### Example
 
 ```python
-exe("git", args = ["push"]).deny()
-exe("git").allow()
+match({"Bash": {"git": {"push": deny()}}})
+match({"Bash": {"git": allow()}})
 ```
 
 `git push origin main` matches the deny rule first (it's listed first and matches). `git status` skips the deny (doesn't match "push") and matches the allow.
 
-If the rules were reversed, `git push` would match `exe("git").allow()` first and be allowed — the deny would never fire.
+If the rules were reversed, `git push` would match the `allow()` first and be allowed — the deny would never fire.
 
 ### Cross-Domain Resolution
 
@@ -173,7 +173,7 @@ If no rules match, the `default` effect applies.
 Starlark policies compose naturally using functions and variables:
 
 ```python
-load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "cwd")
 
 def cwd_access():
     return [
@@ -182,9 +182,9 @@ def cwd_access():
 
 def safe_git():
     return [
-        exe("git", args = ["push"]).deny(),
-        exe("git", args = ["reset"]).deny(),
-        exe("git").allow(),
+        match({"Bash": {"git": {"push": deny()}}}),
+        match({"Bash": {"git": {"reset": deny()}}}),
+        match({"Bash": {"git": allow()}}),
     ]
 
 def main():
@@ -203,12 +203,12 @@ The `update()` method combines two policies. In `a.update(b)`, `b`'s default eff
 
 ```python
 load("@clash//builtin.star", "base")
-load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "cwd", "domains")
 
 def main():
     my_policy = policy(default = deny(), rules = [
         cwd().allow(read = True, write = True),
-        exe("git").allow(),
+        match({"Bash": {"git": allow()}}),
         domains({"github.com": allow()}),
     ])
     return base.update(my_policy)
@@ -235,12 +235,12 @@ If you don't use `base`, you'll need to write your own rules for clash CLI comma
 
 ## Sandbox Policies
 
-Exec rules can attach a **sandbox policy** that defines what filesystem and network access a spawned process gets.
+Shell command rules can attach a **sandbox policy** that defines what filesystem and network access a spawned process gets.
 
 ### Defining sandboxes
 
 ```python
-load("@clash//std.star", "allow", "deny", "exe", "sandbox", "cwd", "home", "policy", "domains")
+load("@clash//std.star", "allow", "deny", "match", "sandbox", "cwd", "home", "policy", "domains")
 
 def main():
     cargo_env = sandbox(
@@ -260,17 +260,17 @@ def main():
     )
 
     return policy(default = deny(), rules = [
-        exe("git", args = ["push"]).deny(),
-        exe("cargo").sandbox(cargo_env).allow(),
-        exe("git").sandbox(git_env).allow(),
+        match({"Bash": {"git": {"push": deny()}}}),
+        match({"Bash": {"cargo": allow(sandbox = cargo_env)}}),
+        match({"Bash": {"git": allow(sandbox = git_env)}}),
         cwd().allow(read = True),
         domains({"github.com": allow()}),
     ])
 ```
 
-When `cargo build` matches the exec rule, the `cargo_env` sandbox defines the restrictions: the process can read the project, write to `./target`, and has unrestricted network access. When `git status` matches, it gets only read access to the project via `git_env`.
+When `cargo build` matches the shell command rule, the `cargo_env` sandbox defines the restrictions: the process can read the project, write to `./target`, and has unrestricted network access. When `git status` matches, it gets only read access to the project via `git_env`.
 
-Note: `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
+Note: Pass the sandbox via the `sandbox=` parameter on `allow()`, e.g. `allow(sandbox = my_sandbox)`.
 
 ### Sandbox presets
 
@@ -289,9 +289,9 @@ load("@clash//sandboxes.star", "dev", "dev_network")
 
 def main():
     return policy(default = deny(), rules = [
-        exe("gh").sandbox(dev_network).allow(),
-        exe("git").sandbox(dev).allow(),
-        exe().sandbox(dev).allow(),
+        match({"Bash": {"gh": allow(sandbox = dev_network)}}),
+        match({"Bash": {"git": allow(sandbox = dev)}}),
+        match({"Bash": allow(sandbox = dev)}),
     ])
 ```
 
@@ -304,17 +304,17 @@ load("@clash//rust.star", "rust_sandbox")
 
 def main():
     return policy(default = deny(), rules = [
-        exe(["cargo", "rustc"]).sandbox(rust_sandbox).allow(),
+        match({"Bash": {("cargo", "rustc"): allow(sandbox = rust_sandbox)}}),
     ])
 ```
 
 ### Default behavior
 
-When no sandbox is specified on an exec allow, the spawned process gets no filesystem/network access beyond bare minimum (deny-all sandbox by default).
+When no sandbox is specified on a shell command allow, the spawned process gets no filesystem/network access beyond bare minimum (deny-all sandbox by default).
 
 ### What sandboxes enforce
 
-Sandbox policies constrain **filesystem and network access** at the kernel level -- these restrictions are inherited by all child processes and cannot be bypassed. However, sandboxes do not enforce **exec-level argument matching** on child processes. If a sandboxed command spawns a subprocess, the subprocess inherits the filesystem and network restrictions but is not checked against exec rules. Tracking issue: [#136](https://github.com/empathic/clash/issues/136).
+Sandbox policies constrain **filesystem and network access** at the kernel level -- these restrictions are inherited by all child processes and cannot be bypassed. However, sandboxes do not enforce **argument matching** on child processes. If a sandboxed command spawns a subprocess, the subprocess inherits the filesystem and network restrictions but is not checked against shell command rules. Tracking issue: [#136](https://github.com/empathic/clash/issues/136).
 
 ### Automatic sandbox inclusions
 
@@ -345,17 +345,17 @@ Subdomain matching is supported: `"github.com"` also permits `api.github.com`.
 
 ```python
 # Literal match (exact binary name or domain)
-exe("git")
+match({"Bash": {"git": allow()}})
 domains({"github.com": allow()})
 
 # Regex match
-exe(regex("^cargo-.*"))
+match({"Bash": {regex("^cargo-.*"): allow()}})
 
 # Multiple binaries
-exe(["cargo", "rustc"])
+match({"Bash": {("cargo", "rustc"): allow()}})
 
-# Chain with .also()
-exe("git").also(exe("gh"))
+# Nested argument matching (tree builder)
+match({"Bash": {"git": {"push": deny(), "pull": allow()}}})
 ```
 
 ### Platform Constants
@@ -408,8 +408,7 @@ tool("Read").sandbox(my_sandbox).allow()
 Annotate rules and sandboxes with `doc=` to explain *why* they exist. Docstrings persist through the compiled IR and appear in `clash status` output.
 
 ```python
-# On rules
-exe("git", doc = "Version control").allow()
+# On tool rules
 tool("WebSearch", doc = "No external searches needed").deny()
 
 # On sandboxes
@@ -516,21 +515,23 @@ def main():
 Allow reads and common dev tools, deny destructive operations:
 
 ```python
-load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "cwd", "domains")
 
 def main():
     return policy(default = deny(), rules = [
         cwd().allow(read = True, write = True),
-        exe("cargo").allow(),
-        exe("npm").allow(),
-        exe("git", args = ["status"]).allow(),
-        exe("git", args = ["diff"]).allow(),
-        exe("git", args = ["log"]).allow(),
-        exe("git", args = ["add"]).allow(),
-        exe("git", args = ["push"]).deny(),
-        exe("git", args = ["reset"]).deny(),
-        exe("sudo").deny(),
-        exe("rm", args = ["-rf"]).deny(),
+        match({"Bash": {"cargo": allow()}}),
+        match({"Bash": {"npm": allow()}}),
+        match({"Bash": {"git": {
+            "status": allow(),
+            "diff": allow(),
+            "log": allow(),
+            "add": allow(),
+            "push": deny(),
+            "reset": deny(),
+        }}}),
+        match({"Bash": {"sudo": deny()}}),
+        match({"Bash": {"rm": {"-rf": deny()}}}),
         domains({"github.com": allow(), "crates.io": allow(), "npmjs.com": allow()}),
     ])
 ```
@@ -540,13 +541,13 @@ def main():
 Allow almost everything, but block the truly dangerous:
 
 ```python
-load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "home", "path")
+load("@clash//std.star", "allow", "deny", "match", "policy", "cwd", "home", "path")
 
 def main():
     return policy(default = allow(), rules = [
-        exe("git", args = ["push", "--force"]).deny(),
-        exe("git", args = ["reset", "--hard"]).deny(),
-        exe("sudo").deny(),
+        match({"Bash": {"git": {"push": {"--force": deny()}}}}),
+        match({"Bash": {"git": {"reset": {"--hard": deny()}}}}),
+        match({"Bash": {"sudo": deny()}}),
         path(".env").deny(write = True),
         home().deny(write = True),
     ])
@@ -557,14 +558,12 @@ def main():
 Allow reading only, deny all modifications:
 
 ```python
-load("@clash//std.star", "deny", "exe", "policy", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "cwd")
 
 def main():
     return policy(default = deny(), rules = [
         cwd().allow(read = True),
-        exe("cat").allow(),
-        exe("ls").allow(),
-        exe("grep").allow(),
+        match({"Bash": {("cat", "ls", "grep"): allow()}}),
     ])
 ```
 
@@ -573,7 +572,7 @@ def main():
 Allow build tools with constrained sandbox environments:
 
 ```python
-load("@clash//std.star", "allow", "deny", "exe", "sandbox", "cwd", "path", "policy", "domains")
+load("@clash//std.star", "allow", "deny", "match", "sandbox", "cwd", "path", "policy", "domains")
 
 def main():
     cargo_env = sandbox(
@@ -595,8 +594,8 @@ def main():
     )
 
     return policy(default = deny(), rules = [
-        exe("cargo").sandbox(cargo_env).allow(),
-        exe("npm").sandbox(npm_env).allow(),
+        match({"Bash": {"cargo": allow(sandbox = cargo_env)}}),
+        match({"Bash": {"npm": allow(sandbox = npm_env)}}),
         cwd().allow(read = True),
     ])
 ```

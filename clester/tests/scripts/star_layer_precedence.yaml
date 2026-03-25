@@ -4,17 +4,16 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "exe", "policy", "ask", "allow")
+    load("@clash//std.star", "match", "policy", "ask", "allow")
     def main():
         return policy(default=ask(), rules=[
-            exe("git").allow(),
-            exe("cargo").allow(),
+            match({"Bash": {("git", "cargo"): allow()}}),
         ])
   project_policy_star: |
-    load("@clash//std.star", "exe", "policy", "deny")
+    load("@clash//std.star", "match", "policy", "deny")
     def main():
         return policy(default=deny(), rules=[
-            exe("git", args=["push"]).deny(),
+            match({"Bash": {"git": {"push": deny()}}}),
         ])
 
 steps:

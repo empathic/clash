@@ -6,11 +6,11 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "exe", "policy", "deny")
+    load("@clash//std.star", "match", "policy", "allow", "deny")
     def main():
         return policy(default=deny(), rules=[
-            exe("cargo").allow(),
-            exe("git", args=["push"]).deny(),
+            match({"Bash": {"git": {"push": deny()}}}),
+            match({"Bash": {"cargo": allow()}}),
         ])
 
 steps:

@@ -86,32 +86,32 @@ The only change: `write = True`. Your agent can now read and write files inside 
 
 ---
 
-## Step 4: Allow commands with `cmd()`
+## Step 4: Allow commands with `match()`
 
-Your agent needs to run build tools and git. The `cmd()` builder lets you define rules as a tree of subcommands:
+Your agent needs to run build tools and git. The `match()` builder lets you define rules as a tree of tool names and subcommands:
 
 ```python
-load("@clash//std.star", "allow", "deny", "policy", "cwd", "tool", "cmd")
+load("@clash//std.star", "allow", "deny", "policy", "cwd", "tool", "match")
 
 def main():
     return policy(default = deny(), rules = [
         cwd(follow_worktrees = True).allow(read = True, write = True),
         tool(["Glob", "Grep"]).allow(),
 
-        cmd("git", {
+        match({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
-        }),
+        }}}),
 
-        cmd("cargo", {
+        match({"Bash": {"cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(),
             "publish": deny(),
-        }),
+        }}}),
     ])
 ```
 
-`cmd()` takes a binary name and a dict of subcommands. Each key maps to an effect:
+`match()` takes a dict where roots are tool names and values are trees of subcommands. Each key maps to an effect:
 
 - Tuples like `("add", "commit", "diff")` match any of those subcommands
 - Nested dicts like `"reset": {"--hard": deny()}` match deeper argument patterns
@@ -132,23 +132,23 @@ clash explain bash "git stash"     # → deny (no rule, falls to default)
 Denying everything unmatched is safe but noisy when you're actively working. Switch the default to `ask` so your agent can request approval for things you haven't written rules for yet:
 
 ```python
-load("@clash//std.star", "allow", "ask", "deny", "policy", "cwd", "tool", "cmd")
+load("@clash//std.star", "allow", "ask", "deny", "policy", "cwd", "tool", "match")
 
 def main():
     return policy(default = ask(), rules = [
         cwd(follow_worktrees = True).allow(read = True, write = True),
         tool(["Glob", "Grep"]).allow(),
 
-        cmd("git", {
+        match({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
-        }),
+        }}}),
 
-        cmd("cargo", {
+        match({"Bash": {"cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(),
             "publish": deny(),
-        }),
+        }}}),
     ])
 ```
 
@@ -162,7 +162,7 @@ Rules control whether a command runs. Sandboxes control what it can access *whil
 
 ```python
 load("@clash//std.star", "allow", "ask", "deny", "policy", "sandbox",
-     "cwd", "home", "tempdir", "tool", "cmd")
+     "cwd", "home", "tempdir", "tool", "match")
 
 def main():
     dev_sandbox = sandbox(
@@ -181,16 +181,16 @@ def main():
         cwd(follow_worktrees = True).allow(read = True, write = True),
         tool(["Glob", "Grep"]).allow(),
 
-        cmd("git", {
+        match({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
-        }),
+        }}}),
 
-        cmd("cargo", {
+        match({"Bash": {"cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(sandbox = dev_sandbox),
             "publish": deny(),
-        }),
+        }}}),
     ])
 ```
 
@@ -210,7 +210,7 @@ Instead of allowing all network access in your sandbox, restrict it to specific 
 
 ```python
 load("@clash//std.star", "allow", "ask", "deny", "policy", "sandbox",
-     "cwd", "home", "tempdir", "domains", "tool", "cmd")
+     "cwd", "home", "tempdir", "domains", "tool", "match")
 
 def main():
     dev_sandbox = sandbox(
@@ -235,16 +235,16 @@ def main():
         cwd(follow_worktrees = True).allow(read = True, write = True),
         tool(["Glob", "Grep"]).allow(),
 
-        cmd("git", {
+        match({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
-        }),
+        }}}),
 
-        cmd("cargo", {
+        match({"Bash": {"cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(sandbox = dev_sandbox),
             "publish": deny(),
-        }),
+        }}}),
     ])
 ```
 
@@ -259,7 +259,7 @@ Clash ships with built-in rules for its own CLI and common Claude Code tools. In
 ```python
 load("@clash//builtin.star", "builtins")
 load("@clash//std.star", "allow", "ask", "deny", "policy", "sandbox",
-     "cwd", "home", "tempdir", "domains", "tool", "cmd")
+     "cwd", "home", "tempdir", "domains", "tool", "match")
 
 def main():
     dev_sandbox = sandbox(
@@ -284,16 +284,16 @@ def main():
         cwd(follow_worktrees = True).allow(read = True, write = True),
         tool(["Glob", "Grep"]).allow(),
 
-        cmd("git", {
+        match({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
-        }),
+        }}}),
 
-        cmd("cargo", {
+        match({"Bash": {"cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(sandbox = dev_sandbox),
             "publish": deny(),
-        }),
+        }}}),
     ])
 ```
 

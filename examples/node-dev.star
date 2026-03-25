@@ -1,6 +1,6 @@
 # Node.js Development Policy
 # Allows npm/bun/node with sandboxed filesystem access.
-load("@clash//std.star", "exe", "tool", "policy", "sandbox", "cwd", "tempdir", "allow", "deny", "ask")
+load("@clash//std.star", "match", "tool", "policy", "sandbox", "cwd", "tempdir", "allow", "deny", "ask")
 
 def main():
     node_sandbox = sandbox(
@@ -15,12 +15,13 @@ def main():
     return policy(
         default = ask(),
         rules = [
-            exe("npm").sandbox(node_sandbox).allow(),
-            exe("npx").sandbox(node_sandbox).allow(),
-            exe("node").sandbox(node_sandbox).allow(),
-            exe("bun").sandbox(node_sandbox).allow(),
-            exe("git").allow(),
-            exe("git", args = ["push", "--force"]).deny(),
+            match({"Bash": {
+                "git": {"push": {"--force": deny()}},
+            }}),
+            match({"Bash": {
+                ("npm", "npx", "node", "bun"): allow(sandbox = node_sandbox),
+                "git": allow(),
+            }}),
             tool("Read").allow(),
             tool("Glob").allow(),
             tool("Grep").allow(),

@@ -1,5 +1,5 @@
 load("@clash//builtin.star", "builtins")
-load("@clash//std.star", "allow", "ask", "deny", "exe", "tool", "policy", "sandbox", "cwd", "home")
+load("@clash//std.star", "allow", "ask", "deny", "match", "tool", "policy", "sandbox", "cwd", "home")
 load("@clash//sandboxes.star", "{preset}")
 
 # Tighter sandbox for Claude fs tools (no execute, scoped to cwd + ~/.claude)
@@ -24,11 +24,17 @@ def main():
             tool(["WebFetch", "WebSearch"]).ask(),
 
             # Deny destructive git ops
-            exe("git", args=["push", "--force"]).deny(),
-            exe("git", args=["push", "--force-with-lease"]).deny(),
-            exe("git", args=["reset", "--hard"]).deny(),
+            match({"Bash": {"git": {
+                "push": {
+                    "--force": deny(),
+                    "--force-with-lease": deny(),
+                },
+                "reset": {
+                    "--hard": deny(),
+                },
+            }}}),
 
             # All other commands — sandboxed
-            exe().sandbox({preset}).allow(),
+            match({"Bash": allow(sandbox = {preset})}),
         ],
     )

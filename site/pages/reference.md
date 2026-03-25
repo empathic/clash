@@ -17,9 +17,9 @@ Every rule ends with an effect:
 - <span class="badge badge--ask">ask</span> — prompt the user for confirmation
 
 ```python
-exe("git").allow()
-exe("git", args = ["push"]).deny()
-exe("git", args = ["commit"]).ask()
+match({"Bash": {"git": allow()}})
+match({"Bash": {"git": {"push": deny()}}})
+match({"Bash": {"git": {"commit": ask()}}})
 ```
 
 **First match wins.** Rules are evaluated in order — the first matching rule determines the effect. Put specific rules (like denies) before broad ones (like allows).
@@ -33,28 +33,28 @@ Clash matches rules across three domains. A single rule can cover multiple tools
 ### Exec — shell commands
 
 ```python
-exe("git").allow()
-exe("git", args = ["push"]).deny()
-exe("cargo", args = ["test"]).allow()
-exe(["cargo", "rustc"]).allow()  # multiple binaries
+match({"Bash": {"git": allow()}})
+match({"Bash": {"git": {"push": deny()}}})
+match({"Bash": {"cargo": {"test": allow()}}})
+match({"Bash": {("cargo", "rustc"): allow()}})  # multiple binaries
 ```
 
-The `exe()` builder matches binary names. The `args` parameter matches positional arguments. More arguments = more specific.
+The `match()` function builds rules by nesting tool names, binary names, and subcommands in a dict. Deeper nesting = more specific matching.
 
 **Scope:** Exec rules evaluate the top-level command the agent invokes. They do not apply to child processes spawned by that command. Sandbox restrictions on filesystem and network access *are* enforced on all child processes at the kernel level.
 
-#### Command trees with `cmd()`
+#### Command trees
 
-For commands with many subcommands, `cmd()` provides a cleaner tree syntax:
+For commands with many subcommands, `match()` supports nested dicts and tuple keys:
 
 ```python
-cmd("git", {
+match({"Bash": {"git": {
     "push": deny(),
     ("pull", "fetch"): allow(),
     "remote": {
         "add": ask(),
     },
-})
+}}})
 ```
 
 ### Fs — file operations
@@ -150,8 +150,8 @@ Rules use **first-match semantics**: the first matching rule wins. Order matters
 Example:
 
 ```python
-exe("git", args = ["push"]).deny()
-exe("git").allow()
+match({"Bash": {"git": {"push": deny()}}})
+match({"Bash": {"git": allow()}})
 ```
 
 `git push origin main` matches the deny first (listed first, matches). `git status` skips the deny (doesn't match "push") and matches the allow.
@@ -168,19 +168,19 @@ In Starlark, break policies into reusable pieces using `load()` to import from o
 
 ```python
 # ~/.clash/safe_git.star
-load("@clash//std.star", "exe")
+load("@clash//std.star", "allow", "ask", "deny", "match")
 
 safe_git_rules = [
-    exe("git", args = ["push"]).deny(),
-    exe("git", args = ["reset"]).deny(),
-    exe("git", args = ["commit"]).ask(),
-    exe("git").allow(),
+    match({"Bash": {"git": {"push": deny()}}}),
+    match({"Bash": {"git": {"reset": deny()}}}),
+    match({"Bash": {"git": {"commit": ask()}}}),
+    match({"Bash": {"git": allow()}}),
 ]
 ```
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "cwd", "domains")
 load("safe_git.star", "safe_git_rules")
 
 def main():
@@ -220,12 +220,12 @@ The `update()` method combines two policies. In `a.update(b)`, `b`'s default eff
 
 ```python
 load("@clash//builtin.star", "base")
-load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "cwd", "domains")
 
 def main():
     my_policy = policy(default = deny(), rules = [
         cwd().allow(read = True, write = True),
-        exe("git").allow(),
+        match({"Bash": {"git": allow()}}),
         domains({"github.com": allow()}),
     ])
     return base.update(my_policy)
@@ -248,10 +248,10 @@ Allowed exec rules can carry a sandbox that constrains what the spawned process 
 
 ### Defining a sandbox
 
-In Starlark, use the `sandbox()` builder and attach it to exec rules with `.sandbox()`:
+In Starlark, use the `sandbox()` builder and pass it to `allow()` / `deny()` / `ask()` via the `sandbox` keyword:
 
 ```python
-load("@clash//std.star", "allow", "deny", "exe", "policy", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "cwd")
 
 def main():
     cargo_env = sandbox(
@@ -260,11 +260,9 @@ def main():
         net = allow(),
     )
     return policy(default = deny(), rules = [
-        exe("cargo").sandbox(cargo_env).allow(),
+        match({"Bash": {"cargo": allow(sandbox = cargo_env)}}),
     ])
 ```
-
-Note that `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
 
 ### What sandboxes enforce
 
@@ -295,21 +293,21 @@ def main():
 ### Developer-friendly
 
 ```python
-load("@clash//std.star", "allow", "ask", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "ask", "deny", "match", "policy", "cwd", "domains")
 
 def main():
     return policy(default = ask(), rules = [
         cwd(follow_worktrees = True).allow(read = True, write = True),
-        exe(["cargo", "npm"]).allow(),
-        exe("git", args = ["status"]).allow(),
-        exe("git", args = ["diff"]).allow(),
-        exe("git", args = ["log"]).allow(),
-        exe("git", args = ["add"]).allow(),
-        exe("git", args = ["commit"]).ask(),
-        exe("git", args = ["push"]).deny(),
-        exe("git", args = ["reset"]).deny(),
-        exe("sudo").deny(),
-        exe("rm", args = ["-rf"]).deny(),
+        match({"Bash": {
+            ("cargo", "npm"): allow(),
+            "git": {
+                ("status", "diff", "log", "add"): allow(),
+                "commit": ask(),
+                ("push", "reset"): deny(),
+            },
+            "sudo": deny(),
+            "rm": {"-rf": deny()},
+        }}),
         domains({"github.com": allow(), "crates.io": allow(), "npmjs.com": allow()}),
     ])
 ```
@@ -317,22 +315,26 @@ def main():
 ### Full trust with guardrails
 
 ```python
-load("@clash//std.star", "allow", "exe", "policy")
+load("@clash//std.star", "allow", "ask", "deny", "match", "policy")
 
 def main():
     return policy(default = allow(), rules = [
-        exe("git", args = ["push", "--force"]).deny(),
-        exe("git", args = ["reset", "--hard"]).deny(),
-        exe("rm", args = ["-rf"]).deny(),
-        exe("sudo").deny(),
-        exe("git", args = ["push"]).ask(),
+        match({"Bash": {
+            "git": {
+                "push": {"--force": deny()},
+                "reset": {"--hard": deny()},
+            },
+            "rm": {"-rf": deny()},
+            "sudo": deny(),
+        }}),
+        match({"Bash": {"git": {"push": ask()}}}),
     ])
 ```
 
 ### Sandboxed build tools
 
 ```python
-load("@clash//std.star", "allow", "deny", "exe", "policy", "sandbox", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "cwd", "domains")
 
 def main():
     cargo_env = sandbox(
@@ -346,8 +348,10 @@ def main():
         net = [domains({"registry.npmjs.org": allow()})],
     )
     return policy(default = deny(), rules = [
-        exe("cargo").sandbox(cargo_env).allow(),
-        exe("npm").sandbox(npm_env).allow(),
+        match({"Bash": {
+            "cargo": allow(sandbox = cargo_env),
+            "npm": allow(sandbox = npm_env),
+        }}),
         cwd().allow(read = True),
     ])
 ```

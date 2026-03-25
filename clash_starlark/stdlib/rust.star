@@ -1,4 +1,4 @@
-load("@clash//std.star", "deny", "sandbox", "cwd", "home", "tempdir", "exe", "path")
+load("@clash//std.star", "allow", "deny", "match", "sandbox", "cwd", "home", "tempdir", "path")
 
 rust_sandbox = sandbox(
     name = "rust_dev",
@@ -14,4 +14,4 @@ rust_sandbox = sandbox(
 )
 
 
-rust = exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow()
+rust = match({"Bash": {("rustc", "cargo"): allow(sandbox = rust_sandbox)}})

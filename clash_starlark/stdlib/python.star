@@ -1,4 +1,4 @@
-load("@clash//std.star", "allow", "deny", "sandbox", "cwd", "home", "tempdir", "domains", "exe", "regex")
+load("@clash//std.star", "allow", "deny", "match", "sandbox", "cwd", "home", "tempdir", "domains", "regex")
 
 python_sandbox = sandbox(
     name = "python_dev",
@@ -19,4 +19,4 @@ python_sandbox = sandbox(
     doc = "Python development: project + pip cache, PyPI/GitHub network",
 )
 
-python = exe(regex("python3?")).sandbox(python_sandbox).allow()
+python = match({"Bash": {regex("python3?"): allow(sandbox = python_sandbox)}})

@@ -105,7 +105,7 @@ def main():
     #[test]
     fn test_sandbox_policy() {
         let source = r#"
-load("@clash//std.star", "allow", "deny", "exe", "tool", "policy", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "tool", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(
@@ -118,8 +118,7 @@ def main():
     )
     return policy(
         default = deny(),
-        rules = [
-            exe("git").sandbox(box).allow(),
+        rules = match({"Bash": {"git": allow(sandbox=box)}}) + [
             tool().allow(),
         ],
     )
@@ -175,38 +174,38 @@ def main():
     fn test_match_multi_exe() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "policy", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(name = "test", default = deny(), fs = [cwd().allow(read = True)])
     return policy(
         default = deny(),
-        rules = [
-            exe(["rustc", "cargo", "cargo-clippy"]).sandbox(box).allow(),
-        ],
+        rules = match({"Bash": {("rustc", "cargo", "cargo-clippy"): allow(sandbox=box)}}),
     )
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
         let tree = doc["tree"].as_array().unwrap();
         assert_eq!(tree.len(), 1);
-        // exe(["rustc", "cargo", "cargo-clippy"]) → ToolName=Bash → PosArg(0)=or([rustc, cargo, cargo-clippy])
+        // match({"Bash": {("rustc", "cargo", "cargo-clippy"): ...}}) → ToolName=Bash → 3 PosArg(0) children
         let exe_node = &tree[0]["condition"];
         assert_eq!(exe_node["observe"], "tool_name");
-        // The inner pos_arg(0) node should have an or pattern
         let children = exe_node["children"].as_array().unwrap();
-        assert!(!children.is_empty());
-        let pos_arg = &children[0]["condition"];
-        assert_eq!(pos_arg["observe"]["positional_arg"], 0);
-        let pat = &pos_arg["pattern"];
-        assert!(pat["any_of"].is_array());
+        assert_eq!(
+            children.len(),
+            3,
+            "expected 3 PosArg(0) children (one per tuple member)"
+        );
+        for child in children {
+            assert_eq!(child["condition"]["observe"]["positional_arg"], 0);
+        }
     }
 
     #[test]
     fn test_domains_net() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "exe", "policy", "sandbox", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "domains")
 
 def main():
     box = sandbox(
@@ -216,7 +215,7 @@ def main():
             domains({"github.com": allow(), "crates.io": allow()}),
         ],
     )
-    return policy(default = deny(), rules = [exe("cargo").sandbox(box).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"cargo": allow(sandbox=box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -228,7 +227,7 @@ def main():
     fn test_home_child() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "policy", "sandbox", "home")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "home")
 
 def main():
     box = sandbox(
@@ -238,7 +237,7 @@ def main():
             home().child(".ssh").allow(read = True),
         ],
     )
-    return policy(default = deny(), rules = [exe("git").sandbox(box).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"git": allow(sandbox=box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -251,7 +250,7 @@ def main():
     fn test_wildcard_domain() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "exe", "policy", "sandbox", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "domains")
 
 def main():
     box = sandbox(
@@ -259,7 +258,7 @@ def main():
         default = deny(),
         net = [domains({"*.npmjs.org": allow()})],
     )
-    return policy(default = deny(), rules = [exe("npm").sandbox(box).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"npm": allow(sandbox=box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -270,7 +269,7 @@ def main():
     fn test_cwd_worktree() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "policy", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(
@@ -278,7 +277,7 @@ def main():
         default = deny(),
         fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
     )
-    return policy(default = deny(), rules = [exe("git").sandbox(box).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"git": allow(sandbox=box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -298,7 +297,7 @@ def main():
     fn test_cwd_without_worktree_omits_field() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "policy", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(
@@ -306,7 +305,7 @@ def main():
         default = deny(),
         fs = [cwd().allow(read = True, write = True)],
     )
-    return policy(default = deny(), rules = [exe("git").sandbox(box).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"git": allow(sandbox=box)}}))
 "#,
         );
         let sandboxes = doc["sandboxes"].as_object().unwrap();
@@ -321,7 +320,7 @@ def main():
     fn test_tempdir_path() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "policy", "sandbox", "tempdir")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "tempdir")
 
 def main():
     box = sandbox(
@@ -329,7 +328,7 @@ def main():
         default = deny(),
         fs = [tempdir().allow()],
     )
-    return policy(default = deny(), rules = [exe("test").sandbox(box).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"test": allow(sandbox=box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -340,7 +339,7 @@ def main():
     fn test_path_static() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "policy", "sandbox", "path")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "path")
 
 def main():
     box = sandbox(
@@ -348,7 +347,7 @@ def main():
         default = deny(),
         fs = [path("/usr/local/bin").allow(read = True, execute = True)],
     )
-    return policy(default = deny(), rules = [exe("test").sandbox(box).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"test": allow(sandbox=box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -359,7 +358,7 @@ def main():
     fn test_path_env() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "policy", "sandbox", "path")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "path")
 
 def main():
     box = sandbox(
@@ -367,7 +366,7 @@ def main():
         default = deny(),
         fs = [path(env = "CARGO_HOME").allow(read = True, write = True)],
     )
-    return policy(default = deny(), rules = [exe("cargo").sandbox(box).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"cargo": allow(sandbox=box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -378,11 +377,11 @@ def main():
     fn test_bare_path_in_sandbox_errors() {
         // Using cwd() without a decision (.allow()/.deny()/.ask()) in sandbox fs= should fail
         let source = r#"
-load("@clash//std.star", "deny", "exe", "policy", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(name = "test", default = deny(), fs = [cwd()])
-    return policy(default = deny(), rules = [exe("test").sandbox(box).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"test": allow(sandbox=box)}}))
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from("."));
         assert!(result.is_err());
@@ -393,14 +392,12 @@ def main():
         let doc = eval_to_doc(
             r#"
 load("@clash//rust.star", "rust_sandbox")
-load("@clash//std.star", "deny", "exe", "policy")
+load("@clash//std.star", "allow", "deny", "match", "policy")
 
 def main():
     return policy(
         default = deny(),
-        rules = [
-            exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow(),
-        ],
+        rules = match({"Bash": {("rustc", "cargo"): allow(sandbox=rust_sandbox)}}),
     )
 "#,
         );
@@ -417,12 +414,12 @@ def main():
             let source = format!(
                 r#"
 load("@clash//{module}", "{sandbox_name}")
-load("@clash//std.star", "deny", "exe", "policy")
+load("@clash//std.star", "allow", "deny", "match", "policy")
 
 def main():
     return policy(
         default = deny(),
-        rules = [exe("test").sandbox({sandbox_name}).allow()],
+        rules = match({{"Bash": {{"test": allow(sandbox={sandbox_name})}}}}),
     )
 "#
             );
@@ -449,10 +446,10 @@ my_sandbox = sandbox(name = "test", default = deny(), fs = [cwd().allow(read = T
 
         let source = r#"
 load("helpers.star", "my_sandbox")
-load("@clash//std.star", "deny", "exe", "policy")
+load("@clash//std.star", "allow", "deny", "match", "policy")
 
 def main():
-    return policy(default = deny(), rules = [exe("test").sandbox(my_sandbox).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"test": allow(sandbox=my_sandbox)}}))
 "#;
         let result = evaluate(source, "policy.star", dir.path()).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
@@ -465,7 +462,7 @@ def main():
         let doc = eval_to_doc(
             r#"
 load("@clash//rust.star", "rust_sandbox")
-load("@clash//std.star", "allow", "deny", "exe", "tool", "policy", "sandbox", "cwd", "home")
+load("@clash//std.star", "allow", "deny", "match", "tool", "policy", "sandbox", "cwd", "home")
 
 def main():
     gitbox = sandbox(
@@ -479,9 +476,12 @@ def main():
         net = allow(),
     )
 
-    return policy(default = deny(), rules = [
-        exe("git").sandbox(gitbox).allow(),
-        exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow(),
+    return policy(default = deny(), rules = match({
+        "Bash": {
+            "git": allow(sandbox=gitbox),
+            ("rustc", "cargo"): allow(sandbox=rust_sandbox),
+        },
+    }) + [
         tool().allow(),
     ])
 "#,
@@ -490,7 +490,7 @@ def main():
         assert_eq!(doc["default_effect"], "deny");
 
         let tree = doc["tree"].as_array().unwrap();
-        assert_eq!(tree.len(), 3, "expected 3 tree nodes, got {}", tree.len());
+        assert_eq!(tree.len(), 2, "expected 2 tree nodes, got {}", tree.len());
 
         // All should be condition nodes on tool_name
         for node in tree {
@@ -506,17 +506,17 @@ def main():
     fn test_exe_regex_pattern() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "regex", "policy")
+load("@clash//std.star", "allow", "deny", "match", "regex", "policy")
 
 def main():
-    return policy(default = deny(), rules = [
-        exe(regex("cargo.*")).allow(),
-    ])
+    return policy(default = deny(), rules = match({
+        "Bash": {regex("cargo.*"): allow()},
+    }))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
         let tree = doc["tree"].as_array().unwrap();
-        // exe(regex("cargo.*")) → ToolName=Bash → PosArg(0)=regex(cargo.*)
+        // match({"Bash": {regex("cargo.*"): allow()}}) → ToolName=Bash → PosArg(0)=regex(cargo.*)
         let exe_node = &tree[0]["condition"];
         let children = exe_node["children"].as_array().unwrap();
         let pos_arg = &children[0]["condition"];
@@ -527,22 +527,24 @@ def main():
     fn test_exe_any_pattern() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "policy")
+load("@clash//std.star", "deny", "match", "policy")
 
 def main():
-    return policy(default = deny(), rules = [
-        exe().deny(),
-    ])
+    return policy(default = deny(), rules = match({
+        "Bash": deny(),
+    }))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
         let tree = doc["tree"].as_array().unwrap();
         let exe_node = &tree[0]["condition"];
         assert_eq!(exe_node["observe"], "tool_name");
-        // exe() with no name → ToolName=Bash → PosArg(0)=wildcard → deny
-        let pos_arg_node = &exe_node["children"].as_array().unwrap()[0]["condition"];
-        assert_eq!(pos_arg_node["observe"]["positional_arg"], 0);
-        assert_eq!(pos_arg_node["pattern"], "wildcard");
+        // match({"Bash": deny()}) → ToolName=Bash → deny (no PosArg nesting)
+        let children = exe_node["children"].as_array().unwrap();
+        assert!(
+            children[0]["decision"].is_object() || children[0]["decision"].is_string(),
+            "expected deny decision directly under ToolName=Bash"
+        );
     }
 
     #[test]
@@ -574,36 +576,41 @@ def main():
     fn test_match_exes_with_regex() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "regex", "policy")
+load("@clash//std.star", "allow", "deny", "match", "regex", "policy")
 
 def main():
-    return policy(default = deny(), rules = [
-        exe(["git", regex("gh.*")]).allow(),
-    ])
+    return policy(default = deny(), rules = match({
+        "Bash": {("git", regex("gh.*")): allow()},
+    }))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
         let tree = doc["tree"].as_array().unwrap();
-        // exe(["git", regex("gh.*")]) → ToolName=Bash → PosArg(0)=or([literal(git), regex(gh.*)])
+        // match({"Bash": {("git", regex("gh.*")): allow()}}) → ToolName=Bash → 2 PosArg(0) children
         let exe_node = &tree[0]["condition"];
         let children = exe_node["children"].as_array().unwrap();
-        let pos_arg = &children[0]["condition"];
-        let or_pats = pos_arg["pattern"]["any_of"].as_array().unwrap();
-        assert_eq!(or_pats[0]["literal"]["literal"], "git");
-        assert_eq!(or_pats[1]["regex"], "gh.*");
+        assert_eq!(
+            children.len(),
+            2,
+            "expected 2 PosArg(0) children (one literal, one regex)"
+        );
+        // Each child should be a PosArg(0) condition
+        for child in children {
+            assert_eq!(child["condition"]["observe"]["positional_arg"], 0);
+        }
     }
 
     #[test]
     fn test_exe_with_args_deny() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "tool", "policy")
+load("@clash//std.star", "allow", "deny", "match", "tool", "policy")
 def main():
-    return policy(default=deny(), rules=[
-        exe("git", args=["push"]).deny(),
-        exe("git").allow(),
-        tool("Read").allow(),
-    ])
+    return policy(default=deny(), rules=
+        match({"Bash": {"git": {"push": deny()}}}) +
+        match({"Bash": {"git": allow()}}) +
+        [tool("Read").allow()],
+    )
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -758,7 +765,7 @@ def main():
     fn test_file_sandbox_match_type() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "policy", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(
@@ -769,7 +776,7 @@ def main():
             cwd().allow(read = True),
         ],
     )
-    return policy(default = deny(), rules = [exe("test").sandbox(box).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"test": allow(sandbox=box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -865,7 +872,7 @@ def main():
     fn test_docstrings_persist_in_ir() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "tool", "policy", "sandbox", "cwd")
+load("@clash//std.star", "deny", "tool", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(
@@ -877,46 +884,20 @@ def main():
         ],
     )
     return policy(default = deny(), rules = [
-        exe("git", doc = "Version control").sandbox(box).allow(),
         tool("WebSearch", doc = "No external searches").deny(),
-    ])
+    ], default_sandbox = box)
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
 
         // Check rule docstrings on conditions
         let tree = doc["tree"].as_array().unwrap();
-        // exe("git", doc="Version control") → inner positional_arg condition has the doc
-        let git_inner = &tree[0]["condition"]["children"].as_array().unwrap()[0]["condition"];
-        assert_eq!(
-            git_inner["doc"], "Version control",
-            "exe doc should persist on inner condition"
-        );
 
         // tool("WebSearch", doc="No external searches")
-        let ws_node = &tree[1]["condition"];
+        let ws_node = &tree[0]["condition"];
         assert_eq!(
             ws_node["doc"], "No external searches",
             "tool doc should persist on condition"
-        );
-
-        // Check source location is set from the Starlark call site
-        let git_source = tree[0]["condition"]["source"].as_str();
-        assert!(
-            git_source.is_some(),
-            "exe() condition should have a source location"
-        );
-        // Source should point to the user's policy file, not @clash//std.star
-        assert!(
-            !git_source.unwrap().contains("@clash//"),
-            "source should be the user's file, not stdlib, got: {}",
-            git_source.unwrap()
-        );
-        // Source should contain a line number
-        assert!(
-            git_source.unwrap().contains(':'),
-            "source should include line number, got: {}",
-            git_source.unwrap()
         );
 
         // Check sandbox docstring
@@ -943,7 +924,7 @@ def main():
     fn test_sandbox_merge_via_varargs() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "exe", "policy", "sandbox", "cwd", "home", "tempdir", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "cwd", "home", "tempdir", "domains")
 
 fs_box = sandbox(
     name = "fs",
@@ -970,12 +951,12 @@ extra_fs = sandbox(
     ],
 )
 
+merged = fs_box.update(net_box).update(extra_fs)
+
 def main():
     return policy(
         default = deny(),
-        rules = [
-            exe("cargo").sandbox(fs_box, net_box, extra_fs).allow(),
-        ],
+        rules = match({"Bash": {"cargo": allow(sandbox=merged)}}),
     )
 "#,
         );
@@ -1036,7 +1017,7 @@ def main():
         // We do this by evaluating a policy that embeds the OS in a sandbox doc field.
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "policy", "sandbox", "cwd", "OS")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "cwd", "OS")
 
 def main():
     box = sandbox(
@@ -1045,7 +1026,7 @@ def main():
         fs = [cwd().allow(read = True)],
         doc = OS,
     )
-    return policy(default = deny(), rules = [exe("test").sandbox(box).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"test": allow(sandbox=box)}}))
 "#,
         );
         let sandbox = &doc["sandboxes"]["test"];
@@ -1062,7 +1043,7 @@ def main():
         // platform-specific user home directory root.
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "exe", "policy", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "cwd")
 
 def main():
     box = sandbox(
@@ -1070,7 +1051,7 @@ def main():
         default = deny(),
         fs = [cwd().allow(read = True)],
     )
-    return policy(default = deny(), rules = [exe("test").sandbox(box).allow()])
+    return policy(default = deny(), rules = match({"Bash": {"test": allow(sandbox=box)}}))
 "#,
         );
         let sandbox = &doc["sandboxes"]["test"];

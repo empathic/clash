@@ -1,4 +1,4 @@
-load("@clash//std.star", "allow", "ask", "cmd", "deny", "home", "path", "sandbox", "tools")
+load("@clash//std.star", "allow", "ask", "match", "deny", "home", "path", "sandbox")
 
 clashbox = sandbox(
     name="clash_box",
@@ -10,17 +10,18 @@ clashbox = sandbox(
     net=allow(),
 )
 
-clash = cmd(
-    "clash",
-    {
-        ("bug", "status"): allow(sandbox=clashbox),
-        "policy": {
-            ("list", "show", "explain"): allow(sandbox=clashbox),
-            "schema": allow(),
-            "edit": ask(sandbox=clashbox),
+clash = match({
+    "Bash": {
+        "clash": {
+            ("bug", "status"): allow(sandbox=clashbox),
+            "policy": {
+                ("list", "show", "explain"): allow(sandbox=clashbox),
+                "schema": allow(),
+                "edit": ask(sandbox=clashbox),
+            },
         },
     },
-)
+})
 
 _claude_fs = sandbox(
     name="claude_fs",
@@ -30,7 +31,7 @@ _claude_fs = sandbox(
     ],
 )
 
-claude = tools({
+claude = match({
     (
         "Agent",
         "AskUserQuestion",
@@ -49,4 +50,4 @@ claude = tools({
 })
 
 # Flat list of all builtin rule nodes
-builtins = [clash] + claude
+builtins = clash + claude

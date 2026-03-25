@@ -112,21 +112,15 @@ fn run_init_quick(no_bypass: Option<bool>) -> Result<()> {
 
     let policy_path = settings_dir.join("policy.star");
 
-    let quick_policy = r#"load("@clash//std.star", "exe", "tool", "policy", "allow", "ask")
+    let quick_policy = r#"load("@clash//std.star", "match", "tool", "policy", "allow", "ask")
 
 def main():
     return policy(
         default = ask(),
         rules = [
-            exe("git").allow(),
-            exe("cargo").allow(),
-            exe("npm").allow(),
-            exe("npx").allow(),
-            exe("node").allow(),
-            exe("bun").allow(),
-            exe("python").allow(),
-            exe("pip").allow(),
-            exe("uv").allow(),
+            match({"Bash": {
+                ("git", "cargo", "npm", "npx", "node", "bun", "python", "pip", "uv"): allow(),
+            }}),
             tool("Read").allow(),
             tool("Write").allow(),
             tool("Edit").allow(),
