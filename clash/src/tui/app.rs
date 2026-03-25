@@ -280,14 +280,13 @@ impl App {
                                     TestPanelAction::None => {}
                                 }
                                 // Advance walkthrough from TypeTest → SaveFinish on submit
-                                if is_submit {
-                                    if let Some(ref mut wt) = self.walkthrough {
-                                        if wt.step == WalkthroughStep::TypeTest {
-                                            wt.step = WalkthroughStep::SaveFinish;
-                                            self.test_focused = false;
-                                            self.mode = Mode::Walkthrough;
-                                        }
-                                    }
+                                if is_submit
+                                    && let Some(ref mut wt) = self.walkthrough
+                                    && wt.step == WalkthroughStep::TypeTest
+                                {
+                                    wt.step = WalkthroughStep::SaveFinish;
+                                    self.test_focused = false;
+                                    self.mode = Mode::Walkthrough;
                                 }
                             }
                             continue;
@@ -627,10 +626,10 @@ impl App {
             .rebuild_with_included(&self.manifest, &self.included);
 
         // Re-evaluate test cases against updated policy
-        if self.test_panel.visible {
-            if let Some(compiled) = self.current_compiled_policy() {
-                self.test_panel.re_evaluate(&compiled);
-            }
+        if self.test_panel.visible
+            && let Some(compiled) = self.current_compiled_policy()
+        {
+            self.test_panel.re_evaluate(&compiled);
         }
     }
 
@@ -780,6 +779,35 @@ enum FormHandled {
     Continue,
 }
 
+/// Compute a diff between two strings, returning colored diff lines.
+fn compute_diff(old: &str, new: &str) -> Vec<DiffLine> {
+    let diff = TextDiff::from_lines(old, new);
+    let mut lines = Vec::new();
+
+    for (idx, group) in diff.grouped_ops(3).iter().enumerate() {
+        if idx > 0 {
+            lines.push(DiffLine::Header("---".into()));
+        }
+        for op in group {
+            for change in diff.iter_changes(op) {
+                let line_content = change.to_string_lossy();
+                let s = line_content.trim_end_matches('\n').to_string();
+                match change.tag() {
+                    similar::ChangeTag::Equal => lines.push(DiffLine::Context(format!("  {s}"))),
+                    similar::ChangeTag::Insert => lines.push(DiffLine::Add(format!("+ {s}"))),
+                    similar::ChangeTag::Delete => lines.push(DiffLine::Remove(format!("- {s}"))),
+                }
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(DiffLine::Context("(no changes)".into()));
+    }
+
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -894,33 +922,4 @@ mod tests {
         press_and_render(&mut app, &mut terminal, key(KeyCode::Esc));
         assert!(matches!(app.mode, Mode::Normal));
     }
-}
-
-/// Compute a diff between two strings, returning colored diff lines.
-fn compute_diff(old: &str, new: &str) -> Vec<DiffLine> {
-    let diff = TextDiff::from_lines(old, new);
-    let mut lines = Vec::new();
-
-    for (idx, group) in diff.grouped_ops(3).iter().enumerate() {
-        if idx > 0 {
-            lines.push(DiffLine::Header("---".into()));
-        }
-        for op in group {
-            for change in diff.iter_changes(op) {
-                let line_content = change.to_string_lossy();
-                let s = line_content.trim_end_matches('\n').to_string();
-                match change.tag() {
-                    similar::ChangeTag::Equal => lines.push(DiffLine::Context(format!("  {s}"))),
-                    similar::ChangeTag::Insert => lines.push(DiffLine::Add(format!("+ {s}"))),
-                    similar::ChangeTag::Delete => lines.push(DiffLine::Remove(format!("- {s}"))),
-                }
-            }
-        }
-    }
-
-    if lines.is_empty() {
-        lines.push(DiffLine::Context("(no changes)".into()));
-    }
-
-    lines
 }

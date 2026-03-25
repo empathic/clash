@@ -911,7 +911,7 @@ def main():
         let rules = sandbox["rules"].as_array().unwrap();
         let cwd_rule = rules
             .iter()
-            .find(|r| r["path"].as_str().map_or(false, |p| p.starts_with("$PWD")));
+            .find(|r| r["path"].as_str().is_some_and(|p| p.starts_with("$PWD")));
         assert!(cwd_rule.is_some(), "should have a CWD rule");
         assert_eq!(
             cwd_rule.unwrap()["doc"],
@@ -1069,7 +1069,7 @@ def main():
         };
 
         assert!(
-            deny_paths.iter().any(|p| *p == expected_home),
+            deny_paths.contains(&expected_home),
             "sandbox should deny {expected_home} on {}, got deny paths: {deny_paths:?}",
             std::env::consts::OS,
         );
@@ -1081,7 +1081,7 @@ def main():
             "/Users"
         };
         assert!(
-            !deny_paths.iter().any(|p| *p == wrong_home),
+            !deny_paths.contains(&wrong_home),
             "sandbox should NOT deny {wrong_home} on {}",
             std::env::consts::OS,
         );

@@ -656,7 +656,7 @@ impl FormState {
             Self::build_sandbox_options_with_included(manifest, included);
 
         // Read condition info
-        let (obs_idx, pat_value) = Self::read_condition_at_path(tree, path);
+        let (_obs_idx, pat_value) = Self::read_condition_at_path(tree, path);
         let pat_type_idx = Self::pattern_type_index_at_path(tree, path);
 
         // Determine if this is a tool rule (ToolName) or an exec rule inner node
@@ -2140,8 +2140,6 @@ impl FormState {
                                     .fg(Color::Cyan)
                                     .add_modifier(Modifier::BOLD)
                                     .add_modifier(Modifier::UNDERLINED)
-                            } else if is_active {
-                                Style::default().fg(Color::DarkGray)
                             } else {
                                 Style::default().fg(Color::DarkGray)
                             };

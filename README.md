@@ -59,27 +59,7 @@ If you have the repo checked out, you can also use `just install` which register
 just dev
 ```
 
-This builds the binary, symlinks it into the source plugin directory, and launches a one-off Claude Code session with the plugin loaded directly from source. Changes to skills, hooks, or Rust code take effect on the next `just dev` — no install step needed.
-
----
-
-## Interactive Configuration
-
-Once clash is running inside Claude Code, you have access to slash commands (skills) for managing your policy without leaving your session:
-
-| Skill | What it does |
-|-------|-------------|
-| `/clash:onboard` | Interactively build your policy from scratch |
-| `/clash:edit` | Guided editing of your policy file |
-| `/clash:status` | Show current policy, rules, and enforcement status |
-| `/clash:describe` | Plain-English description of your active policy |
-| `/clash:explain` | See which rule matches a specific tool invocation |
-| `/clash:allow` | Quickly add an allow rule |
-| `/clash:deny` | Quickly add a deny rule |
-| `/clash:test` | Test your policy against hypothetical tool uses |
-| `/clash:audit` | View recent permission decisions from the audit log |
-
-If you're new, start with `/clash:onboard` — it walks you through creating a policy tailored to your workflow.
+This builds the binary and launches a one-off Claude Code session with the plugin loaded directly from source. Changes to hooks or Rust code take effect on the next `just dev` — no install step needed.
 
 ---
 
@@ -219,13 +199,17 @@ clash update                     # update clash to the latest release
 clash explain bash "git push"    # see which rule matches a command
 clash policy list                # list all rules with level tags
 clash policy validate            # validate policy syntax
-clash policy show                # show the compiled policy
+clash policy edit                # open the interactive policy editor
 clash policy allow "gh pr create"  # allow a command
 clash policy deny --bin rm         # deny a binary
 clash policy remove --tool Read    # remove a rule
 clash sandbox create dev           # create a named sandbox
 clash sandbox add-rule dev ./src   # add a sandbox filesystem rule
-clash launch                     # launch the agent with clash loaded
+clash playground                 # interactive policy sandbox for testing rules
+clash shell                      # sandboxed shell with per-command enforcement
+clash debug log                  # view audit log entries
+clash trace export               # export session trace as JSON
+clash session list               # list recent sessions
 ```
 
 For the full command reference, see the [CLI Reference](docs/cli-reference.md).
@@ -303,8 +287,6 @@ Use `clash explain` to see exactly which rule matches:
 clash explain bash "git push origin main"
 ```
 
-Or use the `/clash:explain` skill inside Claude Code for an interactive walkthrough.
-
 ### All actions blocked — policy error
 
 If every tool use is being denied with a "policy failed to compile" message, your policy file has a syntax error. Clash blocks all actions when it can't compile the policy rather than silently degrading.
@@ -365,7 +347,7 @@ Clash integrates with coding agents via their plugin or extension system. For ea
 Agent → integration hook → clash binary → policy evaluation → allow / deny / ask
 ```
 
-**Claude Code** (current integration): The plugin lives in `clash-plugin/` and registers hooks that intercept every tool call. It consists of hook definitions, skill definitions (slash commands), and the `clash` binary. In dev mode, `just dev` symlinks the freshly-built binary into `clash-plugin/bin/` and points Claude Code at the source directory. In install mode, `just install` stages a self-contained copy and registers it via the marketplace.
+**Claude Code** (current integration): The plugin lives in `clash-plugin/` and registers hooks that intercept every tool call. Hook definitions in `hooks/hooks.json` handle PreToolUse, PostToolUse, PermissionRequest, Notification, and SessionStart events — all delegating to the `clash` binary. In dev mode, `just dev` builds the binary and launches Claude Code with the plugin loaded from source. In install mode, `just install` registers the plugin via the Claude Code marketplace.
 
 ### Recipes
 
@@ -383,13 +365,17 @@ just release 0.4.0  # bump versions, commit, tag (push to trigger release)
 
 ```
 clash/
-├── clash/              # CLI binary + library (Rust)
-├── clash_starlark/     # Starlark policy evaluator (.star → JSON IR)
-├── clash-plugin/       # Claude Code plugin (hooks, skills, bin/)
-├── clash_notify/       # Notification support (desktop, Zulip)
-├── claude_settings/    # Claude Code settings library
-├── clester/            # End-to-end test harness
-└── docs/               # Documentation
+├── clash/                    # CLI binary + library (Rust)
+├── clash_starlark/           # Starlark policy evaluator (.star → JSON IR)
+├── clash-plugin/             # Claude Code plugin (hooks)
+├── clash-brush-core/         # Sandboxed shell core engine
+├── clash-brush-parser/       # Shell command parser
+├── clash-brush-builtins/     # Shell built-in commands
+├── clash-brush-interactive/  # Interactive shell (REPL)
+├── clash_notify/             # Notification support (desktop, Zulip)
+├── claude_settings/          # Claude Code settings library
+├── clester/                  # End-to-end test harness
+└── docs/                     # Documentation
 ```
 
 ---

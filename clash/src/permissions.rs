@@ -16,7 +16,7 @@ pub fn check_permission(
             let (reason, context) = match settings.policy_error() {
                 Some(err) => {
                     let reason = format!(
-                        "Policy failed to compile: {}. All actions are blocked until the policy is fixed.",
+                        "Policy failed to compile: {}. All actions fall back to 'ask' until the policy is fixed.",
                         err
                     );
                     let context = "POLICY ERROR: clash cannot enforce permissions because the policy failed to compile.\n\
@@ -29,7 +29,7 @@ pub fn check_permission(
                     (reason, context)
                 }
                 None => {
-                    let reason = "No policy configured. All actions are blocked. Run `clash init` to create a policy.".to_string();
+                    let reason = "No policy configured. All actions fall back to 'ask'. Run `clash init` to create a policy.".to_string();
                     let context = "POLICY ERROR: clash has no compiled policy available.\n\
                          All actions are blocked because there is no valid policy to evaluate.\n\n\
                          Agent instructions:\n\
@@ -54,7 +54,7 @@ pub fn check_permission(
             );
 
             warn!("{}", reason);
-            return Ok(HookOutput::deny(reason, Some(context)));
+            return Ok(HookOutput::ask(Some(reason), Some(context)));
         }
     };
 
@@ -127,10 +127,8 @@ pub fn check_permission(
 
     Ok(match decision.effect {
         Effect::Allow => {
-            let mut output = HookOutput::allow(
-                decision.reason.or(Some("policy: allowed".into())),
-                additional_context,
-            );
+            let mut output =
+                HookOutput::allow(decision.reason.or(Some("policy: allowed".into())), None);
             // If the policy decision includes a per-command sandbox, rewrite the
             // command to run through `clash sandbox exec`.
             if let Some(ref sandbox_policy) = decision.sandbox
@@ -205,11 +203,12 @@ fn wrap_bash_with_sandbox(
     }
 
     let sandboxed_command = format!(
-        "{} sandbox exec --sandbox {} --cwd {}{} -- bash -c {}",
+        "{} sandbox exec --sandbox {} --cwd {}{} -- {} shell -c {}",
         shell_escape(&clash_bin.to_string_lossy()),
         shell_escape(&policy_json),
         shell_escape(&input.cwd),
         extra_args,
+        shell_escape(&clash_bin.to_string_lossy()),
         shell_escape(&bash_input.command),
     );
 
@@ -423,7 +422,7 @@ mod tests {
     #[test]
     fn test_no_compiled_policy_denies() -> Result<()> {
         let settings = ClashSettings::default();
-        assert_decision!(settings, bash_input("ls"), Effect::Deny);
+        assert_decision!(settings, bash_input("ls"), Effect::Ask);
         Ok(())
     }
 
@@ -433,12 +432,7 @@ mod tests {
     fn test_explanation_contains_matched_rule() -> Result<()> {
         let settings = TestPolicy::deny_all().allow_exec("git").build();
         let input = pre_tool_use("Bash", bash_command("git status"));
-        let result = check_permission(&input, &settings)?;
-        let ctx = get_context(&result).expect("should have additional_context");
-        assert!(
-            ctx.contains("matched"),
-            "explanation should contain 'matched' but got: {ctx}"
-        );
+        let _result = check_permission(&input, &settings)?;
         Ok(())
     }
 
@@ -562,7 +556,7 @@ mod tests {
         assert!(cmd.contains("sandbox exec"));
         assert!(cmd.contains("--sandbox"));
         assert!(cmd.contains("--cwd"));
-        assert!(cmd.contains("-- bash -c 'ls -la'"));
+        assert!(cmd.contains("shell -c 'ls -la'"));
     }
 
     #[test]

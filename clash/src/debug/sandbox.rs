@@ -185,14 +185,20 @@ pub fn exec_entry(entry: &super::AuditLogEntry) -> Result<()> {
 
 /// Extract a shell command from a tool invocation.
 ///
-/// Returns `Some(["bash", "-c", <command>])` for Bash tool inputs,
+/// Returns `Some(["<clash>", "shell", "-c", <command>])` for Bash tool inputs,
 /// `None` for other tools that can't be meaningfully run in a shell sandbox.
 fn extract_shell_command(tool_name: &str, tool_input: &serde_json::Value) -> Option<Vec<String>> {
     if tool_name != "Bash" {
         return None;
     }
     let cmd = tool_input.get("command")?.as_str()?;
-    Some(vec!["bash".to_string(), "-c".to_string(), cmd.to_string()])
+    let clash_bin = std::env::current_exe().ok()?.to_string_lossy().to_string();
+    Some(vec![
+        clash_bin,
+        "shell".to_string(),
+        "-c".to_string(),
+        cmd.to_string(),
+    ])
 }
 
 /// Inspect sandbox enforcement for a tool invocation.
