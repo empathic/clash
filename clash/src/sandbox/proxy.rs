@@ -476,7 +476,7 @@ mod tests {
 
         // After drop returns, the listener is closed.
         assert!(
-            std::net::TcpStream::connect_timeout(&addr.into(), Duration::from_millis(200)).is_err(),
+            std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_err(),
             "proxy should have stopped accepting connections"
         );
     }

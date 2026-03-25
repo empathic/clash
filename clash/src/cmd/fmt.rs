@@ -143,7 +143,7 @@ mod tests {
             .write_all(b"x = 1")
             .unwrap();
 
-        let result = validate_paths(&[star_file.clone()]);
+        let result = validate_paths(std::slice::from_ref(&star_file));
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), vec![star_file]);
     }

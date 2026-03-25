@@ -306,7 +306,7 @@ mod tests {
         fs::create_dir_all(&worktree).unwrap();
         fs::write(
             worktree.join(".git"),
-            format!("gitdir: ../main-repo/.git/worktrees/wt1"),
+            "gitdir: ../main-repo/.git/worktrees/wt1",
         )
         .unwrap();
 

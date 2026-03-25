@@ -68,26 +68,26 @@ fn migrate_legacy_caps(path: &Path, raw: String) -> Result<String> {
             };
 
             // Migrate "default" field
-            if let Some(default_val) = sandbox_obj.get("default") {
-                if let Some(migrated) = migrate_cap_value(default_val) {
-                    sandbox_obj.insert("default".into(), migrated);
-                    changed = true;
-                }
+            if let Some(default_val) = sandbox_obj.get("default")
+                && let Some(migrated) = migrate_cap_value(default_val)
+            {
+                sandbox_obj.insert("default".into(), migrated);
+                changed = true;
             }
 
             // Migrate "caps" in each rule
             if let Some(rules) = sandbox_obj.get_mut("rules").and_then(|v| v.as_array_mut()) {
                 for rule in rules.iter_mut() {
-                    if let Some(rule_obj) = rule.as_object_mut() {
-                        if let Some(caps_val) = rule_obj.get("caps") {
-                            if let Some(migrated) = migrate_cap_value(caps_val) {
-                                rule_obj.insert("caps".into(), migrated);
-                                changed = true;
-                            }
-                        }
+                    if let Some(rule_obj) = rule.as_object_mut()
+                        && let Some(caps_val) = rule_obj.get("caps")
+                        && let Some(migrated) = migrate_cap_value(caps_val)
+                    {
+                        rule_obj.insert("caps".into(), migrated);
+                        changed = true;
                     }
                 }
             }
+
         }
     }
 

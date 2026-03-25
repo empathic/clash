@@ -192,11 +192,13 @@ fn extract_shell_command(tool_name: &str, tool_input: &serde_json::Value) -> Opt
         return None;
     }
     let cmd = tool_input.get("command")?.as_str()?;
-    let clash_bin = std::env::current_exe()
-        .ok()?
-        .to_string_lossy()
-        .to_string();
-    Some(vec![clash_bin, "shell".to_string(), "-c".to_string(), cmd.to_string()])
+    let clash_bin = std::env::current_exe().ok()?.to_string_lossy().to_string();
+    Some(vec![
+        clash_bin,
+        "shell".to_string(),
+        "-c".to_string(),
+        cmd.to_string(),
+    ])
 }
 
 /// Inspect sandbox enforcement for a tool invocation.

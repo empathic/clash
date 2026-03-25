@@ -53,11 +53,17 @@ pub struct WalkthroughState {
     pub step: WalkthroughStep,
 }
 
-impl WalkthroughState {
-    pub fn new() -> Self {
+impl Default for WalkthroughState {
+    fn default() -> Self {
         Self {
             step: WalkthroughStep::Welcome,
         }
+    }
+}
+
+impl WalkthroughState {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn advance(&mut self) {

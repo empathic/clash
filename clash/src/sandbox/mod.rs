@@ -85,12 +85,19 @@ pub struct MockApplication {
 }
 
 #[cfg(test)]
-impl MockSandbox {
-    pub fn new() -> Self {
+impl Default for MockSandbox {
+    fn default() -> Self {
         Self {
             applications: std::cell::RefCell::new(Vec::new()),
             support: SupportLevel::Full,
         }
+    }
+}
+
+#[cfg(test)]
+impl MockSandbox {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn with_support(mut self, support: SupportLevel) -> Self {
