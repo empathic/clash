@@ -252,8 +252,6 @@ async fn run_command_string(
     cwd: &str,
     hook: clash_brush_core::ExternalCommandHook,
 ) -> Result<()> {
-    info!(command = %command, "executing command string with sandbox hook");
-
     let mut shell = clash_brush_core::Shell::builder()
         .command_string_mode(true)
         .working_dir(std::path::PathBuf::from(cwd))
