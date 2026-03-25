@@ -1,0 +1,419 @@
+/* ── Tutorial Layout ─────────────────────────────────────────── */
+
+.tutorial-layout {
+  display: flex;
+  height: calc(100vh - var(--nav-height));
+  overflow: hidden;
+}
+
+/* ── Sidebar ────────────────────────────────────────────────── */
+
+.tutorial-sidebar {
+  width: 380px;
+  min-width: 320px;
+  background: var(--lawn);
+  border-right: 1px solid var(--fence);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#step-dots {
+  display: flex;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--fence);
+  background: var(--ground);
+  justify-content: center;
+}
+
+.step-dot {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  border: 2px solid var(--fence);
+  background: var(--ground);
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: var(--shade);
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.step-dot:hover {
+  border-color: var(--grass);
+  color: var(--grass);
+}
+
+.step-dot.active {
+  background: var(--grass);
+  border-color: var(--grass);
+  color: white;
+}
+
+.step-dot.completed {
+  background: var(--ground);
+  border-color: var(--grass);
+  color: var(--grass);
+}
+
+#tutorial-sidebar {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-lg);
+}
+
+/* ── Step Content ───────────────────────────────────────────── */
+
+.step-header {
+  margin-bottom: var(--space-lg);
+}
+
+.step-label {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--grass);
+}
+
+.step-title {
+  font-size: 1.35rem;
+  margin-top: var(--space-xs);
+  margin-bottom: 0;
+}
+
+.step-content p {
+  font-size: 0.92rem;
+  color: var(--bark);
+  line-height: 1.65;
+}
+
+.step-content ul {
+  font-size: 0.92rem;
+  padding-left: var(--space-lg);
+}
+
+.step-content code {
+  font-size: 0.82em;
+}
+
+/* ── Capability Map ─────────────────────────────────────────── */
+
+.capability-map {
+  background: var(--ground);
+  border: 1px solid var(--fence);
+  border-radius: 6px;
+  padding: var(--space-sm) var(--space-md);
+  margin: var(--space-md) 0;
+}
+
+.cap-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 0.3em 0;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.cap-tool {
+  color: var(--bark);
+  font-weight: 600;
+  min-width: 10em;
+}
+
+.cap-arrow {
+  color: var(--shade);
+}
+
+.cap-domain {
+  padding: 0.1em 0.5em;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.cap-exec { background: #d4f5dc; color: #1a6b2e; }
+.cap-fs   { background: #fdf3d0; color: #7a6010; }
+.cap-net  { background: #dce8f5; color: #2a5080; }
+
+/* ── Tasks ──────────────────────────────────────────────────── */
+
+.step-tasks {
+  margin-top: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.task {
+  display: flex;
+  gap: var(--space-sm);
+  padding: var(--space-sm);
+  border-radius: 6px;
+  opacity: 0.4;
+  transition: opacity 0.3s, background 0.3s;
+}
+
+.task.active {
+  opacity: 1;
+  background: var(--ground);
+}
+
+.task.completed {
+  opacity: 0.6;
+}
+
+.task-status {
+  flex-shrink: 0;
+  padding-top: 0.25em;
+}
+
+.task-dot {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--fence);
+  transition: all 0.3s;
+}
+
+.task.active .task-dot {
+  border-color: var(--grass);
+  background: var(--grass);
+  box-shadow: 0 0 0 3px rgba(45, 138, 78, 0.15);
+}
+
+.task.completed .task-dot {
+  border-color: var(--grass);
+  background: var(--grass);
+}
+
+.task-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-instruction {
+  font-size: 0.85rem;
+  color: var(--shade);
+  margin-bottom: var(--space-xs);
+}
+
+.task-command {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  padding: 0.4em 0.6em;
+  background: var(--dusk);
+  color: var(--mint);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.task.active .task-command {
+  border-color: var(--grass);
+  box-shadow: 0 0 0 2px rgba(45, 138, 78, 0.12);
+}
+
+.task-command:hover {
+  border-color: var(--grass);
+  box-shadow: 0 0 0 3px rgba(45, 138, 78, 0.2);
+}
+
+.task.completed .task-command {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── Summary Cards ──────────────────────────────────────────── */
+
+.summary-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-sm);
+  margin: var(--space-md) 0;
+}
+
+.summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2em;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: 6px;
+  border-top: 3px solid var(--fence);
+  background: var(--ground);
+  font-size: 0.85rem;
+}
+
+.summary-card strong {
+  font-size: 0.9rem;
+}
+
+.summary-card span {
+  color: var(--shade);
+  font-size: 0.8rem;
+}
+
+.summary-card code {
+  font-size: 0.75rem;
+}
+
+.summary-card--rules { border-top-color: var(--grass); }
+.summary-card--sandbox { border-top-color: var(--amber); }
+
+/* ── Playground Commands ────────────────────────────────────── */
+
+.playground-commands {
+  list-style: none;
+  padding: 0;
+}
+
+.playground-commands li {
+  font-size: 0.85rem;
+  padding: 0.2em 0;
+}
+
+.playground-commands code {
+  font-weight: 600;
+}
+
+/* ── Step Navigation ────────────────────────────────────────── */
+
+.step-nav {
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--space-xl);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--fence);
+}
+
+.step-btn {
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.5em 1em;
+  border: 1px solid var(--fence);
+  border-radius: 4px;
+  background: var(--ground);
+  color: var(--bark);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.step-btn:hover {
+  border-color: var(--grass);
+  color: var(--grass);
+}
+
+.step-btn-next {
+  margin-left: auto;
+}
+
+.step-btn.pulse {
+  animation: btn-pulse 1.5s ease-in-out infinite;
+  border-color: var(--grass);
+  color: var(--grass);
+}
+
+@keyframes btn-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(45, 138, 78, 0.3); }
+  50% { box-shadow: 0 0 0 6px rgba(45, 138, 78, 0); }
+}
+
+/* ── Terminal Pane ──────────────────────────────────────────── */
+
+.tutorial-terminal-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: #1b2d1b;
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: #162816;
+  border-bottom: 1px solid #2a4a2a;
+}
+
+.terminal-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.terminal-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.terminal-dot--red { background: var(--rust); }
+.terminal-dot--amber { background: var(--amber); }
+.terminal-dot--green { background: var(--grass); }
+
+.terminal-title {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: #5c8a5c;
+  margin-left: var(--space-sm);
+}
+
+#tutorial-terminal {
+  flex: 1;
+  padding: var(--space-xs);
+}
+
+#tutorial-terminal .xterm {
+  height: 100%;
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+
+@media (max-width: 860px) {
+  .tutorial-layout {
+    flex-direction: column;
+    height: auto;
+    min-height: calc(100vh - var(--nav-height));
+  }
+
+  .tutorial-sidebar {
+    width: 100%;
+    min-width: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--fence);
+    max-height: 45vh;
+  }
+
+  .tutorial-terminal-pane {
+    min-height: 55vh;
+  }
+}
+
+@media (max-width: 480px) {
+  #tutorial-sidebar {
+    padding: var(--space-md);
+  }
+
+  .step-title {
+    font-size: 1.15rem;
+  }
+
+  .summary-cards {
+    grid-template-columns: 1fr;
+  }
+}

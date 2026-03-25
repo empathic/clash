@@ -1,0 +1,17 @@
+{
+  "name": "clash-wasm",
+  "type": "module",
+  "description": "WASM build of Clash policy engine for browser-based interactive tutorial",
+  "version": "0.5.2",
+  "license": "Apache-2.0",
+  "files": [
+    "clash_wasm_bg.wasm",
+    "clash_wasm.js",
+    "clash_wasm.d.ts"
+  ],
+  "main": "clash_wasm.js",
+  "types": "clash_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
