@@ -37,6 +37,8 @@ pub enum FormRequest {
     EditCondition { path: Vec<usize> },
     /// Edit an existing decision node's effect and sandbox.
     EditDecision { path: Vec<usize> },
+    /// Edit an inline leaf rule (condition + decision together).
+    EditRule { path: Vec<usize> },
     /// Add a child node under an existing condition.
     AddChild { parent_path: Vec<usize> },
     /// Edit an existing sandbox's properties (caps, network).

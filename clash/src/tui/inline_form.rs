@@ -102,6 +102,10 @@ pub enum FormKind {
     AddChild {
         parent_path: Vec<usize>,
     },
+    /// Edit an inline leaf rule (condition + decision together).
+    EditRule {
+        path: Vec<usize>,
+    },
     EditSandbox {
         sandbox_name: String,
     },
@@ -144,6 +148,7 @@ impl FormState {
             FormRequest::AddInclude => Self::new_add_include(),
             FormRequest::EditCondition { path } => Self::new_edit_condition(path, manifest),
             FormRequest::EditDecision { path } => Self::new_edit_decision(path, manifest, included),
+            FormRequest::EditRule { path } => Self::new_edit_rule(path, manifest, included),
             FormRequest::AddChild { parent_path } => {
                 Self::new_add_child(parent_path, manifest, included)
             }
@@ -607,12 +612,7 @@ impl FormState {
             },
             FormField::Select {
                 label: "Match type".into(),
-                options: vec![
-                    "exact value".into(),
-                    "anything".into(),
-                    "regex".into(),
-                    "path prefix".into(),
-                ],
+                options: pattern_options(),
                 selected: pat_type_idx,
                 hints: pattern_option_hints(),
             },
@@ -638,6 +638,149 @@ impl FormState {
             active: 0,
             tool_context: Self::ancestor_tool_name(&manifest.policy.tree, path),
         };
+        form.recompute_visible();
+        form
+    }
+
+    /// Edit an inline leaf rule: same layout as AddRule, pre-filled with the
+    /// existing condition (observable + pattern) and decision (effect + sandbox).
+    fn new_edit_rule(
+        path: &[usize],
+        manifest: &PolicyManifest,
+        included: Option<&crate::policy::match_tree::CompiledPolicy>,
+    ) -> Self {
+        let tree = &manifest.policy.tree;
+        let (sandbox_opts, sb_default) =
+            Self::build_sandbox_options_with_included(manifest, included);
+
+        // Read condition info
+        let (obs_idx, pat_value) = Self::read_condition_at_path(tree, path);
+        let pat_type_idx = Self::pattern_type_index_at_path(tree, path);
+
+        // Determine if this is a tool rule (ToolName) or an exec rule inner node
+        let is_tool_rule = matches!(
+            Self::get_node_at_path(tree, path),
+            Some(Node::Condition {
+                observe: Observable::ToolName,
+                ..
+            })
+        );
+
+        // Read decision from the child
+        let (effect_idx, sandbox_name) = Self::read_decision_at_path(tree, path);
+        let sb_selected = if let Some(ref name) = sandbox_name {
+            sandbox_opts
+                .iter()
+                .position(|s| s == name)
+                .unwrap_or(sb_default)
+        } else {
+            sb_default
+        };
+
+        // Build the same field layout as AddRule
+        let (rule_type_selected, tool_name_val, cmd_val, args_val) = if is_tool_rule {
+            // Tool rule: pre-fill tool name with the pattern value
+            (0, pat_value, String::new(), String::new())
+        } else {
+            // Exec/other rule: pre-fill the command field
+            (1, String::new(), pat_value, String::new())
+        };
+
+        let tool_name_cursor = tool_name_val.len();
+        let cmd_cursor = cmd_val.len();
+
+        let fields = vec![
+            FormField::Select {
+                label: "Rule type".into(),
+                options: vec![
+                    "Tool rule".into(),
+                    "Shell command".into(),
+                    "Starlark expression".into(),
+                ],
+                selected: rule_type_selected,
+                hints: vec![
+                    "Match a Claude tool like Read, Write, Bash, Edit",
+                    "Match a shell command like git, npm, curl",
+                    "Write a raw Starlark policy expression",
+                ],
+            },
+            FormField::Text {
+                label: "Tool name".into(),
+                value: tool_name_val,
+                cursor: tool_name_cursor,
+                placeholder: "e.g. Read, Write, Bash, Edit".into(),
+                hint: Some("e.g. Read, Write, Bash, Edit, Glob, Grep, WebSearch"),
+            },
+            FormField::Text {
+                label: "Command".into(),
+                value: cmd_val,
+                cursor: cmd_cursor,
+                placeholder: "e.g. git, npm, gh, curl".into(),
+                hint: Some("The program to match, e.g. git, npm, gh, curl"),
+            },
+            FormField::Text {
+                label: "Arguments".into(),
+                value: args_val,
+                cursor: 0,
+                placeholder: "optional, e.g. push --force".into(),
+                hint: Some("Optional: only match when these args are used"),
+            },
+            FormField::Select {
+                label: "When matched".into(),
+                options: vec![
+                    "allow (permit)".into(),
+                    "deny (block)".into(),
+                    "ask (prompt)".into(),
+                ],
+                selected: effect_idx,
+                hints: vec!["", "", ""],
+            },
+            FormField::Select {
+                label: "Sandbox".into(),
+                options: sandbox_opts,
+                selected: sb_selected,
+                hints: vec![],
+            },
+            FormField::Text {
+                label: "Expression".into(),
+                value: String::new(),
+                cursor: 0,
+                placeholder: r#"e.g. exe("git").allow(), tool("Read").deny()"#.into(),
+                hint: Some("Starlark DSL expression — compiled and added to the policy tree"),
+            },
+        ];
+
+        let title = Self::describe_node_at_path(tree, path);
+
+        let mut form = FormState {
+            title: format!("Edit — {title}"),
+            kind: FormKind::EditRule {
+                path: path.to_vec(),
+            },
+            fields,
+            visible: vec![],
+            active: 0,
+            tool_context: if is_tool_rule {
+                // For tool rules, set the tool context from the pattern value
+                let pat_str = pattern_to_value_string(&match Self::get_node_at_path(tree, path) {
+                    Some(Node::Condition { pattern, .. }) => pattern.clone(),
+                    _ => Pattern::Wildcard,
+                });
+                if pat_str.is_empty() {
+                    None
+                } else {
+                    Some(pat_str)
+                }
+            } else {
+                Self::ancestor_tool_name(tree, path)
+            },
+        };
+        // Set pat_type_idx on the hidden pattern type field if we're editing a
+        // tool rule with a non-literal pattern (e.g. AnyOf).  The AddRule form
+        // doesn't have a visible pattern-type selector, but build_tool_rule_from_text
+        // handles comma-separated values, so we don't need one — just leave the
+        // tool_context set.
+        let _ = pat_type_idx; // suppress unused warning
         form.recompute_visible();
         form
     }
@@ -756,12 +899,7 @@ impl FormState {
             },
             FormField::Select {
                 label: "Match type".into(),
-                options: vec![
-                    "exact value".into(),
-                    "anything".into(),
-                    "regex".into(),
-                    "path prefix".into(),
-                ],
+                options: pattern_options(),
                 selected: 0,
                 hints: pattern_option_hints(),
             },
@@ -903,6 +1041,7 @@ impl FormState {
                 Pattern::Wildcard => 1,
                 Pattern::Regex(_) => 2,
                 Pattern::Prefix(_) => 3,
+                Pattern::AnyOf(_) => 4,
                 _ => 0,
             },
             _ => 0,
@@ -1002,7 +1141,7 @@ impl FormState {
     /// Recompute which field indices are visible based on current selections.
     fn recompute_visible(&mut self) {
         match &self.kind {
-            FormKind::AddRule => {
+            FormKind::AddRule | FormKind::EditRule { .. } => {
                 let rule_type = match &self.fields[0] {
                     FormField::Select { selected, .. } => *selected,
                     _ => 0,
@@ -1149,7 +1288,10 @@ impl FormState {
     /// Whether field at index `fi` should render all options inline.
     fn is_inline_select(&self, fi: usize) -> bool {
         // The "Rule type" selector in AddRule shows all options at once
-        matches!((&self.kind, fi), (FormKind::AddRule, 0))
+        matches!(
+            (&self.kind, fi),
+            (FormKind::AddRule | FormKind::EditRule { .. }, 0)
+        )
     }
 }
 
@@ -1346,6 +1488,7 @@ impl FormState {
             FormKind::EditSandbox { sandbox_name } => {
                 self.apply_edit_sandbox(manifest, sandbox_name)
             }
+            FormKind::EditRule { path } => self.apply_edit_rule(manifest, path),
             FormKind::EditSandboxRule {
                 sandbox_name,
                 rule_index,
@@ -1388,12 +1531,12 @@ impl FormState {
         };
 
         let node = if rule_type == 0 {
-            // Tool rule
+            // Tool rule (supports comma-separated names for AnyOf)
             let tool_name = self.text_value(1);
             if tool_name.is_empty() {
                 return Err("Tool name is required".into());
             }
-            manifest_edit::build_tool_rule(&tool_name, decision)
+            Self::build_tool_node(&tool_name, decision)
         } else {
             // Exec rule
             let bin = self.text_value(2);
@@ -1410,6 +1553,97 @@ impl FormState {
         };
 
         manifest_edit::upsert_rule(manifest, node);
+        Ok(true)
+    }
+
+    /// Build a tool-name rule node, supporting comma-separated names for AnyOf.
+    fn build_tool_node(tool_name: &str, decision: Decision) -> Node {
+        let names: Vec<&str> = tool_name
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let pattern = if names.len() == 1 {
+            Pattern::Literal(Value::Literal(names[0].to_string()))
+        } else {
+            Pattern::AnyOf(
+                names
+                    .iter()
+                    .map(|n| Pattern::Literal(Value::Literal(n.to_string())))
+                    .collect(),
+            )
+        };
+        Node::Condition {
+            observe: Observable::ToolName,
+            pattern,
+            children: vec![Node::Decision(decision)],
+            doc: None,
+            source: None,
+            terminal: false,
+        }
+    }
+
+    fn apply_edit_rule(
+        &self,
+        manifest: &mut PolicyManifest,
+        path: &[usize],
+    ) -> Result<bool, String> {
+        let rule_type = self.select_value(0);
+
+        // Starlark not supported for edit-in-place
+        if rule_type == 2 {
+            return Err("Cannot convert an existing rule to Starlark".into());
+        }
+
+        let effect_idx = tool_registry::filtered_effect_to_canonical(
+            self.tool_context.as_deref(),
+            self.select_value(4),
+        );
+
+        let sandbox_ref = if effect_idx != 1 {
+            let sb_idx = self.select_value(5);
+            if sb_idx > 0 {
+                let sb_name = self.select_option_str(5, sb_idx);
+                Some(SandboxRef(sb_name))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let decision = match effect_idx {
+            0 => Decision::Allow(sandbox_ref),
+            1 => Decision::Deny,
+            2 => Decision::Ask(sandbox_ref),
+            _ => Decision::Deny,
+        };
+
+        let new_node = if rule_type == 0 {
+            let tool_name = self.text_value(1);
+            if tool_name.is_empty() {
+                return Err("Tool name is required".into());
+            }
+            Self::build_tool_node(&tool_name, decision)
+        } else {
+            let bin = self.text_value(2);
+            if bin.is_empty() {
+                return Err("Binary name is required".into());
+            }
+            let args_str = self.text_value(3);
+            let args: Vec<&str> = if args_str.is_empty() {
+                vec![]
+            } else {
+                args_str.split_whitespace().collect()
+            };
+            manifest_edit::build_exec_rule(&bin, &args, decision)
+        };
+
+        // Replace the node at path
+        let target = Self::get_node_at_path_mut(&mut manifest.policy.tree, path)
+            .ok_or_else(|| "Node not found".to_string())?;
+        *target = new_node;
+        manifest.policy.tree = Node::compact(std::mem::take(&mut manifest.policy.tree));
         Ok(true)
     }
 
@@ -1788,7 +2022,7 @@ impl FormState {
         // Use max possible field count for forms that change visibility dynamically,
         // so the popup stays in a fixed position when cycling options.
         let field_count = match &self.kind {
-            FormKind::AddRule => self.fields.len().max(5), // stable at max visible fields
+            FormKind::AddRule | FormKind::EditRule { .. } => self.fields.len().max(5), // stable at max visible fields
             FormKind::AddChild { .. } => self.fields.len().max(5),
             _ => self.visible.len(),
         };
@@ -2353,6 +2587,28 @@ pattern_registry! {
         parse(v): {
             if v.is_empty() { return Err("Prefix pattern requires a value".into()); }
             Ok(Pattern::Prefix(Value::Literal(v.to_string())))
+        },
+    },
+    AnyOf {
+        label: "list of values",
+        hint: "any-of: match any value in a comma-separated list",
+        value_hint: "Comma-separated values, e.g. Read, Glob, Grep",
+        parse(v): {
+            if v.is_empty() { return Err("List requires at least one value".into()); }
+            let pats: Vec<Pattern> = v
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| Pattern::Literal(Value::Literal(s.to_string())))
+                .collect();
+            if pats.is_empty() {
+                return Err("List requires at least one value".into());
+            }
+            if pats.len() == 1 {
+                Ok(pats.into_iter().next().unwrap())
+            } else {
+                Ok(Pattern::AnyOf(pats))
+            }
         },
     },
 }

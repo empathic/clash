@@ -1,8 +1,8 @@
 //! Guided walkthrough for first-time onboarding.
 //!
 //! A lightweight state machine that renders coach-mark overlays inside the
-//! policy editor TUI, guiding the user through adding a "git" rule, testing
-//! it, and saving.
+//! policy editor TUI, guiding the user through base tools, adding a "git"
+//! rule, testing it, and saving.
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -17,6 +17,8 @@ use super::widgets::centered_rect;
 pub enum WalkthroughStep {
     /// Introduction — explain what the editor is.
     Welcome,
+    /// Explain pre-configured base tool rules (Read, Write, Edit, Glob, Grep).
+    BaseTools,
     /// Prompt the user to press `a` to add a rule.
     AddRule,
     /// Form is open and pre-filled — user reviews and submits.
@@ -34,7 +36,8 @@ pub enum WalkthroughStep {
 impl WalkthroughStep {
     pub fn next(self) -> Self {
         match self {
-            Self::Welcome => Self::AddRule,
+            Self::Welcome => Self::BaseTools,
+            Self::BaseTools => Self::AddRule,
             Self::AddRule => Self::FillForm,
             Self::FillForm => Self::TestIt,
             Self::TestIt => Self::TypeTest,
@@ -75,15 +78,34 @@ pub fn render_walkthrough_overlay(frame: &mut Frame, area: Rect, step: Walkthrou
             Line::from("It starts with a sensible default: ask for"),
             Line::from("anything not explicitly allowed."),
             Line::from(""),
-            Line::from("Let's add your first rule — allowing git."),
+            Line::from("Let's walk through your starter policy."),
+            Line::from(""),
+            dim_hint("Press any key to continue  •  Esc to skip"),
+        ],
+        WalkthroughStep::BaseTools => vec![
+            styled_title("Base Tools — Pre-configured"),
+            Line::from(""),
+            Line::from("Your policy already allows the tools Claude"),
+            Line::from("uses most: Read, Write, Edit, Glob, and Grep."),
+            Line::from(""),
+            Line::from("These run inside a sandbox that limits file"),
+            Line::from("access to your project and temp directories."),
+            Line::from(""),
+            Line::from("Shell commands are more nuanced. Take git:"),
+            Line::from("status and log are read-only, commit writes"),
+            Line::from("locally, but push needs network access."),
+            Line::from(""),
+            Line::from("For now we'll allow all of git. Over time you"),
+            Line::from("can add sandboxes for finer-grained control."),
             Line::from(""),
             dim_hint("Press any key to continue  •  Esc to skip"),
         ],
         WalkthroughStep::AddRule => vec![
-            styled_title("Step 1: Add a Rule"),
+            styled_title("Step 1: Allow git"),
             Line::from(""),
-            Line::from("Rules define what commands are allowed,"),
-            Line::from("denied, or require confirmation."),
+            Line::from("Let's add a rule that allows all git commands."),
+            Line::from("You can refine this later — e.g. deny push"),
+            Line::from("--force or sandbox network-dependent ops."),
             Line::from(""),
             key_hint("a", "add a new rule"),
             Line::from(""),
@@ -98,6 +120,10 @@ pub fn render_walkthrough_overlay(frame: &mut Frame, area: Rect, step: Walkthrou
             Line::from(""),
             Line::from("The test console lets you check how your"),
             Line::from("policy handles different commands."),
+            Line::from(""),
+            Line::from("Type a tool name followed by its arguments:"),
+            dim_hint("  bash git status"),
+            dim_hint("  Read /etc/hosts"),
             Line::from(""),
             key_hint("t", "open the test console"),
             Line::from(""),
@@ -138,6 +164,7 @@ pub fn render_walkthrough_overlay(frame: &mut Frame, area: Rect, step: Walkthrou
 pub fn walkthrough_status_hints(step: WalkthroughStep) -> Vec<(&'static str, &'static str)> {
     match step {
         WalkthroughStep::Welcome => vec![("any key", "continue"), ("Esc", "skip walkthrough")],
+        WalkthroughStep::BaseTools => vec![("any key", "continue"), ("Esc", "skip walkthrough")],
         WalkthroughStep::AddRule => vec![("a", "add rule"), ("Esc", "skip walkthrough")],
         WalkthroughStep::FillForm => vec![
             ("Tab", "next field"),
@@ -147,7 +174,7 @@ pub fn walkthrough_status_hints(step: WalkthroughStep) -> Vec<(&'static str, &'s
         ],
         WalkthroughStep::TestIt => vec![("t", "test console"), ("Esc", "skip walkthrough")],
         WalkthroughStep::TypeTest => vec![
-            ("type", "bash git status"),
+            ("try", "bash git status"),
             ("Enter", "run test"),
             ("Esc", "skip walkthrough"),
         ],
