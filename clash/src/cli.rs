@@ -18,8 +18,19 @@ pub struct Cli {
     pub command: Commands,
 }
 
+/// Top-level hook command with shared `--agent` flag.
+#[derive(Parser, Debug)]
+pub struct HookCmd {
+    /// Which coding agent is invoking the hook (default: claude)
+    #[arg(long, default_value = "claude")]
+    pub agent: crate::agents::AgentKind,
+
+    #[command(subcommand)]
+    pub subcommand: HookSubcommand,
+}
+
 #[derive(Subcommand, Debug)]
-pub enum HooksCmd {
+pub enum HookSubcommand {
     /// Handle PreToolUse hook - called before a tool is executed
     #[command(name = "pre-tool-use")]
     PreToolUse,
@@ -32,7 +43,7 @@ pub enum HooksCmd {
     #[command(name = "permission-request")]
     PermissionRequest,
 
-    /// Handle SessionStart hook - called when a Claude Code session begins
+    /// Handle SessionStart hook - called when a coding agent session begins
     #[command(name = "session-start")]
     SessionStart,
 
@@ -130,6 +141,15 @@ pub enum PolicyCmd {
         #[arg(long)]
         scope: Option<String>,
     },
+    /// Check policy for multi-agent portability issues
+    ///
+    /// Scans policy rules and warns about agent-specific tool names
+    /// that won't match across all agents. Suggests canonical alternatives.
+    Check {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     // --- Hidden/power-user subcommands ---
     /// Show policy summary: active policy, default effect, rule count
     #[command(hide = true)]
@@ -179,6 +199,9 @@ pub enum Commands {
         /// Skip the interactive editor and create a sensible default policy
         #[arg(long)]
         quick: bool,
+        /// Which coding agent to set up (default: claude)
+        #[arg(long, default_value = "claude")]
+        agent: crate::agents::AgentKind,
     },
 
     /// Remove clash: undo bypass permissions, uninstall plugin, remove config and binary
@@ -251,6 +274,9 @@ pub enum Commands {
         /// Run interactive onboarding: diagnose issues and offer to fix them
         #[arg(long)]
         onboard: bool,
+        /// Which coding agent to diagnose (default: claude)
+        #[arg(long, default_value = "claude")]
+        agent: crate::agents::AgentKind,
     },
 
     /// Debug policy enforcement: view logs, replay commands, inspect sandbox
@@ -267,8 +293,8 @@ pub enum Commands {
 
     // --- Hidden/internal commands ---
     /// Agent hook callbacks
-    #[command(subcommand, hide = true)]
-    Hook(HooksCmd),
+    #[command(hide = true)]
+    Hook(HookCmd),
 
     /// Launch Claude Code with clash managing hooks and sandbox enforcement
     #[command(hide = true)]

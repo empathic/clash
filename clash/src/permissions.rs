@@ -58,10 +58,11 @@ pub fn check_permission(
         }
     };
 
-    let decision = tree.evaluate_with_mode(
+    let decision = tree.evaluate_with_context(
         &input.tool_name,
         &input.tool_input,
         Some(&input.permission_mode),
+        input.agent.as_ref().map(|a| a.to_string()).as_deref(),
     );
     let noun = extract_noun(&input.tool_name, &input.tool_input);
 
@@ -164,11 +165,12 @@ pub fn check_permission(
 
 /// Map a tool name to a short verb string for user-facing messages.
 ///
+/// Uses canonical names where possible so output is agent-agnostic.
 /// Verbs align with the bare verb shortcuts in `clash allow <verb>`:
-/// bash, edit, read, web.
+/// shell, edit, read, web.
 fn tool_to_verb_str(tool_name: &str) -> String {
     match tool_name {
-        "Bash" => "bash".into(),
+        "Bash" => "shell".into(),
         "Read" | "Glob" | "Grep" => "read".into(),
         "Write" | "Edit" => "edit".into(),
         "WebFetch" | "WebSearch" => "web".into(),
@@ -176,7 +178,7 @@ fn tool_to_verb_str(tool_name: &str) -> String {
         | "TaskOutput" | "AskUserQuestion" | "EnterPlanMode" | "ExitPlanMode" | "NotebookEdit" => {
             "tool".into()
         }
-        _ => tool_name.to_lowercase(),
+        _ => crate::agents::display_name(tool_name).to_lowercase(),
     }
 }
 
@@ -226,13 +228,14 @@ fn shell_escape(s: &str) -> String {
 /// Prefers precise commands (e.g., `clash policy allow "git status"`) over broad
 /// ones (e.g., `clash policy allow --tool Bash`).
 fn suggest_allow_command_specific(tool_name: &str, tool_input: &serde_json::Value) -> String {
+    let display = crate::agents::display_name(tool_name);
     match tool_name {
         "Bash" => {
             // Extract the command and suggest allowing the specific binary (+ first arg if present).
             if let Some(cmd) = tool_input.get("command").and_then(|v| v.as_str()) {
                 let parts: Vec<&str> = cmd.split_whitespace().collect();
                 match parts.len() {
-                    0 => "clash policy allow --tool Bash".into(),
+                    0 => format!("clash policy allow --tool {display}"),
                     1 => format!("clash policy allow \"{}\"", parts[0]),
                     _ => {
                         // Include binary + first arg for specificity
@@ -240,13 +243,10 @@ fn suggest_allow_command_specific(tool_name: &str, tool_input: &serde_json::Valu
                     }
                 }
             } else {
-                "clash policy allow --tool Bash".into()
+                format!("clash policy allow --tool {display}")
             }
         }
-        "Read" | "Glob" | "Grep" => format!("clash policy allow --tool {tool_name}"),
-        "Write" | "Edit" => format!("clash policy allow --tool {tool_name}"),
-        "WebFetch" | "WebSearch" => format!("clash policy allow --tool {tool_name}"),
-        _ => format!("clash policy allow --tool {tool_name}"),
+        _ => format!("clash policy allow --tool {display}"),
     }
 }
 
@@ -260,15 +260,16 @@ fn suggest_allow_command(verb_str: &str) -> String {
     }
 }
 
-/// Map verb strings back to canonical tool names.
+/// Map verb strings back to display tool names for suggestions.
 fn verb_str_to_tool(verb_str: &str) -> &'static str {
     match verb_str {
-        "bash" => "Bash",
-        "edit" => "Edit",
-        "read" => "Read",
-        "web" => "WebFetch",
+        "shell" => "shell",
+        "bash" => "shell",
+        "edit" => "edit",
+        "read" => "read",
+        "web" => "web_fetch",
         "tool" => "Skill",
-        _ => "Bash",
+        _ => "shell",
     }
 }
 
@@ -276,7 +277,7 @@ fn verb_str_to_tool(verb_str: &str) -> &'static str {
 fn denial_explanation(verb_str: &str) -> &'static str {
     match verb_str {
         "edit" => "File editing is not allowed by your current policy.",
-        "bash" => "Command execution is not allowed by your current policy.",
+        "shell" => "Command execution is not allowed by your current policy.",
         "web" => "Web access is not allowed by your current policy.",
         "read" => "File reading outside the project is not allowed by your current policy.",
         _ => "This action is not allowed by your current policy.",
@@ -582,7 +583,7 @@ mod tests {
         let input = json!({"file_path": "/tmp/test.txt"});
         assert_eq!(
             suggest_allow_command_specific("Read", &input),
-            "clash policy allow --tool Read"
+            "clash policy allow --tool read"
         );
     }
 

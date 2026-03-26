@@ -22,7 +22,10 @@ const GITHUB_MARKETPLACE: &str = "empathic/clash";
 /// directly. When omitted, runs the interactive policy editor.
 /// Only one scope is initialized per invocation.
 #[instrument(level = Level::TRACE)]
-pub fn run(scope: Option<String>, quick: bool) -> Result<()> {
+pub fn run(scope: Option<String>, quick: bool, agent: crate::agents::AgentKind) -> Result<()> {
+    if agent != crate::agents::AgentKind::Claude {
+        return run_init_agent(agent, scope);
+    }
     match scope.as_deref() {
         Some("project") => run_init_project(),
         _ if quick => run_init_quick(),
@@ -334,6 +337,97 @@ fn print_user_summary(actions: &InitActions) {
         style::dim("/clash:edit"),
         style::dim("# interactively edit your policy")
     );
+}
+
+/// Initialize clash for a non-Claude agent.
+///
+/// Creates the policy (same policy file — portable across agents) and prints
+/// agent-specific setup instructions.
+fn run_init_agent(agent: crate::agents::AgentKind, scope: Option<String>) -> Result<()> {
+    use crate::agents::AgentKind;
+
+    // Write the policy (same as Claude — policies are agent-agnostic).
+    let settings_dir = if scope.as_deref() == Some("project") {
+        let root = ClashSettings::project_root()
+            .context("could not find project root — are you inside a git repository?")?;
+        let dir = root.join(".clash");
+        std::fs::create_dir_all(&dir)?;
+        dir
+    } else {
+        let dir =
+            ClashSettings::settings_dir().context("could not determine clash settings directory")?;
+        std::fs::create_dir_all(&dir)?;
+        dir
+    };
+
+    let policy_path = settings_dir.join("policy.star");
+    if !policy_path.exists() {
+        write_starter_policy()?;
+        ui::success(&format!("Policy created at {}", policy_path.display()));
+    } else {
+        ui::info(&format!(
+            "Policy already exists at {}",
+            policy_path.display()
+        ));
+    }
+
+    // Print agent-specific setup instructions.
+    println!();
+    style::header(&format!("Setup instructions for {agent}"));
+    println!();
+
+    match agent {
+        AgentKind::Gemini => {
+            println!("  Install the Clash extension for Gemini CLI:");
+            println!(
+                "    {}",
+                style::bold("gemini extensions install <path-to-clash-gemini-ext>")
+            );
+            println!();
+            println!("  Or copy hooks manually to ~/.gemini/settings.json.");
+        }
+        AgentKind::Codex => {
+            println!("  Add the following to your ~/.codex/config.toml:");
+            println!();
+            println!("    {}", style::dim("[hooks.pre_tool_use]"));
+            println!(
+                "    {}",
+                style::dim("command = \"clash hook --agent codex pre-tool-use\"")
+            );
+            println!("    {}", style::dim("timeout_seconds = 10"));
+            println!("    {}", style::dim("pattern = \"*\""));
+            println!();
+            println!("  See clash-codex/hooks.toml for the full configuration.");
+        }
+        AgentKind::AmazonQ => {
+            println!("  Add Clash hooks to your Amazon Q agent configuration.");
+            println!("  See clash-amazonq/agent.json for the hook definitions.");
+        }
+        AgentKind::OpenCode => {
+            println!("  Copy the Clash plugin to your OpenCode plugins directory:");
+            println!(
+                "    {}",
+                style::bold("cp clash-opencode/plugin.ts .opencode/plugins/clash.ts")
+            );
+        }
+        AgentKind::Copilot => {
+            println!("  Copy the hooks configuration to your repository:");
+            println!(
+                "    {}",
+                style::bold("cp -r clash-copilot/.github/hooks .github/hooks")
+            );
+        }
+        AgentKind::Claude => unreachable!(),
+    }
+
+    println!();
+    println!(
+        "  Then run: {}",
+        style::bold(&format!("clash doctor --agent {agent}"))
+    );
+    println!("  to verify the setup is correct.");
+
+    Ok(())
 }
 
 /// Install the clash plugin into Claude Code from the GitHub marketplace.

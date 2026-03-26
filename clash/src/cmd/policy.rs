@@ -20,6 +20,7 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
             tool,
             args,
         } => super::explain::run(json, trace, tool.unwrap_or_default(), args.join(" ")),
+        PolicyCmd::Check { json } => handle_check_portable(json),
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Validate { file, json } => handle_validate(file, json),
         PolicyCmd::Show { json } => handle_show(json),
@@ -49,6 +50,145 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Subcommand handlers
 // ---------------------------------------------------------------------------
+
+/// Handle `clash policy check` — scan for portability issues.
+fn handle_check_portable(json: bool) -> Result<()> {
+    use crate::policy::match_tree::{Node, Observable, Pattern, Value};
+    use crate::style;
+    use crate::ui;
+
+    let settings = ClashSettings::load_or_create()?;
+    let policy = match settings.policy_tree() {
+        Some(t) => t,
+        None => {
+            if let Some(err) = settings.policy_error() {
+                anyhow::bail!("{}", err);
+            }
+            anyhow::bail!("no policy configured — run `clash init`");
+        }
+    };
+
+    /// Collect portability warnings by walking the tree.
+    struct Warning {
+        tool_name: String,
+        canonical: Option<&'static str>,
+        source: Option<String>,
+    }
+
+    fn walk_tree(nodes: &[Node], warnings: &mut Vec<Warning>) {
+        for node in nodes {
+            match node {
+                Node::Condition {
+                    observe: Observable::ToolName,
+                    pattern,
+                    children,
+                    source,
+                    ..
+                } => {
+                    check_pattern(pattern, source, warnings);
+                    walk_tree(children, warnings);
+                }
+                Node::Condition { children, .. } => walk_tree(children, warnings),
+                Node::Decision(_) => {}
+            }
+        }
+    }
+
+    fn check_pattern(pattern: &Pattern, source: &Option<String>, warnings: &mut Vec<Warning>) {
+        match pattern {
+            Pattern::Literal(Value::Literal(name)) => {
+                // Check if this is an internal (Claude-specific) name that has a canonical alias
+                if let Some(canonical) = crate::agents::internal_to_canonical(name) {
+                    warnings.push(Warning {
+                        tool_name: name.clone(),
+                        canonical: Some(canonical),
+                        source: source.clone(),
+                    });
+                }
+                // Check if this is an agent-native name that's not canonical
+                else if crate::agents::resolve_any_to_internal(name).is_some()
+                    && crate::agents::canonical_to_internal(name).is_none()
+                    && crate::agents::internal_to_canonical(name).is_none()
+                {
+                    // It's an agent-native name like "run_shell_command"
+                    let internal = crate::agents::resolve_any_to_internal(name).unwrap();
+                    let canonical = crate::agents::internal_to_canonical(internal);
+                    warnings.push(Warning {
+                        tool_name: name.clone(),
+                        canonical,
+                        source: source.clone(),
+                    });
+                }
+            }
+            Pattern::AnyOf(pats) => {
+                for p in pats {
+                    check_pattern(p, source, warnings);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut warnings = Vec::new();
+    walk_tree(&policy.tree, &mut warnings);
+
+    if json {
+        let entries: Vec<serde_json::Value> = warnings
+            .iter()
+            .map(|w| {
+                serde_json::json!({
+                    "tool_name": w.tool_name,
+                    "suggestion": w.canonical,
+                    "source": w.source,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+        return Ok(());
+    }
+
+    if warnings.is_empty() {
+        ui::success("Policy is portable — no agent-specific tool names found.");
+        println!(
+            "  All tool name rules use canonical names or capabilities that work across agents."
+        );
+    } else {
+        println!(
+            "  {} portability warning(s) found:\n",
+            style::yellow_bold(&warnings.len().to_string())
+        );
+        for w in &warnings {
+            let location = w
+                .source
+                .as_deref()
+                .unwrap_or("unknown");
+            print!(
+                "  {} tool(\"{}\") is agent-specific",
+                style::yellow_bold("!"),
+                w.tool_name
+            );
+            if let Some(canonical) = w.canonical {
+                print!(
+                    " — use tool(\"{}\") for portability",
+                    style::green_bold(canonical)
+                );
+            }
+            println!();
+            println!("    {}", style::dim(location));
+        }
+        println!();
+        println!(
+            "  {} Canonical names (shell, read, write, edit, glob, grep, web_fetch, web_search)",
+            style::dim("Tip:")
+        );
+        println!(
+            "  {} match across all supported agents automatically.",
+            style::dim("    ")
+        );
+    }
+
+    Ok(())
+}
 
 /// Handle `clash policy list`.
 fn handle_list(json: bool) -> Result<()> {
@@ -553,7 +693,12 @@ fn build_rule_node(
     }
     match (tool.as_deref(), bin.as_deref()) {
         (_, Some(bin_name)) => Ok(manifest_edit::build_exec_rule(bin_name, &[], decision)),
-        (Some(tool_name), None) => Ok(manifest_edit::build_tool_rule(tool_name, decision)),
+        (Some(tool_name), None) => {
+            // Resolve canonical/case-insensitive names: "shell" → "Bash", "bash" → "Bash", etc.
+            let resolved = crate::agents::resolve_any_to_internal(tool_name)
+                .unwrap_or(tool_name);
+            Ok(manifest_edit::build_tool_rule(resolved, decision))
+        }
         (None, None) => anyhow::bail!("provide a command, --tool, or --bin"),
     }
 }

@@ -29,6 +29,7 @@
 //! output.write_stdout().unwrap();
 //! ```
 
+pub mod agents;
 pub mod audit;
 pub mod claude;
 pub mod cli;

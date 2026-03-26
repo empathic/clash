@@ -747,6 +747,40 @@ fn matches_observable(
                 _ => false,
             }
         }
+        Observable::ToolName => {
+            // Tool name matching is case-insensitive and supports canonical aliases.
+            // All of these match tool_name="Bash": "Bash", "bash", "shell", "Shell".
+            let tool = &ctx.tool_name;
+            let tool_lower = tool.to_lowercase();
+            let canonical = crate::agents::internal_to_canonical(tool);
+
+            // Build the set of names this tool is known by.
+            let mut aliases = vec![tool.clone(), tool_lower.clone()];
+            if let Some(c) = canonical {
+                aliases.push(c.to_string());
+                let c_lower = c.to_lowercase();
+                if c_lower != c {
+                    aliases.push(c_lower);
+                }
+            }
+
+            match pattern {
+                Pattern::Wildcard => true,
+                Pattern::Literal(v) => {
+                    let pat = v.resolve();
+                    let pat_lower = pat.to_lowercase();
+                    // Direct or case-insensitive match against any alias
+                    aliases.iter().any(|a| a == &pat || a.to_lowercase() == pat_lower)
+                    // Or the pattern is a canonical name that resolves to this tool
+                    || crate::agents::canonical_to_internal(&pat)
+                        .is_some_and(|resolved| resolved.eq_ignore_ascii_case(tool))
+                }
+                _ => {
+                    // Regex, AnyOf, Not, Prefix — match against all aliases
+                    aliases.iter().any(|v| pattern.matches(v))
+                }
+            }
+        }
         _ => {
             // For all other observables, extract the value and match
             if let Some(values) = ctx.extract(obs) {
@@ -770,15 +804,27 @@ impl CompiledPolicy {
         self.evaluate_ctx(&ctx)
     }
 
-    /// Evaluate this policy with mode context from Claude Code's permission_mode.
+    /// Evaluate this policy with mode and agent context.
     pub fn evaluate_with_mode(
         &self,
         tool_name: &str,
         tool_input: &serde_json::Value,
         mode: Option<&str>,
     ) -> PolicyDecision {
+        self.evaluate_with_context(tool_name, tool_input, mode, None)
+    }
+
+    /// Evaluate this policy with mode and agent context.
+    pub fn evaluate_with_context(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+        mode: Option<&str>,
+        agent_name: Option<&str>,
+    ) -> PolicyDecision {
         let mut ctx = QueryContext::from_tool(tool_name, tool_input);
         ctx.mode = mode.map(|m| m.to_string());
+        ctx.agent_name = agent_name.map(|a| a.to_string());
         self.evaluate_ctx(&ctx)
     }
 
@@ -2009,5 +2055,80 @@ mod tests {
             default_sandbox: None,
         };
         assert!(policy.platform_warnings().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Canonical tool name matching tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: test if a ToolName pattern matches a given tool name in context.
+    fn tool_name_matches(pattern_str: &str, context_tool: &str) -> bool {
+        let pattern = Pattern::Literal(Value::Literal(pattern_str.to_string()));
+        let ctx = QueryContext::from_tool(context_tool, &serde_json::json!({}));
+        matches_observable(&Observable::ToolName, &pattern, false, &ctx)
+    }
+
+    #[test]
+    fn canonical_shell_matches_bash() {
+        assert!(tool_name_matches("shell", "Bash"));
+    }
+
+    #[test]
+    fn canonical_read_matches_read() {
+        assert!(tool_name_matches("read", "Read"));
+    }
+
+    #[test]
+    fn canonical_write_matches_write() {
+        assert!(tool_name_matches("write", "Write"));
+    }
+
+    #[test]
+    fn canonical_edit_matches_edit() {
+        assert!(tool_name_matches("edit", "Edit"));
+    }
+
+    #[test]
+    fn canonical_web_fetch_matches_webfetch() {
+        assert!(tool_name_matches("web_fetch", "WebFetch"));
+    }
+
+    #[test]
+    fn canonical_web_search_matches_websearch() {
+        assert!(tool_name_matches("web_search", "WebSearch"));
+    }
+
+    #[test]
+    fn case_insensitive_bash_matches() {
+        assert!(tool_name_matches("bash", "Bash"));
+        assert!(tool_name_matches("BASH", "Bash"));
+        assert!(tool_name_matches("Bash", "Bash"));
+    }
+
+    #[test]
+    fn case_insensitive_shell_matches() {
+        assert!(tool_name_matches("Shell", "Bash"));
+        assert!(tool_name_matches("SHELL", "Bash"));
+    }
+
+    #[test]
+    fn internal_name_still_matches() {
+        // Writing the internal name directly should still work
+        assert!(tool_name_matches("Bash", "Bash"));
+        assert!(tool_name_matches("Read", "Read"));
+        assert!(tool_name_matches("WebFetch", "WebFetch"));
+    }
+
+    #[test]
+    fn unknown_tool_does_not_match() {
+        assert!(!tool_name_matches("shell", "Read"));
+        assert!(!tool_name_matches("run_shell_command", "Bash"));
+    }
+
+    #[test]
+    fn wildcard_matches_any_tool() {
+        let pattern = Pattern::Wildcard;
+        let ctx = QueryContext::from_tool("Bash", &serde_json::json!({}));
+        assert!(matches_observable(&Observable::ToolName, &pattern, false, &ctx));
     }
 }

@@ -15,6 +15,9 @@ pub enum HookInput {
 }
 
 /// Hook input for tool-related events (PreToolUse, PostToolUse, PermissionRequest)
+///
+/// The `tool_name` field carries the internal (Claude-style) name after protocol
+/// normalization. The original agent-native name is preserved in `original_tool_name`.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ToolUseHookInput {
     pub session_id: String,
@@ -28,6 +31,15 @@ pub struct ToolUseHookInput {
     /// Present in PostToolUse events
     #[serde(default)]
     pub tool_response: Option<serde_json::Value>,
+
+    // -- Multi-agent fields (not deserialized from JSON, set by protocol layer) --
+    /// Which agent sent this hook input.
+    #[serde(skip)]
+    pub agent: Option<crate::agents::AgentKind>,
+    /// The agent's original tool name before normalization (e.g. "run_shell_command").
+    /// For Claude, this is the same as `tool_name`.
+    #[serde(skip)]
+    pub original_tool_name: Option<String>,
 }
 
 /// Hook input for SessionStart events

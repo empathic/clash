@@ -1,0 +1,5 @@
+{
+  "name": "clash",
+  "version": "0.1.0",
+  "description": "Command Line Agent Safety Harness — policy enforcement for Gemini CLI"
+}

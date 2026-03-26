@@ -60,10 +60,12 @@ Three commands. One binary, one policy file, full enforcement. See the [Quick St
 | Agent | Status |
 |---|---|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | **Supported** |
-| [Codex CLI](https://github.com/openai/codex) | Planned |
-| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Planned |
-| [OpenCode](https://github.com/opencode-ai/opencode) | Planned |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | **Protocol ready** |
+| [Codex CLI](https://github.com/openai/codex) | **Protocol ready** |
+| [Amazon Q CLI](https://github.com/aws/amazon-q-developer-cli) | **Protocol ready** |
+| [OpenCode](https://github.com/opencode-ai/opencode) | **Protocol ready** |
+| [Copilot CLI](https://github.com/github/copilot-cli) | **Protocol ready** |
 
-Clash is agent-independent. [Contributions welcome](https://github.com/empathic/clash).
+Use `clash init --agent <name>` to set up any supported agent. [Contributions welcome](https://github.com/empathic/clash).
 
 </div>

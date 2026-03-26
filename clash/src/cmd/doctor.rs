@@ -70,7 +70,10 @@ impl CheckResult {
 /// When `onboard` is true, failing or warning checks prompt the user
 /// to fix the issue interactively before moving on.
 #[instrument(level = Level::TRACE, skip(onboard))]
-pub fn run(onboard: bool) -> Result<()> {
+pub fn run(onboard: bool, agent: crate::agents::AgentKind) -> Result<()> {
+    if agent != crate::agents::AgentKind::Claude {
+        return run_diagnose_agent(agent);
+    }
     if onboard {
         run_onboard()
     } else {
@@ -127,6 +130,64 @@ fn run_diagnose() -> Result<()> {
             warn_count,
         );
     }
+
+    Ok(())
+}
+
+/// Diagnostic checks for non-Claude agents.
+fn run_diagnose_agent(agent: crate::agents::AgentKind) -> Result<()> {
+    ui::banner_section(&format!("Doctor ({agent})"));
+
+    let checks = vec![
+        ("Binary on PATH", check_binary_on_path()),
+        ("Policy files", check_policy_files()),
+        ("Policy parsing", check_policy_parsing()),
+        ("Sandbox support", check_sandbox_support()),
+    ];
+
+    let mut fail_count = 0;
+    let mut warn_count = 0;
+
+    for (label, result) in &checks {
+        result.print(label);
+        if result.is_fail() {
+            fail_count += 1;
+        }
+        if result.is_warn() {
+            warn_count += 1;
+        }
+    }
+
+    println!();
+
+    if fail_count == 0 && warn_count == 0 {
+        println!(
+            "  {} All checks passed. clash is ready to use with {agent}.",
+            style::green_bold("OK"),
+        );
+    } else if fail_count == 0 {
+        println!(
+            "  {} {} warning(s), but no failures.",
+            style::yellow_bold("OK"),
+            warn_count,
+        );
+    } else {
+        println!(
+            "  {} {} check(s) failed, {} warning(s). See above for fix instructions.",
+            style::red_bold("!!"),
+            fail_count,
+            warn_count,
+        );
+    }
+
+    println!();
+    println!(
+        "  Note: Agent-specific hook installation for {agent} must be verified manually.",
+    );
+    println!(
+        "  Run {} for setup instructions.",
+        style::bold(&format!("clash init --agent {agent}")),
+    );
 
     Ok(())
 }

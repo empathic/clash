@@ -57,6 +57,8 @@ pub fn pre_tool_use(tool_name: &str, tool_input: serde_json::Value) -> ToolUseHo
         tool_input,
         tool_use_id: Some("toolu_test".into()),
         tool_response: None,
+        agent: None,
+        original_tool_name: None,
     }
 }
 

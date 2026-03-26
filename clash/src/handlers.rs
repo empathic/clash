@@ -83,12 +83,13 @@ pub fn handle_permission_request(
 
 /// Build a human-readable summary of the permission request for notifications.
 fn permission_summary(input: &ToolUseHookInput) -> String {
+    let display = crate::agents::display_name(&input.tool_name);
     match input.tool_name.as_str() {
         "Bash" => {
             let cmd = input.tool_input["command"].as_str().unwrap_or("(unknown)");
-            format!("Bash: {}", cmd)
+            format!("{}: {}", display, cmd)
         }
-        _ => input.tool_name.to_string(),
+        _ => display.to_string(),
     }
 }
 
