@@ -59,6 +59,46 @@ macro_rules! __match_entries {
         v
     }};
 
+    // Mode key => nested dict
+    (Mode($name:expr) => { $($inner:tt)* } $(, $($rest:tt)*)?) => {{
+        let mut v = vec![(
+            $crate::codegen::builder::MatchKey::Mode($name.to_owned()),
+            $crate::codegen::builder::MatchValue::Nested($crate::__match_entries!($($inner)*)),
+        )];
+        $(v.extend($crate::__match_entries!($($rest)*));)?
+        v
+    }};
+
+    // Mode key => effect expression
+    (Mode($name:expr) => $effect:expr $(, $($rest:tt)*)?) => {{
+        let mut v = vec![(
+            $crate::codegen::builder::MatchKey::Mode($name.to_owned()),
+            $crate::codegen::builder::MatchValue::Effect($effect),
+        )];
+        $(v.extend($crate::__match_entries!($($rest)*));)?
+        v
+    }};
+
+    // Tool key => nested dict
+    (Tool($name:expr) => { $($inner:tt)* } $(, $($rest:tt)*)?) => {{
+        let mut v = vec![(
+            $crate::codegen::builder::MatchKey::Tool($name.to_owned()),
+            $crate::codegen::builder::MatchValue::Nested($crate::__match_entries!($($inner)*)),
+        )];
+        $(v.extend($crate::__match_entries!($($rest)*));)?
+        v
+    }};
+
+    // Tool key => effect expression
+    (Tool($name:expr) => $effect:expr $(, $($rest:tt)*)?) => {{
+        let mut v = vec![(
+            $crate::codegen::builder::MatchKey::Tool($name.to_owned()),
+            $crate::codegen::builder::MatchValue::Effect($effect),
+        )];
+        $(v.extend($crate::__match_entries!($($rest)*));)?
+        v
+    }};
+
     // Single key => nested dict (key can be a literal or runtime variable)
     ($key:expr => { $($inner:tt)* } $(, $($rest:tt)*)?) => {{
         let mut v = vec![(
@@ -214,5 +254,34 @@ mod tests {
         let src = serialize(&stmts);
         assert!(src.contains("(\"git\", \"cargo\"): allow()"));
         assert!(src.contains("tool([\"Read\"]).allow()"));
+    }
+
+    #[test]
+    fn match_tree_mode_key() {
+        let expr = match_tree! {
+            Mode("plan") => {
+                Tool("Read") => allow(),
+                Tool("ExitPlanMode") => allow(),
+            },
+        };
+        let src = serialize(&[Stmt::Expr(expr)]);
+        assert!(src.contains("Mode(\"plan\")"));
+        assert!(src.contains("Tool(\"Read\"): allow()"));
+        assert!(src.contains("Tool(\"ExitPlanMode\"): allow()"));
+    }
+
+    #[test]
+    fn match_tree_mixed_keys() {
+        let expr = match_tree! {
+            Mode("plan") => {
+                Tool("Read") => allow(),
+            },
+            "Bash" => {
+                "git" => allow(),
+            },
+        };
+        let src = serialize(&[Stmt::Expr(expr)]);
+        assert!(src.contains("Mode(\"plan\")"));
+        assert!(src.contains("\"Bash\""));
     }
 }

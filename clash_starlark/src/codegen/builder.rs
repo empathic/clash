@@ -37,8 +37,16 @@ pub fn deny() -> Expr {
     Expr::call("deny", vec![])
 }
 
+pub fn deny_with_sandbox(sandbox: Expr) -> Expr {
+    Expr::call_kwargs("deny", vec![], vec![("sandbox", sandbox)])
+}
+
 pub fn ask() -> Expr {
     Expr::call("ask", vec![])
+}
+
+pub fn ask_with_sandbox(sandbox: Expr) -> Expr {
+    Expr::call_kwargs("ask", vec![], vec![("sandbox", sandbox)])
 }
 
 // ---------------------------------------------------------------------------
@@ -53,14 +61,29 @@ pub fn tool(names: &[&str]) -> Expr {
     Expr::call("tool", vec![Expr::list(list)])
 }
 
+/// `tool(["a"], doc="reason")` — tool rule with documentation.
+pub fn tool_doc(names: &[&str], doc: &str) -> Expr {
+    let list = names.iter().map(|n| Expr::string(*n)).collect::<Vec<_>>();
+    Expr::call_kwargs("tool", vec![Expr::list(list)], vec![("doc", Expr::string(doc))])
+}
+
 // ---------------------------------------------------------------------------
 // Match rules
 // ---------------------------------------------------------------------------
 
-/// A key in a match dict — either a single string or a tuple of strings.
+/// A key in a match dict.
+///
+/// Supports raw strings (tool names), typed `Mode()`/`Tool()` keys,
+/// and tuples for matching multiple keys.
 pub enum MatchKey {
+    /// A raw string key (tool name, backwards-compatible).
     Single(String),
+    /// A tuple of raw string keys.
     Tuple(Vec<String>),
+    /// A typed `Mode("name")` key for mode-based routing.
+    Mode(String),
+    /// A typed `Tool("name")` key for explicit tool matching.
+    Tool(String),
 }
 
 impl From<&str> for MatchKey {
@@ -101,6 +124,8 @@ fn match_dict(entries: Vec<(MatchKey, MatchValue)>) -> Expr {
                 MatchKey::Tuple(items) => {
                     Expr::tuple(items.into_iter().map(Expr::string).collect())
                 }
+                MatchKey::Mode(name) => Expr::call("Mode", vec![Expr::string(name)]),
+                MatchKey::Tool(name) => Expr::call("Tool", vec![Expr::string(name)]),
             };
             let value = match v {
                 MatchValue::Effect(e) => e,
@@ -116,7 +141,9 @@ fn match_dict(entries: Vec<(MatchKey, MatchValue)>) -> Expr {
 // Sandbox
 // ---------------------------------------------------------------------------
 
-/// Build a `sandbox(...)` call expression.
+/// Build a `sandbox(name=..., ...)` call expression.
+///
+/// Additional kwargs (e.g. `default`, `fs`, `net`, `doc`) are appended after `name`.
 pub fn sandbox(name: &str, kwargs: Vec<(&str, Expr)>) -> Expr {
     Expr::call_kwargs("sandbox", vec![], {
         let mut kw: Vec<(&str, Expr)> = vec![("name", Expr::string(name))];
