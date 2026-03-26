@@ -15,11 +15,13 @@ Clash is designed to be **agent-agnostic** — a universal safety harness for an
 | Agent | Status | Tracking |
 |-------|--------|----------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | **Supported** | — |
-| [Codex CLI](https://github.com/openai/codex) | Planned | [#195](https://github.com/empathic/clash/issues/195) |
-| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Planned | [#196](https://github.com/empathic/clash/issues/196) |
-| [OpenCode](https://github.com/opencode-ai/opencode) | Planned | [#197](https://github.com/empathic/clash/issues/197) |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | **Protocol ready** | [#196](https://github.com/empathic/clash/issues/196) |
+| [Codex CLI](https://github.com/openai/codex) | **Protocol ready** | [#195](https://github.com/empathic/clash/issues/195) |
+| [Amazon Q CLI](https://github.com/aws/amazon-q-developer-cli) | **Protocol ready** | — |
+| [OpenCode](https://github.com/opencode-ai/opencode) | **Protocol ready** | [#197](https://github.com/empathic/clash/issues/197) |
+| [Copilot CLI](https://github.com/github/copilot-cli) | **Protocol ready** | — |
 
-Currently, the Claude Code integration is the most mature. If you'd like to help bring Clash to another agent, contributions are welcome!
+Claude Code is the most mature integration. The other 5 agents have protocol adapters (hook JSON parsing/formatting), extension packages, and `--agent` flag support throughout the CLI. Use `clash init --agent <name>` to set up any supported agent.
 
 ---
 
