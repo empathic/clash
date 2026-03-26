@@ -445,6 +445,54 @@ th {
   width: 40%;
 }
 
+/* ── Pipeline flow ───────────────────────────────────────────── */
+
+.pipeline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: var(--space-xl) 0;
+}
+
+.pipeline-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-surface);
+  border-left: 3px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.pipeline-row--allow { border-left-color: var(--accent); }
+.pipeline-row--deny  { border-left-color: var(--alert); }
+.pipeline-row--ask   { border-left-color: var(--amber); }
+
+.pipeline-cmd {
+  min-width: 8rem;
+  font-weight: 500;
+  background: none;
+  padding: 0;
+}
+
+.pipeline-arrow {
+  color: var(--text-dim);
+}
+
+.pipeline-result {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 640px) {
+  .pipeline-row {
+    font-size: 0.75rem;
+    gap: var(--space-sm);
+  }
+  .pipeline-cmd {
+    min-width: 0;
+  }
+}
+
 /* ── Code blocks (always dark) ───────────────────────────────── */
 
 pre {
