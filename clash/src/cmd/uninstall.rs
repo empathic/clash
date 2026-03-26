@@ -24,22 +24,19 @@ pub fn run(yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    // 1. Remove bypass permissions (the thing the user keeps forgetting).
-    remove_bypass_permissions();
-
-    // 2. Remove the status line.
+    // 1. Remove the status line.
     remove_status_line();
 
-    // 3. Disable the plugin in Claude Code settings.
+    // 2. Disable the plugin in Claude Code settings.
     disable_plugin();
 
-    // 4. Uninstall the Claude Code plugin via CLI.
+    // 3. Uninstall the Claude Code plugin via CLI.
     uninstall_plugin();
 
-    // 5. Remove ~/.clash/ directory.
+    // 4. Remove ~/.clash/ directory.
     remove_settings_dir(yes);
 
-    // 6. Remove the binary.
+    // 5. Remove the binary.
     remove_binary(yes);
 
     println!();
@@ -56,42 +53,6 @@ pub fn run(yes: bool) -> Result<()> {
     );
 
     Ok(())
-}
-
-/// Remove `bypassPermissions` and reset `permissions.defaultMode` in Claude Code settings.
-fn remove_bypass_permissions() {
-    let claude = claude_settings::ClaudeSettings::new();
-
-    // Check current state first.
-    let has_bypass = claude
-        .read(claude_settings::SettingsLevel::User)
-        .ok()
-        .flatten()
-        .is_some_and(|s| s.bypass_permissions == Some(true));
-
-    if !has_bypass {
-        ui::skip("bypassPermissions is not set, nothing to remove.");
-        return;
-    }
-
-    let mut ok = true;
-    if let Err(e) = claude.set_bypass_permissions(claude_settings::SettingsLevel::User, false) {
-        warn!(error = %e, "failed to unset bypassPermissions");
-        ui::warn(&format!("Could not unset bypassPermissions: {e}"));
-        ok = false;
-    }
-
-    if let Err(e) =
-        claude.set_default_permission_mode(claude_settings::SettingsLevel::User, "default")
-    {
-        warn!(error = %e, "failed to reset defaultMode");
-        ui::warn(&format!("Could not reset permissions.defaultMode: {e}"));
-        ok = false;
-    }
-
-    if ok {
-        ui::success("Removed bypassPermissions from Claude Code settings.");
-    }
 }
 
 /// Remove the clash status line from Claude Code settings.

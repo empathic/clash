@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use tracing::{Level, error, info, instrument, warn};
 
-use crate::dialog;
 use crate::settings::ClashSettings;
 use crate::style;
 use crate::ui;
@@ -11,7 +10,6 @@ use crate::ui;
 struct InitActions {
     policy_created: bool,
     plugin_installed: bool,
-    bypass_set: bool,
     statusline_installed: bool,
 }
 
@@ -24,16 +22,16 @@ const GITHUB_MARKETPLACE: &str = "empathic/clash";
 /// directly. When omitted, runs the interactive policy editor.
 /// Only one scope is initialized per invocation.
 #[instrument(level = Level::TRACE)]
-pub fn run(no_bypass: Option<bool>, scope: Option<String>, quick: bool) -> Result<()> {
+pub fn run(scope: Option<String>, quick: bool) -> Result<()> {
     match scope.as_deref() {
         Some("project") => run_init_project(),
-        _ if quick => run_init_quick(no_bypass),
-        _ => run_init_user(no_bypass),
+        _ if quick => run_init_quick(),
+        _ => run_init_user(),
     }
 }
 
 /// Initialize or reconfigure the user-level policy via the interactive editor.
-fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
+fn run_init_user() -> Result<()> {
     let mut actions = InitActions::default();
 
     let policy_path = write_starter_policy()?;
@@ -47,10 +45,9 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
     }
 
     // Install the Claude Code plugin from GitHub.
-    let plugin_installed = match install_plugin() {
+    match install_plugin() {
         Ok(()) => {
             actions.plugin_installed = true;
-            true
         }
         Err(e) => {
             error!(error = %e, "Could not install clash plugin");
@@ -60,35 +57,8 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
                  claude plugin marketplace add {GITHUB_MARKETPLACE}\n    \
                  claude plugin install clash"
             ));
-            false
         }
     };
-
-    if plugin_installed {
-        // Plugin is installed, so bypassPermissions is safe.
-        let skip_bypass = no_bypass.unwrap_or_else(|| {
-            !dialog::confirm(
-                "Use clash as your default permissions provider in Claude Code? \
-                 (This sets bypassPermissions so clash handles all permission decisions)",
-                false,
-            )
-            .unwrap_or(true)
-        });
-
-        if !skip_bypass {
-            if let Err(e) = set_bypass_permissions() {
-                warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
-                eprintln!(
-                    "warning: could not configure Claude Code to use clash as sole permission handler.\n\
-                     You may see double prompts. Run with --dangerously-skip-permissions to avoid this."
-                );
-            } else {
-                actions.bypass_set = true;
-            }
-        }
-    } else {
-        ui::skip("Skipping bypassPermissions — the clash plugin must be installed first.");
-    }
 
     // Install the status line so the user gets ambient policy visibility.
     if let Err(e) = super::statusline::install() {
@@ -103,7 +73,7 @@ fn run_init_user(no_bypass: Option<bool>) -> Result<()> {
 }
 
 /// Quick-init: skip the interactive editor and write a sensible default policy directly.
-fn run_init_quick(no_bypass: Option<bool>) -> Result<()> {
+fn run_init_quick() -> Result<()> {
     let settings_dir =
         ClashSettings::settings_dir().context("could not determine clash settings directory")?;
 
@@ -145,39 +115,14 @@ def main():
     }
 
     // Install the Claude Code plugin from GitHub.
-    let plugin_installed = match install_plugin() {
-        Ok(()) => true,
-        Err(e) => {
-            error!(error = %e, "Could not install clash plugin");
-            ui::warn(&format!(
-                "Could not install the clash plugin: {e}\n  \
-                 You can install it manually later:\n    \
-                 claude plugin marketplace add {GITHUB_MARKETPLACE}\n    \
-                 claude plugin install clash"
-            ));
-            false
-        }
-    };
-
-    if plugin_installed {
-        let skip_bypass = no_bypass.unwrap_or_else(|| {
-            !dialog::confirm(
-                "Use clash as your default permissions provider in Claude Code? \
-                 (This sets bypassPermissions so clash handles all permission decisions)",
-                false,
-            )
-            .unwrap_or(true)
-        });
-
-        if !skip_bypass && let Err(e) = set_bypass_permissions() {
-            warn!(error = %e, "Could not set bypassPermissions in Claude Code settings");
-            eprintln!(
-                "warning: could not configure Claude Code to use clash as sole permission handler.\n\
-                 You may see double prompts. Run with --dangerously-skip-permissions to avoid this."
-            );
-        }
-    } else {
-        ui::skip("Skipping bypassPermissions — the clash plugin must be installed first.");
+    if let Err(e) = install_plugin() {
+        error!(error = %e, "Could not install clash plugin");
+        ui::warn(&format!(
+            "Could not install the clash plugin: {e}\n  \
+             You can install it manually later:\n    \
+             claude plugin marketplace add {GITHUB_MARKETPLACE}\n    \
+             claude plugin install clash"
+        ));
     }
 
     // Install the status line so the user gets ambient policy visibility.
@@ -322,20 +267,9 @@ pub fn write_starter_policy() -> Result<std::path::PathBuf> {
     Ok(policy_path)
 }
 
-/// Configure Claude Code to let Clash handle all permission decisions.
-pub fn set_bypass_permissions() -> Result<()> {
-    let claude = claude_settings::ClaudeSettings::new();
-    claude.set_bypass_permissions(claude_settings::SettingsLevel::User, true)?;
-    claude
-        .set_default_permission_mode(claude_settings::SettingsLevel::User, "bypassPermissions")?;
-    ui::success("Configured Claude Code to use clash as the sole permission handler.");
-    Ok(())
-}
-
 fn print_user_summary(actions: &InitActions) {
     let any_action = actions.policy_created
         || actions.plugin_installed
-        || actions.bypass_set
         || actions.statusline_installed;
     if !any_action {
         return;
@@ -354,9 +288,6 @@ fn print_user_summary(actions: &InitActions) {
     if actions.plugin_installed {
         ui::success("Clash plugin installed in Claude Code");
     }
-    if actions.bypass_set {
-        ui::success("bypassPermissions enabled (clash handles all permissions)");
-    }
     if actions.statusline_installed {
         ui::success("Status line installed");
     }
@@ -373,13 +304,6 @@ fn print_user_summary(actions: &InitActions) {
             "  {}  {}",
             style::dim("clash policy edit"),
             style::dim("# modify your policy")
-        );
-    }
-    if actions.bypass_set {
-        println!(
-            "  {}  {}",
-            style::dim("clash init --no-bypass"),
-            style::dim("# re-run without bypassPermissions")
         );
     }
 

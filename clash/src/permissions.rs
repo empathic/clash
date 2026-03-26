@@ -130,9 +130,10 @@ pub fn check_permission(
             let mut output =
                 HookOutput::allow(decision.reason.or(Some("policy: allowed".into())), None);
             // If the policy decision includes a per-command sandbox, rewrite the
-            // command to run through `clash sandbox exec`.
-            if let Some(ref sandbox_policy) = decision.sandbox
-                && let Some(updated) = wrap_bash_with_sandbox(input, sandbox_policy)
+            // command to run through `clash shell` (brush) which handles
+            // per-command sandbox enforcement internally.
+            if decision.sandbox.is_some()
+                && let Some(updated) = wrap_bash_with_sandbox(input)
             {
                 output.set_updated_input(updated);
                 info!("Rewrote Bash command to run under sandbox");
@@ -179,36 +180,23 @@ fn tool_to_verb_str(tool_name: &str) -> String {
 /// rewrite the command to run through `clash sandbox exec`.
 ///
 /// Returns the updated `tool_input` JSON if rewriting is applicable, or None.
-#[instrument(level = Level::TRACE, skip(input, sandbox_policy))]
-fn wrap_bash_with_sandbox(
-    input: &ToolUseHookInput,
-    sandbox_policy: &crate::policy::sandbox_types::SandboxPolicy,
-) -> Option<serde_json::Value> {
+#[instrument(level = Level::TRACE, skip(input))]
+fn wrap_bash_with_sandbox(input: &ToolUseHookInput) -> Option<serde_json::Value> {
     let bash_input = match input.typed_tool_input() {
         ToolInput::Bash(b) => b,
         _ => return None,
     };
 
     let clash_bin = std::env::current_exe().ok()?;
-    let policy_json = serde_json::to_string(sandbox_policy).ok()?;
 
-    // Pass session and tool_use_id so `clash sandbox exec` can log violations
-    // to the audit trail after the sandboxed process exits.
-    let mut extra_args = String::new();
-    if !input.session_id.is_empty() {
-        extra_args += &format!(" --session-id {}", shell_escape(&input.session_id));
-        if let Some(ref tuid) = input.tool_use_id {
-            extra_args += &format!(" --tool-use-id {}", shell_escape(tuid));
-        }
-    }
-
+    // Run the command through `clash shell` (brush) which handles per-command
+    // sandbox enforcement internally via its external command hook. We do NOT
+    // wrap in `clash sandbox exec` here — that would nest sandbox-exec inside
+    // sandbox-exec, which macOS seatbelt does not support.
     let sandboxed_command = format!(
-        "{} sandbox exec --sandbox {} --cwd {}{} -- {} shell -c {}",
+        "{} shell --cwd {} -c {}",
         shell_escape(&clash_bin.to_string_lossy()),
-        shell_escape(&policy_json),
         shell_escape(&input.cwd),
-        extra_args,
-        shell_escape(&clash_bin.to_string_lossy()),
         shell_escape(&bash_input.command),
     );
 
@@ -519,16 +507,6 @@ mod tests {
 
     // --- wrap_bash_with_sandbox tests ---
 
-    fn test_sandbox_policy() -> crate::policy::sandbox_types::SandboxPolicy {
-        use crate::policy::sandbox_types::{Cap, NetworkPolicy};
-        crate::policy::sandbox_types::SandboxPolicy {
-            default: Cap::READ | Cap::EXECUTE,
-            rules: vec![],
-            network: NetworkPolicy::Deny,
-            doc: None,
-        }
-    }
-
     fn bash_input_for_sandbox(command: &str, cwd: &str) -> ToolUseHookInput {
         ToolUseHookInput {
             tool_name: "Bash".into(),
@@ -548,15 +526,16 @@ mod tests {
     #[test]
     fn test_wrap_bash_basic_command() {
         let input = bash_input_for_sandbox("ls -la", "/home/user/project");
-        let policy = test_sandbox_policy();
-        let result = wrap_bash_with_sandbox(&input, &policy);
+        let result = wrap_bash_with_sandbox(&input);
         assert!(result.is_some());
         let wrapped = result.unwrap();
         let cmd = extract_wrapped_command(&wrapped);
-        assert!(cmd.contains("sandbox exec"));
-        assert!(cmd.contains("--sandbox"));
+        // Should use `clash shell` (brush) for per-command sandboxing,
+        // NOT `clash sandbox exec` (which would nest sandbox-exec).
+        assert!(!cmd.contains("sandbox exec"), "should not nest sandbox-exec: {cmd}");
+        assert!(cmd.contains("shell"));
         assert!(cmd.contains("--cwd"));
-        assert!(cmd.contains("shell -c 'ls -la'"));
+        assert!(cmd.contains("-c 'ls -la'"));
     }
 
     #[test]
@@ -566,8 +545,7 @@ mod tests {
             tool_input: json!({"file_path": "/tmp/test.txt"}),
             ..Default::default()
         };
-        let policy = test_sandbox_policy();
-        let result = wrap_bash_with_sandbox(&input, &policy);
+        let result = wrap_bash_with_sandbox(&input);
         assert!(result.is_none());
     }
 

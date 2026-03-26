@@ -271,14 +271,6 @@ export PATH="$HOME/.local/bin:$PATH"
 export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
-### Double-prompting (clash asks, then Claude Code asks)
-
-This means Claude Code's built-in permissions are still active. Re-run init — it sets `bypassPermissions: true` in your Claude Code user settings by default so clash is the sole permission handler:
-
-```bash
-clash init
-```
-
 ### Policy not working as expected
 
 Use `clash explain` to see exactly which rule matches:
