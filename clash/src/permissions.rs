@@ -58,7 +58,11 @@ pub fn check_permission(
         }
     };
 
-    let decision = tree.evaluate(&input.tool_name, &input.tool_input);
+    let decision = tree.evaluate_with_mode(
+        &input.tool_name,
+        &input.tool_input,
+        Some(&input.permission_mode),
+    );
     let noun = extract_noun(&input.tool_name, &input.tool_input);
 
     info!(

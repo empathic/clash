@@ -69,9 +69,14 @@ impl HooksCmd {
                     let output = check_permission(&input, &settings)?;
 
                     // Interactive tools (e.g., AskUserQuestion) require user input
-                    // via Claude Code's native UI. Returning "allow" would skip that
-                    // UI entirely, so we pass through for any non-deny decision.
-                    if is_interactive_tool(&input.tool_name) && !is_deny_decision(&output) {
+                    // via Claude Code's native UI. When the policy says "ask", pass
+                    // through to CC's native prompt. When the policy explicitly allows
+                    // or denies, enforce it — this enables mode-aware automation
+                    // (e.g., allow ExitPlanMode in plan mode).
+                    if is_interactive_tool(&input.tool_name)
+                        && !is_deny_decision(&output)
+                        && is_ask_decision(&output)
+                    {
                         info!(tool = %input.tool_name, "Passthrough: interactive tool deferred to Claude Code");
                         HookOutput::continue_execution()
                     } else {

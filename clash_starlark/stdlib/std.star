@@ -79,6 +79,11 @@ def _mt_agent(pattern, doc=None):
     return _cond("agent_name", pattern, doc=doc)
 
 
+def _mt_mode(pattern, doc=None):
+    """Build Mode=pattern."""
+    return _cond("mode", pattern, doc=doc)
+
+
 def _mt_arg(n, pattern):
     """Build PosArg(n)=pattern."""
     return _mt_condition({"positional_arg": n}, pattern)
@@ -161,6 +166,29 @@ def tool(name=None, doc=None):
 
 
 # ---------------------------------------------------------------------------
+# Typed match keys — used in match() dicts to distinguish observables
+# ---------------------------------------------------------------------------
+
+
+def Mode(name):
+    """Typed key for match() dicts — matches Claude Code's permission mode.
+
+    Usage:
+        match({Mode("plan"): {Tool("Read"): allow()}})
+    """
+    return struct(_match_key="mode", _match_value=name)
+
+
+def Tool(name):
+    """Typed key for match() dicts — matches tool name (explicit alternative to raw strings).
+
+    Usage:
+        match({Tool("Bash"): {"git": allow()}})
+    """
+    return struct(_match_key="tool", _match_value=name)
+
+
+# ---------------------------------------------------------------------------
 # Dict-based match tree builder
 # ---------------------------------------------------------------------------
 
@@ -195,23 +223,88 @@ def _match_build_tree(tree, arg_index, sandboxes, seen):
     return nodes
 
 
+def _match_tool_key(name, value, result, sandboxes, seen):
+    """Process a tool-level key (string or Tool() value) in match()."""
+    pat = _pattern(name)
+    tool_cond = _mt_tool(pat)
+
+    if type(value) == "dict":
+        children = _match_build_tree(value, 0, sandboxes, seen)
+        node = tool_cond.on(children)
+    elif hasattr(value, "_is_effect"):
+        decision = _effect_to_decision(value)
+        node = tool_cond.on([decision])
+        _collect_effect_sandbox(value, sandboxes, seen)
+    else:
+        fail("match() values must be effect descriptors or dicts")
+
+    result.append(struct(_node=node, _sandbox=None))
+
+
+def _match_build_tool_level(tree, sandboxes, seen):
+    """Build tool-level nodes from a dict inside a Mode() key."""
+    nodes = []
+    for key, value in tree.items():
+        keys = key if type(key) == "tuple" else (key,)
+        for k in keys:
+            if hasattr(k, "_match_key") and k._match_key == "tool":
+                name = k._match_value
+            else:
+                name = k  # raw string = tool name
+            pat = _pattern(name)
+            tool_cond = _mt_tool(pat)
+
+            if type(value) == "dict":
+                children = _match_build_tree(value, 0, sandboxes, seen)
+                nodes.append(tool_cond.on(children))
+            elif hasattr(value, "_is_effect"):
+                decision = _effect_to_decision(value)
+                nodes.append(tool_cond.on([decision]))
+                _collect_effect_sandbox(value, sandboxes, seen)
+            else:
+                fail("match() values inside Mode() must be effect descriptors or dicts")
+    return nodes
+
+
+def _match_dispatch_key(key, value, result, sandboxes, seen):
+    """Dispatch a single match() key based on its type."""
+    if hasattr(key, "_match_key"):
+        if key._match_key == "mode":
+            cond = _mt_mode(_pattern(key._match_value))
+            if type(value) == "dict":
+                children = _match_build_tool_level(value, sandboxes, seen)
+                node = cond.on(children)
+            elif hasattr(value, "_is_effect"):
+                node = cond.on([_effect_to_decision(value)])
+                _collect_effect_sandbox(value, sandboxes, seen)
+            else:
+                fail("Mode() value must be a dict of tools or an effect")
+            result.append(struct(_node=node, _sandbox=None))
+        elif key._match_key == "tool":
+            _match_tool_key(key._match_value, value, result, sandboxes, seen)
+    else:
+        # Raw string = tool name (backwards compat)
+        _match_tool_key(key, value, result, sandboxes, seen)
+
+
 def match(tree):
-    """Build rules from a nested dict tree where roots are tool names.
+    """Build rules from a nested dict tree.
+
+    Keys can be:
+      - Raw strings: tool names (backwards compatible)
+      - Tool("Bash"): explicit tool matcher
+      - Mode("plan"): mode matcher (children are tool-level)
+      - Tuples of the above: match multiple
 
     Returns a list of rule nodes for use in policy(rules=[...]).
 
     Usage:
         match({
-            "Bash": {
-                "git": {
-                    "push": deny(),
-                    ("pull", "fetch"): allow(),
-                    "remote": {
-                        "add": ask(),
-                    },
-                },
+            Mode("plan"): {
+                Tool("Read"): allow(),
+                Tool("ExitPlanMode"): allow(),
             },
-            ("Read", "Glob", "Grep"): allow(),
+            Tool("Bash"): {"git": allow()},
             "WebSearch": deny(),
         })
     """
@@ -220,23 +313,9 @@ def match(tree):
     result = []
 
     for key, value in tree.items():
-        names = key if type(key) == "tuple" else (key,)
-
-        for name in names:
-            pat = _pattern(name)
-            tool_cond = _mt_tool(pat)
-
-            if type(value) == "dict":
-                children = _match_build_tree(value, 0, sandboxes, seen)
-                node = tool_cond.on(children)
-            elif hasattr(value, "_is_effect"):
-                decision = _effect_to_decision(value)
-                node = tool_cond.on([decision])
-                _collect_effect_sandbox(value, sandboxes, seen)
-            else:
-                fail("match() values must be effect descriptors or dicts")
-
-            result.append(struct(_node=node, _sandbox=None))
+        keys = key if type(key) == "tuple" else (key,)
+        for k in keys:
+            _match_dispatch_key(k, value, result, sandboxes, seen)
 
     # Attach collected sandboxes to the first node for policy() to extract
     if result and sandboxes:
