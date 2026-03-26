@@ -41,22 +41,18 @@ Save this file and try running your agent. Every tool call will be blocked. That
 
 ## Step 2: Allow safe read operations
 
-Your agent needs to read files to be useful. Let's allow that within your project directory.
+Your agent needs to read files to be useful. Let's allow that.
 
 ```python
-load("@clash//std.star", "deny", "policy", "cwd", "tool")
+load("@clash//std.star", "allow", "deny", "match", "policy")
 
 def main():
     return policy(default = deny(), rules = [
-        cwd(follow_worktrees = True).allow(read = True),
-        tool(["Glob", "Grep"]).allow(),
+        match({("Read", "Glob", "Grep"): allow()}),
     ])
 ```
 
-Two new concepts:
-
-- `cwd()` matches the current working directory. `follow_worktrees = True` also covers git worktrees. `.allow(read = True)` permits read access but not writes.
-- `tool()` matches Claude Code tools by name. `Glob` and `Grep` are search tools that should generally be allowed.
+One new concept: `match()` matches Claude Code tools by name. `Read`, `Glob`, and `Grep` are the read-only file tools — allowing all three lets the agent browse and read files without being able to write or edit them.
 
 Test it:
 
@@ -73,16 +69,20 @@ You should see an <span class="badge badge--allow">allow</span> decision.
 Read-only is safe but not very productive. Let's allow writes too.
 
 ```python
-load("@clash//std.star", "deny", "policy", "cwd", "tool")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "subpath")
 
 def main():
+    project_sandbox = sandbox(
+        default = deny(),
+        fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
+    )
+
     return policy(default = deny(), rules = [
-        cwd(follow_worktrees = True).allow(read = True, write = True),
-        tool(["Glob", "Grep"]).allow(),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
     ])
 ```
 
-The only change: `write = True`. Your agent can now read and write files inside your project. Files outside your project are still denied.
+The sandbox restricts file tool access to your project directory. Files outside your project are still denied.
 
 ---
 
@@ -91,12 +91,16 @@ The only change: `write = True`. Your agent can now read and write files inside 
 Your agent needs to run build tools and git. The `match()` builder lets you define rules as a tree of tool names and subcommands:
 
 ```python
-load("@clash//std.star", "allow", "deny", "policy", "cwd", "tool", "match")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "subpath")
 
 def main():
+    project_sandbox = sandbox(
+        default = deny(),
+        fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
+    )
+
     return policy(default = deny(), rules = [
-        cwd(follow_worktrees = True).allow(read = True, write = True),
-        tool(["Glob", "Grep"]).allow(),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
 
         match({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
@@ -132,12 +136,16 @@ clash explain bash "git stash"     # → deny (no rule, falls to default)
 Denying everything unmatched is safe but noisy when you're actively working. Switch the default to `ask` so your agent can request approval for things you haven't written rules for yet:
 
 ```python
-load("@clash//std.star", "allow", "ask", "deny", "policy", "cwd", "tool", "match")
+load("@clash//std.star", "allow", "ask", "deny", "match", "policy", "sandbox", "subpath")
 
 def main():
+    project_sandbox = sandbox(
+        default = deny(),
+        fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
+    )
+
     return policy(default = ask(), rules = [
-        cwd(follow_worktrees = True).allow(read = True, write = True),
-        tool(["Glob", "Grep"]).allow(),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
 
         match({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
@@ -161,25 +169,23 @@ Now unmatched commands prompt you instead of silently failing. As you work, you'
 Rules control whether a command runs. Sandboxes control what it can access *while* it runs — filesystem paths and network access, enforced at the OS level.
 
 ```python
-load("@clash//std.star", "allow", "ask", "deny", "policy", "sandbox",
-     "cwd", "home", "tempdir", "tool", "match")
+load("@clash//std.star", "allow", "ask", "deny", "match", "policy", "sandbox", "subpath")
 
 def main():
     dev_sandbox = sandbox(
         name = "dev",
         default = deny(),
-        fs = [
-            cwd(follow_worktrees = True).allow(read = True, write = True),
-            home().child(".cargo").allow(read = True, write = True),
-            home().child(".rustup").allow(read = True),
-            tempdir().allow(),
-        ],
+        fs = {
+            subpath("$PWD", follow_worktrees = True): allow("rwc"),
+            "$HOME/.cargo": allow("rwc"),
+            "$HOME/.rustup": allow("r"),
+            "$TMPDIR": allow(),
+        },
         net = allow(),
     )
 
     return policy(default = ask(), rules = [
-        cwd(follow_worktrees = True).allow(read = True, write = True),
-        tool(["Glob", "Grep"]).allow(),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox)}),
 
         match({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
@@ -196,7 +202,7 @@ def main():
 
 The `sandbox()` builder defines a restricted environment:
 
-- `fs` lists which paths are accessible and how (read, write, execute)
+- `fs` is a dict mapping paths to capabilities. Keys are path strings (or `subpath()` for worktree support); values are the allowed capabilities.
 - `net` controls network access — `allow()`, `deny()`, or a list of `domains()`
 - `default = deny()` blocks access to anything not listed
 
@@ -209,19 +215,18 @@ Attach a sandbox to an effect with `allow(sandbox = dev_sandbox)`. When cargo ru
 Instead of allowing all network access in your sandbox, restrict it to specific domains:
 
 ```python
-load("@clash//std.star", "allow", "ask", "deny", "policy", "sandbox",
-     "cwd", "home", "tempdir", "domains", "tool", "match")
+load("@clash//std.star", "allow", "ask", "deny", "domains", "match", "policy", "sandbox", "subpath")
 
 def main():
     dev_sandbox = sandbox(
         name = "dev",
         default = deny(),
-        fs = [
-            cwd(follow_worktrees = True).allow(read = True, write = True),
-            home().child(".cargo").allow(read = True, write = True),
-            home().child(".rustup").allow(read = True),
-            tempdir().allow(),
-        ],
+        fs = {
+            subpath("$PWD", follow_worktrees = True): allow("rwc"),
+            "$HOME/.cargo": allow("rwc"),
+            "$HOME/.rustup": allow("r"),
+            "$TMPDIR": allow(),
+        },
         net = [
             domains({
                 "github.com": allow(),
@@ -232,8 +237,7 @@ def main():
     )
 
     return policy(default = ask(), rules = [
-        cwd(follow_worktrees = True).allow(read = True, write = True),
-        tool(["Glob", "Grep"]).allow(),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox)}),
 
         match({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
@@ -258,19 +262,18 @@ Clash ships with built-in rules for its own CLI and common Claude Code tools. In
 
 ```python
 load("@clash//builtin.star", "builtins")
-load("@clash//std.star", "allow", "ask", "deny", "policy", "sandbox",
-     "cwd", "home", "tempdir", "domains", "tool", "match")
+load("@clash//std.star", "allow", "ask", "deny", "domains", "match", "policy", "sandbox", "subpath")
 
 def main():
     dev_sandbox = sandbox(
         name = "dev",
         default = deny(),
-        fs = [
-            cwd(follow_worktrees = True).allow(read = True, write = True),
-            home().child(".cargo").allow(read = True, write = True),
-            home().child(".rustup").allow(read = True),
-            tempdir().allow(),
-        ],
+        fs = {
+            subpath("$PWD", follow_worktrees = True): allow("rwc"),
+            "$HOME/.cargo": allow("rwc"),
+            "$HOME/.rustup": allow("r"),
+            "$TMPDIR": allow(),
+        },
         net = [
             domains({
                 "github.com": allow(),
@@ -281,8 +284,7 @@ def main():
     )
 
     return policy(default = ask(), rules = builtins + [
-        cwd(follow_worktrees = True).allow(read = True, write = True),
-        tool(["Glob", "Grep"]).allow(),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox)}),
 
         match({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),

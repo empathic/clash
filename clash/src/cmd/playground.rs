@@ -423,10 +423,7 @@ impl PlaygroundState {
         use clash_starlark::codegen::ast::{Expr, Stmt};
         use clash_starlark::codegen::builder::*;
 
-        let mut stmts = vec![
-            load_std(STARLARK_LOAD_NAMES),
-            Stmt::Blank,
-        ];
+        let mut stmts = vec![load_std(STARLARK_LOAD_NAMES), Stmt::Blank];
 
         // Emit sandbox definitions as top-level variables
         for (name, expr) in &self.sandboxes {
@@ -437,11 +434,7 @@ impl PlaygroundState {
         }
 
         let rules: Vec<Expr> = self.rules.iter().map(|r| Expr::raw(r.trim())).collect();
-        stmts.push(main_fn(vec![Stmt::Return(policy(
-            deny(),
-            rules,
-            None,
-        ))]));
+        stmts.push(main_fn(vec![Stmt::Return(policy(deny(), rules, None))]));
 
         clash_starlark::codegen::serialize(&stmts)
     }

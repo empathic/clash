@@ -1,14 +1,16 @@
-load("@clash//std.star", "allow", "deny", "match", "sandbox", "cwd", "home", "tempdir", "domains")
+load("@clash//std.star", "allow", "deny", "match", "sandbox", "domains")
 
 node_sandbox = sandbox(
     name = "node_dev",
     default = deny(),
-    fs = [
-        cwd().allow(read = True, write = True, execute = True),
-        home().child(".npm").allow(),
-        home().child(".config/npm").allow(read = True),
-        tempdir().allow(),
-    ],
+    fs = {
+        "$PWD": allow("rwcx"),
+        "$HOME": {
+            ".npm": allow(),
+            ".config/npm": allow("r"),
+        },
+        "$TMPDIR": allow(),
+    },
     net = [
         domains({
             "registry.npmjs.org": allow(),

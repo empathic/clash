@@ -9,48 +9,48 @@
 #   dev_network  — package managers, gh: read+write project + network
 #   unrestricted — fully trusted: all filesystem + network access
 
-load("@clash//std.star", "deny", "sandbox", "cwd", "home", "tempdir")
+load("@clash//std.star", "allow", "deny", "sandbox", "subpath")
 
 restricted = sandbox(
     name="restricted",
     default=deny(),
-    fs=[
-        cwd().allow(read=True, execute=True),
-        tempdir().allow(read=True, execute=True),
-    ],
+    fs={
+        "$PWD": allow("rx"),
+        "$TMPDIR": allow("rx"),
+    },
     doc="Minimal access: read-only project files, no network",
 )
 
 read_only = sandbox(
     name="read_only",
     default=deny(),
-    fs=[
-        cwd(follow_worktrees=True).allow(read=True, execute=True),
-        home().allow(read=True, execute=True),
-        tempdir().allow(),
-    ],
+    fs={
+        subpath("$PWD", follow_worktrees=True): allow("rx"),
+        "$HOME": allow("rx"),
+        "$TMPDIR": allow(),
+    },
     doc="Read project and home, write only to temp, no network",
 )
 
 dev = sandbox(
     name="dev",
     default=deny(),
-    fs=[
-        cwd(follow_worktrees=True).recurse().allow(read=True, write=True, execute=True),
-        home().recurse().allow(read=True, execute=True),
-        tempdir().recurse().allow(),
-    ],
+    fs={
+        subpath("$PWD", follow_worktrees=True): allow("rwcx"),
+        "$HOME": allow("rx"),
+        "$TMPDIR": allow(),
+    },
     doc="Development: read+write project, read home, no network",
 )
 
 dev_network = sandbox(
     name="dev_network",
     default=deny(),
-    fs=[
-        cwd(follow_worktrees=True).allow(read=True, write=True, execute=True),
-        home().allow(read=True, execute=True),
-        tempdir().allow(),
-    ],
+    fs={
+        subpath("$PWD", follow_worktrees=True): allow("rwcx"),
+        "$HOME": allow("rx"),
+        "$TMPDIR": allow(),
+    },
     net="allow",
     doc="Development with network: read+write project, full network",
 )
@@ -58,11 +58,11 @@ dev_network = sandbox(
 unrestricted = sandbox(
     name="unrestricted",
     default=deny(),
-    fs=[
-        cwd(follow_worktrees=True).allow(),
-        home().allow(),
-        tempdir().allow(),
-    ],
+    fs={
+        subpath("$PWD", follow_worktrees=True): allow(),
+        "$HOME": allow(),
+        "$TMPDIR": allow(),
+    },
     net="allow",
     doc="Full access: all filesystem operations, full network",
 )

@@ -1,41 +1,36 @@
 meta:
-  name: starlark policy — sandbox merge via varargs
-  description: Test merging multiple sandboxes with .sandbox(a, b, c)
+  name: starlark policy — dict-based sandbox fs
+  description: Test dict-based fs= syntax with bare strings, nesting, subpath(), and caps shorthand
 
 clash:
   policy_star: |
-    load("@clash//std.star", "match", "policy", "sandbox", "allow", "deny")
+    load("@clash//std.star", "match", "policy", "sandbox", "subpath", "allow", "deny")
 
-    fs_box = sandbox(
-        name = "fs",
+    dev_box = sandbox(
+        name = "dev",
         default = deny(),
         fs = {
-            "$PWD": allow("rwc"),
-        },
-    )
-
-    home_box = sandbox(
-        name = "home",
-        default = deny(),
-        fs = {
-            "$HOME/.cargo": allow("r"),
+            subpath("$PWD", follow_worktrees = True): allow("rwc"),
             "$TMPDIR": allow(),
+            "$HOME": {
+                ".cargo": allow("rwc"),
+                ".rustup": allow("r"),
+                ".ssh": deny(),
+            },
         },
     )
-
-    merged = fs_box.update(home_box)
 
     def main():
         return policy(default=deny(), rules=[
             match({"Bash": {
-                "cargo": allow(sandbox = merged),
-                "git": allow(sandbox = fs_box),
+                "cargo": allow(sandbox = dev_box),
+                "git": allow(sandbox = dev_box),
             }}),
-            match({"Read": allow(sandbox = fs_box)}),
+            match({"Read": allow(sandbox = dev_box)}),
         ])
 
 steps:
-  - name: cargo allowed with merged sandbox
+  - name: cargo allowed with dict sandbox
     hook: pre-tool-use
     tool_name: Bash
     tool_input:
@@ -43,15 +38,7 @@ steps:
     expect:
       decision: allow
 
-  - name: cargo test allowed with merged sandbox
-    hook: pre-tool-use
-    tool_name: Bash
-    tool_input:
-      command: cargo test
-    expect:
-      decision: allow
-
-  - name: git allowed with single sandbox
+  - name: git allowed with dict sandbox
     hook: pre-tool-use
     tool_name: Bash
     tool_input:

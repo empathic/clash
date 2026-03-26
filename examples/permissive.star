@@ -1,7 +1,7 @@
 # Permissive Policy
 # Ask-all default with common dev tools auto-allowed.
 # Denies only truly dangerous operations.
-load("@clash//std.star", "match", "tool", "policy", "allow", "deny", "ask")
+load("@clash//std.star", "match", "policy", "allow", "deny", "ask")
 
 def main():
     return policy(
@@ -11,10 +11,6 @@ def main():
             match({"Bash": {
                 ("git", "cargo", "npm", "npx", "node", "bun", "python", "pip", "uv", "make", "just"): allow(),
             }}),
-            tool("Read").allow(),
-            tool("Write").allow(),
-            tool("Edit").allow(),
-            tool("Glob").allow(),
-            tool("Grep").allow(),
+            match({("Read", "Write", "Edit", "Glob", "Grep"): allow()}),
         ],
     )

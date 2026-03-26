@@ -238,18 +238,21 @@ mod tests {
         let stmts = vec![
             load_std(&["match", "tool", "policy", "allow", "deny", "ask"]),
             Stmt::Blank,
-            Stmt::def("main", vec![Stmt::Return(policy(
-                ask(),
-                vec![
-                    match_tree! {
-                        "Bash" => {
-                            ("git", "cargo") => allow(),
+            Stmt::def(
+                "main",
+                vec![Stmt::Return(policy(
+                    ask(),
+                    vec![
+                        match_tree! {
+                            "Bash" => {
+                                ("git", "cargo") => allow(),
+                            },
                         },
-                    },
-                    tool(&["Read"]).allow(),
-                ],
-                None,
-            ))]),
+                        tool(&["Read"]).allow(),
+                    ],
+                    None,
+                ))],
+            ),
         ];
         let src = serialize(&stmts);
         assert!(src.contains("(\"git\", \"cargo\"): allow()"));

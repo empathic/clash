@@ -1,14 +1,14 @@
 load("@clash//builtin.star", "builtins")
-load("@clash//std.star", "allow", "ask", "deny", "match", "tool", "policy", "sandbox", "cwd", "home")
+load("@clash//std.star", "allow", "ask", "deny", "match", "policy", "sandbox", "subpath")
 load("@clash//sandboxes.star", "{preset}")
 
 # Tighter sandbox for Claude fs tools (no execute, scoped to cwd + ~/.claude)
 _fs_box = sandbox(
     name = "cwd",
-    fs = [
-        cwd(follow_worktrees = True).recurse().allow(read = True, write = True),
-        home().child(".claude").recurse().allow(read = True, write = True),
-    ],
+    fs = {
+        subpath("$PWD", follow_worktrees = True): allow("rwc"),
+        "$HOME/.claude": allow("rwc"),
+    },
 )
 
 def main():
@@ -17,11 +17,11 @@ def main():
         default_sandbox = {preset},
         rules = builtins + [
             # Claude fs tools
-            tool(["Read", "Glob", "Grep"]).sandbox(_fs_box).allow(),
-            tool(["Write", "Edit", "NotebookEdit"]).sandbox(_fs_box).allow(),
+            match({("Read", "Glob", "Grep"): allow(sandbox = _fs_box)}),
+            match({("Write", "Edit", "NotebookEdit"): allow(sandbox = _fs_box)}),
 
             # Network tools — prompt user
-            tool(["WebFetch", "WebSearch"]).ask(),
+            match({("WebFetch", "WebSearch"): ask()}),
 
             # Deny destructive git ops
             match({"Bash": {"git": {

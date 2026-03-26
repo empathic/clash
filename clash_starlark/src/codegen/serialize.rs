@@ -37,11 +37,7 @@ fn write_stmt(out: &mut String, stmt: &Stmt, depth: usize) {
             out.push_str(&rhs);
             out.push('\n');
         }
-        Stmt::FuncDef {
-            name,
-            params,
-            body,
-        } => {
+        Stmt::FuncDef { name, params, body } => {
             out.push_str(&prefix);
             out.push_str("def ");
             out.push_str(name);
@@ -83,7 +79,11 @@ fn write_stmt(out: &mut String, stmt: &Stmt, depth: usize) {
 
 fn write_load(out: &mut String, module: &str, names: &[String], prefix: &str) {
     // Try single line first
-    let name_list: String = names.iter().map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ");
+    let name_list: String = names
+        .iter()
+        .map(|n| format!("\"{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     let oneline = format!("{prefix}load(\"{module}\", {name_list})\n");
     if oneline.len() <= MAX_LINE {
         out.push_str(&oneline);
@@ -288,7 +288,10 @@ mod tests {
     fn load_single_line() {
         let stmts = vec![Stmt::load("@clash//std.star", &["match", "tool", "policy"])];
         let src = serialize(&stmts);
-        assert_eq!(src, "load(\"@clash//std.star\", \"match\", \"tool\", \"policy\")\n");
+        assert_eq!(
+            src,
+            "load(\"@clash//std.star\", \"match\", \"tool\", \"policy\")\n"
+        );
     }
 
     #[test]
@@ -305,9 +308,10 @@ mod tests {
 
     #[test]
     fn simple_function() {
-        let stmts = vec![Stmt::def("main", vec![
-            Stmt::Return(Expr::call("policy", vec![])),
-        ])];
+        let stmts = vec![Stmt::def(
+            "main",
+            vec![Stmt::Return(Expr::call("policy", vec![]))],
+        )];
         let src = serialize(&stmts);
         assert_eq!(src, "def main():\n    return policy()\n");
     }
@@ -343,12 +347,17 @@ mod tests {
     fn assign_short_stays_single_line() {
         let stmts = vec![Stmt::assign(
             "_fs_box",
-            Expr::call_kwargs("sandbox", vec![], vec![
-                ("name", Expr::string("cwd")),
-                ("fs", Expr::list(vec![
-                    Expr::call("cwd", vec![]).recurse().allow(),
-                ])),
-            ]),
+            Expr::call_kwargs(
+                "sandbox",
+                vec![],
+                vec![
+                    ("name", Expr::string("cwd")),
+                    (
+                        "fs",
+                        Expr::list(vec![Expr::call("cwd", vec![]).recurse().allow()]),
+                    ),
+                ],
+            ),
         )];
         let src = serialize(&stmts);
         assert_eq!(
@@ -361,23 +370,46 @@ mod tests {
     fn assign_long_goes_multiline() {
         let stmts = vec![Stmt::assign(
             "_fs_box",
-            Expr::call_kwargs("sandbox", vec![], vec![
-                ("name", Expr::string("cwd")),
-                ("fs", Expr::list(vec![
-                    Expr::call_kwargs("cwd", vec![], vec![("follow_worktrees", Expr::bool(true))])
-                        .recurse()
-                        .allow_kwargs(vec![("read", Expr::bool(true)), ("write", Expr::bool(true))]),
-                    Expr::call("home", vec![])
-                        .child(".claude")
-                        .recurse()
-                        .allow_kwargs(vec![("read", Expr::bool(true)), ("write", Expr::bool(true))]),
-                ])),
-            ]),
+            Expr::call_kwargs(
+                "sandbox",
+                vec![],
+                vec![
+                    ("name", Expr::string("cwd")),
+                    (
+                        "fs",
+                        Expr::list(vec![
+                            Expr::call_kwargs(
+                                "cwd",
+                                vec![],
+                                vec![("follow_worktrees", Expr::bool(true))],
+                            )
+                            .recurse()
+                            .allow_kwargs(vec![
+                                ("read", Expr::bool(true)),
+                                ("write", Expr::bool(true)),
+                            ]),
+                            Expr::call("home", vec![])
+                                .child(".claude")
+                                .recurse()
+                                .allow_kwargs(vec![
+                                    ("read", Expr::bool(true)),
+                                    ("write", Expr::bool(true)),
+                                ]),
+                        ]),
+                    ),
+                ],
+            ),
         )];
         let src = serialize(&stmts);
-        assert!(src.contains("_fs_box = sandbox(\n"), "expected multi-line sandbox call");
+        assert!(
+            src.contains("_fs_box = sandbox(\n"),
+            "expected multi-line sandbox call"
+        );
         assert!(src.contains("name = \"cwd\""), "expected name kwarg");
-        assert!(src.contains("follow_worktrees = True"), "expected follow_worktrees");
+        assert!(
+            src.contains("follow_worktrees = True"),
+            "expected follow_worktrees"
+        );
     }
 
     #[test]
@@ -387,14 +419,17 @@ mod tests {
             Expr::commented("second group", Expr::string("b")),
         ]))];
         let src = serialize(&stmts);
-        assert_eq!(src, "\
+        assert_eq!(
+            src,
+            "\
 [
     # first group
     \"a\",
     # second group
     \"b\",
 ]
-");
+"
+        );
     }
 
     #[test]
@@ -405,7 +440,9 @@ mod tests {
         ];
         let stmts = vec![Stmt::load("@clash//std.star", &names)];
         let src = serialize(&stmts);
-        assert_eq!(src, "\
+        assert_eq!(
+            src,
+            "\
 load(\"@clash//std.star\",
     \"match\",
     \"tool\",
@@ -422,7 +459,8 @@ load(\"@clash//std.star\",
     \"deny\",
     \"ask\",
 )
-");
+"
+        );
     }
 
     #[test]
@@ -430,10 +468,14 @@ load(\"@clash//std.star\",
         use crate::codegen::builder::*;
 
         let stmts = vec![
-            Stmt::load("@clash//std.star", &["match", "tool", "policy", "allow", "ask"]),
+            Stmt::load(
+                "@clash//std.star",
+                &["match", "tool", "policy", "allow", "ask"],
+            ),
             Stmt::Blank,
-            Stmt::def("main", vec![Stmt::Return(
-                policy(
+            Stmt::def(
+                "main",
+                vec![Stmt::Return(policy(
                     ask(),
                     vec![
                         crate::match_tree! {
@@ -445,11 +487,13 @@ load(\"@clash//std.star\",
                         tool(&["Write"]).allow(),
                     ],
                     None,
-                ),
-            )]),
+                ))],
+            ),
         ];
         let src = serialize(&stmts);
-        assert_eq!(src, "\
+        assert_eq!(
+            src,
+            "\
 load(\"@clash//std.star\", \"match\", \"tool\", \"policy\", \"allow\", \"ask\")
 
 def main():
@@ -461,7 +505,8 @@ def main():
             tool([\"Write\"]).allow(),
         ],
     )
-");
+"
+        );
     }
 
     #[test]
@@ -478,7 +523,10 @@ def main():
 
     #[test]
     fn raw_and_none() {
-        assert_eq!(format_expr(&Expr::raw("arbitrary code"), 0), "arbitrary code");
+        assert_eq!(
+            format_expr(&Expr::raw("arbitrary code"), 0),
+            "arbitrary code"
+        );
         assert_eq!(format_expr(&Expr::None, 0), "None");
         assert_eq!(format_expr(&Expr::Int(42), 0), "42");
     }

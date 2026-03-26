@@ -46,52 +46,52 @@ Policies can be managed via `policy.json` (machine-readable, CLI-friendly) or wr
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "allow", "ask", "deny", "exe", "tool", "policy", "sandbox", "cwd", "home", "domains")
+load("@clash//std.star", "allow", "ask", "deny", "match", "policy", "sandbox", "subpath", "domains")
 
 def main():
-    fs_access = sandbox(fs=[
-        cwd(follow_worktrees = True).allow(read = True, write = True),
-        home().child(".ssh").allow(read = True),
-    ])
+    fs_access = sandbox(fs={
+        subpath("$PWD", follow_worktrees = True): allow("rwc"),
+        "$HOME/.ssh": allow("r"),
+    })
 
     return policy(default = deny(), rules = [
-        tool(["Read", "Glob", "Grep"]).sandbox(fs_access).allow(),
-        tool(["Write", "Edit"]).sandbox(fs_access).allow(),
-        exe("git").allow(),
-        exe("git", args = ["push"]).deny(),
-        tool().allow(),
+        match({"Read": allow(sandbox = fs_access)}),
+        match({"Glob": allow(sandbox = fs_access)}),
+        match({"Grep": allow(sandbox = fs_access)}),
+        match({"Write": allow(sandbox = fs_access)}),
+        match({"Edit": allow(sandbox = fs_access)}),
+        match({"Bash": {"git": {"push": deny()}}}),
+        match({"Bash": {"git": allow()}}),
         domains({"github.com": allow()}),
     ])
 ```
-
-Note: Filesystem path entries (`cwd`, `home`, `tempdir`, `path`) cannot appear directly in the `rules = [...]` list. They must be wrapped in a `sandbox()` and attached to a `tool()` or `exe()` rule.
 
 ### Rule Syntax Quick Reference
 
 | Pattern | Starlark |
 |---------|----------|
-| Allow a binary | `exe("git").allow()` |
-| Deny a subcommand | `exe("git", args = ["push"]).deny()` |
-| Ask for confirmation | `exe("git", args = ["commit"]).ask()` |
-| Multiple binaries | `exe(["cargo", "rustc"]).allow()` |
-| Filesystem (via sandbox) | `tool(["Read"]).sandbox(sandbox(fs=[cwd().allow(read = True)])).allow()` |
-| Home subdir (via sandbox) | `exe("ssh").sandbox(sandbox(fs=[home().child(".ssh").allow(read = True)])).allow()` |
+| Allow a binary | `match({"Bash": {"git": allow()}})` |
+| Deny a subcommand | `match({"Bash": {"git": {"push": deny()}}})` |
+| Ask for confirmation | `match({"Bash": {"git": {"commit": ask()}}})` |
+| Multiple binaries | `match({"Bash": {("cargo", "rustc"): allow()}})` |
+| Filesystem (via sandbox) | `match({"Read": allow(sandbox=sandbox(fs={"$PWD": allow("r")}))})` |
+| Home subdir (via sandbox) | `match({"Bash": {"ssh": allow(sandbox=sandbox(fs={"$HOME/.ssh": allow("r")}))}})` |
 | Network domains | `domains({"github.com": allow()})` |
-| Tool access | `tool().allow()` |
-| Sandbox on exec | `exe("cargo").sandbox(sb).allow()` |
+| Tool access | `match({"Read": allow()})` |
+| Sandbox on exec | `match({"Bash": {"cargo": allow(sandbox=sb)}})` |
 
 ### Sandbox Definition
 
 ```python
 sb = sandbox(
     default = deny(),
-    fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
+    fs = {
+        subpath("$PWD", follow_worktrees = True): allow("rwc"),
+    },
     net = allow(),
 )
-exe("cargo").sandbox(sb).allow()
+match({"Bash": {"cargo": allow(sandbox = sb)}})
 ```
-
-Note: `.sandbox(sb)` goes **before** `.allow()` / `.deny()` / `.ask()`.
 
 ### Policy File Paths
 
@@ -108,10 +108,12 @@ If a command fails because of sandbox restrictions, update the policy's sandbox 
 # If cargo needs network access, add net = allow() to its sandbox
 cargo_env = sandbox(
     default = deny(),
-    fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
+    fs = {
+        subpath("$PWD", follow_worktrees = True): allow("rwc"),
+    },
     net = allow(),
 )
-exe("cargo").sandbox(cargo_env).allow()
+match({"Bash": {"cargo": allow(sandbox = cargo_env)}})
 ```
 
 See the [Policy Writing Guide](../docs/policy-guide.md) for full syntax.

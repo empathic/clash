@@ -1,14 +1,16 @@
-load("@clash//std.star", "allow", "deny", "match", "sandbox", "cwd", "home", "tempdir", "domains", "regex")
+load("@clash//std.star", "allow", "deny", "match", "sandbox", "domains", "regex")
 
 python_sandbox = sandbox(
     name = "python_dev",
     default = deny(),
-    fs = [
-        cwd().allow(read = True, write = True, execute = True),
-        home().child(".local").allow(read = True, write = True),
-        home().child(".cache/pip").allow(),
-        tempdir().allow(),
-    ],
+    fs = {
+        "$PWD": allow("rwcx"),
+        "$HOME": {
+            ".local": allow("rwc"),
+            ".cache/pip": allow(),
+        },
+        "$TMPDIR": allow(),
+    },
     net = [
         domains({
             "pypi.org": allow(),

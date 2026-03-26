@@ -10,13 +10,13 @@ Clash policies use Starlark (`.star` files) with three capability domains: **she
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "allow", "deny", "match", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "domains")
 
 def main():
     return policy(default = deny(), rules = [
         match({"Bash": {"git": {"push": deny()}}}),
         match({"Bash": {"git": allow()}}),
-        cwd().allow(read = True, write = True),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow()}),
         domains({"github.com": allow()}),
     ])
 ```
@@ -110,11 +110,17 @@ The `match()` function maps tool names to nested rules. Keys are matched against
 
 ### Fs -- File Operations
 
+File access for Claude Code tools is controlled via `match()` rules. Use `match()` to allow or deny the file-operation tools directly:
+
 ```python
-cwd().allow(read = True)
-cwd().allow(read = True, write = True)
-home().child(".ssh").allow(read = True)
-path("/etc").deny()
+match({("Read", "Glob", "Grep"): allow()})                        # read-only
+match({("Read", "Write", "Edit", "Glob", "Grep"): allow()})       # read + write
+```
+
+To scope filesystem access to specific paths, attach a sandbox to an exec or tool match rule via the `sandbox=` parameter on `allow()`:
+
+```python
+match({("Read", "Write", "Edit"): allow(sandbox = sandbox(fs={"$PWD": allow("rwc")}))})
 ```
 
 The fs domain maps to these tools:
@@ -137,11 +143,11 @@ The net domain maps to:
 ### Tool -- Agent Tools
 
 ```python
-tool("WebSearch").deny()
-tool(["Read", "Glob", "Grep"]).allow()
+match({"WebSearch": deny()})
+match({("Read", "Glob", "Grep"): allow()})
 ```
 
-The tool domain matches agent tools by name. Use this for tools that don't map to exec/fs/net capabilities (e.g., `Skill`, `Agent`, `AskUserQuestion`) or when you want to control a tool directly rather than through its capability.
+The tool domain matches agent tools by name via `match()`. Use this for tools that don't map to exec/fs/net capabilities (e.g., `Skill`, `Agent`, `AskUserQuestion`) or when you want to control a tool directly rather than through its capability.
 
 ---
 
@@ -173,11 +179,11 @@ If no rules match, the `default` effect applies.
 Starlark policies compose naturally using functions and variables:
 
 ```python
-load("@clash//std.star", "allow", "deny", "match", "policy", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "domains")
 
-def cwd_access():
+def file_access():
     return [
-        cwd().allow(read = True, write = True),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow()}),
     ]
 
 def safe_git():
@@ -189,7 +195,7 @@ def safe_git():
 
 def main():
     return policy(default = deny(), rules = [
-        *cwd_access(),
+        *file_access(),
         *safe_git(),
         domains({"github.com": allow(), "crates.io": allow()}),
     ])
@@ -203,11 +209,11 @@ The `update()` method combines two policies. In `a.update(b)`, `b`'s default eff
 
 ```python
 load("@clash//builtin.star", "base")
-load("@clash//std.star", "allow", "deny", "match", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "domains")
 
 def main():
     my_policy = policy(default = deny(), rules = [
-        cwd().allow(read = True, write = True),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow()}),
         match({"Bash": {"git": allow()}}),
         domains({"github.com": allow()}),
     ])
@@ -240,30 +246,30 @@ Shell command rules can attach a **sandbox policy** that defines what filesystem
 ### Defining sandboxes
 
 ```python
-load("@clash//std.star", "allow", "deny", "match", "sandbox", "cwd", "home", "policy", "domains")
+load("@clash//std.star", "allow", "deny", "match", "sandbox", "policy", "domains")
 
 def main():
     cargo_env = sandbox(
         default = deny(),
-        fs = [
-            cwd().allow(read = True),
-            path("./target").allow(write = True),
-        ],
+        fs = {
+            "$PWD": allow("r"),
+            "$PWD/target": allow("rwcd"),
+        },
         net = allow(),
     )
 
     git_env = sandbox(
         default = deny(),
-        fs = [
-            cwd().allow(read = True),
-        ],
+        fs = {
+            "$PWD": allow("r"),
+        },
     )
 
     return policy(default = deny(), rules = [
         match({"Bash": {"git": {"push": deny()}}}),
         match({"Bash": {"cargo": allow(sandbox = cargo_env)}}),
         match({"Bash": {"git": allow(sandbox = git_env)}}),
-        cwd().allow(read = True),
+        match({("Read", "Glob", "Grep"): allow()}),
         domains({"github.com": allow()}),
     ])
 ```
@@ -361,46 +367,94 @@ match({"Bash": {"git": {"push": deny(), "pull": allow()}}})
 ### Platform Constants
 
 ```python
-load("@clash//std.star", "OS", "ARCH")
+load("@clash//std.star", "allow", "match", "OS", "ARCH")
 
 # OS is "macos" or "linux"; ARCH is "aarch64" or "x86_64"
 if OS == "linux":
-    extra_fs = [path("/opt/tools").allow(read = True)]
+    extra_rules = [match({("Read", "Glob", "Grep"): allow()})]
 else:
-    extra_fs = []
+    extra_rules = []
 ```
 
 Use `OS` and `ARCH` to write policies that compile differently per platform.
 
-### Path Helpers
+### Sandbox `fs=` Path Keys
+
+In `sandbox(fs=...)` parameters, use the dict API with bare strings or `subpath()` / `literal()` / `regex()` as keys:
 
 ```python
-# Current working directory (with worktree support)
-cwd().allow(read = True, write = True)
-cwd(follow_worktrees = True).allow(read = True, write = True)
+sandbox(default = deny(), fs = {
+    # Bare string: matches path and all descendants (subpath)
+    "$PWD": allow("rwc"),
 
-# Home directory and subdirectories
-home().child(".ssh").allow(read = True)
+    # subpath() with follow_worktrees for git worktree support
+    subpath("$PWD", follow_worktrees = True): allow("rwc"),
 
-# Temp directories
-tempdir().allow()
+    # Nested dict: path concatenation — equivalent to "$HOME/.cargo" and "$HOME/.ssh"
+    "$HOME": {
+        ".cargo": allow("rwc"),
+        ".ssh": allow("r"),
+    },
 
-# Arbitrary paths
-path("/usr/local").allow(read = True)
-path(env = "CARGO_HOME").allow(read = True)
+    # Temp directory
+    "$TMPDIR": allow(),
+
+    # Arbitrary absolute path
+    "/usr/local": allow("r"),
+
+    # literal() for exact path match (no descendants)
+    literal("/etc/hosts"): allow("r"),
+
+    # regex() for pattern match
+    regex("^/opt/.*"): allow("r"),
+})
+```
+
+Key rules for the dict API:
+- **Bare string + decision value** — subpath (path and all descendants)
+- **Bare string + nested dict** — literal join point (the string is concatenated as a prefix into child keys)
+- **`subpath(path, follow_worktrees=True)`** — subpath with git worktree support
+- **`literal(path)`** — exact path match only
+- **`regex(pattern)`** — regex match
+
+### Capability Shorthand
+
+The `allow()` function accepts a shorthand string of capability letters for use in sandbox `fs=` dicts:
+
+| Letter | Capability |
+|--------|-----------|
+| `r` | read |
+| `w` | write |
+| `c` | create |
+| `d` | delete |
+| `x` | execute |
+
+```python
+allow("r")       # read only
+allow("rw")      # read + write
+allow("rwc")     # read + write + create
+allow("rwcd")    # read + write + create + delete
+allow("rwcdx")   # all capabilities
+allow()          # all capabilities (no args)
+```
+
+The kwargs form still works and is equivalent:
+
+```python
+allow(read = True, write = True, create = True)  # same as allow("rwc")
 ```
 
 ### Tools
 
 ```python
 # Deny specific tool
-tool("WebSearch").deny()
+match({"WebSearch": deny()})
 
 # Allow multiple tools
-tool(["Read", "Glob", "Grep"]).allow()
+match({("Read", "Glob", "Grep"): allow()})
 
 # Allow a single tool with sandbox
-tool("Read").sandbox(my_sandbox).allow()
+match({"Read": allow(sandbox = my_sandbox)})
 ```
 
 ### Docstrings
@@ -408,18 +462,18 @@ tool("Read").sandbox(my_sandbox).allow()
 Annotate rules and sandboxes with `doc=` to explain *why* they exist. Docstrings persist through the compiled IR and appear in `clash status` output.
 
 ```python
-# On tool rules
-tool("WebSearch", doc = "No external searches needed").deny()
+# On match rules
+match({"WebSearch": deny(doc = "No external searches needed")})
 
 # On sandboxes
 sandbox(
     name = "dev",
     doc = "Development sandbox for project work",
     default = deny(),
-    fs = [
-        cwd().allow(read = True, write = True, doc = "Project source files"),
-        home().child(".ssh").allow(read = True, doc = "SSH keys for git auth"),
-    ],
+    fs = {
+        subpath("$PWD", follow_worktrees = True): allow("rwc", doc = "Project source files"),
+        "$HOME/.ssh": allow("r", doc = "SSH keys for git auth"),
+    },
 )
 ```
 
@@ -502,11 +556,11 @@ Values appear inside `Literal` patterns and resolve at eval time:
 Deny everything by default, explicitly allow only safe operations:
 
 ```python
-load("@clash//std.star", "deny", "policy", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy")
 
 def main():
     return policy(default = deny(), rules = [
-        cwd().allow(read = True),
+        match({("Read", "Glob", "Grep"): allow()}),
     ])
 ```
 
@@ -515,11 +569,11 @@ def main():
 Allow reads and common dev tools, deny destructive operations:
 
 ```python
-load("@clash//std.star", "allow", "deny", "match", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "domains")
 
 def main():
     return policy(default = deny(), rules = [
-        cwd().allow(read = True, write = True),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow()}),
         match({"Bash": {"cargo": allow()}}),
         match({"Bash": {"npm": allow()}}),
         match({"Bash": {"git": {
@@ -541,15 +595,13 @@ def main():
 Allow almost everything, but block the truly dangerous:
 
 ```python
-load("@clash//std.star", "allow", "deny", "match", "policy", "cwd", "home", "path")
+load("@clash//std.star", "allow", "deny", "match", "policy")
 
 def main():
     return policy(default = allow(), rules = [
         match({"Bash": {"git": {"push": {"--force": deny()}}}}),
         match({"Bash": {"git": {"reset": {"--hard": deny()}}}}),
         match({"Bash": {"sudo": deny()}}),
-        path(".env").deny(write = True),
-        home().deny(write = True),
     ])
 ```
 
@@ -558,11 +610,11 @@ def main():
 Allow reading only, deny all modifications:
 
 ```python
-load("@clash//std.star", "allow", "deny", "match", "policy", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy")
 
 def main():
     return policy(default = deny(), rules = [
-        cwd().allow(read = True),
+        match({("Read", "Glob", "Grep"): allow()}),
         match({"Bash": {("cat", "ls", "grep"): allow()}}),
     ])
 ```
@@ -572,31 +624,31 @@ def main():
 Allow build tools with constrained sandbox environments:
 
 ```python
-load("@clash//std.star", "allow", "deny", "match", "sandbox", "cwd", "path", "policy", "domains")
+load("@clash//std.star", "allow", "deny", "match", "sandbox", "policy", "domains")
 
 def main():
     cargo_env = sandbox(
         default = deny(),
-        fs = [
-            cwd().allow(read = True),
-            path("./target").allow(write = True),
-        ],
+        fs = {
+            "$PWD": allow("r"),
+            "$PWD/target": allow("rwcd"),
+        },
         net = allow(),
     )
 
     npm_env = sandbox(
         default = deny(),
-        fs = [
-            cwd().allow(read = True),
-            path("./node_modules").allow(write = True),
-        ],
+        fs = {
+            "$PWD": allow("r"),
+            "$PWD/node_modules": allow("rwcd"),
+        },
         net = domains({"registry.npmjs.org": allow()}),
     )
 
     return policy(default = deny(), rules = [
         match({"Bash": {"cargo": allow(sandbox = cargo_env)}}),
         match({"Bash": {"npm": allow(sandbox = npm_env)}}),
-        cwd().allow(read = True),
+        match({("Read", "Glob", "Grep"): allow()}),
     ])
 ```
 

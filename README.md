@@ -87,13 +87,15 @@ Clash supports three policy levels, each automatically included and evaluated in
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "match", "policy", "sandbox", "cwd", "allow", "deny", "ask")
+load("@clash//std.star", "match", "policy", "sandbox", "subpath", "allow", "deny", "ask")
 
 def main():
     cwd_access = sandbox(
         name = "cwd_access",
         default = deny(),
-        fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
+        fs = {
+            subpath("$PWD", follow_worktrees = True): allow("rwc"),
+        },
     )
     return policy(
         default = ask(),
@@ -140,13 +142,15 @@ Starlark replaces JSON's named policy blocks and `include` with standard `load()
 
 ```python
 load("@clash//rust.star", "rust_sandbox")
-load("@clash//std.star", "match", "policy", "sandbox", "cwd", "allow", "deny")
+load("@clash//std.star", "match", "policy", "sandbox", "allow", "deny")
 
 def main():
     git_sandbox = sandbox(
         name = "git",
         default = deny(),
-        fs = [cwd().allow(read = True)],
+        fs = {
+            "$PWD": allow("r"),
+        },
     )
     return policy(
         default = deny(),
@@ -166,17 +170,17 @@ The `@clash//` prefix loads from the built-in standard library, which includes s
 Exec rules can carry sandbox constraints that clash compiles into OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS):
 
 ```python
-load("@clash//std.star", "match", "policy", "sandbox", "cwd", "path", "tempdir", "allow", "deny")
+load("@clash//std.star", "match", "policy", "sandbox", "allow", "deny")
 
 def main():
     cargo_box = sandbox(
         name = "cargo",
         default = deny(),
-        fs = [
-            cwd().allow(read = True),
-            path("./target").allow(write = True),
-            tempdir().allow(),
-        ],
+        fs = {
+            "$PWD": allow("r"),
+            "$PWD/target": allow("rwcd"),
+            "$TMPDIR": allow(),
+        },
         net = allow(),
     )
     return policy(default = deny(), rules = [

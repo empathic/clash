@@ -199,9 +199,14 @@ fn evaluate_stdlib_include(include_path: &str) -> Result<String> {
     let wrapper = clash_starlark::codegen::serialize(&[
         Stmt::load(include_path, &["builtins"]),
         Stmt::load("@clash//std.star", &["deny", "policy"]),
-        Stmt::def("main", vec![
-            Stmt::Return(policy(deny(), vec![Expr::ident("builtins")], None)),
-        ]),
+        Stmt::def(
+            "main",
+            vec![Stmt::Return(policy(
+                deny(),
+                vec![Expr::ident("builtins")],
+                None,
+            ))],
+        ),
     ]);
     let output = clash_starlark::evaluate(&wrapper, "<include>", Path::new("."))
         .with_context(|| format!("failed to evaluate stdlib include {include_path}"))?;

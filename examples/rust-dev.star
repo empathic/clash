@@ -1,18 +1,20 @@
 # Rust Development Policy
 # Allows common Rust toolchain commands with filesystem sandboxing.
 # Default: ask for anything not explicitly allowed.
-load("@clash//std.star", "match", "tool", "policy", "sandbox", "cwd", "tempdir", "home", "allow", "deny", "ask")
+load("@clash//std.star", "match", "policy", "sandbox", "subpath", "allow", "deny", "ask")
 
 def main():
     rust_sandbox = sandbox(
         name = "rust",
         default = deny(),
-        fs = [
-            cwd(follow_worktrees = True).allow(read = True, write = True),
-            tempdir().allow(),
-            home().child(".cargo").allow(read = True, write = True),
-            home().child(".rustup").allow(read = True),
-        ],
+        fs = {
+            subpath("$PWD", follow_worktrees = True): allow("rwc"),
+            "$TMPDIR": allow(),
+            "$HOME": {
+                ".cargo": allow("rwc"),
+                ".rustup": allow("r"),
+            },
+        },
         net = allow(),
     )
     return policy(
@@ -26,8 +28,6 @@ def main():
                 "rustup": allow(),
                 "git": allow(),
             }}),
-            tool("Read").allow(),
-            tool("Glob").allow(),
-            tool("Grep").allow(),
+            match({("Read", "Glob", "Grep"): allow()}),
         ],
     )

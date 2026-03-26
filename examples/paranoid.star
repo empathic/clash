@@ -1,7 +1,7 @@
 # Maximum Security Policy
 # Deny-all default. Only read-only git and file reading tools allowed.
 # Use this when security is more important than convenience.
-load("@clash//std.star", "allow", "match", "tool", "policy", "deny")
+load("@clash//std.star", "allow", "match", "policy", "deny")
 
 def main():
     return policy(
@@ -10,8 +10,6 @@ def main():
             match({"Bash": {"git": {
                 ("status", "diff", "log"): allow(),
             }}}),
-            tool("Read").allow(),
-            tool("Glob").allow(),
-            tool("Grep").allow(),
+            match({("Read", "Glob", "Grep"): allow()}),
         ],
     )

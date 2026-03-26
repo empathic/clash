@@ -1,12 +1,12 @@
-load("@clash//std.star", "allow", "ask", "match", "deny", "home", "path", "sandbox")
+load("@clash//std.star", "allow", "ask", "match", "deny", "sandbox")
 
 clashbox = sandbox(
     name="clash_box",
     default=deny(),
-    fs=[
-        home().child(".clash").recurse().allow(read=True),
-        home().recurse().allow(read=True, execute=True),
-    ],
+    fs={
+        "$HOME/.clash": allow("r"),
+        "$HOME": allow("rx"),
+    },
     net=allow(),
 )
 
@@ -25,10 +25,10 @@ clash = match({
 
 _claude_fs = sandbox(
     name="claude_fs",
-    fs=[
-        home().child(".claude").allow(read=True, write=True),
-        path(env="TRANSCRIPT_DIR").allow(read=True),
-    ],
+    fs={
+        "$HOME/.claude": allow("rwc"),
+        "$TRANSCRIPT_DIR": allow("r"),
+    },
 )
 
 claude = match({

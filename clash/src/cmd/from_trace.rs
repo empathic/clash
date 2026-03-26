@@ -314,15 +314,18 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Sandbox for fs tools
     let rw = clash_starlark::kwargs!(read = true, write = true);
-    let fs_box = sandbox("cwd", vec![(
-        "fs",
-        Expr::list(vec![
-            cwd(clash_starlark::kwargs!(follow_worktrees = true))
-                .recurse()
-                .allow_kwargs(rw.clone()),
-            home().child(".claude").recurse().allow_kwargs(rw),
-        ]),
-    )]);
+    let fs_box = sandbox(
+        "cwd",
+        vec![(
+            "fs",
+            Expr::list(vec![
+                cwd(clash_starlark::kwargs!(follow_worktrees = true))
+                    .recurse()
+                    .allow_kwargs(rw.clone()),
+                home().child(".claude").recurse().allow_kwargs(rw),
+            ]),
+        )],
+    );
     stmts.push(Stmt::comment(
         "Tighter sandbox for Claude fs tools (scoped to cwd + ~/.claude)",
     ));
@@ -368,19 +371,28 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     // Read-only fs tools
     if !read_tools.is_empty() {
         let expr = tool(&read_tools).sandbox(Expr::ident("_fs_box")).allow();
-        rules.push(Expr::commented("Read-only fs tools — observed in session", expr));
+        rules.push(Expr::commented(
+            "Read-only fs tools — observed in session",
+            expr,
+        ));
     }
 
     // Write fs tools
     if !write_tools.is_empty() {
         let expr = tool(&write_tools).sandbox(Expr::ident("_fs_box")).allow();
-        rules.push(Expr::commented("Write fs tools — observed in session", expr));
+        rules.push(Expr::commented(
+            "Write fs tools — observed in session",
+            expr,
+        ));
     }
 
     // Network tools — prompt user (safer default)
     if !net_tools.is_empty() {
         let expr = tool(&net_tools).ask();
-        rules.push(Expr::commented("Network tools — prompt before allowing", expr));
+        rules.push(Expr::commented(
+            "Network tools — prompt before allowing",
+            expr,
+        ));
     }
 
     // Other tools (e.g., Agent)
@@ -439,10 +451,11 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     let policy_expr = policy(Expr::ident("ask"), rules, Some(Expr::ident("dev")));
     let body = vec![
         Stmt::assign("my_policy", policy_expr),
-        Stmt::Return(
-            Expr::ident("base")
-                .method("update", vec![Expr::ident("my_policy")], Vec::<(&str, Expr)>::new()),
-        ),
+        Stmt::Return(Expr::ident("base").method(
+            "update",
+            vec![Expr::ident("my_policy")],
+            Vec::<(&str, Expr)>::new(),
+        )),
     ];
     stmts.push(main_fn(body));
 
