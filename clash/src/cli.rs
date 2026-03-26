@@ -190,6 +190,9 @@ pub enum Commands {
         /// Skip the interactive editor and create a sensible default policy
         #[arg(long)]
         quick: bool,
+        /// Which coding agent to set up (default: claude)
+        #[arg(long, default_value = "claude")]
+        agent: crate::agents::AgentKind,
     },
 
     /// Remove clash: undo bypass permissions, uninstall plugin, remove config and binary
@@ -262,6 +265,9 @@ pub enum Commands {
         /// Run interactive onboarding: diagnose issues and offer to fix them
         #[arg(long)]
         onboard: bool,
+        /// Which coding agent to diagnose (default: claude)
+        #[arg(long, default_value = "claude")]
+        agent: crate::agents::AgentKind,
     },
 
     /// Debug policy enforcement: view logs, replay commands, inspect sandbox

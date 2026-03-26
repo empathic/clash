@@ -18,11 +18,12 @@ fn main() -> Result<()> {
                 scope,
                 from_trace,
                 quick,
+                agent,
             } => {
                 if let Some(trace_path) = from_trace {
                     cmd::from_trace::run(&trace_path).map(|_| ())
                 } else {
-                    cmd::init::run(scope, quick)
+                    cmd::init::run(scope, quick, agent)
                 }
             }
             Commands::Uninstall { yes } => cmd::uninstall::run(yes),
@@ -52,7 +53,7 @@ fn main() -> Result<()> {
                 eprintln!("      The playground REPL has been unified into the policy editor.\n");
                 cmd::playground::run()
             }
-            Commands::Doctor { onboard } => cmd::doctor::run(onboard),
+            Commands::Doctor { onboard, agent } => cmd::doctor::run(onboard, agent),
             Commands::Debug(cmd) => cmd::debug::run(cmd),
             Commands::Trace(cmd) => cmd::trace::run(cmd),
             Commands::Session(cmd) => cmd::session::run(cmd),
