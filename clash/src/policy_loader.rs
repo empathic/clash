@@ -193,11 +193,16 @@ fn evaluate_include(include_path: &str, base_dir: &Path) -> Result<String> {
 /// The wrapper loads the module, imports its `builtins` export (a list of rule
 /// nodes), and returns them wrapped in a `policy()` from `main()`.
 fn evaluate_stdlib_include(include_path: &str) -> Result<String> {
-    let wrapper = format!(
-        "load(\"{include_path}\", \"builtins\")\n\
-         load(\"@clash//std.star\", \"deny\", \"policy\")\n\
-         def main():\n    return policy(default=deny(), rules=builtins)\n"
-    );
+    use clash_starlark::codegen::ast::{Expr, Stmt};
+    use clash_starlark::codegen::builder::*;
+
+    let wrapper = clash_starlark::codegen::serialize(&[
+        Stmt::load(include_path, &["builtins"]),
+        Stmt::load("@clash//std.star", &["deny", "policy"]),
+        Stmt::def("main", vec![
+            Stmt::Return(policy(deny(), vec![Expr::ident("builtins")], None)),
+        ]),
+    ]);
     let output = clash_starlark::evaluate(&wrapper, "<include>", Path::new("."))
         .with_context(|| format!("failed to evaluate stdlib include {include_path}"))?;
     Ok(output.json)

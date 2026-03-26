@@ -105,6 +105,9 @@ pub fn suggest_rule_description(
     tool_input: &serde_json::Value,
     _cwd: &str,
 ) -> Option<String> {
+    use clash_starlark::codegen::builder::*;
+    use clash_starlark::codegen::expr_to_string;
+
     match tool_name {
         "Bash" => {
             let command = tool_input.get("command")?.as_str()?;
@@ -114,7 +117,12 @@ pub fn suggest_rule_description(
                 return None;
             }
             let bin_name = std::path::Path::new(bin).file_name()?.to_str()?;
-            Some(format!("match({{\"Bash\": {{\"{}\"}}}})", bin_name))
+            let expr = clash_starlark::match_tree! {
+                "Bash" => {
+                    bin_name => allow(),
+                },
+            };
+            Some(expr_to_string(&expr))
         }
         "Read" | "Glob" | "Grep" => {
             let path = tool_input
@@ -122,12 +130,14 @@ pub fn suggest_rule_description(
                 .or_else(|| tool_input.get("path"))
                 .and_then(|v| v.as_str())?;
             let parent = PathBuf::from(path).parent()?.to_string_lossy().to_string();
-            Some(format!("tool(\"{}\") # path: {}", tool_name, parent))
+            let expr = tool(&[tool_name]);
+            Some(format!("{} # path: {}", expr_to_string(&expr), parent))
         }
         "Write" | "Edit" | "NotebookEdit" => {
             let path = tool_input.get("file_path")?.as_str()?;
             let parent = PathBuf::from(path).parent()?.to_string_lossy().to_string();
-            Some(format!("tool(\"{}\") # path: {}", tool_name, parent))
+            let expr = tool(&[tool_name]);
+            Some(format!("{} # path: {}", expr_to_string(&expr), parent))
         }
         "WebFetch" => {
             let url = tool_input.get("url")?.as_str()?;
@@ -140,9 +150,9 @@ pub fn suggest_rule_description(
             if domain.is_empty() {
                 return None;
             }
-            Some(format!("net(\"{}\")", domain))
+            Some(expr_to_string(&net(domain)))
         }
-        _ => Some(format!("tool(\"{}\")", tool_name)),
+        _ => Some(expr_to_string(&tool(&[tool_name]))),
     }
 }
 

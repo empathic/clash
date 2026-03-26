@@ -382,7 +382,10 @@ struct PlaygroundState {
     pending_save: Option<PendingSave>,
 }
 
-const STARLARK_LOAD: &str = r#"load("@clash//std.star", "match", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains", "domain", "allow", "deny", "ask")"#;
+const STARLARK_LOAD_NAMES: &[&str] = &[
+    "match", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains",
+    "domain", "allow", "deny", "ask",
+];
 
 impl PlaygroundState {
     /// Recompile the current state into a CompiledPolicy.
@@ -417,24 +420,30 @@ impl PlaygroundState {
 
     /// Build a complete Starlark policy source.
     fn build_starlark_source(&self) -> String {
-        let mut lines = vec![STARLARK_LOAD.to_string(), String::new()];
+        use clash_starlark::codegen::ast::{Expr, Stmt};
+        use clash_starlark::codegen::builder::*;
+
+        let mut stmts = vec![
+            load_std(STARLARK_LOAD_NAMES),
+            Stmt::Blank,
+        ];
 
         // Emit sandbox definitions as top-level variables
         for (name, expr) in &self.sandboxes {
-            lines.push(format!("{name} = {expr}"));
+            stmts.push(Stmt::assign(name, Expr::raw(expr)));
         }
         if !self.sandboxes.is_empty() {
-            lines.push(String::new());
+            stmts.push(Stmt::Blank);
         }
 
-        lines.push("def main():".to_string());
-        lines.push("    return policy(default = deny(), rules = [".to_string());
-        for rule in &self.rules {
-            lines.push(format!("        {},", rule.trim()));
-        }
-        lines.push("    ])".to_string());
+        let rules: Vec<Expr> = self.rules.iter().map(|r| Expr::raw(r.trim())).collect();
+        stmts.push(main_fn(vec![Stmt::Return(policy(
+            deny(),
+            rules,
+            None,
+        ))]));
 
-        lines.join("\n")
+        clash_starlark::codegen::serialize(&stmts)
     }
 
     fn reset(&mut self) {

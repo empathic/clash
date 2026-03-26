@@ -5,6 +5,7 @@
 //! that the existing compile pipeline consumes.
 
 mod builders;
+pub mod codegen;
 mod compile;
 mod globals;
 mod loader;
@@ -409,20 +410,27 @@ def main():
 
     #[test]
     fn test_stdlib_all_modules_load() {
+        use crate::codegen::ast::{Expr, Stmt};
+        use crate::codegen::builder::*;
+
         for module in &["rust.star", "node.star", "python.star"] {
             let sandbox_name = module.strip_suffix(".star").unwrap().to_string() + "_sandbox";
-            let source = format!(
-                r#"
-load("@clash//{module}", "{sandbox_name}")
-load("@clash//std.star", "allow", "deny", "match", "policy")
-
-def main():
-    return policy(
-        default = deny(),
-        rules = match({{"Bash": {{"test": allow(sandbox={sandbox_name})}}}}),
-    )
-"#
-            );
+            let source = crate::codegen::serialize(&[
+                Stmt::load(&format!("@clash//{module}"), &[&sandbox_name]),
+                Stmt::load("@clash//std.star", &["allow", "deny", "match", "policy"]),
+                Stmt::Blank,
+                Stmt::def("main", vec![
+                    Stmt::Return(policy(
+                        deny(),
+                        vec![crate::match_tree! {
+                            "Bash" => {
+                                "test" => allow_with_sandbox(Expr::ident(&sandbox_name)),
+                            },
+                        }],
+                        None,
+                    )),
+                ]),
+            ]);
             let result = evaluate(&source, "test.star", &PathBuf::from("."))
                 .unwrap_or_else(|e| panic!("failed to load @clash//{module}: {e}"));
             let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();

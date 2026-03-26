@@ -82,23 +82,31 @@ fn run_init_quick() -> Result<()> {
 
     let policy_path = settings_dir.join("policy.star");
 
-    let quick_policy = r#"load("@clash//std.star", "match", "tool", "policy", "allow", "ask")
+    let quick_policy = {
+        use clash_starlark::codegen::ast::Stmt;
+        use clash_starlark::codegen::builder::*;
 
-def main():
-    return policy(
-        default = ask(),
-        rules = [
-            match({"Bash": {
-                ("git", "cargo", "npm", "npx", "node", "bun", "python", "pip", "uv"): allow(),
-            }}),
-            tool("Read").allow(),
-            tool("Write").allow(),
-            tool("Edit").allow(),
-            tool("Glob").allow(),
-            tool("Grep").allow(),
-        ],
-    )
-"#;
+        clash_starlark::codegen::serialize(&[
+            load_std(&["match", "tool", "policy", "allow", "ask"]),
+            Stmt::Blank,
+            Stmt::def("main", vec![Stmt::Return(policy(
+                ask(),
+                vec![
+                    clash_starlark::match_tree! {
+                        "Bash" => {
+                            ("git", "cargo", "npm", "npx", "node", "bun", "python", "pip", "uv") => allow(),
+                        },
+                    },
+                    tool(&["Read"]).allow(),
+                    tool(&["Write"]).allow(),
+                    tool(&["Edit"]).allow(),
+                    tool(&["Glob"]).allow(),
+                    tool(&["Grep"]).allow(),
+                ],
+                None,
+            ))]),
+        ])
+    };
 
     std::fs::write(&policy_path, quick_policy)
         .with_context(|| format!("failed to write {}", policy_path.display()))?;

@@ -369,6 +369,7 @@ mod tests {
     #[test]
     fn test_policy_deny_git_push() -> Result<()> {
         // deny git push, allow git *
+        // TODO: rewrite with serde_json::json!
         let source = r#"{"schema_version":5,"default_effect":"deny","sandboxes":{},"tree":[
             {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
                 {"condition":{"observe":{"positional_arg":0},"pattern":{"literal":{"literal":"git"}},"children":[

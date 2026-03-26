@@ -365,14 +365,28 @@ mod tests {
 
     /// Build a test policy that allows Bash with a sandbox.
     fn test_policy() -> Arc<CompiledPolicy> {
-        Arc::new(compile_star(
-            r#"load("@clash//std.star", "policy", "sandbox", "cwd", "match", "allow", "deny")
-def main():
-    return policy(default = deny(), rules = [
-        match({"Bash": allow(sandbox=sandbox(name="test", default=deny(), fs=[cwd().allow(read=True)]))}),
-    ])
-"#,
-        ))
+        use clash_starlark::codegen::ast::{Expr, Stmt};
+        use clash_starlark::codegen::builder::*;
+
+        let sb = sandbox("test", vec![
+            ("default", deny()),
+            ("fs", Expr::list(vec![
+                cwd(vec![]).allow_kwargs(clash_starlark::kwargs!(read = true)),
+            ])),
+        ]);
+        let source = clash_starlark::codegen::serialize(&[
+            load_std(&["policy", "sandbox", "cwd", "match", "allow", "deny"]),
+            Stmt::def("main", vec![
+                Stmt::Return(policy(
+                    deny(),
+                    vec![clash_starlark::match_tree! {
+                        "Bash" => allow_with_sandbox(sb),
+                    }],
+                    None,
+                )),
+            ]),
+        ]);
+        Arc::new(compile_star(&source))
     }
 
     fn test_hook() -> clash_brush_core::ExternalCommandHook {
@@ -430,12 +444,16 @@ def main():
 
     #[test]
     fn hook_returns_none_without_sandbox() {
-        let policy = Arc::new(compile_star(
-            r#"load("@clash//std.star", "allow", "policy")
-def main():
-    return policy(default = allow(), rules = [])
-"#,
-        ));
+        use clash_starlark::codegen::ast::Stmt;
+        use clash_starlark::codegen::builder::*;
+
+        let source = clash_starlark::codegen::serialize(&[
+            load_std(&["allow", "policy"]),
+            Stmt::def("main", vec![
+                Stmt::Return(policy(allow(), vec![], None)),
+            ]),
+        ]);
+        let policy = Arc::new(compile_star(&source));
         let hook = make_sandbox_hook(policy, None, false);
         // No sandbox → command runs unchanged.
         let result = hook("/usr/bin/git", &["push".to_string()]);
