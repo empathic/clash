@@ -21,7 +21,8 @@
 * `clash` is an installed binary on the user's PATH. ALWAYS run it directly as `clash` (e.g., `clash status`, `clash policy list`).
 * NEVER use `cargo run --bin clash` to run clash. That is for building/testing the crate, not for invoking the tool.
 * Skills reference `clash` commands — execute them exactly as written.
-* Available CLI commands: `clash init`, `clash uninstall`, `clash status`, `clash fmt`, `clash policy list`, `clash policy validate`, `clash policy show`, `clash policy allow`, `clash policy deny`, `clash policy remove`, `clash explain`, `clash doctor`, `clash update`, `clash launch`, `clash sandbox exec`, `clash sandbox test`, `clash sandbox check`, `clash sandbox create`, `clash sandbox delete`, `clash sandbox list`, `clash sandbox add-rule`, `clash sandbox remove-rule`. `clash box` is a shorthand alias for `clash sandbox`.
+* Available CLI commands: `clash init`, `clash uninstall`, `clash status`, `clash fmt`, `clash policy list`, `clash policy validate`, `clash policy check`, `clash policy show`, `clash policy allow`, `clash policy deny`, `clash policy remove`, `clash explain`, `clash doctor`, `clash update`, `clash launch`, `clash sandbox exec`, `clash sandbox test`, `clash sandbox check`, `clash sandbox create`, `clash sandbox delete`, `clash sandbox list`, `clash sandbox add-rule`, `clash sandbox remove-rule`. `clash box` is a shorthand alias for `clash sandbox`.
+* Multi-agent commands accept `--agent <name>` (claude, gemini, codex, amazonq, opencode, copilot): `clash hook --agent gemini pre-tool-use`, `clash init --agent gemini`, `clash doctor --agent gemini`. Defaults to `claude`.
 
 ## Development
 
@@ -61,9 +62,18 @@
 
 ## Layout
 
-- *clash* Clash binary + library
+* *clash* Clash binary + library (includes `src/agents/` for multi-agent protocol adapters)
 * *clash-starlark* Starlark policy evaluator — compiles `.star` files to JSON policy format
-* *clash-plugin* Claude plugin refered to by the .claude-plugin definitions
+* *clash-plugin* Claude Code plugin (hooks.json, .claude-plugin definitions)
+* *clash-gemini-ext* Gemini CLI extension package
+* *clash-codex* Codex CLI hook configuration
+* *clash-amazonq* Amazon Q CLI agent hook configuration
+* *clash-opencode* OpenCode TypeScript plugin
+* *clash-copilot* Copilot CLI hook configuration
 * *clash_notify* Helper crate for extended notifications outside of the terminal
 * *claude_settings* Helper crate for interacting with a user's ".claude" settings directories
+* *clash-brush-parser* Shell command parser
+* *clash-brush-core* Sandboxed shell core engine
+* *clash-brush-builtins* Shell built-in commands
+* *clash-brush-interactive* Interactive shell (REPL)
 * *docs* Project level documentation

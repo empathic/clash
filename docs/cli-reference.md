@@ -30,10 +30,19 @@ clash init [SCOPE] [OPTIONS]
 |----------|-------------|
 | `SCOPE` | Scope to initialize: `user` (global) or `project` (this repo). When omitted, an interactive prompt lets you choose. |
 
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--quick` | Skip the interactive editor and create a sensible default policy |
+| `--agent <AGENT>` | Which coding agent to set up: `claude` (default), `gemini`, `codex`, `amazonq`, `opencode`, `copilot` |
+| `--from-trace <PATH>` | Generate policy from an observed session trace file |
+
 **What it does:**
 
 - **`clash init user`** — Creates `~/.clash/policy.star` with a safe default policy, installs the Claude Code plugin, and installs the clash status line.
 - **`clash init project`** — Creates `.clash/policy.star` in the current repository root with a minimal deny-all policy.
+- **`clash init --agent gemini`** — Creates the policy and prints agent-specific setup instructions for installing the Clash extension.
 
 Only one scope is initialized per invocation. When no scope is given, clash explains both options and asks you to choose.
 
@@ -48,6 +57,10 @@ clash init user
 
 # Create a repo-specific policy
 clash init project
+
+# Set up for a non-Claude agent
+clash init --agent gemini
+clash init --agent codex
 ```
 
 ---
@@ -87,7 +100,7 @@ clash status --verbose  # all rules including builtin rules expanded
 Diagnose common setup issues and report fix instructions. Runs a series of checks and reports pass/warn/fail status for each.
 
 ```
-clash doctor [--onboard]
+clash doctor [OPTIONS]
 ```
 
 **Flags:**
@@ -95,6 +108,7 @@ clash doctor [--onboard]
 | Flag | Description |
 |------|-------------|
 | `--onboard` | Run interactive onboarding: diagnose issues and offer to fix them automatically |
+| `--agent <AGENT>` | Which coding agent to diagnose: `claude` (default), `gemini`, `codex`, `amazonq`, `opencode`, `copilot` |
 
 **Checks performed:**
 
@@ -119,6 +133,9 @@ clash doctor
 
 # Interactive onboarding — diagnose and fix
 clash doctor --onboard
+
+# Diagnose a specific agent
+clash doctor --agent gemini
 ```
 
 ---
@@ -126,6 +143,23 @@ clash doctor --onboard
 ## clash policy
 
 View, validate, and manage policy rules.
+
+### clash policy check
+
+Check policy for multi-agent portability issues. Scans policy rules for agent-specific tool names and suggests canonical alternatives.
+
+```
+clash policy check [--json]
+```
+
+Tool names like `Bash`, `Read`, `Write` are Claude Code-specific. Canonical names like `shell`, `read`, `write` match across all supported agents. This command warns about agent-specific names and suggests portable replacements.
+
+```bash
+clash policy check
+clash policy check --json
+```
+
+---
 
 ### clash policy allow
 
@@ -608,14 +642,20 @@ clash sandbox test [OPTIONS] --sandbox <SANDBOX> --cwd <CWD> [COMMAND]...
 
 ## clash hook
 
-Internal commands called by Claude Code's hook system. These are not typically invoked directly — they are registered in `hooks.json` and called automatically by Claude Code.
+Internal commands called by coding agent hook systems. These are not typically invoked directly — they are registered in hook configuration files and called automatically by the agent.
+
+All hook subcommands accept `--agent <AGENT>` to select the protocol format (defaults to `claude`).
+
+```
+clash hook [--agent <AGENT>] <SUBCOMMAND>
+```
 
 ### clash hook pre-tool-use
 
 Called before a tool is executed. Evaluates the policy and returns an allow/deny/ask decision. Reads hook input from stdin as JSON.
 
 ```
-clash hook pre-tool-use
+clash hook [--agent gemini] pre-tool-use
 ```
 
 ### clash hook post-tool-use
@@ -623,12 +663,12 @@ clash hook pre-tool-use
 Called after a tool is executed. Used for audit logging and notifications. Reads hook input from stdin as JSON.
 
 ```
-clash hook post-tool-use
+clash hook [--agent gemini] post-tool-use
 ```
 
 ### clash hook permission-request
 
-Called when Claude Code prompts for permission. Responds to permission prompts on behalf of the user based on policy rules. Reads hook input from stdin as JSON.
+Called when the agent prompts for permission. Responds to permission prompts on behalf of the user based on policy rules. Reads hook input from stdin as JSON.
 
 ```
 clash hook permission-request
@@ -636,10 +676,18 @@ clash hook permission-request
 
 ### clash hook session-start
 
-Called when a Claude Code session begins. Initializes session state, symlinks the clash binary into `~/.local/bin/`, and injects system prompt context. Reads hook input from stdin as JSON.
+Called when a coding agent session begins. Initializes session state and injects system prompt context. Reads hook input from stdin as JSON.
 
 ```
-clash hook session-start
+clash hook [--agent gemini] session-start
+```
+
+### clash hook stop
+
+Called when a conversation turn ends without a tool call. Syncs traces.
+
+```
+clash hook [--agent gemini] stop
 ```
 
 ---
