@@ -1,0 +1,20 @@
+# Clash hooks for OpenAI Codex CLI
+# Add this to your ~/.codex/config.toml or project codex.toml
+
+[hooks.pre_tool_use]
+command = "clash hook --agent codex pre-tool-use"
+timeout_seconds = 10
+pattern = "*"
+
+[hooks.post_tool_use]
+command = "clash hook --agent codex post-tool-use"
+timeout_seconds = 10
+pattern = "*"
+
+[hooks.session_start]
+command = "clash hook --agent codex session-start"
+timeout_seconds = 10
+
+[hooks.stop]
+command = "clash hook --agent codex stop"
+timeout_seconds = 5

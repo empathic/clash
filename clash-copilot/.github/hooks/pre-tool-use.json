@@ -1,0 +1,16 @@
+{
+  "hooks": [
+    {
+      "name": "clash-pre-tool-use",
+      "command": "clash hook --agent copilot pre-tool-use",
+      "events": ["preToolUse"],
+      "matcher": "*"
+    },
+    {
+      "name": "clash-post-tool-use",
+      "command": "clash hook --agent copilot post-tool-use",
+      "events": ["postToolUse"],
+      "matcher": "*"
+    }
+  ]
+}

@@ -69,7 +69,9 @@ pub fn get_protocol(agent: AgentKind) -> Box<dyn HookProtocol> {
     match agent {
         AgentKind::Claude => Box::new(super::claude::ClaudeProtocol),
         AgentKind::Gemini => Box::new(super::gemini::GeminiProtocol),
-        // Future agents will be added here as they are implemented.
-        _ => Box::new(super::claude::ClaudeProtocol),
+        AgentKind::Codex => Box::new(super::codex::CodexProtocol),
+        AgentKind::AmazonQ => Box::new(super::amazonq::AmazonQProtocol),
+        AgentKind::OpenCode => Box::new(super::opencode::OpenCodeProtocol),
+        AgentKind::Copilot => Box::new(super::copilot::CopilotProtocol),
     }
 }

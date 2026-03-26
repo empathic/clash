@@ -7,8 +7,12 @@
 //! - Canonical tool alias table — maps agent-native tool names to internal names
 //! - [`protocol::HookProtocol`] — trait abstracting agent-specific hook JSON formats
 
+pub mod amazonq;
 pub mod claude;
+pub mod codex;
+pub mod copilot;
 pub mod gemini;
+pub mod opencode;
 pub mod protocol;
 
 use std::fmt;

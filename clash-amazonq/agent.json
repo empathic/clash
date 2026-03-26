@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": "clash hook --agent amazonq pre-tool-use",
+        "matcher": "*"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "clash hook --agent amazonq post-tool-use",
+        "matcher": "*"
+      }
+    ],
+    "agentSpawn": [
+      {
+        "command": "clash hook --agent amazonq session-start"
+      }
+    ],
+    "stop": [
+      {
+        "command": "clash hook --agent amazonq stop"
+      }
+    ]
+  }
+}
