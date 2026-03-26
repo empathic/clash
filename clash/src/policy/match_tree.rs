@@ -170,6 +170,9 @@ pub enum Observable {
     /// Capability: network domain.
     /// Extracted from WebFetch URL or "*" for WebSearch.
     NetDomain,
+    /// The permission mode (e.g. "default", "plan").
+    /// From Claude Code's permission_mode hook field.
+    Mode,
 }
 
 impl Observable {
@@ -186,6 +189,7 @@ impl Observable {
             Observable::FsOp => 1,
             Observable::FsPath => 2,
             Observable::NetDomain => 2,
+            Observable::Mode => 0,
         }
     }
 }
@@ -362,6 +366,8 @@ pub struct QueryContext {
     pub fs_path: Option<String>,
     /// Capability: network domain, if applicable.
     pub net_domain: Option<String>,
+    /// Permission mode from Claude Code (e.g. "default", "plan").
+    pub mode: Option<String>,
 }
 
 impl QueryContext {
@@ -427,6 +433,7 @@ impl QueryContext {
             fs_op,
             fs_path,
             net_domain,
+            mode: None,
         }
     }
 
@@ -456,6 +463,7 @@ impl QueryContext {
             Observable::FsOp => self.fs_op.clone().map(|op| vec![op]),
             Observable::FsPath => self.fs_path.clone().map(|p| vec![p]),
             Observable::NetDomain => self.net_domain.clone().map(|d| vec![d]),
+            Observable::Mode => self.mode.clone().map(|m| vec![m]),
         }
     }
 }
@@ -759,6 +767,18 @@ impl CompiledPolicy {
     /// Evaluate this policy against a tool invocation.
     pub fn evaluate(&self, tool_name: &str, tool_input: &serde_json::Value) -> PolicyDecision {
         let ctx = QueryContext::from_tool(tool_name, tool_input);
+        self.evaluate_ctx(&ctx)
+    }
+
+    /// Evaluate this policy with mode context from Claude Code's permission_mode.
+    pub fn evaluate_with_mode(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+        mode: Option<&str>,
+    ) -> PolicyDecision {
+        let mut ctx = QueryContext::from_tool(tool_name, tool_input);
+        ctx.mode = mode.map(|m| m.to_string());
         self.evaluate_ctx(&ctx)
     }
 

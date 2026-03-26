@@ -186,6 +186,7 @@ fn extract_observable(ctx: &QueryContext, obs: &Observable) -> Option<Vec<String
         Observable::FsOp => ctx.fs_op.clone().map(|op| vec![op]),
         Observable::FsPath => ctx.fs_path.clone().map(|p| vec![p]),
         Observable::NetDomain => ctx.net_domain.clone().map(|d| vec![d]),
+        Observable::Mode => ctx.mode.clone().map(|m| vec![m]),
     }
 }
 

@@ -180,6 +180,7 @@ pub fn format_condition(obs: &Observable, pat: &Pattern) -> String {
         Observable::FsOp => "fs_op".to_string(),
         Observable::FsPath => "fs_path".to_string(),
         Observable::NetDomain => "net_domain".to_string(),
+        Observable::Mode => "mode".to_string(),
     };
     let pat_str = format_pattern(pat);
     format!("{obs_str}={pat_str}")

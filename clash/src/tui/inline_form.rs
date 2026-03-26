@@ -2502,6 +2502,7 @@ fn observable_short_desc(obs: &Observable) -> String {
         Observable::FsOp => "fs operation".into(),
         Observable::FsPath => "fs path".into(),
         Observable::NetDomain => "network domain".into(),
+        Observable::Mode => "mode".into(),
     }
 }
 

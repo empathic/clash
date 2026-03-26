@@ -25,15 +25,21 @@ pub fn handle_permission_request(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
 ) -> anyhow::Result<HookOutput> {
-    // Interactive tools (AskUserQuestion, EnterPlanMode, ExitPlanMode) must be
-    // handled by Claude Code's native UI. If the policy doesn't deny them,
-    // pass through so the user sees the native prompt / plan review screen.
+    // Interactive tools (AskUserQuestion, EnterPlanMode, ExitPlanMode):
+    // When the policy says "ask", pass through to CC's native UI so the
+    // user sees the prompt. When the policy explicitly allows or denies,
+    // enforce it — this enables mode-aware automation.
     if is_interactive_tool(&input.tool_name) {
         let pre_tool_result = check_permission(input, settings)?;
         let is_deny = matches!(
             pre_tool_result.hook_specific_output,
             Some(HookSpecificOutput::PreToolUse(ref pre))
                 if matches!(pre.permission_decision, Some(PermissionRule::Deny))
+        );
+        let is_allow = matches!(
+            pre_tool_result.hook_specific_output,
+            Some(HookSpecificOutput::PreToolUse(ref pre))
+                if matches!(pre.permission_decision, Some(PermissionRule::Allow))
         );
         if is_deny {
             let reason = match &pre_tool_result.hook_specific_output {
@@ -44,6 +50,10 @@ pub fn handle_permission_request(
                 _ => "denied by policy".into(),
             };
             return Ok(HookOutput::deny_permission(reason, false));
+        }
+        if is_allow {
+            info!(tool = %input.tool_name, "Policy allows interactive tool");
+            return Ok(HookOutput::approve_permission(None));
         }
         info!(tool = %input.tool_name, "Passthrough: interactive tool deferred to Claude Code");
         return Ok(HookOutput::continue_execution());
