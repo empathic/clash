@@ -90,14 +90,9 @@ Kernel sandboxing needs Landlock (Linux 5.13+) or Seatbelt (macOS). Clash works 
 ## How do I uninstall?
 
 ```bash
-# Remove the agent plugin (if using one)
-claude plugin uninstall clash
-
-# Remove the binary
-cargo uninstall clash          # if installed via cargo
-rm -f ~/.local/bin/clash       # if installed via install script
-
-# Optional: clean up config
-rm -rf ~/.clash                # user-level policy and logs
-rm -rf .clash                  # project-level policy
+clash uninstall
 ```
+
+This removes the Claude Code plugin, the status line, policy files (`~/.clash/`), and the binary — regardless of how it was installed. Use `clash uninstall -y` to skip confirmation prompts.
+
+After uninstalling, Claude Code reverts to its built-in permission model.
