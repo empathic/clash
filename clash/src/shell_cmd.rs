@@ -380,6 +380,7 @@ def main():
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn hook_wraps_with_sandbox_exec_directly() {
         let hook = test_hook();
         // Brush resolves to full paths; hook should still match policy.
@@ -389,13 +390,17 @@ def main():
         assert_eq!(exe, "sandbox-exec");
         assert_eq!(args[0], "-p");
         // args[1] is the compiled SBPL profile string
-        assert!(args[1].contains("(version 1)"), "should be a compiled seatbelt profile");
+        assert!(
+            args[1].contains("(version 1)"),
+            "should be a compiled seatbelt profile"
+        );
         assert_eq!(args[2], "--");
         assert_eq!(args[3], "/usr/bin/git");
         assert_eq!(args[4], "push");
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn hook_preserves_args_order() {
         let hook = test_hook();
         let result = hook(
@@ -408,6 +413,19 @@ def main():
         assert_eq!(args[dash_pos + 1], "/bin/cat");
         assert_eq!(args[dash_pos + 2], "file1.txt");
         assert_eq!(args[dash_pos + 3], "file2.txt");
+    }
+
+    /// On Linux, compile_sandbox_profile returns Err (Landlock is in-process),
+    /// so the hook falls through and returns None — no sandbox-exec wrapping.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn hook_returns_none_on_linux() {
+        let hook = test_hook();
+        let result = hook("/usr/bin/git", &["push".to_string()]);
+        assert!(
+            result.is_none(),
+            "Linux uses Landlock (in-process), not sandbox-exec"
+        );
     }
 
     #[test]
