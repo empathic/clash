@@ -1,4 +1,4 @@
-// Theme toggle: system ◒ → light ◑ → dark ◐ → system
+// Theme toggle: system → light → dark → system
 document.addEventListener("DOMContentLoaded", function () {
   var btn = document.querySelector(".theme-toggle");
   if (!btn) return;
@@ -9,28 +9,28 @@ document.addEventListener("DOMContentLoaded", function () {
     '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M6 1a7 7 0 009 6.7A7 7 0 116 1z"/></svg>'
   ];
 
-  function current() {
+  function preference() {
     var t = localStorage.getItem("theme");
     return states.indexOf(t) !== -1 ? t : null;
   }
 
-  function update(theme) {
-    if (theme) {
-      document.documentElement.setAttribute("data-theme", theme);
-      localStorage.setItem("theme", theme);
+  function apply(pref) {
+    if (pref) {
+      localStorage.setItem("theme", pref);
+      document.documentElement.setAttribute("data-theme", pref);
     } else {
-      document.documentElement.removeAttribute("data-theme");
       localStorage.removeItem("theme");
+      document.documentElement.removeAttribute("data-theme");
     }
-    btn.innerHTML = svgs[states.indexOf(theme)];
+    btn.innerHTML = svgs[states.indexOf(pref)];
   }
 
-  update(current());
+  // Set icon to match stored preference (CSS @media handles system default)
+  btn.innerHTML = svgs[states.indexOf(preference())];
 
   btn.addEventListener("click", function () {
-    var idx = states.indexOf(current());
-    var next = states[(idx + 1) % states.length];
-    update(next);
+    var idx = states.indexOf(preference());
+    apply(states[(idx + 1) % states.length]);
   });
 });
 
