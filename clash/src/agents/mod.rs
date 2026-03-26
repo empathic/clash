@@ -234,6 +234,15 @@ pub fn internal_to_canonical(internal_name: &str) -> Option<&'static str> {
         .map(|a| a.canonical)
 }
 
+/// Return the best user-facing display name for a tool.
+///
+/// Prefers the canonical name ("shell") if one exists, otherwise returns
+/// the internal name as-is. Used for stderr messages, deny reasons, and
+/// other user-visible output.
+pub fn display_name(internal_name: &str) -> &str {
+    internal_to_canonical(internal_name).unwrap_or(internal_name)
+}
+
 /// Given an internal name and target agent, return the agent's native tool name.
 ///
 /// Used for formatting output in the agent's expected vocabulary.
