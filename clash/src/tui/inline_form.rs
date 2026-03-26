@@ -21,8 +21,11 @@ use crate::tui::tool_registry;
 
 use super::tea::FormRequest;
 
-/// Starlark load preamble used when compiling user-entered expressions.
-const STARLARK_LOAD: &str = r#"load("@clash//std.star", "match", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains", "domain", "allow", "deny", "ask")"#;
+const PRELOADED_FUNCS: &[&str] = &[
+    "match", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains",
+    "domain", "allow", "deny", "ask",
+];
+
 
 // ---------------------------------------------------------------------------
 // Field types
@@ -1656,9 +1659,19 @@ impl FormState {
         }
 
         // Build a minimal Starlark program wrapping the expression
-        let starlark_source = format!(
-            "{STARLARK_LOAD}\n\ndef main():\n    return policy(default = deny(), rules = [\n        {expr},\n    ])\n"
-        );
+        let starlark_source = {
+            use clash_starlark::codegen::ast::{Expr, Stmt};
+            use clash_starlark::codegen::builder::*;
+            clash_starlark::codegen::serialize(&[
+                load_std(PRELOADED_FUNCS),
+                Stmt::Blank,
+                main_fn(vec![Stmt::Return(policy(
+                    deny(),
+                    vec![Expr::raw(&expr)],
+                    None,
+                ))]),
+            ])
+        };
 
         let json = clash_starlark::evaluate(
             &starlark_source,

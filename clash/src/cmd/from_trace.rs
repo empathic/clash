@@ -300,29 +300,34 @@ fn analyze(invocations: &[ToolInvocation]) -> TraceAnalysis {
 // ---------------------------------------------------------------------------
 
 fn generate_starlark(analysis: &TraceAnalysis) -> String {
-    let mut lines = vec![
-        r#"load("@clash//builtin.star", "base")"#.to_string(),
-        r#"load("@clash//std.star", "match", "tool", "policy", "sandbox", "cwd", "home", "allow", "ask", "deny")"#
-            .to_string(),
-        r#"load("@clash//sandboxes.star", "dev")"#.to_string(),
-        String::new(),
-        // Sandbox for fs tools
-        "# Tighter sandbox for Claude fs tools (scoped to cwd + ~/.claude)".to_string(),
-        "_fs_box = sandbox(".to_string(),
-        "    name = \"cwd\",".to_string(),
-        "    fs = [".to_string(),
-        "        cwd(follow_worktrees = True).recurse().allow(read = True, write = True),"
-            .to_string(),
-        "        home().child(\".claude\").recurse().allow(read = True, write = True),".to_string(),
-        "    ],".to_string(),
-        ")".to_string(),
-        String::new(),
-        "def main():".to_string(),
-        "    my_policy = policy(".to_string(),
-        "        default = ask,".to_string(),
-        "        default_sandbox = dev,".to_string(),
-        "        rules = [".to_string(),
+    use clash_starlark::codegen::ast::{Expr, Stmt};
+    use clash_starlark::codegen::builder::*;
+
+    let mut stmts = vec![
+        load_builtin(),
+        load_std(&[
+            "match", "tool", "policy", "sandbox", "cwd", "home", "allow", "ask", "deny",
+        ]),
+        load_sandboxes(&["dev"]),
+        Stmt::Blank,
     ];
+
+    // Sandbox for fs tools
+    let rw = clash_starlark::kwargs!(read = true, write = true);
+    let fs_box = sandbox("cwd", vec![(
+        "fs",
+        Expr::list(vec![
+            cwd(clash_starlark::kwargs!(follow_worktrees = true))
+                .recurse()
+                .allow_kwargs(rw.clone()),
+            home().child(".claude").recurse().allow_kwargs(rw),
+        ]),
+    )]);
+    stmts.push(Stmt::comment(
+        "Tighter sandbox for Claude fs tools (scoped to cwd + ~/.claude)",
+    ));
+    stmts.push(Stmt::assign("_fs_box", fs_box));
+    stmts.push(Stmt::Blank);
 
     // Categorize tools
     let read_tools: Vec<&str> = ["Read", "Glob", "Grep"]
@@ -358,75 +363,63 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
         })
         .collect();
 
+    let mut rules: Vec<Expr> = vec![];
+
     // Read-only fs tools
     if !read_tools.is_empty() {
-        let tool_list = format_tool_list(&read_tools);
-        lines.push("            # Read-only fs tools — observed in session".to_string());
-        lines.push(format!(
-            "            tool([{}]).sandbox(_fs_box).allow(),",
-            tool_list
-        ));
+        let expr = tool(&read_tools).sandbox(Expr::ident("_fs_box")).allow();
+        rules.push(Expr::commented("Read-only fs tools — observed in session", expr));
     }
 
     // Write fs tools
     if !write_tools.is_empty() {
-        let tool_list = format_tool_list(&write_tools);
-        lines.push("            # Write fs tools — observed in session".to_string());
-        lines.push(format!(
-            "            tool([{}]).sandbox(_fs_box).allow(),",
-            tool_list
-        ));
+        let expr = tool(&write_tools).sandbox(Expr::ident("_fs_box")).allow();
+        rules.push(Expr::commented("Write fs tools — observed in session", expr));
     }
 
     // Network tools — prompt user (safer default)
     if !net_tools.is_empty() {
-        let tool_list = format_tool_list(&net_tools);
-        lines.push("            # Network tools — prompt before allowing".to_string());
-        lines.push(format!("            tool([{}]).ask(),", tool_list));
+        let expr = tool(&net_tools).ask();
+        rules.push(Expr::commented("Network tools — prompt before allowing", expr));
     }
 
     // Other tools (e.g., Agent)
     for t in &other_tools {
-        lines.push(format!("            tool(\"{}\").allow(),", t));
-    }
-
-    // Add a blank line before exec rules if we had tool rules
-    if !analysis.tools.is_empty() && !analysis.binaries.is_empty() {
-        lines.push(String::new());
+        rules.push(tool(&[t.as_str()]).allow());
     }
 
     // Deny destructive git ops if git was observed
     if analysis.binaries.contains("git") {
-        lines.push("            # Deny destructive git ops".to_string());
-        lines.push("            match({\"Bash\": {\"git\": {".to_string());
-        lines.push(
-            "                \"push\": {\"--force\": deny(), \"--force-with-lease\": deny()},"
-                .to_string(),
-        );
-        lines.push("                \"reset\": {\"--hard\": deny()},".to_string());
-        lines.push("            }}}),".to_string());
-        lines.push(String::new());
+        let expr = clash_starlark::match_tree! {
+            "Bash" => {
+                "git" => {
+                    "push" => {
+                        "--force" => deny(),
+                        "--force-with-lease" => deny(),
+                    },
+                    "reset" => {
+                        "--hard" => deny(),
+                    },
+                },
+            },
+        };
+        rules.push(Expr::commented("Deny destructive git ops", expr));
     }
 
     // Binary-specific rules
     if !analysis.binaries.is_empty() {
-        let bin_list: Vec<String> = analysis
-            .binaries
-            .iter()
-            .map(|b| format!("\"{}\"", b))
-            .collect();
-        lines.push("            # Observed binaries — sandboxed".to_string());
-        if bin_list.len() == 1 {
-            lines.push(format!(
-                "            match({{\"Bash\": {{{}: allow(sandbox = dev)}}}}),",
-                bin_list[0]
-            ));
+        let bins: Vec<&str> = analysis.binaries.iter().map(|s| s.as_str()).collect();
+        let key: MatchKey = if bins.len() == 1 {
+            bins[0].into()
         } else {
-            lines.push(format!(
-                "            match({{\"Bash\": {{({}): allow(sandbox = dev)}}}}),",
-                bin_list.join(", ")
-            ));
-        }
+            bins.as_slice().into()
+        };
+        let expr = clash_starlark::match_tree! {
+            "Bash" => {
+                key => allow_with_sandbox(Expr::ident("dev")),
+            },
+        };
+        rules.push(Expr::commented("Observed binaries — sandboxed", expr));
     }
 
     // If we saw Bash but no specific binaries, add a generic Bash match rule
@@ -434,25 +427,26 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
         && analysis.binaries.is_empty()
         && analysis.tools.len() < analysis.total_invocations;
     if saw_bash {
-        lines.push(
-            "            # Bash commands observed (binaries unknown) — sandboxed".to_string(),
-        );
-        lines.push("            match({\"Bash\": allow(sandbox = dev)}),".to_string());
+        let expr = clash_starlark::match_tree! {
+            "Bash" => allow_with_sandbox(Expr::ident("dev")),
+        };
+        rules.push(Expr::commented(
+            "Bash commands observed (binaries unknown) — sandboxed",
+            expr,
+        ));
     }
 
-    lines.push("        ],".to_string());
-    lines.push("    )".to_string());
-    lines.push("    return base.update(my_policy)".to_string());
+    let policy_expr = policy(Expr::ident("ask"), rules, Some(Expr::ident("dev")));
+    let body = vec![
+        Stmt::assign("my_policy", policy_expr),
+        Stmt::Return(
+            Expr::ident("base")
+                .method("update", vec![Expr::ident("my_policy")], Vec::<(&str, Expr)>::new()),
+        ),
+    ];
+    stmts.push(main_fn(body));
 
-    lines.join("\n") + "\n"
-}
-
-fn format_tool_list(tools: &[&str]) -> String {
-    tools
-        .iter()
-        .map(|t| format!("\"{}\"", t))
-        .collect::<Vec<_>>()
-        .join(", ")
+    clash_starlark::codegen::serialize(&stmts)
 }
 
 // ---------------------------------------------------------------------------
