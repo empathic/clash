@@ -141,6 +141,15 @@ pub enum PolicyCmd {
         #[arg(long)]
         scope: Option<String>,
     },
+    /// Check policy for multi-agent portability issues
+    ///
+    /// Scans policy rules and warns about agent-specific tool names
+    /// that won't match across all agents. Suggests canonical alternatives.
+    Check {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     // --- Hidden/power-user subcommands ---
     /// Show policy summary: active policy, default effect, rule count
     #[command(hide = true)]
