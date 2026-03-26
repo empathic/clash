@@ -1,0 +1,39 @@
+meta:
+  name: starlark policy — case-insensitive tool names
+  description: Test that tool name matching is case-insensitive
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "tool", "policy", "deny")
+    def main():
+        return policy(default=deny(), rules=[
+            tool("bash").allow(),
+            tool("READ").allow(),
+            tool("Shell").deny(),
+        ])
+
+steps:
+  - name: Lowercase "bash" matches Bash (first match wins)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "ls"
+    expect:
+      decision: allow
+
+  - name: Uppercase "READ" matches Read
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/test.txt
+    expect:
+      decision: allow
+
+  - name: Write still denied by default (no canonical match)
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/test.txt
+      content: hello
+    expect:
+      decision: deny

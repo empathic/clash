@@ -1,0 +1,94 @@
+meta:
+  name: starlark policy — canonical tool names
+  description: Test that canonical names (shell, read, write, etc.) work in policies
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "tool", "policy", "deny")
+    def main():
+        return policy(default=deny(), rules=[
+            tool("shell").allow(),
+            tool("read").allow(),
+            tool("write").allow(),
+            tool("edit").allow(),
+            tool("glob").allow(),
+            tool("grep").allow(),
+            tool("web_fetch").allow(),
+            tool("web_search").allow(),
+        ])
+
+steps:
+  - name: Bash matches canonical "shell"
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "ls"
+    expect:
+      decision: allow
+
+  - name: Read matches canonical "read"
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/test.txt
+    expect:
+      decision: allow
+
+  - name: Write matches canonical "write"
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: /tmp/test.txt
+      content: hello
+    expect:
+      decision: allow
+
+  - name: Edit matches canonical "edit"
+    hook: pre-tool-use
+    tool_name: Edit
+    tool_input:
+      file_path: /tmp/test.txt
+      old_string: foo
+      new_string: bar
+    expect:
+      decision: allow
+
+  - name: Glob matches canonical "glob"
+    hook: pre-tool-use
+    tool_name: Glob
+    tool_input:
+      pattern: "*.txt"
+    expect:
+      decision: allow
+
+  - name: Grep matches canonical "grep"
+    hook: pre-tool-use
+    tool_name: Grep
+    tool_input:
+      pattern: "hello"
+    expect:
+      decision: allow
+
+  - name: WebFetch matches canonical "web_fetch"
+    hook: pre-tool-use
+    tool_name: WebFetch
+    tool_input:
+      url: "https://example.com"
+    expect:
+      decision: allow
+
+  - name: WebSearch matches canonical "web_search"
+    hook: pre-tool-use
+    tool_name: WebSearch
+    tool_input:
+      query: "test"
+    expect:
+      decision: allow
+
+  - name: Unknown tool still denied by default
+    hook: pre-tool-use
+    tool_name: Agent
+    tool_input:
+      prompt: "test"
+    expect:
+      decision: deny
