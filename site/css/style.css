@@ -234,6 +234,18 @@ hr {
   font-weight: 500;
 }
 
+.nav-hamburger {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--shade);
+  cursor: pointer;
+  padding: var(--space-xs);
+}
+.nav-hamburger:hover { color: var(--grass); }
+
+.nav-overflow { display: contents; }
+
 .nav-github { display: flex; align-items: center; color: var(--shade); }
 .nav-github:hover { color: var(--grass); text-decoration: none; }
 
@@ -609,8 +621,30 @@ h4:hover .header-anchor {
     grid-template-columns: 1fr;
   }
 
+  .nav-hamburger { display: flex; align-items: center; }
+
   .nav-links { gap: var(--space-md); }
   .nav-links a { font-size: 0.8rem; }
+
+  .nav-overflow {
+    display: none;
+    position: absolute;
+    top: var(--nav-height);
+    right: 0;
+    flex-direction: column;
+    background: var(--ground);
+    border: 1px solid var(--fence);
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    padding: var(--space-sm) var(--space-lg);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+    gap: 0;
+  }
+
+  .nav.open .nav-overflow { display: flex; }
+
+  .nav-overflow a { padding: var(--space-sm) 0; }
+  .nav-overflow .version-selector { padding: var(--space-sm) 0; }
 
   pre {
     padding: var(--space-sm) var(--space-md);

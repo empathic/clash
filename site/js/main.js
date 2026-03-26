@@ -1,3 +1,22 @@
+// Mobile hamburger menu (toggles .nav-overflow dropdown)
+document.addEventListener("DOMContentLoaded", function () {
+  var nav = document.querySelector(".nav");
+  var hamburger = document.querySelector(".nav-hamburger");
+  if (hamburger) {
+    hamburger.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var isOpen = nav.classList.toggle("open");
+      hamburger.setAttribute("aria-expanded", isOpen);
+    });
+    document.addEventListener("click", function (e) {
+      if (!nav.contains(e.target)) {
+        nav.classList.remove("open");
+        hamburger.setAttribute("aria-expanded", "false");
+      }
+    });
+  }
+});
+
 // Version selector toggle
 document.addEventListener("DOMContentLoaded", function () {
   var selector = document.querySelector(".version-selector");
