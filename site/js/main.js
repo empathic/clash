@@ -1,3 +1,39 @@
+// Theme toggle: system ◒ → light ◑ → dark ◐ → system
+document.addEventListener("DOMContentLoaded", function () {
+  var btn = document.querySelector(".theme-toggle");
+  if (!btn) return;
+  var states = [null, "light", "dark"];
+  var svgs = [
+    '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zM2 8a6 6 0 016-6v12a6 6 0 01-6-6z"/></svg>',
+    '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="3.5"/><path d="M8 0v2M8 14v2M0 8h2M14 8h2M2.3 2.3l1.4 1.4M12.3 12.3l1.4 1.4M13.7 2.3l-1.4 1.4M3.7 12.3l-1.4 1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+    '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M6 1a7 7 0 009 6.7A7 7 0 116 1z"/></svg>'
+  ];
+
+  function current() {
+    var t = localStorage.getItem("theme");
+    return states.indexOf(t) !== -1 ? t : null;
+  }
+
+  function update(theme) {
+    if (theme) {
+      document.documentElement.setAttribute("data-theme", theme);
+      localStorage.setItem("theme", theme);
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+      localStorage.removeItem("theme");
+    }
+    btn.innerHTML = svgs[states.indexOf(theme)];
+  }
+
+  update(current());
+
+  btn.addEventListener("click", function () {
+    var idx = states.indexOf(current());
+    var next = states[(idx + 1) % states.length];
+    update(next);
+  });
+});
+
 // Mobile hamburger menu (toggles .nav-overflow dropdown)
 document.addEventListener("DOMContentLoaded", function () {
   var nav = document.querySelector(".nav");

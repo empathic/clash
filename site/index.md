@@ -10,13 +10,19 @@ description: Write rules for your AI agent. Clash enforces them.
   <p class="hero-subtitle">You define the capabilities. Clash enforces them. Your agent never sees a choice.</p>
 </div>
 
-<hr>
+<div class="divider"><span>Clash for Claude</span></div>
 
 <div class="section">
 
-## The problem
+Claude interrupts us constantly asking whether it's okay to run some command.
+This is why `--dangerously-skip-permissions` is so powerful: we can achieve so
+much more per unit prompt.
 
-Every tool call your agent makes requires a decision. Right now, that decision is yours — every single time.
+Every tool call your agent makes requires a decision. Right now, that decision
+is yours - *every single time* or **not at all**.
+
+Think of Clash as a new `--safely-skip-permissions` flag.  A way to choose _how_
+to run anything safely, not just whether Claude can run it **as *you***.
 
 <div class="cards">
   <div class="card card--red">
@@ -35,15 +41,24 @@ Every tool call your agent makes requires a decision. Right now, that decision i
 
 </div>
 
-<hr>
+<div class="divider"><span>Get Started</span></div>
 
 <div class="section">
 
-## Get started
+## Get started with Clash for Claude
 
+Install:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/empathic/clash/main/install.sh | bash
+```
+
+Initialize:
+```
 clash init
+```
+
+Run w/ Claude:
+```
 claude
 ```
 
@@ -51,7 +66,7 @@ Three commands. One binary, one policy file, full enforcement. See the [Quick St
 
 </div>
 
-<hr>
+<div class="divider"><span>Agent Support</span></div>
 
 <div class="section">
 
