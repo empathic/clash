@@ -87,7 +87,6 @@ const SHELL_BUILTINS: &[&str] = &[
 ];
 
 fn make_sandbox_hook(
-    clash_bin: String,
     policy: Arc<CompiledPolicy>,
     default_sandbox: Option<SandboxPolicy>,
     debug: bool,
@@ -137,8 +136,8 @@ fn make_sandbox_hook(
         };
 
         // Resolve env vars in sandbox paths before serializing.
-        // $HOME and $TMPDIR are process-global; $PWD is resolved by sandbox
-        // exec via its process cwd (which brush sets correctly).
+        // $HOME and $TMPDIR are process-global; $PWD is resolved by
+        // brush's process cwd (which it sets correctly per command).
         let mut resolved = sandbox.clone();
         let resolver = crate::policy::path::PathResolver::from_env();
         for rule in &mut resolved.rules {
@@ -158,24 +157,29 @@ fn make_sandbox_hook(
             }
         }
 
-        let policy_json = match serde_json::to_string(&resolved) {
-            Ok(j) => j,
-            Err(_) => return None,
+        // Compile the sandbox policy to a platform-specific profile and
+        // invoke sandbox-exec directly. This avoids nesting sandbox-exec
+        // (via `clash sandbox exec`) inside an already-sandboxed process,
+        // which macOS seatbelt does not support.
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let profile = match crate::sandbox::compile_sandbox_profile(&resolved, &cwd) {
+            Ok(p) => p,
+            Err(e) => {
+                if debug {
+                    eprintln!("[clash-shell] failed to compile sandbox profile: {e}");
+                }
+                return None;
+            }
         };
 
-        // Don't pass --cwd explicitly; brush sets current_dir on the child
-        // process to the shell's working directory, and sandbox exec defaults
-        // --cwd to "." which resolves via the process cwd.
         let mut new_args = vec![
-            "sandbox".to_string(),
-            "exec".to_string(),
-            "--sandbox".to_string(),
-            policy_json,
+            "-p".to_string(),
+            profile,
             "--".to_string(),
             executable_path.to_string(),
         ];
         new_args.extend(args.iter().cloned());
-        Some((clash_bin.clone(), new_args))
+        Some(("sandbox-exec".to_string(), new_args))
     })
 }
 
@@ -188,11 +192,6 @@ pub fn run_shell(
     debug: bool,
 ) -> Result<()> {
     let cwd = crate::sandbox_cmd::resolve_cwd(&cwd)?;
-    let clash_bin = std::env::current_exe()
-        .context("failed to determine clash executable path")?
-        .to_string_lossy()
-        .to_string();
-
     // Load the policy so we can evaluate it per-command.
     let settings = ClashSettings::load_or_create().context("failed to load clash settings")?;
     let policy = settings
@@ -219,7 +218,7 @@ pub fn run_shell(
         None => None,
     };
 
-    let hook = make_sandbox_hook(clash_bin, Arc::new(policy), default_sandbox, debug);
+    let hook = make_sandbox_hook(Arc::new(policy), default_sandbox, debug);
 
     // Build a tokio runtime for brush's async API.
     let rt = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
@@ -377,40 +376,56 @@ def main():
     }
 
     fn test_hook() -> clash_brush_core::ExternalCommandHook {
-        make_sandbox_hook("/usr/bin/clash".to_string(), test_policy(), None, false)
+        make_sandbox_hook(test_policy(), None, false)
     }
 
     #[test]
-    fn hook_wraps_with_policy_json() {
+    #[cfg(target_os = "macos")]
+    fn hook_wraps_with_sandbox_exec_directly() {
         let hook = test_hook();
         // Brush resolves to full paths; hook should still match policy.
         let result = hook("/usr/bin/git", &["push".to_string()]);
         let (exe, args) = result.unwrap();
-        assert_eq!(exe, "/usr/bin/clash");
-        assert_eq!(args[0], "sandbox");
-        assert_eq!(args[1], "exec");
-        assert_eq!(args[2], "--sandbox");
-        // args[3] should be the sandbox policy JSON
-        let _: serde_json::Value =
-            serde_json::from_str(&args[3]).expect("--sandbox arg should be valid JSON");
-        assert_eq!(args[4], "--");
-        // The actual exec still uses the full path from brush.
-        assert_eq!(args[5], "/usr/bin/git");
-        assert_eq!(args[6], "push");
+        // Should invoke sandbox-exec directly, not clash sandbox exec.
+        assert_eq!(exe, "sandbox-exec");
+        assert_eq!(args[0], "-p");
+        // args[1] is the compiled SBPL profile string
+        assert!(
+            args[1].contains("(version 1)"),
+            "should be a compiled seatbelt profile"
+        );
+        assert_eq!(args[2], "--");
+        assert_eq!(args[3], "/usr/bin/git");
+        assert_eq!(args[4], "push");
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn hook_preserves_args_order() {
         let hook = test_hook();
         let result = hook(
             "/bin/cat",
             &["file1.txt".to_string(), "file2.txt".to_string()],
         );
-        let (_, args) = result.unwrap();
+        let (exe, args) = result.unwrap();
+        assert_eq!(exe, "sandbox-exec");
         let dash_pos = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(args[dash_pos + 1], "/bin/cat");
         assert_eq!(args[dash_pos + 2], "file1.txt");
         assert_eq!(args[dash_pos + 3], "file2.txt");
+    }
+
+    /// On Linux, compile_sandbox_profile returns Err (Landlock is in-process),
+    /// so the hook falls through and returns None — no sandbox-exec wrapping.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn hook_returns_none_on_linux() {
+        let hook = test_hook();
+        let result = hook("/usr/bin/git", &["push".to_string()]);
+        assert!(
+            result.is_none(),
+            "Linux uses Landlock (in-process), not sandbox-exec"
+        );
     }
 
     #[test]
@@ -421,7 +436,7 @@ def main():
     return policy(default = allow(), rules = [])
 "#,
         ));
-        let hook = make_sandbox_hook("/usr/bin/clash".to_string(), policy, None, false);
+        let hook = make_sandbox_hook(policy, None, false);
         // No sandbox → command runs unchanged.
         let result = hook("/usr/bin/git", &["push".to_string()]);
         assert!(result.is_none());

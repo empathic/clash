@@ -30,15 +30,9 @@ clash init [SCOPE] [OPTIONS]
 |----------|-------------|
 | `SCOPE` | Scope to initialize: `user` (global) or `project` (this repo). When omitted, an interactive prompt lets you choose. |
 
-**Options:**
-
-| Flag | Description |
-|------|-------------|
-| `--no-bypass` | Skip setting `bypassPermissions` in Claude Code settings (user scope only) |
-
 **What it does:**
 
-- **`clash init user`** — Creates `~/.clash/policy.star` with a safe default policy, installs the Claude Code plugin, configures Claude Code so clash is the sole permission handler (`bypassPermissions: true` and `permissions.defaultMode: "bypassPermissions"`), and installs the clash status line.
+- **`clash init user`** — Creates `~/.clash/policy.star` with a safe default policy, installs the Claude Code plugin, and installs the clash status line.
 - **`clash init project`** — Creates `.clash/policy.star` in the current repository root with a minimal deny-all policy.
 
 Only one scope is initialized per invocation. When no scope is given, clash explains both options and asks you to choose.
@@ -54,9 +48,6 @@ clash init user
 
 # Create a repo-specific policy
 clash init project
-
-# User-level init without touching Claude Code settings
-clash init user --no-bypass
 ```
 
 ---

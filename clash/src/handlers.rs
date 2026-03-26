@@ -233,25 +233,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
     // Inject clash usage context so Claude understands how to use skills and policies.
     lines.push(clash_session_context().into());
 
-    // Check if user is running without skip-permissions (default mode).
-    let is_skip_permissions = input
-        .permission_mode
-        .as_deref()
-        .is_some_and(|m| m == "dangerously-skip-permissions");
-
-    if is_skip_permissions {
-        lines.push(
-            "NOTE: policy enforcement is DISABLED (--dangerously-skip-permissions). \
-             Filesystem sandboxing is still active for exec rules."
-                .into(),
-        );
-    } else {
-        lines.push(
-            "NOTE: Clash is managing permissions. For full enforcement, run with \
-             --dangerously-skip-permissions so Clash is the sole decision-maker."
-                .into(),
-        );
-    }
+    lines.push("Clash is managing permissions via hooks.".into());
 
     check_sandbox_and_session(&mut lines, input);
 
@@ -383,31 +365,11 @@ mod tests {
     }
 
     #[test]
-    fn test_session_start_recommends_skip_permissions_in_default_mode() {
+    fn test_session_start_reports_managing_permissions() {
         let ctx = session_start_context(&default_session_start_input());
         assert!(
-            ctx.contains("--dangerously-skip-permissions"),
-            "should recommend --dangerously-skip-permissions when not in skip mode, got: {ctx}"
+            ctx.contains("Clash is managing permissions via hooks"),
+            "should report clash is managing permissions, got: {ctx}"
         );
-    }
-
-    #[test]
-    fn test_session_start_no_recommendation_when_skip_permissions() {
-        let mut input = default_session_start_input();
-        input.permission_mode = Some("dangerously-skip-permissions".into());
-        let ctx = session_start_context(&input);
-        assert!(
-            !ctx.contains("NOTE: Clash is managing permissions"),
-            "should NOT recommend when already in skip mode, got: {ctx}"
-        );
-    }
-
-    #[test]
-    fn test_session_start_injects_instructions_when_skip_permissions() {
-        let mut input = default_session_start_input();
-        input.permission_mode = Some("dangerously-skip-permissions".into());
-        let ctx = session_start_context(&input);
-        assert!(ctx.contains("policy enforcement is DISABLED"), "got: {ctx}");
-        assert!(ctx.contains("Filesystem sandboxing"), "got: {ctx}");
     }
 }

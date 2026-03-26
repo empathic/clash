@@ -169,9 +169,6 @@ pub enum Commands {
     /// "project" to create a repo-scoped policy (.clash/policy.star).
     /// When no scope is given, an interactive prompt lets you choose.
     Init {
-        /// Skip setting bypassPermissions in Claude Code settings
-        #[arg(long, default_missing_value = "true", num_args = 0..=1)]
-        no_bypass: Option<bool>,
         /// Scope to initialize: "user" (global) or "project" (this repo)
         #[arg(conflicts_with = "from_trace")]
         scope: Option<String>,

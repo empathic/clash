@@ -20,8 +20,6 @@ enum CheckResult {
 enum OnboardFix {
     /// The clash plugin is not installed in Claude Code.
     InstallPlugin,
-    /// bypassPermissions is not configured.
-    ConfigureBypass,
     /// No policy files exist.
     CreatePolicy,
     /// Status line is not installed (optional enhancement).
@@ -156,7 +154,7 @@ fn run_onboard() -> Result<()> {
     }
 
     // --- Check 2: Plugin installed ---
-    let (plugin_ok, bypass_ok) = check_plugin_and_bypass();
+    let plugin_ok = check_plugin_status();
 
     if plugin_ok {
         println!(
@@ -183,33 +181,7 @@ fn run_onboard() -> Result<()> {
         }
     }
 
-    // --- Check 3: bypassPermissions ---
-    if bypass_ok {
-        println!(
-            "  {} {}: configured",
-            style::green_bold("PASS"),
-            style::bold("bypassPermissions"),
-        );
-        already_ok += 1;
-    } else {
-        println!(
-            "  {} {}: not set",
-            style::red_bold("FAIL"),
-            style::bold("bypassPermissions"),
-        );
-        if offer_fix(OnboardFix::ConfigureBypass)? {
-            ui::progress("Configuring bypassPermissions...");
-            match super::init::set_bypass_permissions() {
-                Ok(()) => fixed += 1,
-                Err(e) => {
-                    warn!(error = %e, "bypassPermissions config failed during onboard");
-                    ui::fail(&format!("Could not configure bypassPermissions: {e}"));
-                }
-            }
-        }
-    }
-
-    // --- Check 4: Policy files ---
+    // --- Check 3: Policy files ---
     let policy_check = check_policy_files();
     policy_check.print("Policy files");
     match &policy_check {
@@ -234,7 +206,7 @@ fn run_onboard() -> Result<()> {
         _ => already_ok += 1,
     }
 
-    // --- Check 5: Status line (optional) ---
+    // --- Check 4: Status line (optional) ---
     let statusline_installed = check_statusline_installed();
     if statusline_installed {
         println!(
@@ -298,7 +270,6 @@ fn run_onboard() -> Result<()> {
 fn offer_fix(fix: OnboardFix) -> Result<bool> {
     let (prompt, default_yes) = match fix {
         OnboardFix::InstallPlugin => ("Install now?", true),
-        OnboardFix::ConfigureBypass => ("Configure now?", true),
         OnboardFix::CreatePolicy => ("Create a starter policy?", true),
         OnboardFix::InstallStatusLine => ("Install status line?", false),
     };
@@ -319,26 +290,20 @@ fn offer_fix(fix: OnboardFix) -> Result<bool> {
     }
 }
 
-/// Inspect Claude Code settings to determine plugin and bypass status as a pair.
-///
-/// Returns `(plugin_installed, bypass_configured)`.
-fn check_plugin_and_bypass() -> (bool, bool) {
+/// Check whether the clash plugin is installed in Claude Code settings.
+fn check_plugin_status() -> bool {
     let claude = claude_settings::ClaudeSettings::new();
     let settings = match claude.read(claude_settings::SettingsLevel::User) {
         Ok(Some(s)) => s,
-        _ => return (false, false),
+        _ => return false,
     };
 
-    let plugin_ok = settings.hooks.as_ref().is_some_and(hooks_reference_clash)
+    settings.hooks.as_ref().is_some_and(hooks_reference_clash)
         || settings
             .enabled_plugins
             .as_ref()
             .and_then(|p| p.get("clash").copied())
-            == Some(true);
-
-    let bypass_ok = settings.bypass_permissions == Some(true);
-
-    (plugin_ok, bypass_ok)
+            == Some(true)
 }
 
 /// Check whether the clash status line is installed in Claude Code settings.
@@ -469,17 +434,7 @@ fn check_plugin_installed() -> CheckResult {
     if let Some(ref hooks) = settings.hooks
         && hooks_reference_clash(hooks)
     {
-        // Also check bypass_permissions
-        return if settings.bypass_permissions == Some(true) {
-            CheckResult::Pass("clash hooks are registered and bypassPermissions is enabled.".into())
-        } else {
-            CheckResult::Warn(
-                "clash hooks are registered but bypassPermissions is not set. \
-                 You may see double permission prompts. \
-                 Fix: run `clash init` or set bypassPermissions in Claude Code settings."
-                    .into(),
-            )
-        };
+        return CheckResult::Pass("clash hooks are registered.".into());
     }
 
     // Hooks not found — check if maybe the plugin is installed via the
@@ -487,15 +442,7 @@ fn check_plugin_installed() -> CheckResult {
     if let Some(ref plugins) = settings.enabled_plugins
         && plugins.get("clash").copied() == Some(true)
     {
-        return if settings.bypass_permissions == Some(true) {
-            CheckResult::Pass("clash plugin is enabled and bypassPermissions is set.".into())
-        } else {
-            CheckResult::Warn(
-                "clash plugin is enabled but bypassPermissions is not set. \
-                 Fix: run `clash init` or set bypassPermissions in Claude Code settings."
-                    .into(),
-            )
-        };
+        return CheckResult::Pass("clash plugin is enabled.".into());
     }
 
     CheckResult::Fail(
@@ -775,10 +722,10 @@ mod tests {
     }
 
     #[test]
-    fn check_plugin_and_bypass_does_not_panic() {
-        let (plugin, bypass) = check_plugin_and_bypass();
+    fn check_plugin_status_does_not_panic() {
+        let plugin = check_plugin_status();
         // Just verify it returns without panicking; values depend on environment
-        let _ = (plugin, bypass);
+        let _ = plugin;
     }
 
     #[test]
