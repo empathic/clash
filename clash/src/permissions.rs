@@ -532,7 +532,10 @@ mod tests {
         let cmd = extract_wrapped_command(&wrapped);
         // Should use `clash shell` (brush) for per-command sandboxing,
         // NOT `clash sandbox exec` (which would nest sandbox-exec).
-        assert!(!cmd.contains("sandbox exec"), "should not nest sandbox-exec: {cmd}");
+        assert!(
+            !cmd.contains("sandbox exec"),
+            "should not nest sandbox-exec: {cmd}"
+        );
         assert!(cmd.contains("shell"));
         assert!(cmd.contains("--cwd"));
         assert!(cmd.contains("-c 'ls -la'"));

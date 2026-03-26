@@ -87,7 +87,6 @@ fn migrate_legacy_caps(path: &Path, raw: String) -> Result<String> {
                     }
                 }
             }
-
         }
     }
 

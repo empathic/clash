@@ -268,9 +268,8 @@ pub fn write_starter_policy() -> Result<std::path::PathBuf> {
 }
 
 fn print_user_summary(actions: &InitActions) {
-    let any_action = actions.policy_created
-        || actions.plugin_installed
-        || actions.statusline_installed;
+    let any_action =
+        actions.policy_created || actions.plugin_installed || actions.statusline_installed;
     if !any_action {
         return;
     }
