@@ -770,15 +770,27 @@ impl CompiledPolicy {
         self.evaluate_ctx(&ctx)
     }
 
-    /// Evaluate this policy with mode context from Claude Code's permission_mode.
+    /// Evaluate this policy with mode and agent context.
     pub fn evaluate_with_mode(
         &self,
         tool_name: &str,
         tool_input: &serde_json::Value,
         mode: Option<&str>,
     ) -> PolicyDecision {
+        self.evaluate_with_context(tool_name, tool_input, mode, None)
+    }
+
+    /// Evaluate this policy with mode and agent context.
+    pub fn evaluate_with_context(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+        mode: Option<&str>,
+        agent_name: Option<&str>,
+    ) -> PolicyDecision {
         let mut ctx = QueryContext::from_tool(tool_name, tool_input);
         ctx.mode = mode.map(|m| m.to_string());
+        ctx.agent_name = agent_name.map(|a| a.to_string());
         self.evaluate_ctx(&ctx)
     }
 

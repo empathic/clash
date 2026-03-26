@@ -1,0 +1,60 @@
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "name": "clash-pre-tool-use",
+            "type": "command",
+            "command": "clash hook --agent gemini pre-tool-use",
+            "timeout": 10000,
+            "description": "Clash policy enforcement — evaluates tool call against active policy"
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "name": "clash-post-tool-use",
+            "type": "command",
+            "command": "clash hook --agent gemini post-tool-use",
+            "timeout": 10000,
+            "description": "Clash post-tool audit — sandbox hints and session policy suggestions"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "clash-session-start",
+            "type": "command",
+            "command": "clash hook --agent gemini session-start",
+            "timeout": 10000,
+            "description": "Clash session initialization — validate policy and inject context"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "clash-stop",
+            "type": "command",
+            "command": "clash hook --agent gemini stop",
+            "timeout": 5000,
+            "description": "Clash session cleanup — sync traces"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -58,10 +58,11 @@ pub fn check_permission(
         }
     };
 
-    let decision = tree.evaluate_with_mode(
+    let decision = tree.evaluate_with_context(
         &input.tool_name,
         &input.tool_input,
         Some(&input.permission_mode),
+        input.agent.as_ref().map(|a| a.to_string()).as_deref(),
     );
     let noun = extract_noun(&input.tool_name, &input.tool_input);
 

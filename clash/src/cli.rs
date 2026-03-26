@@ -18,8 +18,19 @@ pub struct Cli {
     pub command: Commands,
 }
 
+/// Top-level hook command with shared `--agent` flag.
+#[derive(Parser, Debug)]
+pub struct HookCmd {
+    /// Which coding agent is invoking the hook (default: claude)
+    #[arg(long, default_value = "claude")]
+    pub agent: crate::agents::AgentKind,
+
+    #[command(subcommand)]
+    pub subcommand: HookSubcommand,
+}
+
 #[derive(Subcommand, Debug)]
-pub enum HooksCmd {
+pub enum HookSubcommand {
     /// Handle PreToolUse hook - called before a tool is executed
     #[command(name = "pre-tool-use")]
     PreToolUse,
@@ -32,7 +43,7 @@ pub enum HooksCmd {
     #[command(name = "permission-request")]
     PermissionRequest,
 
-    /// Handle SessionStart hook - called when a Claude Code session begins
+    /// Handle SessionStart hook - called when a coding agent session begins
     #[command(name = "session-start")]
     SessionStart,
 
@@ -267,8 +278,8 @@ pub enum Commands {
 
     // --- Hidden/internal commands ---
     /// Agent hook callbacks
-    #[command(subcommand, hide = true)]
-    Hook(HooksCmd),
+    #[command(hide = true)]
+    Hook(HookCmd),
 
     /// Launch Claude Code with clash managing hooks and sandbox enforcement
     #[command(hide = true)]

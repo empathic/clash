@@ -1,7 +1,11 @@
+use std::io::Write;
+
 use anyhow::{Context, Result};
 use tracing::{Level, info, instrument};
 
-use crate::cli::HooksCmd;
+use crate::agents::protocol::{HookProtocol, get_protocol};
+use crate::agents::AgentKind;
+use crate::cli::{HookCmd, HookSubcommand};
 use crate::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput, is_interactive_tool};
 use crate::permissions::check_permission;
 use crate::policy::Effect;
@@ -11,12 +15,12 @@ use crate::trace;
 
 use claude_settings::PermissionRule;
 
-impl HooksCmd {
+impl HookCmd {
     /// Handle hook when clash is disabled — drain stdin and return pass-through.
     fn run_disabled(&self) -> Result<()> {
         info!("Clash is disabled (CLASH_DISABLE), returning pass-through");
-        let output = match self {
-            Self::SessionStart => {
+        let output = match self.subcommand {
+            HookSubcommand::SessionStart => {
                 // Still read stdin to avoid broken pipe.
                 let _ = crate::hooks::SessionStartHookInput::from_reader(std::io::stdin().lock());
                 HookOutput::session_start(Some(
@@ -46,9 +50,9 @@ impl HooksCmd {
 
         let passthrough = crate::settings::is_passthrough();
 
-        let output = match self {
-            Self::PreToolUse => {
-                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())
+        let output = match self.subcommand {
+            HookSubcommand::PreToolUse => {
+                let input = self.parse_tool_use_input()
                     .context("parsing PreToolUse hook input from stdin — expected JSON with tool_name and tool_input fields")?;
 
                 if passthrough {
@@ -124,8 +128,8 @@ impl HooksCmd {
                     }
                 }
             }
-            Self::PostToolUse => {
-                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())
+            HookSubcommand::PostToolUse => {
+                let input = self.parse_tool_use_input()
                     .context("parsing PostToolUse hook input from stdin")?;
 
                 // Check if this tool use was previously "ask"ed and the user
@@ -182,8 +186,8 @@ impl HooksCmd {
 
                 HookOutput::post_tool_use(context)
             }
-            Self::PermissionRequest => {
-                let input = ToolUseHookInput::from_reader(std::io::stdin().lock())
+            HookSubcommand::PermissionRequest => {
+                let input = self.parse_tool_use_input()
                     .context("parsing PermissionRequest hook input from stdin")?;
                 if passthrough {
                     info!(
@@ -200,13 +204,13 @@ impl HooksCmd {
                     crate::handlers::handle_permission_request(&input, &settings)?
                 }
             }
-            Self::SessionStart => {
+            HookSubcommand::SessionStart => {
                 let input =
                     crate::hooks::SessionStartHookInput::from_reader(std::io::stdin().lock())
                         .context("parsing SessionStart hook input from stdin")?;
                 crate::handlers::handle_session_start(&input)?
             }
-            Self::Stop => {
+            HookSubcommand::Stop => {
                 // Read stdin to avoid broken pipe, extract session_id.
                 let input = crate::hooks::StopHookInput::from_reader(std::io::stdin().lock())
                     .context("parsing Stop hook input from stdin")?;
@@ -220,10 +224,33 @@ impl HooksCmd {
             }
         };
 
-        output
-            .write_stdout()
-            .context("serializing hook response to stdout")?;
+        // For Claude, write the HookOutput directly (existing format).
+        // For other agents, convert the decision to their protocol format.
+        if self.agent == AgentKind::Claude {
+            output
+                .write_stdout()
+                .context("serializing hook response to stdout")?;
+        } else {
+            let protocol = get_protocol(self.agent);
+            let json = hook_output_to_protocol(&*protocol, &output);
+            serde_json::to_writer(std::io::stdout().lock(), &json)
+                .context("serializing hook response to stdout")?;
+            writeln!(std::io::stdout().lock())?;
+        }
         Ok(())
+    }
+
+    /// Parse tool-use input from stdin, using the agent's protocol for non-Claude agents.
+    fn parse_tool_use_input(&self) -> Result<ToolUseHookInput> {
+        if self.agent == AgentKind::Claude {
+            let mut input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
+            input.agent = Some(AgentKind::Claude);
+            Ok(input)
+        } else {
+            let protocol = get_protocol(self.agent);
+            let raw: serde_json::Value = serde_json::from_reader(std::io::stdin().lock())?;
+            protocol.parse_tool_use(&raw)
+        }
     }
 }
 
@@ -245,4 +272,40 @@ fn is_ask_decision(output: &HookOutput) -> bool {
 
 fn is_deny_decision(output: &HookOutput) -> bool {
     matches!(extract_effect(output), Some(Effect::Deny))
+}
+
+/// Convert a Claude-format HookOutput into the agent's protocol format.
+fn hook_output_to_protocol(protocol: &dyn HookProtocol, output: &HookOutput) -> serde_json::Value {
+    let (reason, context, updated_input) = match &output.hook_specific_output {
+        Some(HookSpecificOutput::PreToolUse(pre)) => (
+            pre.permission_decision_reason.as_deref(),
+            pre.additional_context.as_deref(),
+            pre.updated_input.clone(),
+        ),
+        Some(HookSpecificOutput::SessionStart(ss)) => {
+            return protocol.format_session_start(ss.additional_context.as_deref());
+        }
+        Some(HookSpecificOutput::PostToolUse(pt)) => {
+            // PostToolUse is advisory — just continue
+            return protocol.format_allow(
+                Some("post-tool-use"),
+                pt.additional_context.as_deref(),
+                None,
+            );
+        }
+        _ => (None, None, None),
+    };
+
+    match extract_effect(output) {
+        Some(Effect::Allow) => protocol.format_allow(reason, context, updated_input),
+        Some(Effect::Deny) => protocol.format_deny(
+            reason.unwrap_or("policy: denied"),
+            context,
+        ),
+        Some(Effect::Ask) => protocol.format_ask(reason, context),
+        None => {
+            // No decision (e.g., continue_execution) — allow passthrough
+            protocol.format_allow(None, None, None)
+        }
+    }
 }
