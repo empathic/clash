@@ -57,6 +57,23 @@ match({"Bash": {"git": {
 }}})
 ```
 
+#### Typed match keys: `Mode()` and `Tool()`
+
+Use `Mode()` to apply different rules based on the agent's current permission mode (e.g. plan mode vs code mode). Use `Tool()` as an explicit alternative to raw strings for tool names:
+
+```python
+load("@clash//std.star", "match", "allow", "deny", "Mode", "Tool")
+
+match({
+    Mode("plan"): {
+        Tool("Read"): allow(),
+        Tool("ExitPlanMode"): allow(),
+    },
+    Tool("Bash"): {"git": allow()},
+    "WebSearch": deny(),
+})
+```
+
 ### Fs — file operations
 
 ```python
@@ -425,6 +442,7 @@ What to extract from the query context for pattern matching.
 "tool_name"
 "hook_type"
 "agent_name"
+"mode"
 { "positional_arg": 0 }
 "has_arg"
 { "named_arg": "file_path" }
@@ -436,6 +454,7 @@ What to extract from the query context for pattern matching.
 | Tool name | `"tool_name"` | The agent tool being invoked (e.g. "Bash", "Read") |
 | Hook type | `"hook_type"` | The hook event type |
 | Agent name | `"agent_name"` | The agent identifier |
+| Mode | `"mode"` | The agent's current permission mode (e.g. "plan", "code") |
 | Positional arg | `{ "positional_arg": N }` | Nth positional argument (0-indexed) |
 | Has arg | `"has_arg"` | True if any positional arg matches the pattern |
 | Named arg | `{ "named_arg": "key" }` | Value of a named argument |

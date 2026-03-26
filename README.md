@@ -87,18 +87,20 @@ Clash supports three policy levels, each automatically included and evaluated in
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "deny", "ask")
+load("@clash//std.star", "match", "policy", "sandbox", "cwd", "allow", "deny", "ask")
 
 def main():
     cwd_access = sandbox(
+        name = "cwd_access",
         default = deny(),
         fs = [cwd(follow_worktrees = True).allow(read = True, write = True)],
     )
     return policy(
         default = ask(),
         rules = [
-            exe("cargo").sandbox(cwd_access).allow(),
-            exe("git").sandbox(cwd_access).allow(),
+            match({"Bash": {
+                ("cargo", "git"): allow(sandbox = cwd_access),
+            }}),
         ],
     )
 ```
@@ -110,14 +112,15 @@ def main():
 {
   "schema_version": 5,
   "default_effect": "ask",
-  "sandboxes": {},
+  "sandboxes": { "cwd_access": { "name": "cwd_access", "default": ["execute"], "rules": [...], "network": "deny" } },
   "tree": [
     { "condition": { "observe": "tool_name", "pattern": { "literal": { "literal": "Bash" } },
         "children": [
-          { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "cargo" } },
-              "children": [{ "decision": { "allow": null } }] } },
-          { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "literal": { "literal": "git" } },
-              "children": [{ "decision": { "allow": null } }] } }
+          { "condition": { "observe": { "positional_arg": 0 }, "pattern": { "any_of": [
+                { "literal": { "literal": "cargo" } },
+                { "literal": { "literal": "git" } }
+              ] },
+              "children": [{ "decision": { "allow": "cwd_access" } }] } }
         ] } }
   ]
 }
@@ -137,14 +140,21 @@ Starlark replaces JSON's named policy blocks and `include` with standard `load()
 
 ```python
 load("@clash//rust.star", "rust_sandbox")
-load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "deny")
+load("@clash//std.star", "match", "policy", "sandbox", "cwd", "allow", "deny")
 
 def main():
+    git_sandbox = sandbox(
+        name = "git",
+        default = deny(),
+        fs = [cwd().allow(read = True)],
+    )
     return policy(
         default = deny(),
         rules = [
-            exe(["rustc", "cargo"]).sandbox(rust_sandbox).allow(),
-            exe("git").sandbox(sandbox(default = deny(), fs = [cwd().allow(read = True)])).allow(),
+            match({"Bash": {
+                ("rustc", "cargo"): allow(sandbox = rust_sandbox),
+                "git": allow(sandbox = git_sandbox),
+            }}),
         ],
     )
 ```
@@ -156,10 +166,11 @@ The `@clash//` prefix loads from the built-in standard library, which includes s
 Exec rules can carry sandbox constraints that clash compiles into OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS):
 
 ```python
-load("@clash//std.star", "exe", "policy", "sandbox", "cwd", "path", "tempdir", "allow", "deny")
+load("@clash//std.star", "match", "policy", "sandbox", "cwd", "path", "tempdir", "allow", "deny")
 
 def main():
     cargo_box = sandbox(
+        name = "cargo",
         default = deny(),
         fs = [
             cwd().allow(read = True),
@@ -168,7 +179,9 @@ def main():
         ],
         net = allow(),
     )
-    return policy(default = deny(), rules = [exe("cargo").sandbox(cargo_box).allow()])
+    return policy(default = deny(), rules = [
+        match({"Bash": {"cargo": allow(sandbox = cargo_box)}}),
+    ])
 ```
 
 Even if a command is allowed by policy, the sandbox ensures it can only access the paths you specify.
