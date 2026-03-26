@@ -197,6 +197,32 @@ pub fn canonical_to_internal(clash_name: &str) -> Option<&'static str> {
         .map(|a| a.internal)
 }
 
+/// Resolve any tool name to its internal form.
+///
+/// Accepts canonical names ("shell"), internal names ("Bash"), or any
+/// agent-native name ("run_shell_command"). Case-insensitive.
+/// Returns the internal name if found, or None if unrecognized.
+pub fn resolve_any_to_internal(name: &str) -> Option<&'static str> {
+    let lower = name.to_lowercase();
+    for alias in TOOL_ALIASES {
+        // Match canonical name
+        if alias.canonical.to_lowercase() == lower {
+            return Some(alias.internal);
+        }
+        // Match internal name
+        if alias.internal.to_lowercase() == lower {
+            return Some(alias.internal);
+        }
+        // Match any agent-native name
+        for &(_, agent_name) in alias.agent_names {
+            if agent_name.to_lowercase() == lower {
+                return Some(alias.internal);
+            }
+        }
+    }
+    None
+}
+
 /// Given an internal name (e.g. "Bash"), return the Clash canonical name (e.g. "shell").
 ///
 /// Case-insensitive.
@@ -299,6 +325,31 @@ mod tests {
             Some("fs_read")
         );
         assert_eq!(internal_to_agent(AgentKind::Codex, "Glob"), None);
+    }
+
+    #[test]
+    fn resolve_any_canonical() {
+        assert_eq!(resolve_any_to_internal("shell"), Some("Bash"));
+        assert_eq!(resolve_any_to_internal("read"), Some("Read"));
+    }
+
+    #[test]
+    fn resolve_any_internal() {
+        assert_eq!(resolve_any_to_internal("Bash"), Some("Bash"));
+        assert_eq!(resolve_any_to_internal("bash"), Some("Bash"));
+        assert_eq!(resolve_any_to_internal("BASH"), Some("Bash"));
+    }
+
+    #[test]
+    fn resolve_any_agent_native() {
+        assert_eq!(resolve_any_to_internal("run_shell_command"), Some("Bash"));
+        assert_eq!(resolve_any_to_internal("execute_bash"), Some("Bash"));
+        assert_eq!(resolve_any_to_internal("fs_read"), Some("Read"));
+    }
+
+    #[test]
+    fn resolve_any_unknown() {
+        assert_eq!(resolve_any_to_internal("CustomTool"), None);
     }
 
     #[test]

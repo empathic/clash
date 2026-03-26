@@ -553,7 +553,12 @@ fn build_rule_node(
     }
     match (tool.as_deref(), bin.as_deref()) {
         (_, Some(bin_name)) => Ok(manifest_edit::build_exec_rule(bin_name, &[], decision)),
-        (Some(tool_name), None) => Ok(manifest_edit::build_tool_rule(tool_name, decision)),
+        (Some(tool_name), None) => {
+            // Resolve canonical/case-insensitive names: "shell" → "Bash", "bash" → "Bash", etc.
+            let resolved = crate::agents::resolve_any_to_internal(tool_name)
+                .unwrap_or(tool_name);
+            Ok(manifest_edit::build_tool_rule(resolved, decision))
+        }
         (None, None) => anyhow::bail!("provide a command, --tool, or --bin"),
     }
 }
