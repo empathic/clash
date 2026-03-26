@@ -76,14 +76,24 @@ match({
 
 ### Fs — file operations
 
+File access for agent tools is controlled via sandboxes. Use `match()` to attach a sandbox to tool rules:
+
 ```python
-cwd().allow(read = True)                          # read under working directory
-cwd().allow(read = True, write = True)             # read + write under cwd
-cwd(follow_worktrees = True).allow(read = True)    # git worktree-aware
-home().child(".ssh").allow(read = True)             # read under ~/.ssh
+load("@clash//std.star", "allow", "deny", "match", "sandbox", "subpath")
+
+project_sandbox = sandbox(
+    default = deny(),
+    fs = {
+        subpath("$PWD", follow_worktrees = True): allow("rwc"),  # project dir, worktree-aware
+        "$HOME/.ssh": allow("r"),                                  # read-only ~/.ssh
+    },
+)
+
+match({("Read", "Glob", "Grep"): allow(sandbox = project_sandbox)})
+match({("Write", "Edit"): allow(sandbox = project_sandbox)})
 ```
 
-The fs domain maps to agent tools: `Read` / `Glob` / `Grep` → `fs read`, `Write` / `Edit` → `fs write`.
+The `fs` dict in a sandbox maps path strings (or `subpath()` for worktree support) to capabilities. The fs domain maps to agent tools: `Read` / `Glob` / `Grep` → `fs read`, `Write` / `Edit` → `fs write`.
 
 ### Net — network access
 
@@ -97,11 +107,12 @@ The net domain maps to: `WebFetch` → `net` with the URL's domain, `WebSearch` 
 ### Tool — agent tools
 
 ```python
-tool("WebSearch").deny()
-tool(["Read", "Glob", "Grep"]).allow()
+match({"WebSearch": deny()})
+match({("Read", "Glob", "Grep"): allow()})
+match({("Skill", "Agent"): allow()})
 ```
 
-The tool domain matches agent tools by name. Use this for tools that don't map to exec/fs/net capabilities (e.g., `Skill`, `Agent`) or when you want to control a tool directly.
+Use `match()` to control agent tools by name. This works for any tool, including those that don't map to exec/fs/net capabilities (e.g., `Skill`, `Agent`).
 
 ---
 
@@ -197,12 +208,17 @@ safe_git_rules = [
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "allow", "deny", "match", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "domains", "match", "policy", "sandbox", "subpath")
 load("safe_git.star", "safe_git_rules")
 
 def main():
+    project_sandbox = sandbox(
+        default = deny(),
+        fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
+    )
+
     return policy(default = deny(), rules = [
-        cwd(follow_worktrees = True).allow(read = True, write = True),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
         *safe_git_rules,
         domains({"github.com": allow(), "crates.io": allow()}),
     ])
@@ -237,11 +253,16 @@ The `update()` method combines two policies. In `a.update(b)`, `b`'s default eff
 
 ```python
 load("@clash//builtin.star", "base")
-load("@clash//std.star", "allow", "deny", "match", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "domains", "match", "policy", "sandbox", "subpath")
 
 def main():
+    project_sandbox = sandbox(
+        default = deny(),
+        fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
+    )
+
     my_policy = policy(default = deny(), rules = [
-        cwd().allow(read = True, write = True),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
         match({"Bash": {"git": allow()}}),
         domains({"github.com": allow()}),
     ])
@@ -268,12 +289,12 @@ Allowed exec rules can carry a sandbox that constrains what the spawned process 
 In Starlark, use the `sandbox()` builder and pass it to `allow()` / `deny()` / `ask()` via the `sandbox` keyword:
 
 ```python
-load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "subpath")
 
 def main():
     cargo_env = sandbox(
         default = deny(),
-        fs = [cwd().allow(read = True, write = True)],
+        fs = {"$PWD": allow("rwc")},
         net = allow(),
     )
     return policy(default = deny(), rules = [
@@ -299,22 +320,32 @@ Sandbox restrictions on **filesystem and network access** are inherited by all c
 ### Conservative (untrusted projects)
 
 ```python
-load("@clash//std.star", "deny", "policy", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "subpath")
 
 def main():
+    readonly_sandbox = sandbox(
+        default = deny(),
+        fs = {subpath("$PWD", follow_worktrees = True): allow("r")},
+    )
+
     return policy(default = deny(), rules = [
-        cwd().allow(read = True),
+        match({("Read", "Glob", "Grep"): allow(sandbox = readonly_sandbox)}),
     ])
 ```
 
 ### Developer-friendly
 
 ```python
-load("@clash//std.star", "allow", "ask", "deny", "match", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "ask", "deny", "domains", "match", "policy", "sandbox", "subpath")
 
 def main():
+    project_sandbox = sandbox(
+        default = deny(),
+        fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
+    )
+
     return policy(default = ask(), rules = [
-        cwd(follow_worktrees = True).allow(read = True, write = True),
+        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
         match({"Bash": {
             ("cargo", "npm"): allow(),
             "git": {
@@ -351,25 +382,29 @@ def main():
 ### Sandboxed build tools
 
 ```python
-load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "domains", "match", "policy", "sandbox", "subpath")
 
 def main():
     cargo_env = sandbox(
         default = deny(),
-        fs = [cwd().allow(read = True, write = True)],
+        fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
         net = allow(),
     )
     npm_env = sandbox(
         default = deny(),
-        fs = [cwd().allow(read = True, write = True)],
+        fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
         net = [domains({"registry.npmjs.org": allow()})],
     )
+    readonly_sandbox = sandbox(
+        default = deny(),
+        fs = {subpath("$PWD", follow_worktrees = True): allow("r")},
+    )
     return policy(default = deny(), rules = [
+        match({("Read", "Glob", "Grep"): allow(sandbox = readonly_sandbox)}),
         match({"Bash": {
             "cargo": allow(sandbox = cargo_env),
             "npm": allow(sandbox = npm_env),
         }}),
-        cwd().allow(read = True),
     ])
 ```
 

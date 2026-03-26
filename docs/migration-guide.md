@@ -15,7 +15,7 @@ In v0.3.x, policies declared rules inside fixed capability domains using s-expre
 
 In v0.4.0, the policy engine is a **match tree** — a trie of patterns that match against properties of each tool invocation (tool name, arguments, input fields). When a path through the tree reaches a leaf, it produces a decision (allow, deny, or ask) and optionally attaches a **sandbox** that constrains what the spawned process can access at the kernel level.
 
-The Starlark DSL provides builders like `exe()`, `cwd()`, and `domains()` that compile down to match tree nodes. These are ergonomic sugar — under the hood, every rule is a chain of "observe this value, match it against this pattern, then continue or decide."
+The Starlark DSL provides `match()` and `domains()` that compile down to match tree nodes. Under the hood, every rule is a chain of "observe this value, match it against this pattern, then continue or decide."
 
 | | v0.3.x (s-expressions) | v0.4.0 (Starlark) |
 |---|---|---|
@@ -51,12 +51,12 @@ Or create `~/.clash/policy.star` manually — see the examples below.
 
 ```python
 # v0.4.0
-load("@clash//std.star", "allow", "deny", "exe", "policy")
+load("@clash//std.star", "allow", "deny", "match", "policy")
 
 def main():
     return policy(default = deny(), rules = [
-        exe("git", args = ["push"]).deny(),
-        exe("git").allow(),
+        match({"Bash": {"git": {"push": deny()}}}),
+        match({"Bash": {"git": allow()}}),
     ])
 ```
 
@@ -66,21 +66,21 @@ Named policy blocks (`(policy "main" ...)`) are replaced by a single `main()` fu
 
 | S-expression | Starlark |
 |---|---|
-| `(allow (exec "git" *))` | `exe("git").allow()` |
-| `(deny (exec "git" "push" *))` | `exe("git", args = ["push"]).deny()` |
-| `(allow (exec "cargo" "test" *))` | `exe("cargo", args = ["test"]).allow()` |
+| `(allow (exec "git" *))` | `match({"Bash": {"git": allow()}})` |
+| `(deny (exec "git" "push" *))` | `match({"Bash": {"git": {"push": deny()}}})` |
+| `(allow (exec "cargo" "test" *))` | `match({"Bash": {"cargo": {"test": allow()}}})` |
 
-The `exe()` builder compiles to match tree nodes that observe the tool name (must be `Bash`) and then pattern-match against positional arguments extracted from the command string.
+`match()` compiles to match tree nodes that observe the tool name (must be `Bash`) and then pattern-match against positional arguments extracted from the command string.
 
 ### Filesystem rules
 
 | S-expression | Starlark |
 |---|---|
-| `(allow (fs read (subpath "/project")))` | `cwd().allow(read = True)` |
-| `(allow (fs (or read write) (subpath ".")))` | `cwd().allow(read = True, write = True)` |
-| `(allow (fs read (subpath "$HOME/.ssh")))` | `home().child(".ssh").allow(read = True)` |
+| `(allow (fs read (subpath "/project")))` | `match({"Read": allow()})`, `match({"Glob": allow()})`, `match({"Grep": allow()})` |
+| `(allow (fs (or read write) (subpath ".")))` | `match({("Read", "Write", "Edit", "Glob", "Grep"): allow()})` |
+| `(allow (fs read (subpath "$HOME/.ssh")))` | `match({"Bash": {"ssh": allow(sandbox=sandbox(fs={"$HOME/.ssh": allow("r")}))}})` |
 
-The `cwd()` and `home()` builders compile to match tree nodes that observe tool names (`Read`, `Write`, `Edit`, `Glob`, `Grep`) and match the file path argument against a subpath pattern.
+`match()` matches agent tools by name. For path-scoped access, attach a `sandbox(fs=...)` to the `allow()` in the match rule. Working-directory access is expressed as `sandbox(fs={"$PWD": allow("r")})`.
 
 ### Network rules
 
@@ -104,14 +104,14 @@ The `cwd()` and `home()` builders compile to match tree nodes that observe tool 
 
 ```python
 # v0.4.0
-load("@clash//std.star", "allow", "deny", "exe", "policy", "cwd", "domains")
+load("@clash//std.star", "allow", "deny", "match", "policy", "domains")
 
 def main():
     return policy(default = deny(), rules = [
-        exe("git", args = ["push"]).deny(),
-        exe("git").allow(),
-        exe("cargo").allow(),
-        cwd().allow(read = True),
+        match({"Bash": {"git": {"push": deny()}}}),
+        match({"Bash": {"git": allow()}}),
+        match({"Bash": {"cargo": allow()}}),
+        match({("Read", "Glob", "Grep"): allow()}),
         domains({"github.com": allow()}),
     ])
 ```
@@ -124,10 +124,10 @@ Claude Code's built-in format (used before Clash, or in v0.1.x with Clash) used 
 
 | Simple format | Starlark |
 |---|---|
-| `"Bash(git:*)"` in allow | `exe("git").allow()` |
-| `"Bash(rm:*)"` in deny | `exe("rm").deny()` |
-| `"Read(*)"` in allow | `cwd().allow(read = True)` |
-| `"Read(.env)"` in deny | Use `default = deny()` and scope `cwd()` to your project |
+| `"Bash(git:*)"` in allow | `match({"Bash": {"git": allow()}})` |
+| `"Bash(rm:*)"` in deny | `match({"Bash": {"rm": deny()}})` |
+| `"Read(*)"` in allow | `match({("Read", "Glob", "Grep"): allow()})` |
+| `"Read(.env)"` in deny | Use `default = deny()` — only explicitly allowed tools can read files |
 
 ### Full example
 
@@ -142,17 +142,17 @@ Claude Code's built-in format (used before Clash, or in v0.1.x with Clash) used 
 
 ```python
 # v0.4.0
-load("@clash//std.star", "deny", "exe", "policy", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy")
 
 def main():
     return policy(default = deny(), rules = [
-        exe("rm").deny(),
-        exe("git").allow(),
-        cwd().allow(read = True),
+        match({"Bash": {"rm": deny()}}),
+        match({"Bash": {"git": allow()}}),
+        match({("Read", "Glob", "Grep"): allow()}),
     ])
 ```
 
-The `.env` deny is handled naturally by `default = deny()` — only the working directory is readable.
+The `.env` deny is handled naturally by `default = deny()` — only explicitly allowed tools can read files.
 
 ## Migrating from YAML profiles
 
@@ -177,18 +177,18 @@ profiles:
 
 ```python
 # v0.4.0
-load("@clash//std.star", "deny", "exe", "policy", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy")
 
 readonly_rules = [
-    cwd().allow(read = True),
+    match({("Read", "Glob", "Grep"): allow()}),
 ]
 
 def main():
     return policy(default = deny(), rules = [
         *readonly_rules,
-        exe("git", args = ["push", "--force"]).deny(),
-        exe("git").allow(),
-        exe("rm").deny(),
+        match({"Bash": {"git": {"push": {"--force": deny()}}}}),
+        match({"Bash": {"git": allow()}}),
+        match({"Bash": {"rm": deny()}}),
     ])
 ```
 
@@ -203,9 +203,9 @@ load("readonly.star", "readonly_rules")
 YAML used `args: ["!--force"]` to forbid specific flags. In Starlark, express this as a deny rule for the specific argument placed before the allow:
 
 ```python
-exe("git", args = ["push", "--force"]).deny()
-exe("git", args = ["reset", "--hard"]).deny()
-exe("git").allow()
+match({"Bash": {"git": {"push": {"--force": deny()}}}})
+match({"Bash": {"git": {"reset": {"--hard": deny()}}}})
+match({"Bash": {"git": allow()}})
 ```
 
 ### URL constraints
@@ -226,8 +226,8 @@ domains({"github.com": allow(), "evil.com": deny()})
 ## Key differences to remember
 
 1. **First-match, not specificity.** In v0.3.x, more-specific rules won regardless of order. In v0.4.0, the first matching rule wins — order your rules deliberately.
-2. **Match tree, not capability domains.** The Starlark builders (`exe()`, `cwd()`, `domains()`) are sugar over a general-purpose match tree. Under the hood, rules pattern-match on observable properties of tool invocations (tool name, arguments, file paths, URLs).
-3. **Sandboxes are new.** You can attach kernel-enforced filesystem and network constraints to any exec rule — see the [Policy Writing Guide](policy-guide.md#sandbox-policies).
+2. **Match tree, not capability domains.** `match()` and `domains()` compile down to a general-purpose match tree. Under the hood, rules pattern-match on observable properties of tool invocations (tool name, arguments, file paths, URLs).
+3. **Sandboxes are new.** You can attach kernel-enforced filesystem and network constraints to any exec rule via `allow(sandbox=...)` — see the [Policy Writing Guide](policy-guide.md#sandbox-policies).
 4. **No profiles or named policies.** Use Starlark variables, functions, and `load()` imports for composition.
 5. **Validate after migrating.** Run `clash policy validate` to catch errors before they block your session.
 

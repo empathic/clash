@@ -419,8 +419,9 @@ def main():
                 Stmt::load(&format!("@clash//{module}"), &[&sandbox_name]),
                 Stmt::load("@clash//std.star", &["allow", "deny", "match", "policy"]),
                 Stmt::Blank,
-                Stmt::def("main", vec![
-                    Stmt::Return(policy(
+                Stmt::def(
+                    "main",
+                    vec![Stmt::Return(policy(
                         deny(),
                         vec![crate::match_tree! {
                             "Bash" => {
@@ -428,8 +429,8 @@ def main():
                             },
                         }],
                         None,
-                    )),
-                ]),
+                    ))],
+                ),
             ]);
             let result = evaluate(&source, "test.star", &PathBuf::from("."))
                 .unwrap_or_else(|e| panic!("failed to load @clash//{module}: {e}"));

@@ -64,7 +64,11 @@ pub fn tool(names: &[&str]) -> Expr {
 /// `tool(["a"], doc="reason")` — tool rule with documentation.
 pub fn tool_doc(names: &[&str], doc: &str) -> Expr {
     let list = names.iter().map(|n| Expr::string(*n)).collect::<Vec<_>>();
-    Expr::call_kwargs("tool", vec![Expr::list(list)], vec![("doc", Expr::string(doc))])
+    Expr::call_kwargs(
+        "tool",
+        vec![Expr::list(list)],
+        vec![("doc", Expr::string(doc))],
+    )
 }
 
 // ---------------------------------------------------------------------------

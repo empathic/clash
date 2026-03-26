@@ -89,22 +89,25 @@ fn run_init_quick() -> Result<()> {
         clash_starlark::codegen::serialize(&[
             load_std(&["match", "tool", "policy", "allow", "ask"]),
             Stmt::Blank,
-            Stmt::def("main", vec![Stmt::Return(policy(
-                ask(),
-                vec![
-                    clash_starlark::match_tree! {
-                        "Bash" => {
-                            ("git", "cargo", "npm", "npx", "node", "bun", "python", "pip", "uv") => allow(),
+            Stmt::def(
+                "main",
+                vec![Stmt::Return(policy(
+                    ask(),
+                    vec![
+                        clash_starlark::match_tree! {
+                            "Bash" => {
+                                ("git", "cargo", "npm", "npx", "node", "bun", "python", "pip", "uv") => allow(),
+                            },
                         },
-                    },
-                    tool(&["Read"]).allow(),
-                    tool(&["Write"]).allow(),
-                    tool(&["Edit"]).allow(),
-                    tool(&["Glob"]).allow(),
-                    tool(&["Grep"]).allow(),
-                ],
-                None,
-            ))]),
+                        tool(&["Read"]).allow(),
+                        tool(&["Write"]).allow(),
+                        tool(&["Edit"]).allow(),
+                        tool(&["Glob"]).allow(),
+                        tool(&["Grep"]).allow(),
+                    ],
+                    None,
+                ))],
+            ),
         ])
     };
 

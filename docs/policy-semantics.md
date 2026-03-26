@@ -68,12 +68,12 @@ This means **order matters**. Put more specific rules before broader ones:
 
 ```python
 # Correct: deny matches git push first, allow catches everything else
-exe("git", args = ["push"]).deny()
-exe("git").allow()
+match({"Bash": {"git": {"push": deny()}}})
+match({"Bash": {"git": allow()}})
 
 # Wrong: allow matches git push first, deny never fires
-exe("git").allow()
-exe("git", args = ["push"]).deny()
+match({"Bash": {"git": allow()}})
+match({"Bash": {"git": {"push": deny()}}})
 ```
 
 There is no automatic sorting or conflict detection — the policy author controls evaluation order directly.
@@ -138,9 +138,8 @@ Sandbox definitions are declared at the top level of the policy and referenced b
 
 ```python
 policy(
-    sandboxes = [cwd_sb],
     rules = [
-        exe("cargo").allow(sandbox="cwd_access"),
+        match({"Bash": {"cargo": allow(sandbox = cwd_sb)}}),
     ],
 )
 ```
@@ -184,8 +183,8 @@ The deny-overrides principle applies **across capability domains**: if a request
 Within a single domain, **first-match wins** — the policy author controls precedence through rule ordering. To express "deny everything except X", put the allow rule before the deny rule:
 
 ```python
-# Allow writes under CWD, deny writes everywhere else
-cwd(write = allow)
+# Allow reads, deny everything else
+match({("Read", "Glob", "Grep"): allow()})
 # The default=deny handles everything not matched above
 ```
 

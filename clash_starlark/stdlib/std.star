@@ -16,19 +16,48 @@ ARCH = _ARCH  # e.g. "aarch64", "x86_64"
 # ---------------------------------------------------------------------------
 
 
-def allow(sandbox=None):
-    """Create an allow effect, optionally with a sandbox."""
-    return struct(_effect=_ALLOW, _sandbox=sandbox, _is_effect=True)
+def _parse_caps_string(caps):
+    """Parse a shorthand capability string like 'rwcdx' into individual booleans."""
+    return struct(
+        read="r" in caps,
+        write="w" in caps,
+        create="c" in caps,
+        delete="d" in caps,
+        execute="x" in caps,
+    )
 
 
-def deny(sandbox=None):
-    """Create a deny effect, optionally with a sandbox."""
-    return struct(_effect=_DENY, _sandbox=sandbox, _is_effect=True)
+def allow(caps=None, sandbox=None, read=None, write=None, create=None, delete=None, execute=None):
+    """Create an allow effect, optionally with a sandbox and capabilities.
+
+    Capabilities can be specified as a shorthand string or keyword args:
+        allow("rwc")                         # read + write + create
+        allow(read=True, write=True)         # read + write (+ create implied)
+        allow()                              # all capabilities
+    """
+    if caps != None:
+        parsed = _parse_caps_string(caps)
+        read, write, create, delete, execute = parsed.read, parsed.write, parsed.create, parsed.delete, parsed.execute
+    return struct(_effect=_ALLOW, _sandbox=sandbox, _is_effect=True,
+                  _read=read, _write=write, _create=create, _delete=delete, _execute=execute)
 
 
-def ask(sandbox=None):
-    """Create an ask effect, optionally with a sandbox."""
-    return struct(_effect=_ASK, _sandbox=sandbox, _is_effect=True)
+def deny(caps=None, sandbox=None, read=None, write=None, create=None, delete=None, execute=None):
+    """Create a deny effect, optionally with a sandbox and capabilities."""
+    if caps != None:
+        parsed = _parse_caps_string(caps)
+        read, write, create, delete, execute = parsed.read, parsed.write, parsed.create, parsed.delete, parsed.execute
+    return struct(_effect=_DENY, _sandbox=sandbox, _is_effect=True,
+                  _read=read, _write=write, _create=create, _delete=delete, _execute=execute)
+
+
+def ask(caps=None, sandbox=None, read=None, write=None, create=None, delete=None, execute=None):
+    """Create an ask effect, optionally with a sandbox and capabilities."""
+    if caps != None:
+        parsed = _parse_caps_string(caps)
+        read, write, create, delete, execute = parsed.read, parsed.write, parsed.create, parsed.delete, parsed.execute
+    return struct(_effect=_ASK, _sandbox=sandbox, _is_effect=True,
+                  _read=read, _write=write, _create=create, _delete=delete, _execute=execute)
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +441,102 @@ def _caps_from_bools(read, write, execute, all_ops):
     return parts
 
 
+def _caps_from_effect(eff):
+    """Compute sandbox caps list from an effect descriptor with capability fields."""
+    has_caps_string = (
+        eff._read != None or eff._write != None or eff._create != None or
+        eff._delete != None or eff._execute != None
+    )
+    if not has_caps_string:
+        return ["read", "write", "create", "delete", "execute"]
+    caps = []
+    if eff._read:
+        caps.append("read")
+    if eff._write:
+        caps.append("write")
+    if eff._create:
+        caps.append("create")
+    if eff._delete:
+        caps.append("delete")
+    if eff._execute:
+        caps.append("execute")
+    return caps
+
+
+# ---------------------------------------------------------------------------
+# Sandbox path matchers (for dict-based fs= API)
+# ---------------------------------------------------------------------------
+
+
+def literal(path_str):
+    """Explicit PathMatch::Literal marker for sandbox fs dicts."""
+    return struct(_matcher_type="literal", _path=path_str, _is_sandbox_matcher=True)
+
+
+def subpath(path_str, follow_worktrees=False):
+    """Explicit PathMatch::Subpath marker for sandbox fs dicts."""
+    return struct(_matcher_type="subpath", _path=path_str,
+                  _follow_worktrees=follow_worktrees, _is_sandbox_matcher=True)
+
+
+def _process_fs_dict(fs_dict, parent_path=None):
+    """Convert a dict-based fs spec to a flat list of sandbox rules.
+
+    Keys:
+      - bare string with dict value → literal path join, recurse into children
+      - bare string with decision value → subpath match (path + all descendants)
+      - literal("...") → PathMatch::Literal
+      - regex("...") → PathMatch::Regex
+      - subpath("...") → PathMatch::Subpath (explicit)
+
+    Values:
+      - allow/deny/ask effect → terminal rule
+      - dict → nested children (path segments concatenate)
+    """
+    rules = []
+    for key, value in fs_dict.items():
+        # Determine path, match_type, follow_worktrees from key type
+        if hasattr(key, "_is_sandbox_matcher"):
+            key_path = key._path
+            explicit_type = key._matcher_type
+            follow_wt = hasattr(key, "_follow_worktrees") and key._follow_worktrees
+        elif hasattr(key, "_regex"):
+            key_path = key._regex
+            explicit_type = "regex"
+            follow_wt = False
+        else:
+            # bare string
+            key_path = key
+            explicit_type = None
+            follow_wt = False
+
+        # Join with parent path
+        if parent_path != None:
+            full_path = parent_path + "/" + key_path
+        else:
+            full_path = key_path
+
+        if type(value) == "dict":
+            # Nested dict → recurse (bare string becomes literal join point)
+            rules.extend(_process_fs_dict(value, full_path))
+        elif hasattr(value, "_is_effect"):
+            # Terminal decision
+            match_type = explicit_type if explicit_type != None else "subpath"
+            caps = _caps_from_effect(value)
+            rule = {
+                "effect": value._effect,
+                "path_value": full_path,
+                "caps": caps,
+                "match_type": match_type,
+            }
+            if follow_wt:
+                rule["follow_worktrees"] = True
+            rules.append(rule)
+        else:
+            fail("sandbox fs values must be allow/deny/ask effects or nested dicts")
+    return rules
+
+
 def _make_path_pattern(path_value, match_type):
     """Create the appropriate FsPath pattern for the given match type."""
     if match_type == "literal":
@@ -637,12 +762,12 @@ def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
     """Build a sandbox definition.
 
     Usage:
-        sandbox(
-            "example",
-            default=deny,
-            fs=[cwd().allow(read=True), home().child(".ssh").allow(read=True)],
-            net=allow,
-            doc="Description of this sandbox",
+        sandbox("example", default=deny(),
+            fs={
+                "$PWD": allow("rwc"),
+                "$HOME": {".ssh": allow("r")},
+            },
+            net=allow(),
         )
     """
     if name == None:
@@ -651,20 +776,30 @@ def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
     # Accept effect descriptors for default and net
     default = _unwrap_effect(default)
 
+    # System rules: allow reading root but deny access to user home directories.
+    _user_homes = "/Users" if OS == "macos" else "/home"
+    _system_rules = [
+        {"effect": _ALLOW, "path_value": "/", "caps": ["read"], "match_type": "subpath"},
+        {"effect": _DENY, "path_value": _user_homes, "caps": ["read", "write", "create", "delete", "execute"], "match_type": "subpath"},
+    ]
+
     fs_rules = []
     if fs == None:
-        fs = []
-    # Allow reading the root filesystem but deny access to user home directories.
-    # The home directory root differs by platform: /Users on macOS, /home on Linux.
-    _user_homes = "/Users" if OS == "macos" else "/home"
-    fs += [path("/").recurse().allow(read=True), path(_user_homes).recurse().deny()]
-    for entry in fs:
-        if hasattr(entry, "_is_path"):
-            # Path entry — collect sandbox rules from it
-            if hasattr(entry, "_sandbox_rules"):
-                fs_rules.extend(entry._sandbox_rules)
-        else:
-            fail("sandbox fs= entries must be path values (cwd, home, tempdir, path)")
+        fs_rules = _system_rules
+    elif type(fs) == "dict":
+        # New dict-based API
+        fs_rules = _process_fs_dict(fs) + _system_rules
+    elif type(fs) == "list":
+        # Legacy builder-based API
+        fs += [path("/").recurse().allow(read=True), path(_user_homes).recurse().deny()]
+        for entry in fs:
+            if hasattr(entry, "_is_path"):
+                if hasattr(entry, "_sandbox_rules"):
+                    fs_rules.extend(entry._sandbox_rules)
+            else:
+                fail("sandbox fs= entries must be path values (cwd, home, tempdir, path)")
+    else:
+        fail("sandbox fs= must be a dict or list")
 
     net_policy = None
     net_domain_names = []
@@ -807,20 +942,13 @@ def policy(default="deny", rules=None, default_sandbox=None):
 
     Usage:
         policy(default=deny(), rules=[
-            cwd().allow(read=True, write=True),
-            match({"Bash": {
-                "git": {
-                    "push": deny(),
-                },
-            }}),
+            match({"Bash": {"git": {"push": deny()}}}),
             match({"Bash": {"git": allow()}}),
-            tool("Glob").on([
-                cwd().child("src").allow(read=True),
-            ]),
+            match({("Read", "Glob", "Grep"): allow()}),
         ], default_sandbox=sandbox(
             name="default",
             default=deny(),
-            fs=[cwd().allow(read=True)],
+            fs={"$PWD": allow("r")},
         ))
     """
     default = _unwrap_effect(default)

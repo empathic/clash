@@ -180,7 +180,11 @@ impl Expr {
 
     /// Chain `.child(name)` — e.g. `home().child(".claude")`
     pub fn child(self, name: impl Into<String>) -> Self {
-        self.method("child", vec![Expr::string(name)], Vec::<(&str, Expr)>::new())
+        self.method(
+            "child",
+            vec![Expr::string(name)],
+            Vec::<(&str, Expr)>::new(),
+        )
     }
 
     /// Chain `.allow(read = True, write = True)` with keyword args.
@@ -249,4 +253,3 @@ impl From<i64> for Expr {
         Expr::Int(n)
     }
 }
-
