@@ -13,7 +13,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 rust-version = "1.94"
 license = "Apache-2.0"
@@ -140,18 +140,18 @@ landlock = "0.4"
 seccompiler = "0.4"
 
 # Workspace crates (published)
-clash-brush-builtins = { path = "clash-brush-builtins", version = "0.6.1" }
-clash-brush-parser = { path = "clash-brush-parser", version = "0.6.1" }
-clash-brush-core = { path = "clash-brush-core", version = "0.6.1" }
-clash-brush-interactive = { path = "clash-brush-interactive", version = "0.6.1", features = [
+clash-brush-builtins = { path = "clash-brush-builtins", version = "0.6.2" }
+clash-brush-parser = { path = "clash-brush-parser", version = "0.6.2" }
+clash-brush-core = { path = "clash-brush-core", version = "0.6.2" }
+clash-brush-interactive = { path = "clash-brush-interactive", version = "0.6.2", features = [
     "basic",
 ] }
 
 # Workspace crate aliases (used by brush crates internally under original brush-* names)
-brush-parser = { path = "clash-brush-parser", version = "0.6.1", package = "clash-brush-parser" }
-brush-core = { path = "clash-brush-core", version = "0.6.1", package = "clash-brush-core" }
+brush-parser = { path = "clash-brush-parser", version = "0.6.2", package = "clash-brush-parser" }
+brush-core = { path = "clash-brush-core", version = "0.6.2", package = "clash-brush-core" }
 
 # Workspace crates (internal only)
-clash_notify = { path = "clash_notify", version = "0.6.1" }
-clash_starlark = { path = "clash_starlark", version = "0.6.1" }
-claude_settings = { path = "claude_settings", version = "0.6.1" }
+clash_notify = { path = "clash_notify", version = "0.6.2" }
+clash_starlark = { path = "clash_starlark", version = "0.6.2" }
+claude_settings = { path = "claude_settings", version = "0.6.2" }
