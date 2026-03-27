@@ -380,7 +380,7 @@ impl CallStack {
         Self::default()
     }
 
-    /// Removes the top from from the stack. If the stack is empty, does nothing and
+    /// Removes the top frame from the stack. If the stack is empty, does nothing and
     /// returns `None`; otherwise, returns the removed call frame.
     pub fn pop(&mut self) -> Option<Frame> {
         let frame = self.frames.pop_front()?;

@@ -524,7 +524,7 @@ async fn wait_for_pipeline_processes_and_update_status(
     let mut stopped_children = vec![];
     let mut last_failure_exit_code: Option<ExecutionExitCode> = None;
 
-    // Clear our the pipeline status so we can start filling it out.
+    // Clear out the pipeline status so we can start filling it out.
     shell.last_pipeline_statuses_mut().clear();
 
     while let Some(child) = process_spawn_results.pop_front() {

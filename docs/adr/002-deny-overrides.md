@@ -19,7 +19,7 @@ Common resolution strategies:
 Use strict deny-overrides precedence:
 
 ```
-deny > ask > allow > delegate > default
+deny > ask > allow > default
 ```
 
 If any matching rule says `deny`, the result is `deny` — regardless of how many `allow` rules also match. Rule order in the document has no effect on the outcome.
@@ -35,11 +35,11 @@ If any matching rule says `deny`, the result is `deny` — regardless of how man
 **Negative:**
 - Cannot express "deny everything except X" as a deny + allow pair — need negation patterns (`deny * write !~/project/**`)
 - Cannot have a targeted allow that overrides a broader deny — must restructure the deny rule to be more specific
-- Makes the `delegate` effect lowest priority, which means you can't delegate a decision that another rule denies
+- Cannot have a "pass-through" effect — every matching rule must commit to deny, ask, or allow
 
 ## Amendment: Specificity-Based Ordering (v2, 2026-02)
 
-The strict deny-overrides model is preserved across capability domains, but within a domain v2 uses **specificity-based first-match** instead of collecting all matches. Rules are sorted at compile time (most specific first) and the first matching rule wins. Conflicts (same specificity, different effects, overlapping matchers) are rejected at compile time.
+The strict deny-overrides model is preserved across capability domains, but within a domain v2 uses **specificity-based first-match** instead of collecting all matches. Children at the same level are sorted at compile time by specificity (most specific first) and the first matching rule wins.
 
 This means:
 

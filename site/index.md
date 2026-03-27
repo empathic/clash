@@ -21,7 +21,7 @@ much more per unit prompt.
 Every tool call your agent makes requires a decision. Right now, that decision
 is yours - *every single time* or **not at all**.
 
-Think of Clash as a new `--safely-skip-permissions` flag.  A way to choose _how_
+Think of Clash as a new `--safely-skip-permissions` flag. A way to choose _how_
 to run anything safely, not just whether Claude can run it **as *you***.
 
 Clash intercepts every tool call Claude makes and runs it through your policy — before anything executes.

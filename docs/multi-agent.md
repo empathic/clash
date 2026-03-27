@@ -63,7 +63,7 @@ Capability rules (`exec`, `fs`, `net`) are inherently portable since they operat
 
 ```python
 # These work identically across all agents
-match("git", "cargo", "npm") >> allow()
+match({"Bash": {("git", "cargo", "npm"): allow()}})
 tool(["read", "write", "edit"]).allow()
 ```
 
@@ -73,7 +73,7 @@ Use `agent()` conditions for agent-specific behavior:
 
 ```python
 # Only applies when running under Gemini CLI
-agent("gemini") >> tool("save_memory").deny()
+match({Tool("save_memory"): deny()})  # inside an agent("gemini") scope
 ```
 
 ### Checking Portability

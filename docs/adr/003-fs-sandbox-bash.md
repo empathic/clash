@@ -23,8 +23,8 @@ For bash commands, `fs` path filters generate kernel-level sandbox rules instead
 For non-bash tools (Read, Write, Edit, Glob, Grep), the eval layer checks the resolved path against `fs` rules directly — the path filter acts as a permission guard.
 
 In v2, this maps to:
-- `exec` capability → sandbox generation from `fs_rules` (future PR)
-- `fs` capability → eval checks path against `CompiledPathFilter` at decision time
+- `exec` capability → sandbox generation from sandbox definitions
+- `fs` capability → eval checks path against match tree at decision time
 
 ## Consequences
 
@@ -36,6 +36,6 @@ In v2, this maps to:
 **Negative:**
 - Requires platform-specific code (macOS Seatbelt profiles, Linux Landlock rules)
 - Sandbox is one-way — once applied, the process cannot gain additional permissions
-- Filter expression semantics differ slightly: `And(a, b)` / `Or(a, b)` both collect rules from both sides in sandbox generation (the boolean logic is approximated by the union of sandbox rules)
+- Sandbox rules are collected from the policy's sandbox definitions — the union of all applicable rules is applied
 - Regex-based filters have limited support on some platforms
 - Kernel-level sandbox enforcement covers filesystem and network access only. Exec-level argument matching (e.g., `(deny (exec "git" "push" *))`) operates at the hook level and only evaluates the top-level command — child processes within the sandbox are not checked against exec rules ([#136](https://github.com/empathic/clash/issues/136))

@@ -18,7 +18,7 @@ pub enum TrapSignal {
     Err,
     /// The `EXIT` trap.
     Exit,
-    /// The `RETURN` trp.
+    /// The `RETURN` trap.
     Return,
 }
 

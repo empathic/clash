@@ -264,7 +264,7 @@ impl<'a, IB: InputBackend, SE: brush_core::ShellExtensions> InteractiveShell<'a,
     ) -> Result<InteractiveExecutionResult, ShellError> {
         let mut shell = self.shell.lock().await;
 
-        // See if the the user interface has a non-empty read buffer.
+        // See if the user interface has a non-empty read buffer.
         let buffer_info = self.input.get_read_buffer();
 
         // If the user interface did, in fact, have a non-empty read buffer,

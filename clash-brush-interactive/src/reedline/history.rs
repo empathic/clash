@@ -50,7 +50,7 @@ impl<SE: brush_core::ShellExtensions> reedline::History for ReedlineHistory<SE> 
     fn load(&self, id: reedline::HistoryItemId) -> reedline::Result<reedline::HistoryItem> {
         let shell = self.lock_shell();
 
-        // Get the history, retrieve the item, and translate the item it into reedline's format.
+        // Get the history, retrieve the item, and translate it into reedline's format.
         get_shell_history(&shell)?
             .get_by_id(id.0)
             .map_err(brush_error_to_reedline)?
@@ -122,7 +122,7 @@ impl<SE: brush_core::ShellExtensions> reedline::History for ReedlineHistory<SE> 
     fn clear(&mut self) -> reedline::Result<()> {
         let mut shell = self.lock_shell();
 
-        // Get the history, retrieve the item, and translate the item it into reedline's format.
+        // Get the history and clear it.
         get_shell_history_mut(&mut shell)?
             .clear()
             .map_err(brush_error_to_reedline)

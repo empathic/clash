@@ -85,7 +85,7 @@ jobs:
           files: artifacts/*
           generate_release_notes: true
 
-  publish-stite:
+  publish-site:
     runs-on: ubuntu-latest
     environment: clash-site
     steps:

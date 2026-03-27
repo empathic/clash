@@ -291,7 +291,7 @@ impl std::io::Write for OpenFile {
     }
 }
 
-/// Tristate representing the an `OpenFile` entry in an `OpenFiles` structure.
+/// Tristate representing an `OpenFile` entry in an `OpenFiles` structure.
 pub enum OpenFileEntry<'a> {
     /// File descriptor is present and has a valid associated `OpenFile`.
     Open(&'a OpenFile),

@@ -2027,7 +2027,7 @@ pub enum ArithmeticExpr {
     Literal(i64),
     /// A dereference of a variable or array element.
     Reference(ArithmeticTarget),
-    /// A unary operation on an the result of a given nested expression.
+    /// A unary operation on the result of a given nested expression.
     UnaryOp(UnaryOperator, Box<Self>),
     /// A binary operation on two nested expressions.
     BinaryOp(BinaryOperator, Box<Self>, Box<Self>),
