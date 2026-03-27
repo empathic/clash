@@ -354,8 +354,8 @@ fn run_init_agent(agent: crate::agents::AgentKind, scope: Option<String>) -> Res
         std::fs::create_dir_all(&dir)?;
         dir
     } else {
-        let dir =
-            ClashSettings::settings_dir().context("could not determine clash settings directory")?;
+        let dir = ClashSettings::settings_dir()
+            .context("could not determine clash settings directory")?;
         std::fs::create_dir_all(&dir)?;
         dir
     };

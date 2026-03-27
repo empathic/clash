@@ -129,8 +129,7 @@ pub(crate) fn resolve_tool_input(
         return Ok((noun.to_string(), serde_json::json!({})));
     }
 
-    let tool_name = crate::agents::resolve_any_to_internal(tool)
-        .unwrap_or(tool);
+    let tool_name = crate::agents::resolve_any_to_internal(tool).unwrap_or(tool);
 
     let tool_input = serde_json::from_str::<serde_json::Value>(noun)
         .ok()

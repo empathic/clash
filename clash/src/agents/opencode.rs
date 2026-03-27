@@ -27,8 +27,7 @@ impl HookProtocol for OpenCodeProtocol {
             transcript_path: String::new(),
             cwd: json_str_any(raw, &["cwd", "directory"]).to_string(),
             permission_mode: "default".to_string(),
-            hook_event_name: json_str_any(raw, &["hook_event_name", "event"])
-                .to_string(),
+            hook_event_name: json_str_any(raw, &["hook_event_name", "event"]).to_string(),
             tool_name: resolved,
             tool_input: json_value_any(raw, &["tool_input", "args"])
                 .unwrap_or(Value::Object(serde_json::Map::new())),

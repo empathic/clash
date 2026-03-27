@@ -366,7 +366,11 @@ mod tests {
         // Every internal name in the alias table should be a known Claude tool
         let claude_names: Vec<&str> = TOOL_ALIASES
             .iter()
-            .flat_map(|a| a.agent_names.iter().filter(|(ak, _)| *ak == AgentKind::Claude))
+            .flat_map(|a| {
+                a.agent_names
+                    .iter()
+                    .filter(|(ak, _)| *ak == AgentKind::Claude)
+            })
             .map(|(_, name)| *name)
             .collect();
         for alias in TOOL_ALIASES {

@@ -158,10 +158,7 @@ fn handle_check_portable(json: bool) -> Result<()> {
             style::yellow_bold(&warnings.len().to_string())
         );
         for w in &warnings {
-            let location = w
-                .source
-                .as_deref()
-                .unwrap_or("unknown");
+            let location = w.source.as_deref().unwrap_or("unknown");
             print!(
                 "  {} tool(\"{}\") is agent-specific",
                 style::yellow_bold("!"),
@@ -695,8 +692,7 @@ fn build_rule_node(
         (_, Some(bin_name)) => Ok(manifest_edit::build_exec_rule(bin_name, &[], decision)),
         (Some(tool_name), None) => {
             // Resolve canonical/case-insensitive names: "shell" → "Bash", "bash" → "Bash", etc.
-            let resolved = crate::agents::resolve_any_to_internal(tool_name)
-                .unwrap_or(tool_name);
+            let resolved = crate::agents::resolve_any_to_internal(tool_name).unwrap_or(tool_name);
             Ok(manifest_edit::build_tool_rule(resolved, decision))
         }
         (None, None) => anyhow::bail!("provide a command, --tool, or --bin"),

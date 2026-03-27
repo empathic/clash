@@ -30,7 +30,9 @@ impl HookProtocol for GeminiProtocol {
             permission_mode: "default".to_string(),
             hook_event_name: json_str(raw, "hook_event_name").to_string(),
             tool_name: resolved,
-            tool_input: raw.get("tool_input").cloned()
+            tool_input: raw
+                .get("tool_input")
+                .cloned()
                 .unwrap_or(Value::Object(serde_json::Map::new())),
             tool_use_id: None,
             tool_response: raw.get("tool_response").cloned(),
@@ -87,7 +89,10 @@ mod tests {
         });
         let input = GeminiProtocol.parse_tool_use(&raw).unwrap();
         assert_eq!(input.tool_name, "Bash");
-        assert_eq!(input.original_tool_name.as_deref(), Some("run_shell_command"));
+        assert_eq!(
+            input.original_tool_name.as_deref(),
+            Some("run_shell_command")
+        );
         assert_eq!(input.agent, Some(AgentKind::Gemini));
     }
 

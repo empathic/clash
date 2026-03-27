@@ -87,7 +87,10 @@ mod tests {
 
     #[test]
     fn format_allow_codex() {
-        assert_eq!(CodexProtocol.format_allow(None, None, None)["decision"], "proceed");
+        assert_eq!(
+            CodexProtocol.format_allow(None, None, None)["decision"],
+            "proceed"
+        );
     }
 
     #[test]

@@ -181,9 +181,7 @@ fn run_diagnose_agent(agent: crate::agents::AgentKind) -> Result<()> {
     }
 
     println!();
-    println!(
-        "  Note: Agent-specific hook installation for {agent} must be verified manually.",
-    );
+    println!("  Note: Agent-specific hook installation for {agent} must be verified manually.",);
     println!(
         "  Run {} for setup instructions.",
         style::bold(&format!("clash init --agent {agent}")),
