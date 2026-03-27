@@ -39,10 +39,7 @@ impl HookProtocol for ClaudeProtocol {
         context: Option<&str>,
         updated_input: Option<Value>,
     ) -> Value {
-        let mut output = HookOutput::allow(
-            reason.map(String::from),
-            context.map(String::from),
-        );
+        let mut output = HookOutput::allow(reason.map(String::from), context.map(String::from));
         if let Some(ui) = updated_input {
             output.set_updated_input(ui);
         }
@@ -123,7 +120,9 @@ mod tests {
             cwd: "/home/user".into(),
             ..Default::default()
         };
-        let result = ClaudeProtocol.rewrite_for_sandbox(&input, "/usr/bin/clash").unwrap();
+        let result = ClaudeProtocol
+            .rewrite_for_sandbox(&input, "/usr/bin/clash")
+            .unwrap();
         assert!(result["command"].as_str().unwrap().contains("clash"));
     }
 }

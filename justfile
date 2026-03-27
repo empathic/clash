@@ -92,6 +92,12 @@ release VERSION:
     # Bump all workspace crate versions + inter-crate dependency references
     cargo workspaces version custom "$new_version" --no-git-commit --yes
 
+    # Update version specs for published workspace crates
+    # (cargo-workspaces doesn't update [workspace.dependencies] entries)
+    sed -i '' -E \
+      '/path = .*version = / s/version = "[^"]+"/version = "'"$new_version"'"/' \
+      Cargo.toml
+
     # Freeze site docs
     cd site && bun run freeze "$tag" && cd ..
 

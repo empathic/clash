@@ -3,8 +3,8 @@ use std::io::Write;
 use anyhow::{Context, Result};
 use tracing::{Level, info, instrument};
 
-use crate::agents::protocol::{HookProtocol, get_protocol};
 use crate::agents::AgentKind;
+use crate::agents::protocol::{HookProtocol, get_protocol};
 use crate::cli::{HookCmd, HookSubcommand};
 use crate::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput, is_interactive_tool};
 use crate::permissions::check_permission;
@@ -129,7 +129,8 @@ impl HookCmd {
                 }
             }
             HookSubcommand::PostToolUse => {
-                let input = self.parse_tool_use_input()
+                let input = self
+                    .parse_tool_use_input()
                     .context("parsing PostToolUse hook input from stdin")?;
 
                 // Check if this tool use was previously "ask"ed and the user
@@ -187,7 +188,8 @@ impl HookCmd {
                 HookOutput::post_tool_use(context)
             }
             HookSubcommand::PermissionRequest => {
-                let input = self.parse_tool_use_input()
+                let input = self
+                    .parse_tool_use_input()
                     .context("parsing PermissionRequest hook input from stdin")?;
                 if passthrough {
                     info!(
@@ -298,10 +300,7 @@ fn hook_output_to_protocol(protocol: &dyn HookProtocol, output: &HookOutput) -> 
 
     match extract_effect(output) {
         Some(Effect::Allow) => protocol.format_allow(reason, context, updated_input),
-        Some(Effect::Deny) => protocol.format_deny(
-            reason.unwrap_or("policy: denied"),
-            context,
-        ),
+        Some(Effect::Deny) => protocol.format_deny(reason.unwrap_or("policy: denied"), context),
         Some(Effect::Ask) => protocol.format_ask(reason, context),
         None => {
             // No decision (e.g., continue_execution) — allow passthrough

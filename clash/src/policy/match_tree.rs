@@ -2129,6 +2129,11 @@ mod tests {
     fn wildcard_matches_any_tool() {
         let pattern = Pattern::Wildcard;
         let ctx = QueryContext::from_tool("Bash", &serde_json::json!({}));
-        assert!(matches_observable(&Observable::ToolName, &pattern, false, &ctx));
+        assert!(matches_observable(
+            &Observable::ToolName,
+            &pattern,
+            false,
+            &ctx
+        ));
     }
 }

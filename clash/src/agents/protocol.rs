@@ -55,7 +55,10 @@ pub trait HookProtocol {
             session_id: json_str(raw, "session_id").to_string(),
             transcript_path: json_str(raw, "transcript_path").to_string(),
             cwd: json_str(raw, "cwd").to_string(),
-            permission_mode: raw.get("permission_mode").and_then(|v| v.as_str()).map(String::from),
+            permission_mode: raw
+                .get("permission_mode")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             hook_event_name: json_str_or(raw, "hook_event_name", "SessionStart").to_string(),
             source: raw.get("source").and_then(|v| v.as_str()).map(String::from),
             model: raw.get("model").and_then(|v| v.as_str()).map(String::from),
@@ -112,11 +115,7 @@ pub trait HookProtocol {
     /// Rewrite a shell command's tool_input to run through `clash shell`.
     ///
     /// Default: rewrites the `command` field for tools with internal name "Bash".
-    fn rewrite_for_sandbox(
-        &self,
-        input: &ToolUseHookInput,
-        sandbox_cmd: &str,
-    ) -> Option<Value> {
+    fn rewrite_for_sandbox(&self, input: &ToolUseHookInput, sandbox_cmd: &str) -> Option<Value> {
         if input.tool_name != "Bash" {
             return None;
         }
@@ -128,7 +127,9 @@ pub trait HookProtocol {
             shell_escape(command),
         );
         let mut updated = input.tool_input.clone();
-        updated.as_object_mut()?.insert("command".into(), Value::String(sandboxed));
+        updated
+            .as_object_mut()?
+            .insert("command".into(), Value::String(sandboxed));
         Some(updated)
     }
 
