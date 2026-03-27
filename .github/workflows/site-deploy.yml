@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs: 
-  publish-stite:
+  publish-site:
     runs-on: ubuntu-latest
     environment: clash-site
     steps:

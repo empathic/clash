@@ -28,7 +28,7 @@
 
 * Always check the documentation after your changes to ensure they are logically consistent with what you have done. This should be the last step after you have validated your changes work.
 * ALWAYS update the relevant documentation (readme/comments) when changes have a public facing impact.
-* Prefer to "comment through context", whether that be debug logs, anyhow::Context instead of comments unless your code comments are explaining difficult to understand code
+* Prefer to "comment through context", whether that be debug logs or anyhow::Context, instead of comments — unless your code comments are explaining difficult-to-understand code
 * If you are corrected by a person when using a skill, or told you should have used the skill, then modify the plugin definition for clash to ensure this doesn't happen again.
 
 ## Commits
@@ -63,7 +63,7 @@
 ## Layout
 
 * *clash* Clash binary + library (includes `src/agents/` for multi-agent protocol adapters)
-* *clash-starlark* Starlark policy evaluator — compiles `.star` files to JSON policy format
+* *clash_starlark* Starlark policy evaluator — compiles `.star` files to JSON policy format
 * *clash-plugin* Claude Code plugin (hooks.json, .claude-plugin definitions)
 * *clash-gemini-ext* Gemini CLI extension package
 * *clash-codex* Codex CLI hook configuration

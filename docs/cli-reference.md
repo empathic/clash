@@ -797,27 +797,13 @@ unset CLASH_DISABLE
 
 ## Uninstalling
 
-To fully remove clash from your system:
-
 ```bash
-# 1. Remove the Claude Code plugin (stops hooks from firing)
-claude plugin uninstall clash
-
-# 2. Remove the binary
-cargo uninstall clash
-
-# 3. (Optional) Remove from the plugin marketplace
-claude plugin marketplace remove clash
-
-# 4. (Optional) Remove the status line — only needed if you skipped step 2
-clash statusline uninstall
-
-# 5. (Optional) Clean up configuration and logs
-rm -rf ~/.clash       # user-level policy and logs
-rm -rf .clash         # project-level policy (per repo)
+clash uninstall
 ```
 
-After step 1, Claude Code reverts to its built-in permission model immediately. Policy files are left in place so you can resume where you left off if you reinstall later.
+This removes the Claude Code plugin, the status line, policy files (`~/.clash/`), and the binary — regardless of how it was installed. Use `clash uninstall -y` to skip confirmation prompts.
+
+After uninstalling, Claude Code reverts to its built-in permission model.
 
 ---
 

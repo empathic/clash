@@ -28,7 +28,7 @@ Claude Code gives you per-tool toggles: allow a tool entirely, or get prompted e
 
 ## Which agents does Clash support?
 
-**Claude Code** is fully supported today. Codex CLI, Gemini CLI, and OpenCode are planned. But Clash also works standalone — `clash sandbox exec` sandboxes any command, no agent required. The policy engine is agent-independent; only the hook layer is specific to each agent. See the [agent support table]({{ version.pathPrefix }}/#agent-support).
+**Claude Code** is fully supported today. Gemini CLI, Codex CLI, Amazon Q CLI, OpenCode, and Copilot CLI have protocol-ready integrations. But Clash also works standalone — `clash sandbox exec` sandboxes any command, no agent required. The policy engine is agent-independent; only the hook layer is specific to each agent. See the [agent support table]({{ version.pathPrefix }}/#agent-support).
 
 ---
 

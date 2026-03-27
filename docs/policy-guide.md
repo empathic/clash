@@ -21,7 +21,7 @@ def main():
     ])
 ```
 
-This policy allows git commands (except push), file reads and writes under the current directory, and network access to github.com. Everything else is denied.
+This policy allows git commands (except push), file reads and writes, and network access to github.com. Everything else is denied.
 
 <details>
 <summary>Compiled JSON IR (advanced)</summary>
@@ -462,8 +462,8 @@ match({"Read": allow(sandbox = my_sandbox)})
 Annotate rules and sandboxes with `doc=` to explain *why* they exist. Docstrings persist through the compiled IR and appear in `clash status` output.
 
 ```python
-# On match rules
-match({"WebSearch": deny(doc = "No external searches needed")})
+# On tool rules
+tool("WebSearch", doc = "No external searches needed").deny()
 
 # On sandboxes
 sandbox(
@@ -471,8 +471,8 @@ sandbox(
     doc = "Development sandbox for project work",
     default = deny(),
     fs = {
-        subpath("$PWD", follow_worktrees = True): allow("rwc", doc = "Project source files"),
-        "$HOME/.ssh": allow("r", doc = "SSH keys for git auth"),
+        subpath("$PWD", follow_worktrees = True): allow("rwc"),
+        "$HOME/.ssh": allow("r"),
     },
 )
 ```

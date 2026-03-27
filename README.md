@@ -29,7 +29,7 @@ Claude Code is the most mature integration. The other 5 agents have protocol ada
 
 Coding agents operate with broad tool access — executing commands, editing files, and making network requests on your behalf. Their permission models tend to be all-or-nothing: either you allow a tool entirely or get prompted every time. You end up clicking "yes" hundreds of times a session, or giving blanket approval and hoping for the best.
 
-Clash gives you granular control. Write policy rules that decide what to **allow**, **deny**, or **ask** about — then let the agent work freely on safe operations while blocking dangerous ones. On Linux, rules can generate kernel-enforced filesystem sandboxes so even allowed commands can only touch the files you specify.
+Clash gives you granular control. Write policy rules that decide what to **allow**, **deny**, or **ask** about — then let the agent work freely on safe operations while blocking dangerous ones. Rules can carry OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS) so even allowed commands can only touch the files you specify.
 
 ---
 

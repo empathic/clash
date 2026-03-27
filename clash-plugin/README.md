@@ -29,7 +29,7 @@ The build copies this plugin directory and the compiled `clash` binary into a st
 
 ## How It Works
 
-The plugin registers four hook types via `hooks/hooks.json`:
+The plugin registers five hook types via `hooks/hooks.json`:
 
 | Hook | Purpose |
 |------|---------|
@@ -37,6 +37,7 @@ The plugin registers four hook types via `hooks/hooks.json`:
 | **PostToolUse** | Runs after tool execution (audit logging) |
 | **PermissionRequest** | Responds to permission prompts on behalf of the user |
 | **Notification** | Handles notification events (permission prompts, idle detection, etc.) |
+| **SessionStart** | Initializes session state and injects system prompt context |
 
 ## Policy Basics
 

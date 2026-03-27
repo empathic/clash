@@ -76,7 +76,7 @@ match({"Bash": {"git": allow()}})
 match({"Bash": {"git": {"push": deny()}}})
 ```
 
-There is no automatic sorting or conflict detection — the policy author controls evaluation order directly.
+Children at the same level are automatically sorted by specificity (literals before regexes before wildcards), but top-level rule order from the policy source is preserved. Put more specific rules before broader ones to ensure the desired evaluation order.
 
 ---
 
