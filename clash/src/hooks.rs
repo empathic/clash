@@ -45,11 +45,15 @@ pub struct ToolUseHookInput {
 /// Hook input for SessionStart events
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SessionStartHookInput {
+    #[serde(default)]
     pub session_id: String,
+    #[serde(default)]
     pub transcript_path: String,
+    #[serde(default)]
     pub cwd: String,
     #[serde(default)]
     pub permission_mode: Option<String>,
+    #[serde(default)]
     pub hook_event_name: String,
     #[serde(default)]
     pub source: Option<String>,
@@ -68,9 +72,13 @@ impl SessionStartHookInput {
 /// Hook input for Stop events (conversation turn ended without a tool call)
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct StopHookInput {
+    #[serde(default)]
     pub session_id: String,
+    #[serde(default)]
     pub transcript_path: String,
+    #[serde(default)]
     pub cwd: String,
+    #[serde(default)]
     pub hook_event_name: String,
 }
 

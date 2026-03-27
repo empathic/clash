@@ -13,6 +13,15 @@ use crate::session_policy;
 use crate::settings::{ClashSettings, HookContext};
 use crate::trace;
 
+/// Generate a fallback session ID when the agent doesn't provide one.
+///
+/// Uses the parent PID as a stable identifier — every `clash hook` invocation
+/// within the same agent session shares the same parent process.
+fn fallback_session_id(agent: AgentKind) -> String {
+    let ppid = std::os::unix::process::parent_id();
+    format!("{agent}-{ppid}")
+}
+
 use claude_settings::PermissionRule;
 
 impl HookCmd {
@@ -42,7 +51,7 @@ impl HookCmd {
         Ok(())
     }
 
-    #[instrument(level = Level::TRACE, skip(self))]
+    #[instrument(level = Level::TRACE, skip(self), fields(agent = %self.agent))]
     pub fn run(&self) -> Result<()> {
         if crate::settings::is_disabled() {
             return self.run_disabled();
@@ -207,15 +216,21 @@ impl HookCmd {
                 }
             }
             HookSubcommand::SessionStart => {
-                let input =
-                    crate::hooks::SessionStartHookInput::from_reader(std::io::stdin().lock())
-                        .context("parsing SessionStart hook input from stdin")?;
+                let mut input = self.parse_session_start_input()
+                    .context("parsing SessionStart hook input from stdin")?;
+                if input.session_id.is_empty() {
+                    input.session_id = fallback_session_id(self.agent);
+                    info!(session_id = %input.session_id, "Agent did not provide session_id, using fallback");
+                }
                 crate::handlers::handle_session_start(&input)?
             }
             HookSubcommand::Stop => {
-                // Read stdin to avoid broken pipe, extract session_id.
-                let input = crate::hooks::StopHookInput::from_reader(std::io::stdin().lock())
+                let mut input = self.parse_stop_input()
                     .context("parsing Stop hook input from stdin")?;
+                if input.session_id.is_empty() {
+                    input.session_id = fallback_session_id(self.agent);
+                    info!(session_id = %input.session_id, "Agent did not provide session_id, using fallback");
+                }
 
                 // Final catch-up sync for non-tool conversation turns.
                 if let Err(e) = trace::sync_trace(&input.session_id, None) {
@@ -242,17 +257,35 @@ impl HookCmd {
         Ok(())
     }
 
-    /// Parse tool-use input from stdin, using the agent's protocol for non-Claude agents.
+    /// Read stdin as raw JSON, then delegate to the agent's protocol.
+    fn read_stdin_json(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::from_reader(std::io::stdin().lock())?)
+    }
+
+    /// Parse tool-use input from stdin via the agent's protocol.
     fn parse_tool_use_input(&self) -> Result<ToolUseHookInput> {
-        if self.agent == AgentKind::Claude {
-            let mut input = ToolUseHookInput::from_reader(std::io::stdin().lock())?;
-            input.agent = Some(AgentKind::Claude);
-            Ok(input)
-        } else {
-            let protocol = get_protocol(self.agent);
-            let raw: serde_json::Value = serde_json::from_reader(std::io::stdin().lock())?;
-            protocol.parse_tool_use(&raw)
+        let protocol = get_protocol(self.agent);
+        let raw = self.read_stdin_json()?;
+        let mut input = protocol.parse_tool_use(&raw)?;
+        if input.session_id.is_empty() {
+            input.session_id = fallback_session_id(self.agent);
+            info!(session_id = %input.session_id, "Agent did not provide session_id, using fallback");
         }
+        Ok(input)
+    }
+
+    /// Parse session-start input from stdin via the agent's protocol.
+    fn parse_session_start_input(&self) -> Result<crate::hooks::SessionStartHookInput> {
+        let protocol = get_protocol(self.agent);
+        let raw = self.read_stdin_json()?;
+        protocol.parse_session_start(&raw)
+    }
+
+    /// Parse stop input from stdin via the agent's protocol.
+    fn parse_stop_input(&self) -> Result<crate::hooks::StopHookInput> {
+        let protocol = get_protocol(self.agent);
+        let raw = self.read_stdin_json()?;
+        protocol.parse_stop(&raw)
     }
 }
 

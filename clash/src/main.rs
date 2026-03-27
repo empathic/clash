@@ -26,6 +26,7 @@ fn main() -> Result<()> {
                     cmd::init::run(scope, quick, agent)
                 }
             }
+            Commands::Install { agent } => cmd::init::run_install(agent),
             Commands::Uninstall { yes } => cmd::uninstall::run(yes),
             Commands::Status { json } => cmd::status::run(json, cli.verbose),
             Commands::ShowCommands { json, all } => cmd::commands::run(json, all),

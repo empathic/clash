@@ -230,7 +230,7 @@ fn run_onboard() -> Result<()> {
         );
         if offer_fix(OnboardFix::InstallPlugin)? {
             ui::progress("Installing plugin...");
-            match super::init::install_plugin() {
+            match super::init::install_plugin_from_marketplace() {
                 Ok(()) => fixed += 1,
                 Err(e) => {
                     warn!(error = %e, "Plugin install failed during onboard");

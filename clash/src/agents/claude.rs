@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use super::protocol::HookProtocol;
 use super::{AgentKind, resolve_tool_name};
-use crate::hooks::{HookOutput, SessionStartHookInput, ToolUseHookInput};
+use crate::hooks::{HookOutput, SessionStartHookInput, StopHookInput, ToolUseHookInput};
 
 pub struct ClaudeProtocol;
 
@@ -28,6 +28,10 @@ impl HookProtocol for ClaudeProtocol {
     }
 
     fn parse_session_start(&self, raw: &Value) -> Result<SessionStartHookInput> {
+        Ok(serde_json::from_value(raw.clone())?)
+    }
+
+    fn parse_stop(&self, raw: &Value) -> Result<StopHookInput> {
         Ok(serde_json::from_value(raw.clone())?)
     }
 

@@ -46,6 +46,41 @@ impl fmt::Display for AgentKind {
     }
 }
 
+impl crate::dialog::SelectItem for AgentKind {
+    fn label(&self) -> &str {
+        match self {
+            AgentKind::Claude => "Claude Code",
+            AgentKind::Gemini => "Gemini CLI",
+            AgentKind::Codex => "Codex CLI",
+            AgentKind::AmazonQ => "Amazon Q",
+            AgentKind::OpenCode => "OpenCode",
+            AgentKind::Copilot => "Copilot CLI",
+        }
+    }
+
+    fn description(&self) -> &str {
+        match self {
+            AgentKind::Claude => "Anthropic's coding agent",
+            AgentKind::Gemini => "Google's coding agent",
+            AgentKind::Codex => "OpenAI's coding agent",
+            AgentKind::AmazonQ => "Amazon's coding agent",
+            AgentKind::OpenCode => "Open-source coding agent",
+            AgentKind::Copilot => "GitHub's coding agent",
+        }
+    }
+
+    fn variants() -> &'static [Self] {
+        &[
+            AgentKind::Claude,
+            AgentKind::Gemini,
+            AgentKind::Codex,
+            AgentKind::AmazonQ,
+            AgentKind::OpenCode,
+            AgentKind::Copilot,
+        ]
+    }
+}
+
 impl FromStr for AgentKind {
     type Err = String;
 

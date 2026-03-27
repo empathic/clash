@@ -199,9 +199,16 @@ pub enum Commands {
         /// Skip the interactive editor and create a sensible default policy
         #[arg(long)]
         quick: bool,
-        /// Which coding agent to set up (default: claude)
-        #[arg(long, default_value = "claude")]
-        agent: crate::agents::AgentKind,
+        /// Which coding agent to set up (prompts if omitted)
+        #[arg(long)]
+        agent: Option<crate::agents::AgentKind>,
+    },
+
+    /// Install the clash plugin/hooks for a coding agent (skip policy setup)
+    Install {
+        /// Which coding agent to install for (prompts if omitted)
+        #[arg(long)]
+        agent: Option<crate::agents::AgentKind>,
     },
 
     /// Remove clash: undo bypass permissions, uninstall plugin, remove config and binary
