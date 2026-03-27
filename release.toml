@@ -1,0 +1,4 @@
+sign-commit = false
+tag = false
+push = false
+publish = false

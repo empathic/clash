@@ -89,23 +89,25 @@ release VERSION:
     # Create release branch
     git checkout -b "$branch"
 
-    # Bump all workspace crate versions + inter-crate dependency references
-    cargo workspaces version custom "$new_version" --no-git-commit --yes
-
-    # Update version specs for published workspace crates
-    # (cargo-workspaces doesn't update [workspace.dependencies] entries)
-    sed -i '' -E \
-      '/path = .*version = / s/version = "[^"]+"/version = "'"$new_version"'"/' \
-      Cargo.toml
+    # Bump all workspace crate versions (handles [workspace.package], version.workspace = true,
+    # and [workspace.dependencies] path entries)
+    cargo release version "$new_version" --execute --no-confirm
 
     # Freeze site docs
     cd site && bun run freeze "$tag" && cd ..
 
-    # Commit, push, and create PR
+    # Commit and tag
     git add -A
     git commit -m "chore: release ${tag}"
-    git push -u origin "$branch"
-    gh pr create --title "chore: release ${tag}" --body "Version bump and frozen docs for ${tag}"
+    git tag "$tag"
+
+    # Publish to crates.io
+    cargo release publish --execute --no-confirm
+
+    # Push branch + tag (tag triggers CI for binary builds, GitHub release, site deploy)
+    git push -u origin "$branch" --follow-tags
+    gh pr create --title "chore: release ${tag}" --body "Version bump and frozen docs for ${tag}" --fill
+    gh pr merge "$branch" --merge --auto
 
 # Fast targeted testing for a specific module (default: all clash lib tests)
 quick MODULE="":
