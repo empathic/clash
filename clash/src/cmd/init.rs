@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use tracing::{Level, error, info, instrument, warn};
 
+use crate::agents::AgentKind;
 use crate::settings::ClashSettings;
 use crate::style;
 use crate::ui;
@@ -16,61 +17,78 @@ struct InitActions {
 /// GitHub repository used to install the clash plugin marketplace.
 const GITHUB_MARKETPLACE: &str = "empathic/clash";
 
+/// Embedded agent plugin files — compiled into the binary so `clash init --agent <name>`
+/// can install them without needing the source repo.
+const OPENCODE_PLUGIN_TS: &str = include_str!("../../../clash-opencode/plugin.ts");
+const COPILOT_HOOKS_JSON: &str = include_str!("../../../clash-copilot/.github/hooks/pre-tool-use.json");
+const CODEX_HOOKS_TOML: &str = include_str!("../../../clash-codex/hooks.toml");
+const AMAZONQ_AGENT_JSON: &str = include_str!("../../../clash-amazonq/agent.json");
+const GEMINI_EXTENSION_JSON: &str = include_str!("../../../clash-gemini-ext/gemini-extension.json");
+const GEMINI_HOOKS_JSON: &str = include_str!("../../../clash-gemini-ext/hooks/hooks.json");
+
 /// Initialize clash at the chosen scope.
 ///
-/// When `scope` is provided ("user" or "project"), initializes that scope
-/// directly. When omitted, runs the interactive policy editor.
-/// Only one scope is initialized per invocation.
-#[instrument(level = Level::TRACE)]
-pub fn run(scope: Option<String>, quick: bool, agent: crate::agents::AgentKind) -> Result<()> {
-    if agent != crate::agents::AgentKind::Claude {
-        return run_init_agent(agent, scope);
-    }
-    match scope.as_deref() {
-        Some("project") => run_init_project(),
-        _ if quick => run_init_quick(),
-        _ => run_init_user(),
-    }
-}
-
-/// Initialize or reconfigure the user-level policy via the interactive editor.
-fn run_init_user() -> Result<()> {
-    let mut actions = InitActions::default();
-
-    let policy_path = write_starter_policy()?;
-    crate::tui::run_with_options(&policy_path, false, true)?;
-    actions.policy_created = true;
-
-    // Always ensure settings.json records clash as an enabled plugin.
-    let claude = claude_settings::ClaudeSettings::new();
-    if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true) {
-        warn!(error = %e, "Could not set enabledPlugins in Claude Code settings");
-    }
-
-    // Install the Claude Code plugin from GitHub.
-    match install_plugin() {
-        Ok(()) => {
-            actions.plugin_installed = true;
-        }
-        Err(e) => {
-            error!(error = %e, "Could not install clash plugin");
-            ui::warn(&format!(
-                "Could not install the clash plugin: {e}\n  \
-                 You can install it manually later:\n    \
-                 claude plugin marketplace add {GITHUB_MARKETPLACE}\n    \
-                 claude plugin install clash"
-            ));
-        }
+/// All agents share the same onboarding flow: agent selection (if not
+/// specified), policy setup (interactive, quick, or project), then
+/// agent-specific plugin installation.
+/// Install just the agent plugin/hooks, skipping policy setup.
+pub fn run_install(agent: Option<AgentKind>) -> Result<()> {
+    let agent = match agent {
+        Some(a) => a,
+        None => *crate::dialog::select::<AgentKind>("Which coding agent are you installing for?")?,
     };
 
-    // Install the status line so the user gets ambient policy visibility.
-    if let Err(e) = super::statusline::install() {
-        warn!(error = %e, "Could not install status line");
-    } else {
-        actions.statusline_installed = true;
+    let installed = install_agent_plugin(agent)?;
+    if installed {
+        println!();
+        println!(
+            "  Run: {}",
+            style::bold(&format!("clash doctor --agent {agent}"))
+        );
+        println!("  to verify the setup is correct.");
+    }
+    Ok(())
+}
+
+#[instrument(level = Level::TRACE)]
+pub fn run(scope: Option<String>, quick: bool, agent: Option<AgentKind>) -> Result<()> {
+    let agent = match agent {
+        Some(a) => a,
+        None => *crate::dialog::select::<AgentKind>("Which coding agent are you using?")?,
+    };
+
+    let mut actions = InitActions::default();
+
+    // 1. Policy setup — same for all agents.
+    match scope.as_deref() {
+        Some("project") => {
+            run_init_project()?;
+            actions.policy_created = true;
+        }
+        _ if quick => {
+            run_init_quick()?;
+            actions.policy_created = true;
+        }
+        _ => {
+            let policy_path = write_starter_policy()?;
+            crate::tui::run_with_options(&policy_path, false, true)?;
+            actions.policy_created = true;
+        }
     }
 
-    print_user_summary(&actions);
+    // 2. Agent-specific plugin installation.
+    actions.plugin_installed = install_agent_plugin(agent)?;
+
+    // 3. Claude-specific extras: status line.
+    if agent == AgentKind::Claude {
+        if let Err(e) = super::statusline::install() {
+            warn!(error = %e, "Could not install status line");
+        } else {
+            actions.statusline_installed = true;
+        }
+    }
+
+    print_summary(&actions, agent);
 
     Ok(())
 }
@@ -122,28 +140,6 @@ fn run_init_quick() -> Result<()> {
         policy_path.display()
     ));
 
-    // Ensure settings.json records clash as an enabled plugin.
-    let claude = claude_settings::ClaudeSettings::new();
-    if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true) {
-        warn!(error = %e, "Could not set enabledPlugins in Claude Code settings");
-    }
-
-    // Install the Claude Code plugin from GitHub.
-    if let Err(e) = install_plugin() {
-        error!(error = %e, "Could not install clash plugin");
-        ui::warn(&format!(
-            "Could not install the clash plugin: {e}\n  \
-             You can install it manually later:\n    \
-             claude plugin marketplace add {GITHUB_MARKETPLACE}\n    \
-             claude plugin install clash"
-        ));
-    }
-
-    // Install the status line so the user gets ambient policy visibility.
-    if let Err(e) = super::statusline::install() {
-        warn!(error = %e, "Could not install status line");
-    }
-
     Ok(())
 }
 
@@ -174,26 +170,6 @@ fn run_init_project() -> Result<()> {
         "Project policy initialized at {}",
         policy_path.display()
     ));
-
-    println!();
-    println!("{}", style::bold("Setup complete!"));
-    println!();
-    ui::success(&format!(
-        "Project policy created at {}",
-        policy_path.display()
-    ));
-    println!();
-    println!("{}:", style::bold("Next steps"));
-    println!(
-        "  {}  {}",
-        style::dim("clash policy show"),
-        style::dim("# view the compiled policy")
-    );
-    println!(
-        "  {}  {}",
-        style::dim("clash policy validate"),
-        style::dim("# check for errors")
-    );
 
     Ok(())
 }
@@ -281,7 +257,193 @@ pub fn write_starter_policy() -> Result<std::path::PathBuf> {
     Ok(policy_path)
 }
 
-fn print_user_summary(actions: &InitActions) {
+// ---------------------------------------------------------------------------
+// Agent plugin installation
+// ---------------------------------------------------------------------------
+
+/// Install the agent-specific plugin/hooks. Returns true if installation succeeded.
+fn install_agent_plugin(agent: AgentKind) -> Result<bool> {
+    println!();
+    style::header(&format!("Installing {agent} plugin"));
+    println!();
+
+    match agent {
+        AgentKind::Claude => install_claude_plugin(),
+        AgentKind::Gemini => install_gemini_plugin(),
+        AgentKind::Codex => install_codex_plugin(),
+        AgentKind::AmazonQ => install_amazonq_plugin(),
+        AgentKind::OpenCode => install_opencode_plugin(),
+        AgentKind::Copilot => install_copilot_plugin(),
+    }
+}
+
+fn install_claude_plugin() -> Result<bool> {
+    // Ensure settings.json records clash as an enabled plugin.
+    let claude = claude_settings::ClaudeSettings::new();
+    if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true) {
+        warn!(error = %e, "Could not set enabledPlugins in Claude Code settings");
+    }
+
+    match install_plugin_from_marketplace() {
+        Ok(()) => Ok(true),
+        Err(e) => {
+            error!(error = %e, "Could not install clash plugin");
+            ui::warn(&format!(
+                "Could not install the clash plugin: {e}\n  \
+                 You can install it manually later:\n    \
+                 claude plugin marketplace add {GITHUB_MARKETPLACE}\n    \
+                 claude plugin install clash"
+            ));
+            Ok(false)
+        }
+    }
+}
+
+fn install_gemini_plugin() -> Result<bool> {
+    let ext_dir = std::env::temp_dir().join("clash-gemini-ext");
+    let hooks_dir = ext_dir.join("hooks");
+    std::fs::create_dir_all(&hooks_dir)
+        .context("failed to create hooks directory in temp extension")?;
+    std::fs::write(ext_dir.join("gemini-extension.json"), GEMINI_EXTENSION_JSON)
+        .context("failed to write gemini-extension.json")?;
+    std::fs::write(hooks_dir.join("hooks.json"), GEMINI_HOOKS_JSON)
+        .context("failed to write hooks/hooks.json")?;
+
+    let output = std::process::Command::new("gemini")
+        .args(["extensions", "install", &ext_dir.display().to_string()])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            ui::success("Clash extension installed in Gemini CLI");
+            Ok(true)
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            ui::warn(&format!(
+                "Could not install Gemini extension: {stderr}\n  \
+                 You can install it manually later:\n    \
+                 gemini extensions install <path-to-extension-dir>"
+            ));
+            Ok(false)
+        }
+        Err(e) => {
+            ui::warn(&format!(
+                "Could not run gemini CLI: {e}\n  \
+                 Install the Gemini CLI, then run:\n    \
+                 clash init --agent gemini"
+            ));
+            Ok(false)
+        }
+    }
+}
+
+fn install_codex_plugin() -> Result<bool> {
+    let codex_dir = dirs::home_dir()
+        .context("could not determine home directory")?
+        .join(".codex");
+    std::fs::create_dir_all(&codex_dir)
+        .with_context(|| format!("failed to create {}", codex_dir.display()))?;
+    let dest = codex_dir.join("config.toml");
+    let clash_hooks: toml::Value = toml::from_str(CODEX_HOOKS_TOML)
+        .context("failed to parse embedded Codex hooks TOML")?;
+    if dest.exists() {
+        let existing = std::fs::read_to_string(&dest)
+            .with_context(|| format!("failed to read {}", dest.display()))?;
+        let mut config: toml::Value = toml::from_str(&existing)
+            .with_context(|| format!("failed to parse {}", dest.display()))?;
+        // Merge clash hooks into the existing [hooks] table.
+        let hooks_table = config
+            .as_table_mut()
+            .context("codex config is not a TOML table")?
+            .entry("hooks")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if let (Some(dst), Some(src)) =
+            (hooks_table.as_table_mut(), clash_hooks.get("hooks").and_then(|h| h.as_table()))
+        {
+            for (key, value) in src {
+                dst.insert(key.clone(), value.clone());
+            }
+        }
+        std::fs::write(&dest, toml::to_string_pretty(&config)?)
+            .with_context(|| format!("failed to write {}", dest.display()))?;
+        ui::success(&format!("Clash hooks merged into {}", dest.display()));
+    } else {
+        std::fs::write(&dest, CODEX_HOOKS_TOML)
+            .with_context(|| format!("failed to write {}", dest.display()))?;
+        ui::success(&format!("Hooks config installed at {}", dest.display()));
+    }
+    Ok(true)
+}
+
+fn install_amazonq_plugin() -> Result<bool> {
+    let amazonq_dir = dirs::home_dir()
+        .context("could not determine home directory")?
+        .join(".amazonq");
+    std::fs::create_dir_all(&amazonq_dir)
+        .with_context(|| format!("failed to create {}", amazonq_dir.display()))?;
+    let dest = amazonq_dir.join("agent.json");
+    let clash_hooks: serde_json::Value = serde_json::from_str(AMAZONQ_AGENT_JSON)
+        .context("failed to parse embedded Amazon Q hooks JSON")?;
+    if dest.exists() {
+        let existing = std::fs::read_to_string(&dest)
+            .with_context(|| format!("failed to read {}", dest.display()))?;
+        let mut config: serde_json::Value = serde_json::from_str(&existing)
+            .with_context(|| format!("failed to parse {}", dest.display()))?;
+        // Merge clash hook arrays into the existing "hooks" object.
+        let dst_hooks = config
+            .as_object_mut()
+            .context("amazonq config is not a JSON object")?
+            .entry("hooks")
+            .or_insert_with(|| json!({}));
+        if let (Some(dst), Some(src)) =
+            (dst_hooks.as_object_mut(), clash_hooks.get("hooks").and_then(|h| h.as_object()))
+        {
+            for (key, value) in src {
+                dst.insert(key.clone(), value.clone());
+            }
+        }
+        std::fs::write(&dest, serde_json::to_string_pretty(&config)?)
+            .with_context(|| format!("failed to write {}", dest.display()))?;
+        ui::success(&format!("Clash hooks merged into {}", dest.display()));
+    } else {
+        std::fs::write(&dest, AMAZONQ_AGENT_JSON)
+            .with_context(|| format!("failed to write {}", dest.display()))?;
+        ui::success(&format!("Hooks config installed at {}", dest.display()));
+    }
+    Ok(true)
+}
+
+fn install_opencode_plugin() -> Result<bool> {
+    let plugins_dir = dirs::home_dir()
+        .context("could not determine home directory")?
+        .join(".opencode")
+        .join("plugins");
+    std::fs::create_dir_all(&plugins_dir)
+        .context("failed to create ~/.opencode/plugins directory")?;
+    let dest = plugins_dir.join("clash.ts");
+    std::fs::write(&dest, OPENCODE_PLUGIN_TS)
+        .with_context(|| format!("failed to write {}", dest.display()))?;
+    ui::success(&format!("Plugin installed at {}", dest.display()));
+    Ok(true)
+}
+
+fn install_copilot_plugin() -> Result<bool> {
+    let hooks_dir = std::path::Path::new(".github/hooks");
+    std::fs::create_dir_all(hooks_dir)
+        .context("failed to create .github/hooks directory")?;
+    let dest = hooks_dir.join("pre-tool-use.json");
+    std::fs::write(&dest, COPILOT_HOOKS_JSON)
+        .with_context(|| format!("failed to write {}", dest.display()))?;
+    ui::success(&format!("Hooks installed at {}", dest.display()));
+    Ok(true)
+}
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+
+fn print_summary(actions: &InitActions, agent: AgentKind) {
     let any_action =
         actions.policy_created || actions.plugin_installed || actions.statusline_installed;
     if !any_action {
@@ -299,7 +461,7 @@ fn print_user_summary(actions: &InitActions) {
         ui::success("Policy created");
     }
     if actions.plugin_installed {
-        ui::success("Clash plugin installed in Claude Code");
+        ui::success(&format!("Clash plugin installed for {agent}"));
     }
     if actions.statusline_installed {
         ui::success("Status line installed");
@@ -324,114 +486,22 @@ fn print_user_summary(actions: &InitActions) {
     println!("{}:", style::bold("Next steps"));
     println!(
         "  {}  {}",
-        style::dim("claude"),
-        style::dim("# start a session with clash active")
+        style::dim(&format!("clash doctor --agent {agent}")),
+        style::dim("# verify the setup is correct")
     );
     println!(
         "  {}  {}",
-        style::dim("/clash:status"),
-        style::dim("# check policy status inside a session")
-    );
-    println!(
-        "  {}  {}",
-        style::dim("/clash:edit"),
-        style::dim("# interactively edit your policy")
+        style::dim("clash policy show"),
+        style::dim("# view the compiled policy")
     );
 }
 
-/// Initialize clash for a non-Claude agent.
-///
-/// Creates the policy (same policy file — portable across agents) and prints
-/// agent-specific setup instructions.
-fn run_init_agent(agent: crate::agents::AgentKind, scope: Option<String>) -> Result<()> {
-    use crate::agents::AgentKind;
-
-    // Write the policy (same as Claude — policies are agent-agnostic).
-    let settings_dir = if scope.as_deref() == Some("project") {
-        let root = ClashSettings::project_root()
-            .context("could not find project root — are you inside a git repository?")?;
-        let dir = root.join(".clash");
-        std::fs::create_dir_all(&dir)?;
-        dir
-    } else {
-        let dir = ClashSettings::settings_dir()
-            .context("could not determine clash settings directory")?;
-        std::fs::create_dir_all(&dir)?;
-        dir
-    };
-
-    let policy_path = settings_dir.join("policy.star");
-    if !policy_path.exists() {
-        write_starter_policy()?;
-        ui::success(&format!("Policy created at {}", policy_path.display()));
-    } else {
-        ui::info(&format!(
-            "Policy already exists at {}",
-            policy_path.display()
-        ));
-    }
-
-    // Print agent-specific setup instructions.
-    println!();
-    style::header(&format!("Setup instructions for {agent}"));
-    println!();
-
-    match agent {
-        AgentKind::Gemini => {
-            println!("  Install the Clash extension for Gemini CLI:");
-            println!(
-                "    {}",
-                style::bold("gemini extensions install <path-to-clash-gemini-ext>")
-            );
-            println!();
-            println!("  Or copy hooks manually to ~/.gemini/settings.json.");
-        }
-        AgentKind::Codex => {
-            println!("  Add the following to your ~/.codex/config.toml:");
-            println!();
-            println!("    {}", style::dim("[hooks.pre_tool_use]"));
-            println!(
-                "    {}",
-                style::dim("command = \"clash hook --agent codex pre-tool-use\"")
-            );
-            println!("    {}", style::dim("timeout_seconds = 10"));
-            println!("    {}", style::dim("pattern = \"*\""));
-            println!();
-            println!("  See clash-codex/hooks.toml for the full configuration.");
-        }
-        AgentKind::AmazonQ => {
-            println!("  Add Clash hooks to your Amazon Q agent configuration.");
-            println!("  See clash-amazonq/agent.json for the hook definitions.");
-        }
-        AgentKind::OpenCode => {
-            println!("  Copy the Clash plugin to your OpenCode plugins directory:");
-            println!(
-                "    {}",
-                style::bold("cp clash-opencode/plugin.ts .opencode/plugins/clash.ts")
-            );
-        }
-        AgentKind::Copilot => {
-            println!("  Copy the hooks configuration to your repository:");
-            println!(
-                "    {}",
-                style::bold("cp -r clash-copilot/.github/hooks .github/hooks")
-            );
-        }
-        AgentKind::Claude => unreachable!(),
-    }
-
-    println!();
-    println!(
-        "  Then run: {}",
-        style::bold(&format!("clash doctor --agent {agent}"))
-    );
-    println!("  to verify the setup is correct.");
-
-    Ok(())
-}
+// ---------------------------------------------------------------------------
+// Claude marketplace helpers
+// ---------------------------------------------------------------------------
 
 /// Install the clash plugin into Claude Code from the GitHub marketplace.
-pub fn install_plugin() -> Result<()> {
+pub fn install_plugin_from_marketplace() -> Result<()> {
     ui::progress(&format!(
         "Installing clash plugin from {}...",
         GITHUB_MARKETPLACE,

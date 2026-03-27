@@ -14,7 +14,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::AgentKind;
-use crate::hooks::{SessionStartHookInput, ToolUseHookInput};
+use crate::hooks::{SessionStartHookInput, StopHookInput, ToolUseHookInput};
 
 /// Abstraction over agent-specific hook JSON formats.
 ///
@@ -62,6 +62,18 @@ pub trait HookProtocol {
             hook_event_name: json_str_or(raw, "hook_event_name", "SessionStart").to_string(),
             source: raw.get("source").and_then(|v| v.as_str()).map(String::from),
             model: raw.get("model").and_then(|v| v.as_str()).map(String::from),
+        })
+    }
+
+    /// Parse the agent's Stop JSON.
+    ///
+    /// Default: extracts common fields (session_id, cwd).
+    fn parse_stop(&self, raw: &Value) -> Result<StopHookInput> {
+        Ok(StopHookInput {
+            session_id: json_str(raw, "session_id").to_string(),
+            transcript_path: json_str(raw, "transcript_path").to_string(),
+            cwd: json_str(raw, "cwd").to_string(),
+            hook_event_name: json_str_or(raw, "hook_event_name", "Stop").to_string(),
         })
     }
 
