@@ -177,6 +177,9 @@ impl App {
             terminal.draw(|frame| self.view(frame, frame.area(), &manifest_snapshot))?;
 
             let event = event::read()?;
+            if matches!(event, Event::Resize(_, _)) {
+                continue; // redraw with new dimensions
+            }
             if let Event::Key(key) = event {
                 // Walkthrough mode intercepts keys to advance steps.
                 if matches!(self.mode, Mode::Walkthrough) {
