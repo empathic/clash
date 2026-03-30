@@ -175,14 +175,13 @@ fn merge_manifest_with_includes(manifest: &PolicyManifest, base_dir: &Path) -> R
 /// Evaluate an include entry and return the compiled JSON source.
 ///
 /// For `.star` files (local or `@clash//` stdlib), evaluates through Starlark.
-/// Local `.star` includes must define a `main()` function that returns a policy.
 fn evaluate_include(include_path: &str, base_dir: &Path) -> Result<String> {
     if include_path.starts_with("@clash//") {
-        // Stdlib includes are library modules — they export values, not main().
-        // Wrap in a minimal Starlark policy that loads the export and returns it.
+        // Stdlib includes are library modules — they export values, not policies.
+        // Wrap in a minimal Starlark policy that loads the export and registers it.
         evaluate_stdlib_include(include_path)
     } else {
-        // Local .star file — must define main().
+        // Local .star file — must call policy().
         let resolved = base_dir.join(include_path);
         evaluate_star_policy(&resolved)
     }
@@ -191,22 +190,22 @@ fn evaluate_include(include_path: &str, base_dir: &Path) -> Result<String> {
 /// Evaluate a `@clash//` stdlib module by wrapping it in a Starlark policy.
 ///
 /// The wrapper loads the module, imports its `builtins` export (a list of rule
-/// nodes), and returns them wrapped in a `policy()` from `main()`.
+/// nodes), and registers them via `policy()` and `settings()`.
 fn evaluate_stdlib_include(include_path: &str) -> Result<String> {
     use clash_starlark::codegen::ast::{Expr, Stmt};
     use clash_starlark::codegen::builder::*;
 
     let wrapper = clash_starlark::codegen::serialize(&[
         Stmt::load(include_path, &["builtins"]),
-        Stmt::load("@clash//std.star", &["deny", "policy"]),
-        Stmt::def(
-            "main",
-            vec![Stmt::Return(policy(
-                deny(),
-                vec![Expr::ident("builtins")],
-                None,
-            ))],
-        ),
+        Stmt::load("@clash//std.star", &["deny", "policy", "settings"]),
+        Stmt::Blank,
+        Stmt::Expr(settings(deny(), None)),
+        Stmt::Expr(policy(
+            "include",
+            deny(),
+            vec![Expr::ident("builtins")],
+            None,
+        )),
     ]);
     let output = clash_starlark::evaluate(&wrapper, "<include>", Path::new("."))
         .with_context(|| format!("failed to evaluate stdlib include {include_path}"))?;
@@ -536,9 +535,9 @@ mod tests {
         std::fs::write(
             &star_path,
             r#"
-load("@clash//std.star", "tool", "policy", "deny")
-def main():
-    return policy(default = deny(), rules = [tool("Read").allow()])
+load("@clash//std.star", "tool", "policy", "settings", "deny")
+settings(default = deny())
+policy("include", rules = [tool("Read").allow()])
 "#,
         )
         .unwrap();

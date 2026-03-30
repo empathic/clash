@@ -24,8 +24,8 @@ use crate::tui::tool_registry;
 use super::tea::FormRequest;
 
 const PRELOADED_FUNCS: &[&str] = &[
-    "match", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains",
-    "domain", "allow", "deny", "ask",
+    "match", "tool", "policy", "settings", "sandbox", "cwd", "home", "tempdir", "path", "regex",
+    "domains", "domain", "allow", "deny", "ask",
 ];
 
 // ---------------------------------------------------------------------------
@@ -1703,11 +1703,14 @@ impl FormState {
             clash_starlark::codegen::serialize(&[
                 load_std(PRELOADED_FUNCS),
                 Stmt::Blank,
-                main_fn(vec![Stmt::Return(policy(
+                Stmt::Expr(settings(deny(), None)),
+                Stmt::Blank,
+                Stmt::Expr(policy(
+                    "tui",
                     deny(),
                     vec![Expr::raw(&expr)],
                     None,
-                ))]),
+                )),
             ])
         };
 

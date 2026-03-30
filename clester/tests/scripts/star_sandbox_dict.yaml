@@ -4,7 +4,7 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "match", "policy", "sandbox", "subpath", "allow", "deny")
+    load("@clash//std.star", "match", "policy", "settings", "sandbox", "subpath", "allow", "deny")
 
     dev_box = sandbox(
         name = "dev",
@@ -20,14 +20,14 @@ clash:
         },
     )
 
-    def main():
-        return policy(default=deny(), rules=[
-            match({"Bash": {
-                "cargo": allow(sandbox = dev_box),
-                "git": allow(sandbox = dev_box),
-            }}),
-            match({"Read": allow(sandbox = dev_box)}),
-        ])
+    settings(default=deny())
+    policy("test", rules=[
+        match({"Bash": {
+            "cargo": allow(sandbox = dev_box),
+            "git": allow(sandbox = dev_box),
+        }}),
+        match({"Read": allow(sandbox = dev_box)}),
+    ])
 
 steps:
   - name: cargo allowed with dict sandbox

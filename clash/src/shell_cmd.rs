@@ -381,17 +381,16 @@ mod tests {
             ],
         );
         let source = clash_starlark::codegen::serialize(&[
-            load_std(&["policy", "sandbox", "cwd", "match", "allow", "deny"]),
-            Stmt::def(
-                "main",
-                vec![Stmt::Return(policy(
-                    deny(),
-                    vec![clash_starlark::match_tree! {
-                        "Bash" => allow_with_sandbox(sb),
-                    }],
-                    None,
-                ))],
-            ),
+            load_std(&["policy", "settings", "sandbox", "cwd", "match", "allow", "deny"]),
+            Stmt::Expr(settings(deny(), None)),
+            Stmt::Expr(policy(
+                "test",
+                deny(),
+                vec![clash_starlark::match_tree! {
+                    "Bash" => allow_with_sandbox(sb),
+                }],
+                None,
+            )),
         ]);
         Arc::new(compile_star(&source))
     }
@@ -455,8 +454,9 @@ mod tests {
         use clash_starlark::codegen::builder::*;
 
         let source = clash_starlark::codegen::serialize(&[
-            load_std(&["allow", "policy"]),
-            Stmt::def("main", vec![Stmt::Return(policy(allow(), vec![], None))]),
+            load_std(&["allow", "policy", "settings"]),
+            Stmt::Expr(settings(allow(), None)),
+            Stmt::Expr(policy("test", allow(), vec![], None)),
         ]);
         let policy = Arc::new(compile_star(&source));
         let hook = make_sandbox_hook(policy, None, false);

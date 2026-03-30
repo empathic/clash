@@ -4,7 +4,7 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "match", "policy", "sandbox", "allow", "deny")
+    load("@clash//std.star", "match", "policy", "settings", "sandbox", "allow", "deny")
 
     fs_box = sandbox(
         name = "fs",
@@ -25,14 +25,14 @@ clash:
 
     merged = fs_box.update(home_box)
 
-    def main():
-        return policy(default=deny(), rules=[
-            match({"Bash": {
-                "cargo": allow(sandbox = merged),
-                "git": allow(sandbox = fs_box),
-            }}),
-            match({"Read": allow(sandbox = fs_box)}),
-        ])
+    settings(default=deny())
+    policy("test", rules=[
+        match({"Bash": {
+            "cargo": allow(sandbox = merged),
+            "git": allow(sandbox = fs_box),
+        }}),
+        match({"Read": allow(sandbox = fs_box)}),
+    ])
 
 steps:
   - name: cargo allowed with merged sandbox

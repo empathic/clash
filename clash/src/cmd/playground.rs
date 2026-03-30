@@ -383,8 +383,8 @@ struct PlaygroundState {
 }
 
 const STARLARK_LOAD_NAMES: &[&str] = &[
-    "match", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains",
-    "domain", "allow", "deny", "ask",
+    "match", "tool", "policy", "settings", "sandbox", "cwd", "home", "tempdir", "path", "regex",
+    "domains", "domain", "allow", "deny", "ask",
 ];
 
 impl PlaygroundState {
@@ -434,7 +434,9 @@ impl PlaygroundState {
         }
 
         let rules: Vec<Expr> = self.rules.iter().map(|r| Expr::raw(r.trim())).collect();
-        stmts.push(main_fn(vec![Stmt::Return(policy(deny(), rules, None))]));
+        stmts.push(Stmt::Expr(settings(deny(), None)));
+        stmts.push(Stmt::Blank);
+        stmts.push(Stmt::Expr(policy("playground", deny(), rules, None)));
 
         clash_starlark::codegen::serialize(&stmts)
     }
@@ -1186,10 +1188,10 @@ mod tests {
         state.rules.push(r#"tool("Read").allow()"#.to_string());
 
         let source = state.build_starlark_source();
-        assert!(source.contains("def main():"));
+        assert!(source.contains("settings("));
         assert!(source.contains(r#"match({"Bash": {"git": allow()}})"#));
         assert!(source.contains(r#"tool("Read").allow()"#));
-        assert!(source.contains("return policy("));
+        assert!(source.contains("policy("));
         assert!(source.contains("\"match\""));
         assert!(source.contains("\"allow\""));
     }
@@ -1206,7 +1208,7 @@ mod tests {
 
         let source = state.build_starlark_source();
         assert!(source.contains(r#"sb = sandbox("sb", fs=[])"#));
-        assert!(source.contains("def main():"));
+        assert!(source.contains("policy("));
     }
 
     #[test]

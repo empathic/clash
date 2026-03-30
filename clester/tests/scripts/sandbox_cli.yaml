@@ -4,11 +4,11 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "match", "policy", "allow", "deny")
-    def main():
-        return policy(default=deny(), rules=[
-            match({"Bash": {"git": allow()}}),
-        ])
+    load("@clash//std.star", "match", "policy", "settings", "allow", "deny")
+    settings(default=deny())
+    policy("test", rules=[
+        match({"Bash": {"git": allow()}}),
+    ])
 
 steps:
   - name: sandbox list shows no sandboxes initially

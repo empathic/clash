@@ -160,19 +160,23 @@ pub fn sandbox(name: &str, kwargs: Vec<(&str, Expr)>) -> Expr {
 // Policy
 // ---------------------------------------------------------------------------
 
-/// Build a `policy(default = ..., rules = [...])` expression.
-pub fn policy(default: Expr, rules: Vec<Expr>, default_sandbox: Option<Expr>) -> Expr {
+/// Build a `policy("name", rules = [...])` call statement.
+pub fn policy(name: &str, default: Expr, rules: Vec<Expr>, default_sandbox: Option<Expr>) -> Expr {
     let mut kwargs: Vec<(&str, Expr)> = vec![("default", default)];
     if let Some(sb) = default_sandbox {
         kwargs.push(("default_sandbox", sb));
     }
     kwargs.push(("rules", Expr::list(rules)));
-    Expr::call_kwargs("policy", vec![], kwargs)
+    Expr::call_kwargs("policy", vec![Expr::string(name)], kwargs)
 }
 
-/// Build a complete `def main(): return policy(...)` function.
-pub fn main_fn(body: Vec<Stmt>) -> Stmt {
-    Stmt::def("main", body)
+/// Build a `settings(default = ..., ...)` call statement.
+pub fn settings(default: Expr, default_sandbox: Option<Expr>) -> Expr {
+    let mut kwargs: Vec<(&str, Expr)> = vec![("default", default)];
+    if let Some(sb) = default_sandbox {
+        kwargs.push(("default_sandbox", sb));
+    }
+    Expr::call_kwargs("settings", vec![], kwargs)
 }
 
 // ---------------------------------------------------------------------------
@@ -243,18 +247,21 @@ mod tests {
     #[test]
     fn full_policy() {
         let stmts = vec![
-            load_std(&["match", "tool", "policy", "allow", "deny"]),
+            load_std(&["match", "tool", "policy", "settings", "allow", "deny"]),
             Stmt::Blank,
-            main_fn(vec![Stmt::Return(policy(
+            Stmt::Expr(settings(deny(), None)),
+            Stmt::Blank,
+            Stmt::Expr(policy(
+                "default",
                 deny(),
                 vec![tool(&["Read"]).allow()],
                 None,
-            ))]),
+            )),
         ];
         let src = serialize(&stmts);
         assert!(src.contains("load(\"@clash//std.star\""));
-        assert!(src.contains("def main():"));
-        assert!(src.contains("return policy("));
+        assert!(src.contains("settings("));
+        assert!(src.contains("policy(\"default\""));
         assert!(src.contains("tool([\"Read\"]).allow()"));
     }
 }

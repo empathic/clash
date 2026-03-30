@@ -91,9 +91,9 @@ fn policy_section() -> SchemaSection {
                 fields: None,
             },
             SchemaField {
-                key: "def main(): return policy(...)",
+                key: "policy(\"name\", rules=[...])",
                 type_name: "form",
-                description: "A main() function that returns a policy() value with rules",
+                description: "A top-level policy() call that registers a named policy with rules",
                 default: None,
                 values: None,
                 required: true,

@@ -468,7 +468,7 @@ mod test {
 
     #[test]
     fn load_valid_policy_succeeds() {
-        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\")\ndef main():\n    return policy(default = allow(), rules = [])\n";
+        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow())\npolicy(\"default\", rules = [])\n";
         let dir = tempfile::tempdir().unwrap();
         let policy_path = dir.path().join("policy.star");
         std::fs::write(&policy_path, star_policy).unwrap();
@@ -538,7 +538,7 @@ mod test {
         let policy_path = dir.path().join("policy.star");
         std::fs::write(
             &policy_path,
-            "load(\"@clash//std.star\", \"policy\", \"deny\")\ndef main():\n    return policy(default = deny(), rules = [])\n",
+            "load(\"@clash//std.star\", \"policy\", \"settings\", \"deny\")\nsettings(default = deny())\npolicy(\"default\", rules = [])\n",
         )
         .unwrap();
 
@@ -547,7 +547,7 @@ mod test {
 
         // Verify original content is preserved.
         let contents = std::fs::read_to_string(&policy_path).unwrap();
-        assert!(contents.contains("def main"), "original content preserved");
+        assert!(contents.contains("policy("), "original content preserved");
     }
 
     #[test]

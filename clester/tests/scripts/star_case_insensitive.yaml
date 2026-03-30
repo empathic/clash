@@ -4,13 +4,13 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "tool", "policy", "deny")
-    def main():
-        return policy(default=deny(), rules=[
-            tool("bash").allow(),
-            tool("READ").allow(),
-            tool("Shell").deny(),
-        ])
+    load("@clash//std.star", "tool", "policy", "settings", "deny")
+    settings(default=deny())
+    policy("test", rules=[
+        tool("bash").allow(),
+        tool("READ").allow(),
+        tool("Shell").deny(),
+    ])
 
 steps:
   - name: Lowercase "bash" matches Bash (first match wins)

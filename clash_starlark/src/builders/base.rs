@@ -1,6 +1,6 @@
-//! Base policy value — the return type of `main()`.
+//! Base policy value — wraps a v5 match tree JSON document.
 //!
-//! Wraps a v5 match tree JSON document.
+//! Used by `_mt_policy()` (the legacy match_tree.star path).
 
 use std::fmt::{self, Display};
 
@@ -9,9 +9,9 @@ use serde_json::Value as JsonValue;
 use starlark::starlark_simple_value;
 use starlark::values::{NoSerialize, ProvidesStaticType, StarlarkValue, Trace, starlark_value};
 
-/// A base policy value — the return type of `main()`.
+/// A base policy value wrapping a v5 match tree document.
 ///
-/// Created by `_mt_policy()` which builds a v5 match tree document.
+/// Created by `_mt_policy()` for the legacy match_tree.star path.
 #[derive(Debug, Clone, ProvidesStaticType, NoSerialize, Allocative)]
 pub struct BasePolicyValue {
     /// The v5 JSON document.

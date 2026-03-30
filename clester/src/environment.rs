@@ -275,12 +275,12 @@ mod tests {
     #[test]
     fn test_project_policy_star_file_written() {
         let config = SettingsConfig::default();
-        let user_star = r#"load("@clash//std.star", "exe", "policy")
-def main():
-    return policy(default=deny, rules=[exe("git").allow()])"#;
-        let project_star = r#"load("@clash//std.star", "exe", "policy")
-def main():
-    return policy(default=deny, rules=[exe("git", args=["push"]).deny()])"#;
+        let user_star = r#"load("@clash//std.star", "exe", "settings", "policy")
+settings(default=deny)
+policy("test", rules=[exe("git").allow()])"#;
+        let project_star = r#"load("@clash//std.star", "exe", "settings", "policy")
+settings(default=deny)
+policy("test", rules=[exe("git", args=["push"]).deny()])"#;
         let clash = ClashConfig {
             policy: None,
             policy_raw: None,
@@ -301,9 +301,9 @@ def main():
     #[test]
     fn test_policy_star_file_written() {
         let config = SettingsConfig::default();
-        let star = r#"load("@clash//std.star", "exe", "policy")
-def main():
-    return policy(default=deny, rules=[exe("git").allow()])"#;
+        let star = r#"load("@clash//std.star", "exe", "settings", "policy")
+settings(default=deny)
+policy("test", rules=[exe("git").allow()])"#;
         let clash = ClashConfig {
             policy: None,
             policy_raw: None,
@@ -313,7 +313,7 @@ def main():
 
         let env = TestEnvironment::setup(&config, Some(&clash)).unwrap();
         let content = std::fs::read_to_string(env.home_dir.join(".clash/policy.star")).unwrap();
-        assert!(content.contains("default=deny"));
+        assert!(content.contains("settings(default=deny)"));
         assert!(content.contains("exe(\"git\").allow()"));
     }
 }

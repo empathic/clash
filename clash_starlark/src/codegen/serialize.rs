@@ -470,41 +470,43 @@ load(\"@clash//std.star\",
         let stmts = vec![
             Stmt::load(
                 "@clash//std.star",
-                &["match", "tool", "policy", "allow", "ask"],
+                &["match", "tool", "policy", "settings", "allow", "ask"],
             ),
             Stmt::Blank,
-            Stmt::def(
-                "main",
-                vec![Stmt::Return(policy(
-                    ask(),
-                    vec![
-                        crate::match_tree! {
-                            "Bash" => {
-                                ("git", "cargo") => allow(),
-                            },
+            Stmt::Expr(settings(ask(), None)),
+            Stmt::Blank,
+            Stmt::Expr(policy(
+                "test",
+                ask(),
+                vec![
+                    crate::match_tree! {
+                        "Bash" => {
+                            ("git", "cargo") => allow(),
                         },
-                        tool(&["Read"]).allow(),
-                        tool(&["Write"]).allow(),
-                    ],
-                    None,
-                ))],
-            ),
+                    },
+                    tool(&["Read"]).allow(),
+                    tool(&["Write"]).allow(),
+                ],
+                None,
+            )),
         ];
         let src = serialize(&stmts);
         assert_eq!(
             src,
             "\
-load(\"@clash//std.star\", \"match\", \"tool\", \"policy\", \"allow\", \"ask\")
+load(\"@clash//std.star\", \"match\", \"tool\", \"policy\", \"settings\", \"allow\", \"ask\")
 
-def main():
-    return policy(
-        default = ask(),
-        rules = [
-            match({\"Bash\": {(\"git\", \"cargo\"): allow()}}),
-            tool([\"Read\"]).allow(),
-            tool([\"Write\"]).allow(),
-        ],
-    )
+settings(default = ask())
+
+policy(
+    \"test\",
+    default = ask(),
+    rules = [
+        match({\"Bash\": {(\"git\", \"cargo\"): allow()}}),
+        tool([\"Read\"]).allow(),
+        tool([\"Write\"]).allow(),
+    ],
+)
 "
         );
     }
