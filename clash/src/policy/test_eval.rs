@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 
 use crate::policy::Effect;
-use crate::policy::ir::PolicyDecision;
+use crate::policy::ir::PolicyEvaluation;
 use crate::policy::match_tree::CompiledPolicy;
 
 /// The result of testing a tool invocation against a policy.
@@ -17,7 +17,7 @@ pub struct TestResult {
     /// The resolved tool input JSON.
     pub tool_input: serde_json::Value,
     /// The policy decision.
-    pub decision: PolicyDecision,
+    pub decision: PolicyEvaluation,
 }
 
 impl TestResult {

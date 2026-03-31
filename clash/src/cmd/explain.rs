@@ -7,7 +7,6 @@ use crate::policy::match_tree::QueryContext;
 use crate::settings::ClashSettings;
 use crate::style;
 use crate::trace_display;
-use crate::ui;
 
 /// Explain which policy rule would match a given tool invocation.
 ///
@@ -47,11 +46,12 @@ pub fn run(json_output: bool, trace_mode: bool, tool: String, input_args: String
             let output = trace_display::trace_to_json(&policy_trace);
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
-            ui::print_tool_header("Input:", &tool_name, &tool_input);
-            println!();
+            let mut lines = display::format_tool_header("Input:", &tool_name, &tool_input);
+            lines.push(String::new());
             for line in trace_display::render_trace(&policy_trace) {
-                println!("{line}");
+                lines.push(line);
             }
+            println!("{}", lines.join("\n"));
         }
     } else {
         let decision = tree.evaluate(&tool_name, &tool_input);
@@ -60,15 +60,16 @@ pub fn run(json_output: bool, trace_mode: bool, tool: String, input_args: String
             let output = display::decision_to_json(&decision);
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
-            ui::print_tool_header("Input:", &tool_name, &tool_input);
-            println!();
-            ui::print_decision(&decision);
+            let mut lines = display::format_tool_header("Input:", &tool_name, &tool_input);
+            lines.push(String::new());
+            lines.extend(display::format_decision(&decision));
 
             if let Some(ref sandbox) = decision.sandbox {
-                println!();
-                println!("{}", style::header("Sandbox policy:"));
-                ui::print_sandbox_summary(sandbox);
+                lines.push(String::new());
+                lines.push(style::header("Sandbox policy:").to_string());
+                lines.extend(display::format_sandbox_summary(sandbox));
             }
+            println!("{}", lines.join("\n"));
         }
     }
 

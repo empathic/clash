@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::policy::Effect;
-use crate::policy::ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
+use crate::policy::ir::{DecisionTrace, PolicyEvaluation, RuleMatch, RuleSkip};
 use crate::policy::sandbox_types::SandboxPolicy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -203,13 +203,13 @@ impl Observable {
 pub struct SandboxRef(pub String);
 
 // ---------------------------------------------------------------------------
-// Decision
+// MatchVerdict
 // ---------------------------------------------------------------------------
 
 /// A leaf decision in the match tree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Decision {
+pub enum MatchVerdict {
     /// Allow, optionally with a sandbox.
     Allow(Option<SandboxRef>),
     /// Deny.
@@ -218,19 +218,19 @@ pub enum Decision {
     Ask(Option<SandboxRef>),
 }
 
-impl Decision {
+impl MatchVerdict {
     pub fn effect(&self) -> Effect {
         match self {
-            Decision::Allow(_) => Effect::Allow,
-            Decision::Deny => Effect::Deny,
-            Decision::Ask(_) => Effect::Ask,
+            MatchVerdict::Allow(_) => Effect::Allow,
+            MatchVerdict::Deny => Effect::Deny,
+            MatchVerdict::Ask(_) => Effect::Ask,
         }
     }
 
     pub fn sandbox_ref(&self) -> Option<&SandboxRef> {
         match self {
-            Decision::Allow(sb) | Decision::Ask(sb) => sb.as_ref(),
-            Decision::Deny => None,
+            MatchVerdict::Allow(sb) | MatchVerdict::Ask(sb) => sb.as_ref(),
+            MatchVerdict::Deny => None,
         }
     }
 }
@@ -261,7 +261,7 @@ pub enum Node {
         terminal: bool,
     },
     /// A leaf decision.
-    Decision(Decision),
+    Decision(MatchVerdict),
 }
 
 impl Node {
@@ -622,7 +622,7 @@ pub struct TraceEntry {
 /// Evaluate the match tree against a query context.
 ///
 /// Returns the first decision found via DFS, or None if no branch matches.
-pub fn eval(nodes: &[Node], ctx: &QueryContext) -> Option<Decision> {
+pub fn eval(nodes: &[Node], ctx: &QueryContext) -> Option<MatchVerdict> {
     for node in nodes {
         match node {
             Node::Decision(d) => return Some(d.clone()),
@@ -650,7 +650,7 @@ pub fn eval_traced(
     ctx: &QueryContext,
     trace: &mut EvalTrace,
     path: &mut Vec<String>,
-) -> Option<Decision> {
+) -> Option<MatchVerdict> {
     for node in nodes {
         match node {
             Node::Decision(d) => return Some(d.clone()),
@@ -799,7 +799,7 @@ fn matches_observable(
 
 impl CompiledPolicy {
     /// Evaluate this policy against a tool invocation.
-    pub fn evaluate(&self, tool_name: &str, tool_input: &serde_json::Value) -> PolicyDecision {
+    pub fn evaluate(&self, tool_name: &str, tool_input: &serde_json::Value) -> PolicyEvaluation {
         let ctx = QueryContext::from_tool(tool_name, tool_input);
         self.evaluate_ctx(&ctx)
     }
@@ -810,7 +810,7 @@ impl CompiledPolicy {
         tool_name: &str,
         tool_input: &serde_json::Value,
         mode: Option<&str>,
-    ) -> PolicyDecision {
+    ) -> PolicyEvaluation {
         self.evaluate_with_context(tool_name, tool_input, mode, None)
     }
 
@@ -821,7 +821,7 @@ impl CompiledPolicy {
         tool_input: &serde_json::Value,
         mode: Option<&str>,
         agent_name: Option<&str>,
-    ) -> PolicyDecision {
+    ) -> PolicyEvaluation {
         let mut ctx = QueryContext::from_tool(tool_name, tool_input);
         ctx.mode = mode.map(|m| m.to_string());
         ctx.agent_name = agent_name.map(|a| a.to_string());
@@ -842,7 +842,7 @@ impl CompiledPolicy {
     }
 
     /// Evaluate this policy against a prepared query context.
-    pub fn evaluate_ctx(&self, ctx: &QueryContext) -> PolicyDecision {
+    pub fn evaluate_ctx(&self, ctx: &QueryContext) -> PolicyEvaluation {
         let mut trace = EvalTrace::default();
         let mut path = Vec::new();
 
@@ -888,7 +888,7 @@ impl CompiledPolicy {
                     None => format!("result: {effect}"),
                 };
 
-                PolicyDecision {
+                PolicyEvaluation {
                     effect,
                     reason: Some(resolution.clone()),
                     trace: self.build_decision_trace(&trace, &resolution),
@@ -899,7 +899,7 @@ impl CompiledPolicy {
             None => {
                 let resolution = format!("no rules matched, default: {}", self.default_effect);
 
-                PolicyDecision {
+                PolicyEvaluation {
                     effect: self.default_effect,
                     reason: Some(resolution.clone()),
                     trace: self.build_decision_trace(&trace, &resolution),
@@ -1141,9 +1141,9 @@ mod tests {
 
     #[test]
     fn simple_decision() {
-        let nodes = vec![Node::Decision(Decision::Allow(None))];
+        let nodes = vec![Node::Decision(MatchVerdict::Allow(None))];
         let ctx = make_ctx("Bash", "echo hello");
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Allow(None)));
     }
 
     #[test]
@@ -1151,13 +1151,13 @@ mod tests {
         let nodes = vec![Node::Condition {
             observe: Observable::ToolName,
             pattern: Pattern::Literal(Value::Literal("Bash".into())),
-            children: vec![Node::Decision(Decision::Allow(None))],
+            children: vec![Node::Decision(MatchVerdict::Allow(None))],
             doc: None,
             source: None,
             terminal: false,
         }];
         let ctx = make_ctx("Bash", "echo hello");
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Allow(None)));
     }
 
     #[test]
@@ -1165,7 +1165,7 @@ mod tests {
         let nodes = vec![Node::Condition {
             observe: Observable::ToolName,
             pattern: Pattern::Literal(Value::Literal("Read".into())),
-            children: vec![Node::Decision(Decision::Allow(None))],
+            children: vec![Node::Decision(MatchVerdict::Allow(None))],
             doc: None,
             source: None,
             terminal: false,
@@ -1186,7 +1186,7 @@ mod tests {
                 children: vec![Node::Condition {
                     observe: Observable::PositionalArg(1),
                     pattern: Pattern::Literal(Value::Literal("commit".into())),
-                    children: vec![Node::Decision(Decision::Deny)],
+                    children: vec![Node::Decision(MatchVerdict::Deny)],
                     doc: None,
                     source: None,
                     terminal: true,
@@ -1202,7 +1202,7 @@ mod tests {
 
         // Exact match: "git commit" → deny
         let ctx = make_ctx("Bash", "git commit");
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Deny));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Deny));
 
         // Extra args: "git commit --amend" → no match (terminal blocks it)
         let ctx = make_ctx("Bash", "git commit --amend");
@@ -1219,14 +1219,14 @@ mod tests {
         let nodes = vec![Node::Condition {
             observe: Observable::PositionalArg(0),
             pattern: Pattern::Literal(Value::Literal("ls".into())),
-            children: vec![Node::Decision(Decision::Allow(None))],
+            children: vec![Node::Decision(MatchVerdict::Allow(None))],
             doc: None,
             source: None,
             terminal: true,
         }];
 
         let ctx = make_ctx("Bash", "ls");
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Allow(None)));
 
         let ctx = make_ctx("Bash", "ls -la");
         assert_eq!(eval(&nodes, &ctx), None);
@@ -1241,7 +1241,7 @@ mod tests {
             children: vec![Node::Condition {
                 observe: Observable::PositionalArg(1),
                 pattern: Pattern::Literal(Value::Literal("commit".into())),
-                children: vec![Node::Decision(Decision::Allow(None))],
+                children: vec![Node::Decision(MatchVerdict::Allow(None))],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -1252,7 +1252,7 @@ mod tests {
         }];
 
         let ctx = make_ctx("Bash", "git commit --amend");
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Allow(None)));
     }
 
     #[test]
@@ -1263,7 +1263,7 @@ mod tests {
             children: vec![Node::Condition {
                 observe: Observable::PositionalArg(0),
                 pattern: Pattern::Literal(Value::Literal("git".into())),
-                children: vec![Node::Decision(Decision::Allow(None))],
+                children: vec![Node::Decision(MatchVerdict::Allow(None))],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -1273,7 +1273,7 @@ mod tests {
             terminal: false,
         }];
         let ctx = make_ctx("Bash", "git push");
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Allow(None)));
     }
 
     #[test]
@@ -1284,7 +1284,7 @@ mod tests {
             children: vec![Node::Condition {
                 observe: Observable::HasArg,
                 pattern: Pattern::Literal(Value::Literal("--force".into())),
-                children: vec![Node::Decision(Decision::Deny)],
+                children: vec![Node::Decision(MatchVerdict::Deny)],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -1294,7 +1294,7 @@ mod tests {
             terminal: false,
         }];
         let ctx = make_ctx("Bash", "git push --force origin main");
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Deny));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Deny));
     }
 
     #[test]
@@ -1305,7 +1305,7 @@ mod tests {
             children: vec![Node::Condition {
                 observe: Observable::HasArg,
                 pattern: Pattern::Literal(Value::Literal("--force".into())),
-                children: vec![Node::Decision(Decision::Deny)],
+                children: vec![Node::Decision(MatchVerdict::Deny)],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -1325,7 +1325,7 @@ mod tests {
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Wildcard,
-                children: vec![Node::Decision(Decision::Ask(None))],
+                children: vec![Node::Decision(MatchVerdict::Ask(None))],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -1333,7 +1333,7 @@ mod tests {
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("Bash".into())),
-                children: vec![Node::Decision(Decision::Allow(None))],
+                children: vec![Node::Decision(MatchVerdict::Allow(None))],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -1342,7 +1342,7 @@ mod tests {
         let nodes = Node::compact(nodes);
         // Literal should be first after sorting
         let ctx = make_ctx("Bash", "echo hello");
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Allow(None)));
     }
 
     #[test]
@@ -1356,7 +1356,7 @@ mod tests {
                 children: vec![Node::Condition {
                     observe: Observable::PositionalArg(0),
                     pattern: Pattern::Literal(Value::Literal("cargo".into())),
-                    children: vec![Node::Decision(Decision::Allow(None))],
+                    children: vec![Node::Decision(MatchVerdict::Allow(None))],
                     doc: None,
                     source: None,
                     terminal: false,
@@ -1368,7 +1368,7 @@ mod tests {
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Wildcard,
-                children: vec![Node::Decision(Decision::Ask(None))],
+                children: vec![Node::Decision(MatchVerdict::Ask(None))],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -1376,7 +1376,7 @@ mod tests {
         ];
         // "git push" matches Bash but not cargo, so should backtrack to wildcard
         let ctx = make_ctx("Bash", "git push");
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Ask(None)));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Ask(None)));
     }
 
     #[test]
@@ -1384,14 +1384,14 @@ mod tests {
         let nodes = vec![Node::Condition {
             observe: Observable::NestedField(vec!["file_path".into()]),
             pattern: Pattern::Regex(Arc::new(Regex::new(r".*\.rs$").unwrap())),
-            children: vec![Node::Decision(Decision::Allow(None))],
+            children: vec![Node::Decision(MatchVerdict::Allow(None))],
             doc: None,
             source: None,
             terminal: false,
         }];
         let input = serde_json::json!({"file_path": "/src/main.rs"});
         let ctx = QueryContext::from_tool("Edit", &input);
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Allow(None)));
     }
 
     #[test]
@@ -1399,13 +1399,13 @@ mod tests {
         let nodes = vec![Node::Condition {
             observe: Observable::PositionalArg(0),
             pattern: Pattern::Regex(Arc::new(Regex::new(r"^cargo").unwrap())),
-            children: vec![Node::Decision(Decision::Allow(None))],
+            children: vec![Node::Decision(MatchVerdict::Allow(None))],
             doc: None,
             source: None,
             terminal: false,
         }];
         let ctx = make_ctx("Bash", "cargo-clippy check");
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Allow(None)));
     }
 
     #[test]
@@ -1416,14 +1416,14 @@ mod tests {
                 Pattern::Literal(Value::Literal("cargo".into())),
                 Pattern::Literal(Value::Literal("rustc".into())),
             ]),
-            children: vec![Node::Decision(Decision::Allow(None))],
+            children: vec![Node::Decision(MatchVerdict::Allow(None))],
             doc: None,
             source: None,
             terminal: false,
         }];
 
         let ctx = make_ctx("Bash", "rustc main.rs");
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Allow(None)));
 
         let ctx = make_ctx("Bash", "gcc main.c");
         assert_eq!(eval(&nodes, &ctx), None);
@@ -1434,14 +1434,14 @@ mod tests {
         let nodes = vec![Node::Condition {
             observe: Observable::PositionalArg(0),
             pattern: Pattern::Not(Box::new(Pattern::Literal(Value::Literal("rm".into())))),
-            children: vec![Node::Decision(Decision::Allow(None))],
+            children: vec![Node::Decision(MatchVerdict::Allow(None))],
             doc: None,
             source: None,
             terminal: false,
         }];
 
         let ctx = make_ctx("Bash", "ls -la");
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Allow(None)));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Allow(None)));
 
         let ctx = make_ctx("Bash", "rm -rf /");
         assert_eq!(eval(&nodes, &ctx), None);
@@ -1451,7 +1451,7 @@ mod tests {
     fn sandbox_ref_validation() {
         let policy = CompiledPolicy {
             sandboxes: HashMap::new(),
-            tree: vec![Node::Decision(Decision::Allow(Some(SandboxRef(
+            tree: vec![Node::Decision(MatchVerdict::Allow(Some(SandboxRef(
                 "missing".into(),
             ))))],
             default_effect: Effect::Deny,
@@ -1476,7 +1476,7 @@ mod tests {
         );
         let policy = CompiledPolicy {
             sandboxes,
-            tree: vec![Node::Decision(Decision::Allow(Some(SandboxRef(
+            tree: vec![Node::Decision(MatchVerdict::Allow(Some(SandboxRef(
                 "cwd_access".into(),
             ))))],
             default_effect: Effect::Deny,
@@ -1500,12 +1500,12 @@ mod tests {
                             Node::Condition {
                                 observe: Observable::HasArg,
                                 pattern: Pattern::Literal(Value::Literal("--force".into())),
-                                children: vec![Node::Decision(Decision::Deny)],
+                                children: vec![Node::Decision(MatchVerdict::Deny)],
                                 doc: None,
                                 source: None,
                                 terminal: false,
                             },
-                            Node::Decision(Decision::Allow(None)),
+                            Node::Decision(MatchVerdict::Allow(None)),
                         ],
                         doc: None,
                         source: None,
@@ -1518,7 +1518,7 @@ mod tests {
                 Node::Condition {
                     observe: Observable::ToolName,
                     pattern: Pattern::Wildcard,
-                    children: vec![Node::Decision(Decision::Allow(None))],
+                    children: vec![Node::Decision(MatchVerdict::Allow(None))],
                     doc: None,
                     source: None,
                     terminal: false,
@@ -1547,7 +1547,7 @@ mod tests {
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Wildcard,
-                children: vec![Node::Decision(Decision::Allow(None))],
+                children: vec![Node::Decision(MatchVerdict::Allow(None))],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -1555,7 +1555,7 @@ mod tests {
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("Bash".into())),
-                children: vec![Node::Decision(Decision::Deny)],
+                children: vec![Node::Decision(MatchVerdict::Deny)],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -1590,7 +1590,7 @@ mod tests {
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("Read".into())),
-                children: vec![Node::Decision(Decision::Allow(None))],
+                children: vec![Node::Decision(MatchVerdict::Allow(None))],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -1598,7 +1598,7 @@ mod tests {
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("Bash".into())),
-                children: vec![Node::Decision(Decision::Deny)],
+                children: vec![Node::Decision(MatchVerdict::Deny)],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -1610,7 +1610,7 @@ mod tests {
         let mut path = Vec::new();
         let result = eval_traced(&nodes, &ctx, &mut trace, &mut path);
 
-        assert_eq!(result, Some(Decision::Deny));
+        assert_eq!(result, Some(MatchVerdict::Deny));
         assert_eq!(trace.skipped.len(), 1); // Read was skipped
         assert_eq!(trace.matched.len(), 1); // Bash matched
     }
@@ -1633,14 +1633,14 @@ mod tests {
         let nodes = vec![Node::Condition {
             observe: Observable::NamedArg("file_path".into()),
             pattern: Pattern::Regex(Arc::new(Regex::new(r"\.env").unwrap())),
-            children: vec![Node::Decision(Decision::Deny)],
+            children: vec![Node::Decision(MatchVerdict::Deny)],
             doc: None,
             source: None,
             terminal: false,
         }];
         let input = serde_json::json!({"file_path": "/project/.env"});
         let ctx = QueryContext::from_tool("Write", &input);
-        assert_eq!(eval(&nodes, &ctx), Some(Decision::Deny));
+        assert_eq!(eval(&nodes, &ctx), Some(MatchVerdict::Deny));
     }
 
     #[test]
@@ -1654,7 +1654,7 @@ mod tests {
                 children: vec![Node::Condition {
                     observe: Observable::PositionalArg(0),
                     pattern: Pattern::Literal(Value::Literal("cargo".into())),
-                    children: vec![Node::Decision(Decision::Allow(None))],
+                    children: vec![Node::Decision(MatchVerdict::Allow(None))],
                     doc: None,
                     source: None,
                     terminal: false,
@@ -1699,7 +1699,7 @@ mod tests {
             tree: vec![Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("Bash".into())),
-                children: vec![Node::Decision(Decision::Allow(None))],
+                children: vec![Node::Decision(MatchVerdict::Allow(None))],
                 doc: None,
                 source: None,
                 terminal: false,

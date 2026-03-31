@@ -5,7 +5,7 @@ use tracing::{Level, info, instrument};
 
 use crate::cli::PolicyCmd;
 use crate::policy::manifest_edit;
-use crate::policy::match_tree::{Decision, PolicyManifest};
+use crate::policy::match_tree::{MatchVerdict, PolicyManifest};
 use crate::settings::{ClashSettings, PolicyLevel};
 use crate::style;
 
@@ -559,10 +559,10 @@ fn apply_mutation(
     let path = resolve_manifest_path(scope)?;
     let mut manifest = crate::policy_loader::read_manifest(&path)?;
 
-    // For Remove we only need the observable chain — Decision::Deny is a dummy.
-    let dummy_decision = Decision::Deny;
+    // For Remove we only need the observable chain — MatchVerdict::Deny is a dummy.
+    let dummy_decision = MatchVerdict::Deny;
     let decision = match &mutation {
-        PolicyMutation::Allow { sandbox } => Decision::Allow(
+        PolicyMutation::Allow { sandbox } => MatchVerdict::Allow(
             sandbox
                 .as_deref()
                 .map(|s| crate::policy::match_tree::SandboxRef(s.to_string())),
@@ -679,7 +679,7 @@ fn build_rule_node(
     command: &[String],
     tool: Option<String>,
     bin: Option<String>,
-    decision: Decision,
+    decision: MatchVerdict,
 ) -> Result<crate::policy::match_tree::Node> {
     // Positional command takes priority.
     if let Some((bin_name, args)) = parse_command(command) {

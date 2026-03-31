@@ -7,7 +7,7 @@
 use crate::policy::Effect;
 use crate::policy::format::format_condition;
 use crate::policy::match_tree::{
-    CompiledPolicy, Decision, Node, Observable, Pattern, QueryContext,
+    CompiledPolicy, MatchVerdict, Node, Observable, Pattern, QueryContext,
 };
 use crate::style;
 
@@ -34,7 +34,7 @@ struct RuleBranchTrace {
     /// Per-condition trace entries.
     conditions: Vec<ConditionTrace>,
     /// The decision at the leaf, if all conditions matched.
-    decision: Option<Decision>,
+    decision: Option<MatchVerdict>,
     /// Whether this rule was the winning (first-matched) rule.
     is_winner: bool,
     /// Whether this rule was skipped because a prior rule already won.
@@ -118,7 +118,7 @@ fn trace_node(
     node: &Node,
     ctx: &QueryContext,
     conditions: &mut Vec<ConditionTrace>,
-) -> Option<Decision> {
+) -> Option<MatchVerdict> {
     match node {
         Node::Decision(d) => Some(d.clone()),
         Node::Condition {
@@ -262,7 +262,7 @@ fn collect_rule_path(node: &Node, parts: &mut Vec<String>) {
     }
 }
 
-fn find_first_decision(nodes: &[Node]) -> Option<Decision> {
+fn find_first_decision(nodes: &[Node]) -> Option<MatchVerdict> {
     for node in nodes {
         match node {
             Node::Decision(d) => return Some(d.clone()),
@@ -458,7 +458,7 @@ mod tests {
             children: vec![Node::Condition {
                 observe: Observable::PositionalArg(0),
                 pattern: Pattern::Literal(Value::Literal("git".into())),
-                children: vec![Node::Decision(Decision::Deny)],
+                children: vec![Node::Decision(MatchVerdict::Deny)],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -485,7 +485,7 @@ mod tests {
         let policy = make_policy(vec![Node::Condition {
             observe: Observable::ToolName,
             pattern: Pattern::Literal(Value::Literal("Read".into())),
-            children: vec![Node::Decision(Decision::Deny)],
+            children: vec![Node::Decision(MatchVerdict::Deny)],
             doc: None,
             source: None,
             terminal: false,
@@ -509,7 +509,7 @@ mod tests {
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("Bash".into())),
-                children: vec![Node::Decision(Decision::Deny)],
+                children: vec![Node::Decision(MatchVerdict::Deny)],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -517,7 +517,7 @@ mod tests {
             Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("Bash".into())),
-                children: vec![Node::Decision(Decision::Allow(None))],
+                children: vec![Node::Decision(MatchVerdict::Allow(None))],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -539,7 +539,7 @@ mod tests {
         let policy = make_policy(vec![Node::Condition {
             observe: Observable::ToolName,
             pattern: Pattern::Literal(Value::Literal("Bash".into())),
-            children: vec![Node::Decision(Decision::Allow(None))],
+            children: vec![Node::Decision(MatchVerdict::Allow(None))],
             doc: None,
             source: None,
             terminal: false,
@@ -562,7 +562,7 @@ mod tests {
         let policy = make_policy(vec![Node::Condition {
             observe: Observable::ToolName,
             pattern: Pattern::Literal(Value::Literal("Bash".into())),
-            children: vec![Node::Decision(Decision::Deny)],
+            children: vec![Node::Decision(MatchVerdict::Deny)],
             doc: None,
             source: None,
             terminal: false,
@@ -583,7 +583,7 @@ mod tests {
         let policy = make_policy(vec![Node::Condition {
             observe: Observable::ToolName,
             pattern: Pattern::Wildcard,
-            children: vec![Node::Decision(Decision::Allow(None))],
+            children: vec![Node::Decision(MatchVerdict::Allow(None))],
             doc: None,
             source: None,
             terminal: false,
@@ -603,7 +603,7 @@ mod tests {
         let policy = make_policy(vec![Node::Condition {
             observe: Observable::ToolName,
             pattern: Pattern::Regex(Arc::new(re)),
-            children: vec![Node::Decision(Decision::Deny)],
+            children: vec![Node::Decision(MatchVerdict::Deny)],
             doc: None,
             source: None,
             terminal: false,
@@ -629,7 +629,7 @@ mod tests {
                 children: vec![Node::Condition {
                     observe: Observable::PositionalArg(1),
                     pattern: Pattern::Literal(Value::Literal("push".into())),
-                    children: vec![Node::Decision(Decision::Deny)],
+                    children: vec![Node::Decision(MatchVerdict::Deny)],
                     doc: None,
                     source: None,
                     terminal: false,

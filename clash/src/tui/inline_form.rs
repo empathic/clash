@@ -15,7 +15,7 @@ use super::widgets::{ClickAction, ClickRegions, ModalHeight, ModalOverlay};
 
 use crate::policy::manifest_edit;
 use crate::policy::match_tree::{
-    Decision, IncludeEntry, Node, Observable, Pattern, PolicyManifest, SandboxRef, Value,
+    IncludeEntry, MatchVerdict, Node, Observable, Pattern, PolicyManifest, SandboxRef, Value,
 };
 use crate::policy::sandbox_edit;
 use crate::policy::sandbox_types::{Cap, NetworkPolicy, PathMatch, RuleEffect};
@@ -850,17 +850,17 @@ impl FormState {
     fn read_decision_at_path(tree: &[Node], path: &[usize]) -> (usize, Option<String>) {
         match Self::get_node_at_path(tree, path) {
             Some(Node::Decision(d)) => match d {
-                Decision::Allow(sb) => (0, sb.as_ref().map(|s| s.0.clone())),
-                Decision::Deny => (1, None),
-                Decision::Ask(sb) => (2, sb.as_ref().map(|s| s.0.clone())),
+                MatchVerdict::Allow(sb) => (0, sb.as_ref().map(|s| s.0.clone())),
+                MatchVerdict::Deny => (1, None),
+                MatchVerdict::Ask(sb) => (2, sb.as_ref().map(|s| s.0.clone())),
             },
             // For inline leaves (Condition with single Decision child), read the child
             Some(Node::Condition { children, .. }) => {
                 if let Some(Node::Decision(d)) = children.first() {
                     match d {
-                        Decision::Allow(sb) => (0, sb.as_ref().map(|s| s.0.clone())),
-                        Decision::Deny => (1, None),
-                        Decision::Ask(sb) => (2, sb.as_ref().map(|s| s.0.clone())),
+                        MatchVerdict::Allow(sb) => (0, sb.as_ref().map(|s| s.0.clone())),
+                        MatchVerdict::Deny => (1, None),
+                        MatchVerdict::Ask(sb) => (2, sb.as_ref().map(|s| s.0.clone())),
                     }
                 } else {
                     (0, None)
@@ -980,9 +980,9 @@ impl FormState {
                     }
                 }
                 let effect = match d {
-                    Decision::Allow(_) => "allow",
-                    Decision::Deny => "deny",
-                    Decision::Ask(_) => "ask",
+                    MatchVerdict::Allow(_) => "allow",
+                    MatchVerdict::Deny => "deny",
+                    MatchVerdict::Ask(_) => "ask",
                 };
                 format!("Edit effect (currently {effect})")
             }
@@ -999,9 +999,9 @@ impl FormState {
                     let what = observable_short_desc(observe);
                     let val = short_pattern_desc(pattern);
                     let effect = match d {
-                        Decision::Allow(_) => "allow",
-                        Decision::Deny => "deny",
-                        Decision::Ask(_) => "ask",
+                        MatchVerdict::Allow(_) => "allow",
+                        MatchVerdict::Deny => "deny",
+                        MatchVerdict::Ask(_) => "ask",
                     };
                     return format!("Edit: {what} = {val} (currently {effect})");
                 }
@@ -1567,10 +1567,10 @@ impl FormState {
         };
 
         let decision = match effect_idx {
-            0 => Decision::Allow(sandbox_ref),
-            1 => Decision::Deny,
-            2 => Decision::Ask(sandbox_ref),
-            _ => Decision::Deny,
+            0 => MatchVerdict::Allow(sandbox_ref),
+            1 => MatchVerdict::Deny,
+            2 => MatchVerdict::Ask(sandbox_ref),
+            _ => MatchVerdict::Deny,
         };
 
         let node = if rule_type == 0 {
@@ -1600,7 +1600,7 @@ impl FormState {
     }
 
     /// Build a tool-name rule node, supporting comma-separated names for AnyOf.
-    fn build_tool_node(tool_name: &str, decision: Decision) -> Node {
+    fn build_tool_node(tool_name: &str, decision: MatchVerdict) -> Node {
         let names: Vec<&str> = tool_name
             .split(',')
             .map(|s| s.trim())
@@ -1656,10 +1656,10 @@ impl FormState {
         };
 
         let decision = match effect_idx {
-            0 => Decision::Allow(sandbox_ref),
-            1 => Decision::Deny,
-            2 => Decision::Ask(sandbox_ref),
-            _ => Decision::Deny,
+            0 => MatchVerdict::Allow(sandbox_ref),
+            1 => MatchVerdict::Deny,
+            2 => MatchVerdict::Ask(sandbox_ref),
+            _ => MatchVerdict::Deny,
         };
 
         let new_node = if rule_type == 0 {
@@ -1836,10 +1836,10 @@ impl FormState {
             None
         };
         let new_decision = match effect_idx {
-            0 => Decision::Allow(sandbox_ref),
-            1 => Decision::Deny,
-            2 => Decision::Ask(sandbox_ref),
-            _ => Decision::Deny,
+            0 => MatchVerdict::Allow(sandbox_ref),
+            1 => MatchVerdict::Deny,
+            2 => MatchVerdict::Ask(sandbox_ref),
+            _ => MatchVerdict::Deny,
         };
 
         let node = Self::get_node_at_path_mut(&mut manifest.policy.tree, path)
@@ -1937,7 +1937,7 @@ impl FormState {
             Node::Condition {
                 observe: observable,
                 pattern,
-                children: vec![Node::Decision(Decision::Ask(None))],
+                children: vec![Node::Decision(MatchVerdict::Ask(None))],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -1959,10 +1959,10 @@ impl FormState {
                 None
             };
             let decision = match effect_idx {
-                0 => Decision::Allow(sandbox_ref),
-                1 => Decision::Deny,
-                2 => Decision::Ask(sandbox_ref),
-                _ => Decision::Deny,
+                0 => MatchVerdict::Allow(sandbox_ref),
+                1 => MatchVerdict::Deny,
+                2 => MatchVerdict::Ask(sandbox_ref),
+                _ => MatchVerdict::Deny,
             };
             Node::Decision(decision)
         };
@@ -2823,7 +2823,7 @@ mod tests {
         let mut manifest = empty_manifest();
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_tool_rule("Read", Decision::Allow(None)),
+            manifest_edit::build_tool_rule("Read", MatchVerdict::Allow(None)),
         );
 
         // Create edit form for the root condition
@@ -2876,7 +2876,7 @@ mod tests {
         // Create a condition with multiple children so it's expandable
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_exec_rule("gh", &["pr"], Decision::Allow(None)),
+            manifest_edit::build_exec_rule("gh", &["pr"], MatchVerdict::Allow(None)),
         );
 
         // Add a decision child under root (Bash condition)
@@ -2905,7 +2905,7 @@ mod tests {
             Node::Condition { children, .. } => {
                 let has_deny = children
                     .iter()
-                    .any(|c| matches!(c, Node::Decision(Decision::Deny)));
+                    .any(|c| matches!(c, Node::Decision(MatchVerdict::Deny)));
                 assert!(has_deny, "Should have a Deny decision child");
             }
             _ => panic!("Expected condition node"),
@@ -3014,7 +3014,7 @@ mod tests {
         let mut manifest = empty_manifest();
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_tool_rule("Bash", Decision::Allow(None)),
+            manifest_edit::build_tool_rule("Bash", MatchVerdict::Allow(None)),
         );
 
         // The tool rule creates Condition(tool_name=Bash) -> Decision(Allow)

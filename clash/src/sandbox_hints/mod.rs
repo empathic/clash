@@ -24,7 +24,8 @@ use std::path::Path;
 
 use tracing::{Level, info, instrument};
 
-use crate::hooks::ToolUseHookInput;
+use clash_hooks::{HookEventCommon, ToolEvent};
+
 use crate::network_hints::extract_response_text;
 use crate::policy::sandbox_types::{Cap, SandboxPolicy};
 use crate::settings::ClashSettings;
@@ -63,11 +64,11 @@ const NOISE_PATH_PREFIXES: &[&str] = &["/dev/dtrace", "/dev/dtracehelper", "/dev
 ///    if `log show` didn't capture anything).
 #[instrument(level = Level::TRACE, skip(input, settings))]
 pub fn check_for_sandbox_fs_hint(
-    input: &ToolUseHookInput,
+    input: &clash_hooks::event::PostToolUse,
     settings: &ClashSettings,
 ) -> Option<String> {
     // Only check Bash tool responses
-    if input.tool_name != "Bash" {
+    if input.tool_name() != "Bash" {
         return None;
     }
 
@@ -91,7 +92,7 @@ pub fn check_for_sandbox_fs_hint(
     // Source 2: Parse stderr for filesystem error patterns (fallback).
     // Note: don't use `?` on tool_response — we still want to proceed if we
     // have audit violations even when the response is missing.
-    let response_text = input.tool_response.as_ref().and_then(extract_response_text);
+    let response_text = input.tool_response().and_then(extract_response_text);
     let stderr_has_errors = response_text.as_ref().is_some_and(|t| contains_fs_error(t));
 
     info!(
@@ -112,7 +113,7 @@ pub fn check_for_sandbox_fs_hint(
 
     // Audit-derived paths are high-confidence (kernel-verified denials).
     if has_audit {
-        blocked_paths.extend(paths_from_audit(&audit_violations, &sandbox, &input.cwd));
+        blocked_paths.extend(paths_from_audit(&audit_violations, &sandbox, input.cwd()));
     }
 
     // Stderr heuristic paths fill in gaps (e.g., paths the audit missed,
@@ -124,7 +125,7 @@ pub fn check_for_sandbox_fs_hint(
             paths = ?extracted_paths,
             "check_for_sandbox_fs_hint: paths extracted from stderr"
         );
-        let stderr_blocked = extract_blocked_paths(text, &sandbox, &input.cwd);
+        let stderr_blocked = extract_blocked_paths(text, &sandbox, input.cwd());
         info!(
             stderr_blocked_count = stderr_blocked.len(),
             "check_for_sandbox_fs_hint: stderr paths confirmed as sandbox violations"
@@ -164,12 +165,12 @@ pub fn check_for_sandbox_fs_hint(
 /// 2. Fall back to extracting the `--sandbox` JSON from the rewritten command
 ///    string (works when PostToolUse gets the `clash sandbox exec ...` wrapper).
 fn resolve_sandbox_policy(
-    input: &ToolUseHookInput,
+    input: &impl ToolEvent,
     settings: &ClashSettings,
 ) -> Option<SandboxPolicy> {
     // Path 1: re-evaluate against the decision tree.
     if let Some(tree) = settings.policy_tree() {
-        let decision = tree.evaluate(&input.tool_name, &input.tool_input);
+        let decision = tree.evaluate(input.tool_name(), input.tool_input_raw());
         if let Some(sandbox) = decision.sandbox {
             info!("resolve_sandbox_policy: found sandbox via decision tree re-evaluation");
             return Some(sandbox);
@@ -180,7 +181,7 @@ fn resolve_sandbox_policy(
     }
 
     // Path 2: extract --sandbox JSON from the rewritten command string.
-    let command = input.tool_input.get("command")?.as_str()?;
+    let command = input.tool_input_raw().get("command")?.as_str()?;
     if !command.contains("sandbox exec") || !command.contains("--sandbox") {
         info!(
             command_prefix = &command[..command.len().min(80)],
@@ -290,6 +291,48 @@ mod tests {
     use stderr_source::{
         contains_fs_error, extract_paths_from_errors, is_likely_sandbox_violation,
     };
+
+    fn post_tool_use_event(
+        tool_name: &str,
+        tool_input: serde_json::Value,
+        tool_response: serde_json::Value,
+    ) -> clash_hooks::event::PostToolUse {
+        let json = json!({
+            "session_id": "test",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/tmp",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+            "tool_use_id": "toolu_test",
+            "tool_response": tool_response,
+        });
+        match clash_hooks::recv_from_value(json).unwrap() {
+            clash_hooks::HookEvent::PostToolUse(e) => e,
+            _ => panic!("expected PostToolUse"),
+        }
+    }
+
+    fn post_tool_use_event_no_response(
+        tool_name: &str,
+        tool_input: serde_json::Value,
+    ) -> clash_hooks::event::PostToolUse {
+        let json = json!({
+            "session_id": "test",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/tmp",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+            "tool_use_id": "toolu_test",
+        });
+        match clash_hooks::recv_from_value(json).unwrap() {
+            clash_hooks::HookEvent::PostToolUse(e) => e,
+            _ => panic!("expected PostToolUse"),
+        }
+    }
 
     // --- contains_fs_error ---
 
@@ -647,33 +690,21 @@ mod tests {
 
     #[test]
     fn test_check_returns_none_for_non_bash() {
-        let input = ToolUseHookInput {
-            tool_name: "Read".into(),
-            tool_response: Some(json!("operation not permitted")),
-            ..Default::default()
-        };
+        let input = post_tool_use_event("Read", json!({}), json!("operation not permitted"));
         let settings = ClashSettings::default();
         assert!(check_for_sandbox_fs_hint(&input, &settings).is_none());
     }
 
     #[test]
     fn test_check_returns_none_without_response() {
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_response: None,
-            ..Default::default()
-        };
+        let input = post_tool_use_event_no_response("Bash", json!({"command": "ls"}));
         let settings = ClashSettings::default();
         assert!(check_for_sandbox_fs_hint(&input, &settings).is_none());
     }
 
     #[test]
     fn test_check_returns_none_for_non_fs_error() {
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_response: Some(json!("file not found")),
-            ..Default::default()
-        };
+        let input = post_tool_use_event("Bash", json!({"command": "ls"}), json!("file not found"));
         let settings = ClashSettings::default();
         assert!(check_for_sandbox_fs_hint(&input, &settings).is_none());
     }
@@ -682,14 +713,11 @@ mod tests {
     fn test_check_returns_none_without_policy() {
         let settings = ClashSettings::default();
         assert!(settings.decision_tree().is_none());
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_input: json!({"command": "fly logs"}),
-            tool_response: Some(json!(
-                "open /Users/user/.fly/perms.123: operation not permitted"
-            )),
-            ..Default::default()
-        };
+        let input = post_tool_use_event(
+            "Bash",
+            json!({"command": "fly logs"}),
+            json!("open /Users/user/.fly/perms.123: operation not permitted"),
+        );
         assert!(check_for_sandbox_fs_hint(&input, &settings).is_none());
     }
 
@@ -706,15 +734,13 @@ mod tests {
     ]}}
   ]}"#,
         );
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_input: json!({"command": "fly logs --app scour-rs"}),
-            tool_response: Some(json!(
+        let input = post_tool_use_event(
+            "Bash",
+            json!({"command": "fly logs --app scour-rs"}),
+            json!(
                 "Error: failed ensuring config directory perms: open /Users/emschwartz/.fly/perms.3199984107: operation not permitted"
-            )),
-            cwd: "/tmp".into(),
-            ..Default::default()
-        };
+            ),
+        );
         let result = check_for_sandbox_fs_hint(&input, &settings);
         assert!(
             result.is_some(),
@@ -738,15 +764,11 @@ mod tests {
     ]}}
   ]}"#,
         );
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_input: json!({"command": "fly logs"}),
-            tool_response: Some(json!(
-                "open /Users/emschwartz/.fly/perms.123: operation not permitted"
-            )),
-            cwd: "/tmp".into(),
-            ..Default::default()
-        };
+        let input = post_tool_use_event(
+            "Bash",
+            json!({"command": "fly logs"}),
+            json!("open /Users/emschwartz/.fly/perms.123: operation not permitted"),
+        );
         let result = check_for_sandbox_fs_hint(&input, &settings);
         assert!(
             result.is_none(),
@@ -769,15 +791,11 @@ mod tests {
     ]}}
   ]}"#,
         );
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_input: json!({"command": "fly logs --app scour-rs"}),
-            tool_response: Some(json!(
-                "open /Users/user/.fly/perms.123: operation not permitted"
-            )),
-            cwd: "/project".into(),
-            ..Default::default()
-        };
+        let input = post_tool_use_event(
+            "Bash",
+            json!({"command": "fly logs --app scour-rs"}),
+            json!("open /Users/user/.fly/perms.123: operation not permitted"),
+        );
         let result = check_for_sandbox_fs_hint(&input, &settings);
         assert!(
             result.is_some(),

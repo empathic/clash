@@ -9,8 +9,9 @@ use std::collections::BTreeSet;
 
 use tracing::info;
 
+use clash_hooks::ToolEvent;
+
 use crate::audit;
-use crate::hooks::ToolUseHookInput;
 use crate::policy::sandbox_types::SandboxPolicy;
 
 use super::formatter::BlockedPath;
@@ -23,15 +24,15 @@ use super::{
 /// `clash sandbox exec` captures violations from the macOS unified log after
 /// the sandboxed process exits and writes them to the session `audit.jsonl`.
 /// This function reads them back by `tool_use_id`.
-pub(crate) fn read_audit_violations(input: &ToolUseHookInput) -> Vec<audit::SandboxViolation> {
-    if input.session_id.is_empty() {
+pub(crate) fn read_audit_violations(input: &impl ToolEvent) -> Vec<audit::SandboxViolation> {
+    if input.session_id().is_empty() {
         return Vec::new();
     }
-    let tool_use_id = match input.tool_use_id.as_deref() {
+    let tool_use_id = match input.tool_use_id() {
         Some(id) => id,
         None => return Vec::new(),
     };
-    audit::read_sandbox_violations(&input.session_id, tool_use_id)
+    audit::read_sandbox_violations(input.session_id(), tool_use_id)
 }
 
 /// Convert audit-derived violations into `BlockedPath` entries.

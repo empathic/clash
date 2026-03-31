@@ -1,161 +1,25 @@
-use std::io::{Read, Write};
+//! Hook types for the Claude Code hook protocol.
+//!
+//! **Input:** Typed events from [`clash_hooks`] are used for all input handling.
+//!
+//! **Output:** [`HookOutput`] and [`HookSpecificOutput`] are the wire format that
+//! Claude Code expects. `HookOutput` is used as the output boundary for all agents.
+
+use std::io::Write;
 
 use claude_settings::PermissionRule;
-use serde::{Deserialize, Serialize};
-use tracing::{Level, instrument};
+use serde::Serialize;
 
-/// The complete hook input received from Claude Code via stdin
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-pub enum HookInput {
-    /// PreToolUse, PostToolUse, PermissionRequest events
-    ToolUse(ToolUseHookInput),
-    /// SessionStart events
-    SessionStart(SessionStartHookInput),
-}
+// Re-export clash_hooks types used across the crate boundary.
+pub use clash_hooks::CommonFields;
+pub use clash_hooks::{HookEvent, HookEventCommon, ToolEvent};
 
-/// Hook input for tool-related events (PreToolUse, PostToolUse, PermissionRequest)
-///
-/// The `tool_name` field carries the internal (Claude-style) name after protocol
-/// normalization. The original agent-native name is preserved in `original_tool_name`.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct ToolUseHookInput {
-    pub session_id: String,
-    pub transcript_path: String,
-    pub cwd: String,
-    pub permission_mode: String,
-    pub hook_event_name: String,
-    pub tool_name: String,
-    pub tool_input: serde_json::Value,
-    pub tool_use_id: Option<String>,
-    /// Present in PostToolUse events
-    #[serde(default)]
-    pub tool_response: Option<serde_json::Value>,
-
-    // -- Multi-agent fields (not deserialized from JSON, set by protocol layer) --
-    /// Which agent sent this hook input.
-    #[serde(skip)]
-    pub agent: Option<crate::agents::AgentKind>,
-    /// The agent's original tool name before normalization (e.g. "run_shell_command").
-    /// For Claude, this is the same as `tool_name`.
-    #[serde(skip)]
-    pub original_tool_name: Option<String>,
-}
-
-/// Hook input for SessionStart events
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct SessionStartHookInput {
-    #[serde(default)]
-    pub session_id: String,
-    #[serde(default)]
-    pub transcript_path: String,
-    #[serde(default)]
-    pub cwd: String,
-    #[serde(default)]
-    pub permission_mode: Option<String>,
-    #[serde(default)]
-    pub hook_event_name: String,
-    #[serde(default)]
-    pub source: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-}
-
-impl SessionStartHookInput {
-    /// Parse from any reader (for testability)
-    #[instrument(level = Level::TRACE, skip(reader))]
-    pub fn from_reader(reader: impl Read) -> anyhow::Result<Self> {
-        Ok(serde_json::from_reader(reader)?)
-    }
-}
-
-/// Hook input for Stop events (conversation turn ended without a tool call)
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct StopHookInput {
-    #[serde(default)]
-    pub session_id: String,
-    #[serde(default)]
-    pub transcript_path: String,
-    #[serde(default)]
-    pub cwd: String,
-    #[serde(default)]
-    pub hook_event_name: String,
-}
-
-impl StopHookInput {
-    /// Parse from any reader (for testability)
-    #[instrument(level = Level::TRACE, skip(reader))]
-    pub fn from_reader(reader: impl Read) -> anyhow::Result<Self> {
-        Ok(serde_json::from_reader(reader)?)
-    }
-}
-
-impl HookInput {
-    /// Parse from any reader (for testability)
-    #[instrument(level = Level::TRACE, skip(reader))]
-    pub fn from_reader(reader: impl Read) -> anyhow::Result<Self> {
-        Ok(serde_json::from_reader(reader)?)
-    }
-
-    /// Parse from stdin (convenience wrapper for production)
-    #[instrument(level = Level::TRACE)]
-    pub fn from_stdin() -> anyhow::Result<Self> {
-        Self::from_reader(std::io::stdin().lock())
-    }
-
-    /// Get the hook event name
-    pub fn hook_event_name(&self) -> &str {
-        match self {
-            HookInput::ToolUse(input) => &input.hook_event_name,
-            HookInput::SessionStart(input) => &input.hook_event_name,
-        }
-    }
-
-    /// Get the session ID
-    pub fn session_id(&self) -> &str {
-        match self {
-            HookInput::ToolUse(input) => &input.session_id,
-            HookInput::SessionStart(input) => &input.session_id,
-        }
-    }
-
-    /// Check if this is a tool use event
-    pub fn as_tool_use(&self) -> Option<&ToolUseHookInput> {
-        match self {
-            HookInput::ToolUse(input) => Some(input),
-            _ => None,
-        }
-    }
-
-    /// Check if this is a session start event
-    pub fn as_session_start(&self) -> Option<&SessionStartHookInput> {
-        match self {
-            HookInput::SessionStart(input) => Some(input),
-            _ => None,
-        }
-    }
-}
-
-impl ToolUseHookInput {
-    /// Parse from any reader (for testability)
-    #[instrument(level = Level::TRACE, skip(reader))]
-    pub fn from_reader(reader: impl Read) -> anyhow::Result<Self> {
-        Ok(serde_json::from_reader(reader)?)
-    }
-
-    /// Get typed tool input based on tool_name.
-    ///
-    /// Delegates to [`crate::claude::tools::ToolInput::parse`] for the
-    /// canonical tool-name → typed-struct mapping.
-    #[instrument(level = Level::TRACE, skip(self))]
-    pub fn typed_tool_input(&self) -> crate::claude::tools::ToolInput {
-        crate::claude::tools::ToolInput::parse(&self.tool_name, self.tool_input.clone())
-    }
-}
-
-// Typed tool input structs live in crate::claude::tools.
-// Re-export for backwards compatibility.
+// Re-export typed tool input types for backwards compatibility.
 pub use crate::claude::tools::{BashInput, EditInput, ReadInput, ToolInput, WriteInput};
+
+// ═══════════════════════════════════════════════════════════════════════
+// OUTPUT TYPES — wire format for Claude Code hook responses
+// ═══════════════════════════════════════════════════════════════════════
 
 /// Hook-specific output for PreToolUse
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -260,25 +124,21 @@ impl HookOutput {
     }
 
     /// Create an "allow" response for PreToolUse - bypasses permission system.
-    #[instrument(level = Level::TRACE)]
     pub fn allow(reason: Option<String>, context: Option<String>) -> Self {
         Self::pretooluse_output(PermissionRule::Allow, reason, context, None)
     }
 
     /// Create a "deny" response for PreToolUse - prevents tool execution.
-    #[instrument(level = Level::TRACE)]
     pub fn deny(reason: String, context: Option<String>) -> Self {
         Self::pretooluse_output(PermissionRule::Deny, Some(reason), context, None)
     }
 
     /// Create an "ask" response for PreToolUse - prompts user for confirmation.
-    #[instrument(level = Level::TRACE)]
     pub fn ask(reason: Option<String>, context: Option<String>) -> Self {
         Self::pretooluse_output(PermissionRule::Ask, reason, context, None)
     }
 
     /// Approve a permission request on behalf of the user
-    #[instrument(level = Level::TRACE)]
     pub fn approve_permission(updated_input: Option<serde_json::Value>) -> Self {
         Self {
             should_continue: true,
@@ -297,7 +157,6 @@ impl HookOutput {
     }
 
     /// Deny a permission request on behalf of the user
-    #[instrument(level = Level::TRACE)]
     pub fn deny_permission(message: String, interrupt: bool) -> Self {
         Self {
             should_continue: true,
@@ -317,7 +176,6 @@ impl HookOutput {
 
     /// Set the updated_input field on a PreToolUse response.
     /// This rewrites the tool input before Claude Code executes it.
-    #[instrument(level = Level::TRACE, skip(self))]
     pub fn set_updated_input(&mut self, updated_input: serde_json::Value) {
         if let Some(HookSpecificOutput::PreToolUse(ref mut pre)) = self.hook_specific_output {
             pre.updated_input = Some(updated_input);
@@ -325,7 +183,6 @@ impl HookOutput {
     }
 
     /// Create a SessionStart response with optional context about the session setup.
-    #[instrument(level = Level::TRACE)]
     pub fn session_start(additional_context: Option<String>) -> Self {
         Self {
             should_continue: true,
@@ -337,7 +194,6 @@ impl HookOutput {
     }
 
     /// Create a PostToolUse response with optional advisory context.
-    #[instrument(level = Level::TRACE)]
     pub fn post_tool_use(additional_context: Option<String>) -> Self {
         match additional_context {
             Some(ctx) => Self {
@@ -352,7 +208,6 @@ impl HookOutput {
     }
 
     /// Continue execution without making a decision (for informational hooks)
-    #[instrument(level = Level::TRACE)]
     pub fn continue_execution() -> Self {
         Self {
             should_continue: true,
@@ -361,7 +216,6 @@ impl HookOutput {
     }
 
     /// Write response to any writer (for testability)
-    #[instrument(level = Level::TRACE, skip(self, writer))]
     pub fn write_to(&self, mut writer: impl Write) -> anyhow::Result<()> {
         serde_json::to_writer(&mut writer, self)?;
         writeln!(writer)?;
@@ -369,7 +223,6 @@ impl HookOutput {
     }
 
     /// Write response to stdout (convenience wrapper for production)
-    #[instrument(level = Level::TRACE, skip(self))]
     pub fn write_stdout(&self) -> anyhow::Result<()> {
         self.write_to(std::io::stdout().lock())
     }
@@ -393,63 +246,6 @@ pub mod exit_code {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn sample_tool_use_json() -> &'static str {
-        r#"{
-            "session_id": "test-session",
-            "transcript_path": "/tmp/transcript.jsonl",
-            "cwd": "/home/user/project",
-            "permission_mode": "default",
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": "git status", "timeout": 120000},
-            "tool_use_id": "toolu_01ABC"
-        }"#
-    }
-
-    #[test]
-    fn test_parse_tool_use_input() {
-        let input = HookInput::from_reader(sample_tool_use_json().as_bytes()).unwrap();
-        assert_eq!(input.session_id(), "test-session");
-        assert_eq!(input.hook_event_name(), "PreToolUse");
-
-        let tool_use = input.as_tool_use().expect("Should be ToolUse variant");
-        assert_eq!(tool_use.tool_name, "Bash");
-    }
-
-    #[test]
-    fn test_typed_bash_input() {
-        let input = ToolUseHookInput::from_reader(sample_tool_use_json().as_bytes()).unwrap();
-        match input.typed_tool_input() {
-            ToolInput::Bash(bash) => {
-                assert_eq!(bash.command, "git status");
-                assert_eq!(bash.timeout, Some(120000));
-            }
-            other => panic!("Expected Bash input, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_typed_write_input() {
-        let json = r#"{
-            "session_id": "test",
-            "transcript_path": "/tmp/t.jsonl",
-            "cwd": "/tmp",
-            "permission_mode": "default",
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Write",
-            "tool_input": {"file_path": "/tmp/test.txt", "content": "hello world"},
-            "tool_use_id": "toolu_02"
-        }"#;
-        let input = ToolUseHookInput::from_reader(json.as_bytes()).unwrap();
-        match input.typed_tool_input() {
-            ToolInput::Write(write) => {
-                assert_eq!(write.file_path, "/tmp/test.txt");
-                assert_eq!(write.content, "hello world");
-            }
-            other => panic!("Expected Write input, got {:?}", other),
-        }
-    }
 
     #[test]
     fn test_output_allow() {

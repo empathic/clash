@@ -1,16 +1,12 @@
 //! Terminal output helpers — everything that talks to stdout/stderr.
 //!
-//! This module owns all human-readable output. Command handlers call `ui::`
-//! functions instead of `println!`/`eprintln!` directly, keeping display
-//! logic centralized and consistent.
-//!
 //! `style` handles *how things look* (colors, boldness).
-//! `display` handles *pure data transforms* (JSON serialization, effect colorizing).
-//! `ui` handles *communicating outcomes* — formatting and printing.
+//! `display` handles *pure formatting* (decision rendering, JSON serialization).
+//! `ui` handles *step reporting* (✓/✗/~/· glyphs), structural output (banners,
+//! sections), and complex table rendering (sandbox matrix).
 
 use std::collections::HashMap;
 
-use crate::policy::ir::PolicyDecision;
 use crate::policy::sandbox_types::SandboxPolicy;
 use crate::style;
 
@@ -76,63 +72,6 @@ pub fn banner_section(title: &str) {
 // ---------------------------------------------------------------------------
 // Policy display
 // ---------------------------------------------------------------------------
-
-/// Print the "Input:" header block: tool name and arguments.
-pub fn print_tool_header(title: &str, tool_name: &str, arguments: &serde_json::Value) {
-    println!("{}", style::bold(title));
-    println!("  {}   {}", style::cyan("tool:"), tool_name);
-    println!("  {}   {}", style::cyan("arguments:"), arguments);
-}
-
-/// Print a policy decision: effect, reason, matched/skipped rules, resolution.
-pub fn print_decision(decision: &PolicyDecision) {
-    println!(
-        "{} {}",
-        style::bold("Decision:"),
-        style::effect(&decision.effect.to_string())
-    );
-    if let Some(ref reason) = decision.reason {
-        println!("{} {}", style::bold("Reason:  "), reason);
-    }
-    println!();
-
-    if !decision.trace.matched_rules.is_empty() {
-        println!("{}", style::header("Matched rules:"));
-        for m in &decision.trace.matched_rules {
-            let eff = style::effect(&m.effect.to_string());
-            println!("  [{}] {} -> {}", m.rule_index, m.description, eff);
-        }
-        println!();
-    }
-
-    if !decision.trace.skipped_rules.is_empty() {
-        println!("{}", style::dim("Skipped rules:"));
-        for s in &decision.trace.skipped_rules {
-            println!(
-                "  {} {} {}",
-                style::dim(&format!("[{}]", s.rule_index)),
-                style::dim(&s.description),
-                style::dim(&format!("({})", s.reason))
-            );
-        }
-        println!();
-    }
-
-    println!(
-        "{} {}",
-        style::bold("Resolution:"),
-        style::effect(&decision.trace.final_resolution)
-    );
-}
-
-/// Print a sandbox policy summary (default caps, network, rules).
-pub fn print_sandbox_summary(sandbox: &SandboxPolicy) {
-    println!("  {}: {}", style::cyan("default"), sandbox.default.short());
-    println!("  {}: {:?}", style::cyan("network"), sandbox.network);
-    for rule in &sandbox.rules {
-        println!("  {:?} {} in {}", rule.effect, rule.caps.short(), rule.path);
-    }
-}
 
 /// Print sandboxes as a compact matrix: paths down the left, sandbox names across the top.
 pub fn print_sandbox_table(sandboxes: &HashMap<String, SandboxPolicy>) {

@@ -3,42 +3,60 @@
 //! Key differences from the default protocol:
 //! - Tool input rewriting uses `hookSpecificOutput.tool_input` merge
 //! - Session start uses `hookSpecificOutput` wrapper
+//! - Uses non-standard hook_event_name values (e.g., "BeforeTool")
 
 use anyhow::Result;
 use serde_json::Value;
 
-use super::protocol::{HookProtocol, json_str};
-use super::{AgentKind, resolve_tool_name};
-use crate::hooks::ToolUseHookInput;
+use super::AgentKind;
+use super::protocol::HookProtocol;
 
 pub struct GeminiProtocol;
+
+impl GeminiProtocol {
+    /// Normalize Gemini JSON to Claude convention for `recv_from_value`.
+    fn normalize(raw: &Value) -> Value {
+        let mut normalized = serde_json::Map::new();
+
+        if let Some(obj) = raw.as_object() {
+            for (k, v) in obj {
+                normalized.insert(k.clone(), v.clone());
+            }
+        }
+
+        // Gemini uses non-standard hook_event_name values
+        if let Some(name) = normalized.get("hook_event_name").and_then(|v| v.as_str()) {
+            let pascal = normalize_gemini_event(name);
+            normalized.insert("hook_event_name".into(), Value::String(pascal));
+        }
+
+        // Default transcript_path if missing
+        if !normalized.contains_key("transcript_path") {
+            normalized.insert("transcript_path".into(), Value::String(String::new()));
+        }
+
+        Value::Object(normalized)
+    }
+}
+
+/// Normalize Gemini event names to Claude PascalCase convention.
+fn normalize_gemini_event(name: &str) -> String {
+    match name {
+        "BeforeTool" | "beforeTool" => "PreToolUse".into(),
+        "AfterTool" | "afterTool" => "PostToolUse".into(),
+        "sessionStart" | "SessionStart" => "SessionStart".into(),
+        "stop" | "Stop" => "Stop".into(),
+        _ => super::copilot::normalize_event_name(name),
+    }
+}
 
 impl HookProtocol for GeminiProtocol {
     fn agent(&self) -> AgentKind {
         AgentKind::Gemini
     }
 
-    fn parse_tool_use(&self, raw: &Value) -> Result<ToolUseHookInput> {
-        let tool_name = json_str(raw, "tool_name").to_string();
-        let original = tool_name.clone();
-        let resolved = resolve_tool_name(AgentKind::Gemini, &tool_name).to_string();
-
-        Ok(ToolUseHookInput {
-            session_id: json_str(raw, "session_id").to_string(),
-            transcript_path: json_str(raw, "transcript_path").to_string(),
-            cwd: json_str(raw, "cwd").to_string(),
-            permission_mode: "default".to_string(),
-            hook_event_name: json_str(raw, "hook_event_name").to_string(),
-            tool_name: resolved,
-            tool_input: raw
-                .get("tool_input")
-                .cloned()
-                .unwrap_or(Value::Object(serde_json::Map::new())),
-            tool_use_id: None,
-            tool_response: raw.get("tool_response").cloned(),
-            agent: Some(AgentKind::Gemini),
-            original_tool_name: Some(original),
-        })
+    fn parse_event(&self, raw: &Value) -> Result<clash_hooks::HookEvent> {
+        Ok(clash_hooks::recv_from_value(Self::normalize(raw))?)
     }
 
     // Gemini uses hookSpecificOutput for tool input rewrites
@@ -68,16 +86,15 @@ impl HookProtocol for GeminiProtocol {
         }
         output
     }
-
-    // format_deny, format_ask, rewrite_for_sandbox, session_context — use defaults
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clash_hooks::{HookEventCommon, ToolEvent};
 
     #[test]
-    fn parse_gemini_tool_use() {
+    fn parse_event_gemini_tool_use() {
         let raw = serde_json::json!({
             "session_id": "gem-123",
             "transcript_path": "/tmp/gemini.jsonl",
@@ -87,17 +104,16 @@ mod tests {
             "tool_input": {"command": "git status"},
             "timestamp": "2026-03-26T00:00:00Z"
         });
-        let input = GeminiProtocol.parse_tool_use(&raw).unwrap();
-        assert_eq!(input.tool_name, "Bash");
-        assert_eq!(
-            input.original_tool_name.as_deref(),
-            Some("run_shell_command")
-        );
-        assert_eq!(input.agent, Some(AgentKind::Gemini));
+        let event = GeminiProtocol.parse_event(&raw).unwrap();
+        let clash_hooks::HookEvent::PreToolUse(e) = event else {
+            panic!("expected PreToolUse");
+        };
+        assert_eq!(e.tool_name(), "run_shell_command");
+        assert_eq!(e.session_id(), "gem-123");
     }
 
     #[test]
-    fn parse_gemini_read_file() {
+    fn parse_event_gemini_read_file() {
         let raw = serde_json::json!({
             "session_id": "gem-123",
             "cwd": "/home/user",
@@ -105,8 +121,11 @@ mod tests {
             "tool_name": "read_file",
             "tool_input": {"file_path": "/tmp/foo.txt"}
         });
-        let input = GeminiProtocol.parse_tool_use(&raw).unwrap();
-        assert_eq!(input.tool_name, "Read");
+        let event = GeminiProtocol.parse_event(&raw).unwrap();
+        let clash_hooks::HookEvent::PreToolUse(e) = event else {
+            panic!("expected PreToolUse");
+        };
+        assert_eq!(e.tool_name(), "read_file");
     }
 
     #[test]

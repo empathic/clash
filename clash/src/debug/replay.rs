@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 
 use crate::display;
-use crate::policy::ir::PolicyDecision;
+use crate::policy::ir::PolicyEvaluation;
 use crate::settings::ClashSettings;
 use crate::style;
 
@@ -11,7 +11,7 @@ use crate::style;
 pub struct ReplayResult {
     pub tool_name: String,
     pub tool_input: serde_json::Value,
-    pub decision: PolicyDecision,
+    pub decision: PolicyEvaluation,
     pub multi_level: bool,
 }
 

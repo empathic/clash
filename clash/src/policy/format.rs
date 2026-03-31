@@ -1,10 +1,12 @@
 //! Human-readable formatting for policy IR types.
 //!
-//! Provides display rendering for [`CompiledPolicy`], [`Node`], [`Decision`],
+//! Provides display rendering for [`CompiledPolicy`], [`Node`], [`MatchVerdict`],
 //! [`Observable`], and [`Pattern`] — kept separate from the IR definitions so
 //! `match_tree.rs` stays focused on types and evaluation.
 
-use crate::policy::match_tree::{CompiledPolicy, Decision, Node, Observable, Pattern, SandboxRef};
+use crate::policy::match_tree::{
+    CompiledPolicy, MatchVerdict, Node, Observable, Pattern, SandboxRef,
+};
 
 // ---------------------------------------------------------------------------
 // Public entry points
@@ -154,15 +156,15 @@ fn format_node_flat(node: &Node, path: &mut Vec<String>, lines: &mut Vec<String>
 // Primitive renderers (pub for use in tui and other display code)
 // ---------------------------------------------------------------------------
 
-/// Render a [`Decision`] leaf as a short string (e.g. `"allow"`, `"deny"`,
+/// Render a [`MatchVerdict`] leaf as a short string (e.g. `"allow"`, `"deny"`,
 /// `"allow [sandbox: dev]"`).
-pub fn format_decision(d: &Decision) -> String {
+pub fn format_decision(d: &MatchVerdict) -> String {
     match d {
-        Decision::Allow(Some(SandboxRef(name))) => format!("allow [sandbox: {name}]"),
-        Decision::Allow(None) => "allow".to_string(),
-        Decision::Deny => "deny".to_string(),
-        Decision::Ask(Some(SandboxRef(name))) => format!("ask [sandbox: {name}]"),
-        Decision::Ask(None) => "ask".to_string(),
+        MatchVerdict::Allow(Some(SandboxRef(name))) => format!("allow [sandbox: {name}]"),
+        MatchVerdict::Allow(None) => "allow".to_string(),
+        MatchVerdict::Deny => "deny".to_string(),
+        MatchVerdict::Ask(Some(SandboxRef(name))) => format!("ask [sandbox: {name}]"),
+        MatchVerdict::Ask(None) => "ask".to_string(),
     }
 }
 

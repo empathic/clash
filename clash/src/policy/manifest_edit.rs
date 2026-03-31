@@ -3,7 +3,7 @@
 //! Provides `upsert_rule` (add-or-replace) and `remove_rule` for CLI-driven
 //! policy mutation. After every mutation the tree is compacted.
 
-use crate::policy::match_tree::{Decision, Node, Observable, Pattern, PolicyManifest};
+use crate::policy::match_tree::{MatchVerdict, Node, Observable, Pattern, PolicyManifest};
 
 /// Result of an upsert operation.
 #[derive(Debug, PartialEq, Eq)]
@@ -121,7 +121,7 @@ fn children_are_all_decisions(children: &[Node]) -> bool {
 }
 
 /// Extract the leaf decision from a node tree (DFS to the first Decision).
-fn leaf_decision(node: &Node) -> Option<&Decision> {
+fn leaf_decision(node: &Node) -> Option<&MatchVerdict> {
     match node {
         Node::Decision(d) => Some(d),
         Node::Condition { children, .. } => children.iter().find_map(leaf_decision),
@@ -129,7 +129,7 @@ fn leaf_decision(node: &Node) -> Option<&Decision> {
 }
 
 /// Replace the leaf decision(s) in a node tree.
-fn replace_leaf_decision(node: &mut Node, new_decision: Option<&Decision>) {
+fn replace_leaf_decision(node: &mut Node, new_decision: Option<&MatchVerdict>) {
     let Some(new_decision) = new_decision else {
         return;
     };
@@ -147,7 +147,7 @@ fn replace_leaf_decision(node: &mut Node, new_decision: Option<&Decision>) {
 ///
 /// Constructs a `Node` tree representing a match chain, e.g.:
 /// `tool_name=Bash → positional_arg(0)=gh → positional_arg(1)=pr → positional_arg(2)=create → decision`
-pub fn build_exec_rule(bin: &str, args: &[&str], decision: Decision) -> Node {
+pub fn build_exec_rule(bin: &str, args: &[&str], decision: MatchVerdict) -> Node {
     // Build the chain from the leaf (decision) upward.
     let mut current = Node::Decision(decision);
 
@@ -187,7 +187,7 @@ pub fn build_exec_rule(bin: &str, args: &[&str], decision: Decision) -> Node {
 }
 
 /// Build a tool-name rule (e.g. allow/deny a specific tool like "Read", "Write").
-pub fn build_tool_rule(tool_name: &str, decision: Decision) -> Node {
+pub fn build_tool_rule(tool_name: &str, decision: MatchVerdict) -> Node {
     Node::Condition {
         observe: Observable::ToolName,
         pattern: Pattern::Literal(crate::policy::match_tree::Value::Literal(tool_name.into())),
@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn upsert_inserts_new_rule() {
         let mut manifest = empty_manifest();
-        let node = build_exec_rule("grep", &[], Decision::Allow(None));
+        let node = build_exec_rule("grep", &[], MatchVerdict::Allow(None));
         let result = upsert_rule(&mut manifest, node);
         assert_eq!(result, UpsertResult::Inserted);
         assert_eq!(manifest.policy.tree.len(), 1);
@@ -228,12 +228,12 @@ mod tests {
     #[test]
     fn upsert_replaces_same_chain() {
         let mut manifest = empty_manifest();
-        let allow = build_exec_rule("grep", &[], Decision::Allow(None));
+        let allow = build_exec_rule("grep", &[], MatchVerdict::Allow(None));
         upsert_rule(&mut manifest, allow);
         assert_eq!(manifest.policy.tree.len(), 1);
 
         // Now deny the same chain — should replace, not add.
-        let deny = build_exec_rule("grep", &[], Decision::Deny);
+        let deny = build_exec_rule("grep", &[], MatchVerdict::Deny);
         let result = upsert_rule(&mut manifest, deny);
         assert_eq!(result, UpsertResult::Replaced);
         // After compact, still 1 root node.
@@ -241,7 +241,7 @@ mod tests {
 
         // The leaf should now be deny.
         let leaf = leaf_decision(&manifest.policy.tree[0]);
-        assert!(matches!(leaf, Some(Decision::Deny)));
+        assert!(matches!(leaf, Some(MatchVerdict::Deny)));
     }
 
     #[test]
@@ -249,9 +249,12 @@ mod tests {
         let mut manifest = empty_manifest();
         upsert_rule(
             &mut manifest,
-            build_exec_rule("grep", &[], Decision::Allow(None)),
+            build_exec_rule("grep", &[], MatchVerdict::Allow(None)),
         );
-        upsert_rule(&mut manifest, build_exec_rule("rm", &[], Decision::Deny));
+        upsert_rule(
+            &mut manifest,
+            build_exec_rule("rm", &[], MatchVerdict::Deny),
+        );
         // Both should exist (compacted under a shared Bash parent).
         let total_rules = count_leaf_decisions(&manifest.policy.tree);
         assert_eq!(total_rules, 2);
@@ -262,9 +265,9 @@ mod tests {
         let mut manifest = empty_manifest();
         upsert_rule(
             &mut manifest,
-            build_exec_rule("grep", &[], Decision::Allow(None)),
+            build_exec_rule("grep", &[], MatchVerdict::Allow(None)),
         );
-        let target = build_exec_rule("grep", &[], Decision::Allow(None));
+        let target = build_exec_rule("grep", &[], MatchVerdict::Allow(None));
         assert!(remove_rule(&mut manifest, &target));
         assert!(manifest.policy.tree.is_empty());
     }
@@ -274,32 +277,32 @@ mod tests {
         let mut manifest = empty_manifest();
         upsert_rule(
             &mut manifest,
-            build_exec_rule("grep", &[], Decision::Allow(None)),
+            build_exec_rule("grep", &[], MatchVerdict::Allow(None)),
         );
-        let target = build_exec_rule("rm", &[], Decision::Allow(None));
+        let target = build_exec_rule("rm", &[], MatchVerdict::Allow(None));
         assert!(!remove_rule(&mut manifest, &target));
     }
 
     #[test]
     fn tool_rule_upsert() {
         let mut manifest = empty_manifest();
-        let node = build_tool_rule("WebSearch", Decision::Deny);
+        let node = build_tool_rule("WebSearch", MatchVerdict::Deny);
         let result = upsert_rule(&mut manifest, node);
         assert_eq!(result, UpsertResult::Inserted);
 
         // Replace with allow.
-        let node2 = build_tool_rule("WebSearch", Decision::Allow(None));
+        let node2 = build_tool_rule("WebSearch", MatchVerdict::Allow(None));
         let result2 = upsert_rule(&mut manifest, node2);
         assert_eq!(result2, UpsertResult::Replaced);
 
         let leaf = leaf_decision(&manifest.policy.tree[0]);
-        assert!(matches!(leaf, Some(Decision::Allow(None))));
+        assert!(matches!(leaf, Some(MatchVerdict::Allow(None))));
     }
 
     #[test]
     fn exec_rule_with_args() {
         let mut manifest = empty_manifest();
-        let node = build_exec_rule("gh", &["pr", "create"], Decision::Allow(None));
+        let node = build_exec_rule("gh", &["pr", "create"], MatchVerdict::Allow(None));
         upsert_rule(&mut manifest, node);
 
         // Should produce: Bash → gh → pr → create → allow
@@ -307,11 +310,11 @@ mod tests {
         assert_eq!(total, 1);
 
         // Same chain with different decision replaces it.
-        let deny = build_exec_rule("gh", &["pr", "create"], Decision::Deny);
+        let deny = build_exec_rule("gh", &["pr", "create"], MatchVerdict::Deny);
         let result = upsert_rule(&mut manifest, deny);
         assert_eq!(result, UpsertResult::Replaced);
         let leaf = leaf_decision(&manifest.policy.tree[0]);
-        assert!(matches!(leaf, Some(Decision::Deny)));
+        assert!(matches!(leaf, Some(MatchVerdict::Deny)));
     }
 
     #[test]
@@ -319,11 +322,11 @@ mod tests {
         let mut manifest = empty_manifest();
         upsert_rule(
             &mut manifest,
-            build_exec_rule("gh", &["pr", "create"], Decision::Allow(None)),
+            build_exec_rule("gh", &["pr", "create"], MatchVerdict::Allow(None)),
         );
         upsert_rule(
             &mut manifest,
-            build_exec_rule("gh", &["pr", "merge"], Decision::Deny),
+            build_exec_rule("gh", &["pr", "merge"], MatchVerdict::Deny),
         );
         let total = count_leaf_decisions(&manifest.policy.tree);
         assert_eq!(total, 2);

@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::tea::{Action, Component, FormRequest};
 use crate::policy::format::{format_condition, format_decision};
-use crate::policy::match_tree::{CompiledPolicy, Decision, Node, PolicyManifest};
+use crate::policy::match_tree::{CompiledPolicy, MatchVerdict, Node, PolicyManifest};
 
 /// A flattened node in the tree for display purposes.
 pub struct FlatNode {
@@ -27,7 +27,7 @@ pub struct FlatNode {
     /// Whether this node has children (for expand/collapse).
     pub has_children: bool,
     /// The decision at this node, if it's a leaf.
-    pub decision: Option<Decision>,
+    pub decision: Option<MatchVerdict>,
     /// Whether this is the synthetic root node.
     pub is_root: bool,
     /// Whether this node came from an include file (read-only).
@@ -619,11 +619,11 @@ impl TreeView {
     }
 }
 
-fn decision_style(decision: Option<&Decision>) -> Style {
+fn decision_style(decision: Option<&MatchVerdict>) -> Style {
     match decision {
-        Some(Decision::Allow(_)) => Style::default().fg(Color::Green),
-        Some(Decision::Deny) => Style::default().fg(Color::Red),
-        Some(Decision::Ask(_)) => Style::default().fg(Color::Yellow),
+        Some(MatchVerdict::Allow(_)) => Style::default().fg(Color::Green),
+        Some(MatchVerdict::Deny) => Style::default().fg(Color::Red),
+        Some(MatchVerdict::Ask(_)) => Style::default().fg(Color::Yellow),
         None => Style::default().fg(Color::White),
     }
 }
@@ -670,7 +670,7 @@ mod tests {
         let mut manifest = empty_manifest();
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_tool_rule("Read", Decision::Allow(None)),
+            manifest_edit::build_tool_rule("Read", MatchVerdict::Allow(None)),
         );
 
         let view = TreeView::new(&manifest, &empty_included());
@@ -685,7 +685,7 @@ mod tests {
         let mut manifest = empty_manifest();
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_tool_rule("Read", Decision::Allow(None)),
+            manifest_edit::build_tool_rule("Read", MatchVerdict::Allow(None)),
         );
 
         let mut view = TreeView::new(&manifest, &empty_included());
@@ -715,7 +715,7 @@ mod tests {
         let mut manifest = empty_manifest();
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_exec_rule("gh", &["pr"], Decision::Allow(None)),
+            manifest_edit::build_exec_rule("gh", &["pr"], MatchVerdict::Allow(None)),
         );
 
         let mut view = TreeView::new(&manifest, &empty_included());
@@ -745,7 +745,7 @@ mod tests {
         let mut manifest = empty_manifest();
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_exec_rule("gh", &["pr"], Decision::Allow(None)),
+            manifest_edit::build_exec_rule("gh", &["pr"], MatchVerdict::Allow(None)),
         );
 
         let mut view = TreeView::new(&manifest, &empty_included());
@@ -764,7 +764,7 @@ mod tests {
         let mut manifest = empty_manifest();
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_tool_rule("Read", Decision::Allow(None)),
+            manifest_edit::build_tool_rule("Read", MatchVerdict::Allow(None)),
         );
 
         let mut view = TreeView::new(&manifest, &empty_included());
@@ -792,11 +792,11 @@ mod tests {
         let mut manifest = empty_manifest();
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_exec_rule("gh", &[], Decision::Allow(None)),
+            manifest_edit::build_exec_rule("gh", &[], MatchVerdict::Allow(None)),
         );
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_exec_rule("rm", &[], Decision::Deny),
+            manifest_edit::build_exec_rule("rm", &[], MatchVerdict::Deny),
         );
 
         let mut view = TreeView::new(&manifest, &empty_included());
@@ -823,11 +823,11 @@ mod tests {
         let mut manifest = empty_manifest();
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_tool_rule("Read", Decision::Allow(None)),
+            manifest_edit::build_tool_rule("Read", MatchVerdict::Allow(None)),
         );
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_tool_rule("Write", Decision::Deny),
+            manifest_edit::build_tool_rule("Write", MatchVerdict::Deny),
         );
 
         let mut view = TreeView::new(&manifest, &empty_included());

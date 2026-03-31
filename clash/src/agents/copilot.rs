@@ -5,38 +5,55 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::protocol::{HookProtocol, json_str};
-use super::{AgentKind, resolve_tool_name};
-use crate::hooks::ToolUseHookInput;
+use super::AgentKind;
+use super::protocol::HookProtocol;
 
 pub struct CopilotProtocol;
+
+impl CopilotProtocol {
+    /// Normalize Copilot JSON to Claude convention for `recv_from_value`.
+    fn normalize(raw: &Value) -> Value {
+        let mut normalized = serde_json::Map::new();
+
+        if let Some(obj) = raw.as_object() {
+            for (k, v) in obj {
+                normalized.insert(k.clone(), v.clone());
+            }
+        }
+
+        // Copilot may use camelCase hook_event_name (e.g., "preToolUse")
+        if let Some(name) = normalized.get("hook_event_name").and_then(|v| v.as_str()) {
+            let pascal = normalize_event_name(name);
+            normalized.insert("hook_event_name".into(), Value::String(pascal));
+        }
+
+        // Default transcript_path if missing
+        if !normalized.contains_key("transcript_path") {
+            normalized.insert("transcript_path".into(), Value::String(String::new()));
+        }
+
+        Value::Object(normalized)
+    }
+}
+
+/// Normalize camelCase event names to PascalCase Claude convention.
+pub(super) fn normalize_event_name(name: &str) -> String {
+    match name {
+        "preToolUse" => "PreToolUse".into(),
+        "postToolUse" => "PostToolUse".into(),
+        "sessionStart" => "SessionStart".into(),
+        "stop" => "Stop".into(),
+        _ => name.to_string(),
+    }
+}
 
 impl HookProtocol for CopilotProtocol {
     fn agent(&self) -> AgentKind {
         AgentKind::Copilot
     }
 
-    fn parse_tool_use(&self, raw: &Value) -> Result<ToolUseHookInput> {
-        let tool_name = json_str(raw, "tool_name").to_string();
-        let original = tool_name.clone();
-        let resolved = resolve_tool_name(AgentKind::Copilot, &tool_name).to_string();
-
-        Ok(ToolUseHookInput {
-            session_id: json_str(raw, "session_id").to_string(),
-            transcript_path: json_str(raw, "transcript_path").to_string(),
-            cwd: json_str(raw, "cwd").to_string(),
-            permission_mode: "default".to_string(),
-            hook_event_name: json_str(raw, "hook_event_name").to_string(),
-            tool_name: resolved,
-            tool_input: raw
-                .get("tool_input")
-                .cloned()
-                .unwrap_or(Value::Object(serde_json::Map::new())),
-            tool_use_id: None,
-            tool_response: raw.get("tool_response").cloned(),
-            agent: Some(AgentKind::Copilot),
-            original_tool_name: Some(original),
-        })
+    fn parse_event(&self, raw: &Value) -> Result<clash_hooks::HookEvent> {
+        Ok(clash_hooks::recv_from_value(Self::normalize(raw))?)
     }
 
     // Copilot uses "approve"/"deny"
@@ -65,9 +82,10 @@ impl HookProtocol for CopilotProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clash_hooks::ToolEvent;
 
     #[test]
-    fn parse_copilot_bash() {
+    fn parse_event_copilot_bash() {
         let raw = serde_json::json!({
             "session_id": "cp-123",
             "cwd": "/home/user",
@@ -75,8 +93,11 @@ mod tests {
             "tool_name": "bash",
             "tool_input": {"command": "git status"}
         });
-        let input = CopilotProtocol.parse_tool_use(&raw).unwrap();
-        assert_eq!(input.tool_name, "Bash");
+        let event = CopilotProtocol.parse_event(&raw).unwrap();
+        let clash_hooks::HookEvent::PreToolUse(e) = event else {
+            panic!("expected PreToolUse");
+        };
+        assert_eq!(e.tool_name(), "bash");
     }
 
     #[test]
