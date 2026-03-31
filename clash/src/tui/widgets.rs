@@ -1,7 +1,8 @@
 //! Shared ratatui widgets: tab bar, status bar, overlays.
 
+use crossterm::event::KeyCode;
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -9,6 +10,66 @@ use ratatui::widgets::{
 };
 
 use super::app::Tab;
+
+// ---------------------------------------------------------------------------
+// Click regions — mouse click targets populated each frame during render
+// ---------------------------------------------------------------------------
+
+/// An action that a mouse click can trigger.
+#[derive(Debug)]
+pub enum ClickAction {
+    /// Simulate pressing a key (for footer buttons).
+    Key(KeyCode),
+    /// Activate a form field by its visible-index.
+    FormField(usize),
+    /// Select an inline-select option directly.
+    SelectOption { field: usize, option: usize },
+    /// Toggle a multiselect checkbox.
+    ToggleMultiSelect { field: usize, option: usize },
+}
+
+/// Clickable regions for the current frame.
+#[derive(Default)]
+pub struct ClickRegions(pub(crate) Vec<(Rect, ClickAction)>);
+
+impl ClickRegions {
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn push(&mut self, area: Rect, action: ClickAction) {
+        self.0.push((area, action));
+    }
+
+    /// Return the action for the *most specific* (last-added) region containing (col, row).
+    /// More-specific regions (inline options) are pushed after less-specific ones (field rows),
+    /// so searching in reverse gives correct precedence.
+    pub fn hit(&self, col: u16, row: u16) -> Option<&ClickAction> {
+        self.0
+            .iter()
+            .rev()
+            .find(|(r, _)| r.contains(Position { x: col, y: row }))
+            .map(|(_, a)| a)
+    }
+}
+
+/// Try to parse a footer key-hint string into a single `KeyCode`.
+/// Returns `None` for multi-key combos like `"j/k"`, `"←/→"`, `"any key"`, `"try"`.
+fn parse_hint_key(s: &str) -> Option<KeyCode> {
+    match s {
+        "Enter" => Some(KeyCode::Enter),
+        "Esc" => Some(KeyCode::Esc),
+        "Tab" => Some(KeyCode::Tab),
+        _ => {
+            let chars: Vec<char> = s.chars().collect();
+            if chars.len() == 1 {
+                Some(KeyCode::Char(chars[0]))
+            } else {
+                None
+            }
+        }
+    }
+}
 
 /// Render the tab bar at the top of the screen.
 pub fn render_tab_bar(frame: &mut Frame, area: Rect, active_tab: &Tab, dirty: bool) {
@@ -161,7 +222,7 @@ pub fn help_content() -> Vec<Line<'static>> {
 }
 
 /// Render a centered help popup listing all keybindings.
-pub fn render_help_overlay(frame: &mut Frame, area: Rect, scroll: &mut ScrollState) {
+pub fn render_help_overlay(frame: &mut Frame, area: Rect, scroll: &mut ScrollState) -> ModalInner {
     let help_lines = help_content();
 
     let modal = ModalOverlay {
@@ -184,10 +245,11 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, scroll: &mut ScrollSta
 
     let para = Paragraph::new(visible).alignment(Alignment::Left);
     frame.render_widget(para, inner.area);
+    inner
 }
 
 /// Render a confirmation dialog.
-pub fn render_confirm_overlay(frame: &mut Frame, area: Rect, prompt: &str) {
+pub fn render_confirm_overlay(frame: &mut Frame, area: Rect, prompt: &str) -> ModalInner {
     let modal = ModalOverlay {
         width_pct: 50,
         height: ModalHeight::Percent(20),
@@ -203,6 +265,7 @@ pub fn render_confirm_overlay(frame: &mut Frame, area: Rect, prompt: &str) {
 
     let para = Paragraph::new(text).alignment(Alignment::Center);
     frame.render_widget(para, inner.area);
+    inner
 }
 
 /// Render a scrollable diff overlay for save review.
@@ -211,7 +274,7 @@ pub fn render_diff_overlay(
     area: Rect,
     diff_lines: &[DiffLine],
     scroll: &mut ScrollState,
-) {
+) -> ModalInner {
     let total = diff_lines.len();
     // Use the previous frame's real viewport for scroll_info (avoids estimate).
     // On the very first frame viewport is 0, so scroll_info won't show — that's
@@ -266,6 +329,7 @@ pub fn render_diff_overlay(
 
     let para = Paragraph::new(visible_lines);
     frame.render_widget(para, inner.area);
+    inner
 }
 
 /// A line in a diff display.
@@ -320,6 +384,8 @@ pub struct ModalOverlay<'a> {
 /// The inner area returned by [`ModalOverlay::render_chrome`].
 pub struct ModalInner {
     pub area: Rect,
+    /// (rect, key_code) for each parseable footer button.
+    pub footer_buttons: Vec<(Rect, KeyCode)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -423,18 +489,35 @@ impl ModalOverlay<'_> {
 
         frame.render_widget(Clear, popup);
 
+        let mut footer_buttons: Vec<(Rect, KeyCode)> = Vec::new();
+
         // Build footer line from key-hint pairs
         let mut block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(self.border_color))
             .title(format!(" {} ", self.title));
 
+        // Track button char offsets (from the start of the footer text) so we
+        // can compute screen rects after we know the right-aligned x origin.
+        // Each entry: (offset_in_footer, width, KeyCode).
+        let mut button_offsets: Vec<(u16, u16, KeyCode)> = Vec::new();
+
         if !self.footer.is_empty() || self.footer_right.is_some() {
             let mut spans: Vec<Span> = Vec::new();
+            let mut char_offset: u16 = 0;
+
             spans.push(Span::raw(" "));
+            char_offset += 1;
+
             for (i, (key, desc)) in self.footer.iter().enumerate() {
                 if i > 0 {
                     spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                    char_offset += 2;
+                }
+                let button_text = format!("{key} {desc}");
+                let button_width = button_text.len() as u16;
+                if let Some(kc) = parse_hint_key(key) {
+                    button_offsets.push((char_offset, button_width, kc));
                 }
                 spans.push(Span::styled(
                     *key,
@@ -442,18 +525,38 @@ impl ModalOverlay<'_> {
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 ));
+                char_offset += key.len() as u16;
                 spans.push(Span::styled(
                     format!(" {desc}"),
                     Style::default().fg(Color::DarkGray),
                 ));
+                char_offset += 1 + desc.len() as u16;
             }
             if let Some(ref right) = self.footer_right {
+                let right_text = format!(" {right}");
                 spans.push(Span::styled(
-                    format!(" {right}"),
+                    right_text.clone(),
                     Style::default().fg(Color::DarkGray),
                 ));
+                char_offset += right_text.len() as u16;
             }
             spans.push(Span::raw(" "));
+            char_offset += 1;
+
+            // The footer is right-aligned: ratatui places it so the last char
+            // sits just inside the right border.
+            // footer_x = popup.x + popup.width - 1 (right border) - char_offset
+            let total_footer_width = char_offset;
+            let footer_x = popup
+                .x
+                .saturating_add(popup.width.saturating_sub(1 + total_footer_width));
+            let footer_y = popup.y + popup.height.saturating_sub(1);
+
+            // Convert button offsets to screen-space Rects
+            for (off, w, kc) in &button_offsets {
+                footer_buttons.push((Rect::new(footer_x + off, footer_y, *w, 1), *kc));
+            }
+
             block = block.title_bottom(Line::from(spans).alignment(Alignment::Right));
         }
 
@@ -491,7 +594,10 @@ impl ModalOverlay<'_> {
             inner
         };
 
-        ModalInner { area: content_area }
+        ModalInner {
+            area: content_area,
+            footer_buttons,
+        }
     }
 }
 
@@ -510,4 +616,255 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         Constraint::Percentage((100 - percent_x) / 2),
     ])
     .split(vertical[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    // -- parse_hint_key -------------------------------------------------------
+
+    #[test]
+    fn parse_hint_key_single_char() {
+        assert!(matches!(parse_hint_key("y"), Some(KeyCode::Char('y'))));
+        assert!(matches!(parse_hint_key("n"), Some(KeyCode::Char('n'))));
+        assert!(matches!(parse_hint_key("a"), Some(KeyCode::Char('a'))));
+        assert!(matches!(parse_hint_key("s"), Some(KeyCode::Char('s'))));
+        assert!(matches!(parse_hint_key("b"), Some(KeyCode::Char('b'))));
+        assert!(matches!(parse_hint_key("t"), Some(KeyCode::Char('t'))));
+        assert!(matches!(parse_hint_key("?"), Some(KeyCode::Char('?'))));
+    }
+
+    #[test]
+    fn parse_hint_key_named_keys() {
+        assert!(matches!(parse_hint_key("Enter"), Some(KeyCode::Enter)));
+        assert!(matches!(parse_hint_key("Esc"), Some(KeyCode::Esc)));
+        assert!(matches!(parse_hint_key("Tab"), Some(KeyCode::Tab)));
+    }
+
+    #[test]
+    fn parse_hint_key_multi_key_returns_none() {
+        assert!(parse_hint_key("j/k").is_none());
+        assert!(parse_hint_key("←/→").is_none());
+        assert!(parse_hint_key("any key").is_none());
+        assert!(parse_hint_key("try").is_none());
+        assert!(parse_hint_key("J/K").is_none());
+    }
+
+    // -- ClickRegions::hit ----------------------------------------------------
+
+    #[test]
+    fn hit_returns_none_when_empty() {
+        let cr = ClickRegions::default();
+        assert!(cr.hit(10, 10).is_none());
+    }
+
+    #[test]
+    fn hit_returns_action_when_inside_region() {
+        let mut cr = ClickRegions::default();
+        cr.push(Rect::new(5, 5, 10, 1), ClickAction::Key(KeyCode::Char('y')));
+        // Inside
+        assert!(matches!(
+            cr.hit(5, 5),
+            Some(ClickAction::Key(KeyCode::Char('y')))
+        ));
+        assert!(matches!(
+            cr.hit(14, 5),
+            Some(ClickAction::Key(KeyCode::Char('y')))
+        ));
+        // Outside
+        assert!(cr.hit(4, 5).is_none());
+        assert!(cr.hit(15, 5).is_none());
+        assert!(cr.hit(10, 4).is_none());
+        assert!(cr.hit(10, 6).is_none());
+    }
+
+    #[test]
+    fn hit_returns_most_specific_last_added_region() {
+        let mut cr = ClickRegions::default();
+        // Broad region first (field row)
+        cr.push(Rect::new(0, 10, 80, 1), ClickAction::FormField(0));
+        // Narrow region second (inline option)
+        cr.push(
+            Rect::new(20, 10, 8, 1),
+            ClickAction::SelectOption {
+                field: 0,
+                option: 1,
+            },
+        );
+
+        // Click inside the narrow region → gets the more-specific action
+        assert!(matches!(
+            cr.hit(22, 10),
+            Some(ClickAction::SelectOption {
+                field: 0,
+                option: 1
+            })
+        ));
+        // Click outside the narrow region but inside the broad one → gets FormField
+        assert!(matches!(cr.hit(5, 10), Some(ClickAction::FormField(0))));
+    }
+
+    #[test]
+    fn hit_clear_removes_all_regions() {
+        let mut cr = ClickRegions::default();
+        cr.push(Rect::new(0, 0, 80, 24), ClickAction::Key(KeyCode::Enter));
+        assert!(cr.hit(10, 10).is_some());
+        cr.clear();
+        assert!(cr.hit(10, 10).is_none());
+    }
+
+    // -- Footer button rects via render_chrome --------------------------------
+
+    #[test]
+    fn render_chrome_produces_footer_buttons_for_parseable_hints() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let modal = ModalOverlay {
+                    width_pct: 50,
+                    height: ModalHeight::Percent(20),
+                    border_color: Color::Yellow,
+                    title: "Test",
+                    footer: &[("y", "yes"), ("n", "no")],
+                    footer_right: None,
+                    scroll: None,
+                };
+                let inner = modal.render_chrome(frame, area);
+
+                // Both "y" and "n" are parseable single-char keys
+                assert_eq!(inner.footer_buttons.len(), 2);
+
+                let (rect_y, kc_y) = &inner.footer_buttons[0];
+                assert!(matches!(kc_y, KeyCode::Char('y')));
+
+                let (rect_n, kc_n) = &inner.footer_buttons[1];
+                assert!(matches!(kc_n, KeyCode::Char('n')));
+
+                // Both rects should be on the same row (the bottom border)
+                assert_eq!(rect_y.y, rect_n.y, "both buttons on same row");
+                // The row should be within the terminal area
+                assert!(rect_y.y < area.height, "button row within terminal");
+
+                // Rects should have width matching "y yes" (5) and "n no" (4)
+                assert_eq!(rect_y.width, 5, "y-button width = 'y yes'");
+                assert_eq!(rect_n.width, 4, "n-button width = 'n no'");
+
+                // n-button should start after y-button + 2-char separator
+                assert_eq!(
+                    rect_n.x,
+                    rect_y.x + rect_y.width + 2,
+                    "n-button follows y-button with separator gap"
+                );
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn render_chrome_skips_unparseable_footer_hints() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let modal = ModalOverlay {
+                    width_pct: 60,
+                    height: ModalHeight::Percent(70),
+                    border_color: Color::Cyan,
+                    title: "Help",
+                    footer: &[("j/k", "scroll"), ("any key", "close")],
+                    footer_right: None,
+                    scroll: None,
+                };
+                let inner = modal.render_chrome(frame, area);
+
+                // Neither "j/k" nor "any key" is parseable → no buttons
+                assert_eq!(inner.footer_buttons.len(), 0);
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn render_chrome_mixed_parseable_and_unparseable() {
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let modal = ModalOverlay {
+                    width_pct: 80,
+                    height: ModalHeight::Percent(80),
+                    border_color: Color::Cyan,
+                    title: "Save Review",
+                    footer: &[("y", "confirm"), ("n", "cancel"), ("j/k", "scroll")],
+                    footer_right: None,
+                    scroll: None,
+                };
+                let inner = modal.render_chrome(frame, area);
+
+                // Only "y" and "n" are parseable; "j/k" is not
+                assert_eq!(inner.footer_buttons.len(), 2);
+                assert!(matches!(inner.footer_buttons[0].1, KeyCode::Char('y')));
+                assert!(matches!(inner.footer_buttons[1].1, KeyCode::Char('n')));
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn footer_button_rects_are_hittable_by_click_regions() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let modal = ModalOverlay {
+                    width_pct: 50,
+                    height: ModalHeight::Percent(20),
+                    border_color: Color::Yellow,
+                    title: "Confirm",
+                    footer: &[("y", "yes"), ("n", "no")],
+                    footer_right: None,
+                    scroll: None,
+                };
+                let inner = modal.render_chrome(frame, area);
+
+                // Feed the footer buttons into a ClickRegions
+                let mut clicks = ClickRegions::default();
+                for (rect, kc) in &inner.footer_buttons {
+                    clicks.push(*rect, ClickAction::Key(*kc));
+                }
+
+                // The "y" button rect should be hittable at its midpoint
+                let (ry, _) = &inner.footer_buttons[0];
+                let hit = clicks.hit(ry.x + ry.width / 2, ry.y);
+                assert!(
+                    matches!(hit, Some(ClickAction::Key(KeyCode::Char('y')))),
+                    "clicking center of y-button should yield Key('y')"
+                );
+
+                // The "n" button rect should be hittable
+                let (rn, _) = &inner.footer_buttons[1];
+                let hit = clicks.hit(rn.x + rn.width / 2, rn.y);
+                assert!(
+                    matches!(hit, Some(ClickAction::Key(KeyCode::Char('n')))),
+                    "clicking center of n-button should yield Key('n')"
+                );
+
+                // Clicking outside both buttons on the same row → no hit
+                let outside_x = if ry.x > 0 { ry.x - 1 } else { rn.x + rn.width };
+                assert!(
+                    clicks.hit(outside_x, ry.y).is_none(),
+                    "clicking outside footer buttons should miss"
+                );
+            })
+            .unwrap();
+    }
 }

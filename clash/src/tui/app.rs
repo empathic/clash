@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -25,7 +25,7 @@ use super::tea::{Action, Component};
 use super::test_panel::{self, TestPanel, TestPanelAction};
 use super::tree_view::TreeView;
 use super::walkthrough::{self, WalkthroughState, WalkthroughStep};
-use super::widgets::{self, DiffLine, ScrollState};
+use super::widgets::{self, ClickAction, ClickRegions, DiffLine, ScrollState};
 
 /// Which tab is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +49,7 @@ enum Mode {
 /// What action to take after confirmation.
 enum ConfirmAction {
     Quit,
+    SkipWalkthrough,
 }
 
 /// State for the diff review overlay.
@@ -99,6 +100,8 @@ pub struct App {
     flash: Option<(String, Instant)>,
     /// Onboarding walkthrough state — persists across Mode transitions.
     walkthrough: Option<WalkthroughState>,
+    /// Mouse click targets populated each frame during `view()`.
+    click_regions: ClickRegions,
 }
 
 impl App {
@@ -152,6 +155,7 @@ impl App {
             dirty: false,
             flash,
             walkthrough: None,
+            click_regions: ClickRegions::default(),
         })
     }
 
@@ -182,8 +186,9 @@ impl App {
             if matches!(event, Event::Resize(_, _)) {
                 continue; // redraw with new dimensions
             }
-            // Mouse events: handle scroll in overlay modes, skip everything else
-            // to avoid busy-redraw loops from MouseEventKind::Moved.
+            // Mouse events: handle scroll in overlay modes, click on regions,
+            // skip everything else to avoid busy-redraw loops from MouseEventKind::Moved.
+            let mut synth_key: Option<KeyEvent> = None;
             if let Event::Mouse(mouse) = &event {
                 match mouse.kind {
                     MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
@@ -215,153 +220,186 @@ impl App {
                             _ => {}
                         }
                     }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        if let Some(action) = self.click_regions.hit(mouse.column, mouse.row) {
+                            match action {
+                                ClickAction::Key(kc) => {
+                                    synth_key = Some(KeyEvent::new(*kc, KeyModifiers::empty()));
+                                }
+                                &ClickAction::FormField(vi) => {
+                                    if let Mode::Form(ref mut form) = self.mode {
+                                        form.set_active(vi);
+                                    }
+                                }
+                                &ClickAction::SelectOption { field, option } => {
+                                    if let Mode::Form(ref mut form) = self.mode {
+                                        form.set_active_for_field(field);
+                                        form.set_select_option(field, option);
+                                    }
+                                }
+                                &ClickAction::ToggleMultiSelect { field, option } => {
+                                    if let Mode::Form(ref mut form) = self.mode {
+                                        form.set_active_for_field(field);
+                                        form.toggle_multi(field, option);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     _ => {}
+                }
+                if synth_key.is_none() {
+                    continue;
+                }
+            }
+
+            let key = if let Some(sk) = synth_key {
+                sk
+            } else if let Event::Key(k) = event {
+                k
+            } else {
+                continue;
+            };
+
+            // Walkthrough mode intercepts keys to advance steps.
+            if matches!(self.mode, Mode::Walkthrough) {
+                if let Some(ref mut wt) = self.walkthrough {
+                    match key.code {
+                        KeyCode::Esc => {
+                            self.mode = Mode::Confirm(ConfirmAction::SkipWalkthrough);
+                        }
+                        // j/k/arrows scroll the walkthrough overlay
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            wt.scroll.scroll_down();
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            wt.scroll.scroll_up();
+                        }
+                        KeyCode::Char('b') => {
+                            wt.go_back();
+                        }
+                        KeyCode::Enter
+                            if matches!(
+                                wt.step,
+                                WalkthroughStep::Welcome | WalkthroughStep::BaseTools
+                            ) =>
+                        {
+                            wt.advance();
+                        }
+                        KeyCode::Char('a') if wt.step == WalkthroughStep::AddRule => {
+                            wt.step = WalkthroughStep::FillForm;
+                            let form = FormState::new_add_rule_prefilled(
+                                &self.manifest,
+                                Some(&self.included),
+                            );
+                            self.mode = Mode::Form(form);
+                        }
+                        KeyCode::Char('t') if wt.step == WalkthroughStep::TestIt => {
+                            wt.step = WalkthroughStep::TypeTest;
+                            self.test_panel.visible = true;
+                            self.test_panel.input_active = true;
+                            self.test_focused = true;
+                            self.mode = Mode::Normal;
+                        }
+                        KeyCode::Char('s') if wt.step == WalkthroughStep::SaveFinish => {
+                            wt.step = WalkthroughStep::Done;
+                            self.mode = Mode::Normal;
+                            // Trigger the save flow
+                            if self.dirty {
+                                let new_json = serde_json::to_string_pretty(&self.manifest)
+                                    .unwrap_or_default();
+                                let diff_lines = compute_diff(&self.original_json, &new_json);
+                                let len = diff_lines.len();
+                                self.mode = Mode::SaveReview(DiffState {
+                                    lines: diff_lines,
+                                    scroll: ScrollState::new(len),
+                                });
+                            } else {
+                                self.walkthrough = None;
+                                self.flash = Some((
+                                    "No changes to save — walkthrough complete!".into(),
+                                    Instant::now(),
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 continue;
             }
-            if let Event::Key(key) = event {
-                // Walkthrough mode intercepts keys to advance steps.
-                if matches!(self.mode, Mode::Walkthrough) {
-                    if let Some(ref mut wt) = self.walkthrough {
-                        match key.code {
-                            KeyCode::Esc => {
-                                self.walkthrough = None;
-                                self.mode = Mode::Normal;
-                                self.flash = Some((
-                                    "Walkthrough skipped — press ? for help".into(),
-                                    Instant::now(),
-                                ));
-                            }
-                            // j/k/arrows scroll the walkthrough overlay
-                            KeyCode::Char('j') | KeyCode::Down => {
-                                wt.scroll.scroll_down();
-                            }
-                            KeyCode::Char('k') | KeyCode::Up => {
-                                wt.scroll.scroll_up();
-                            }
-                            _ => match wt.step {
-                                WalkthroughStep::Welcome | WalkthroughStep::BaseTools => {
-                                    wt.advance();
-                                    // Stay in Walkthrough mode for the next overlay step
-                                }
-                                WalkthroughStep::AddRule if key.code == KeyCode::Char('a') => {
-                                    wt.step = WalkthroughStep::FillForm;
-                                    let form = FormState::new_add_rule_prefilled(
-                                        &self.manifest,
-                                        Some(&self.included),
-                                    );
-                                    self.mode = Mode::Form(form);
-                                }
-                                WalkthroughStep::TestIt if key.code == KeyCode::Char('t') => {
-                                    wt.step = WalkthroughStep::TypeTest;
-                                    self.test_panel.visible = true;
-                                    self.test_panel.input_active = true;
-                                    self.test_focused = true;
-                                    self.mode = Mode::Normal;
-                                }
-                                WalkthroughStep::SaveFinish if key.code == KeyCode::Char('s') => {
-                                    wt.step = WalkthroughStep::Done;
-                                    self.mode = Mode::Normal;
-                                    // Trigger the save flow
-                                    if self.dirty {
-                                        let new_json = serde_json::to_string_pretty(&self.manifest)
-                                            .unwrap_or_default();
-                                        let diff_lines =
-                                            compute_diff(&self.original_json, &new_json);
-                                        let len = diff_lines.len();
-                                        self.mode = Mode::SaveReview(DiffState {
-                                            lines: diff_lines,
-                                            scroll: ScrollState::new(len),
-                                        });
-                                    } else {
-                                        self.walkthrough = None;
-                                        self.flash = Some((
-                                            "No changes to save — walkthrough complete!".into(),
-                                            Instant::now(),
-                                        ));
-                                    }
-                                }
-                                _ => {} // ignore non-matching keys
-                            },
+
+            // Form mode handles keys directly — not via Msg
+            if matches!(self.mode, Mode::Form(_)) {
+                let FormHandled::Continue = self.handle_form_key(key);
+                continue;
+            }
+
+            // Test panel focused: route keys to the test panel.
+            // Esc returns focus to the left pane. Tab toggles input/history.
+            if self.test_panel.visible && self.test_focused && matches!(self.mode, Mode::Normal) {
+                match key.code {
+                    KeyCode::Esc => {
+                        // During walkthrough, Esc from test panel cancels walkthrough
+                        if self.walkthrough.is_some() {
+                            self.walkthrough = None;
+                            self.test_focused = false;
+                            self.flash = Some((
+                                "Walkthrough skipped — press ? for help".into(),
+                                Instant::now(),
+                            ));
+                        } else {
+                            // Return focus to the left pane
+                            self.test_focused = false;
                         }
+                        continue;
                     }
-                    continue;
-                }
-
-                // Form mode handles keys directly — not via Msg
-                if matches!(self.mode, Mode::Form(_)) {
-                    let FormHandled::Continue = self.handle_form_key(key);
-                    continue;
-                }
-
-                // Test panel focused: route keys to the test panel.
-                // Esc returns focus to the left pane. Tab toggles input/history.
-                if self.test_panel.visible && self.test_focused && matches!(self.mode, Mode::Normal)
-                {
-                    match key.code {
-                        KeyCode::Esc => {
-                            // During walkthrough, Esc from test panel cancels walkthrough
-                            if self.walkthrough.is_some() {
-                                self.walkthrough = None;
+                    KeyCode::Tab => {
+                        // Toggle between input and history within test panel
+                        self.test_panel.toggle_input_focus();
+                        continue;
+                    }
+                    _ => {
+                        if let Some(msg) = self.test_panel.handle_key(key) {
+                            let is_submit = matches!(msg, test_panel::Msg::InputSubmit);
+                            let compiled = self.current_compiled_policy();
+                            match self.test_panel.update(msg, compiled.as_ref()) {
+                                TestPanelAction::Flash(s) => {
+                                    self.flash = Some((s, Instant::now()));
+                                }
+                                TestPanelAction::None => {}
+                            }
+                            // Advance walkthrough from TypeTest → SaveFinish on submit
+                            if is_submit
+                                && let Some(ref mut wt) = self.walkthrough
+                                && wt.step == WalkthroughStep::TypeTest
+                            {
+                                wt.step = WalkthroughStep::SaveFinish;
                                 self.test_focused = false;
-                                self.flash = Some((
-                                    "Walkthrough skipped — press ? for help".into(),
-                                    Instant::now(),
-                                ));
-                            } else {
-                                // Return focus to the left pane
-                                self.test_focused = false;
+                                self.mode = Mode::Walkthrough;
                             }
-                            continue;
                         }
-                        KeyCode::Tab => {
-                            // Toggle between input and history within test panel
-                            self.test_panel.toggle_input_focus();
-                            continue;
-                        }
-                        _ => {
-                            if let Some(msg) = self.test_panel.handle_key(key) {
-                                let is_submit = matches!(msg, test_panel::Msg::InputSubmit);
-                                let compiled = self.current_compiled_policy();
-                                match self.test_panel.update(msg, compiled.as_ref()) {
-                                    TestPanelAction::Flash(s) => {
-                                        self.flash = Some((s, Instant::now()));
-                                    }
-                                    TestPanelAction::None => {}
-                                }
-                                // Advance walkthrough from TypeTest → SaveFinish on submit
-                                if is_submit
-                                    && let Some(ref mut wt) = self.walkthrough
-                                    && wt.step == WalkthroughStep::TypeTest
-                                {
-                                    wt.step = WalkthroughStep::SaveFinish;
-                                    self.test_focused = false;
-                                    self.mode = Mode::Walkthrough;
-                                }
-                            }
-                            continue;
-                        }
+                        continue;
                     }
                 }
+            }
 
-                if let Some(msg) = self.handle_key(key) {
-                    let action = self.update_msg(msg);
-                    match action {
-                        Action::Quit => break,
-                        Action::Modified => {
-                            self.dirty = true;
-                            self.rebuild_views();
-                        }
-                        Action::RunForm(req) => {
-                            let form =
-                                FormState::from_request(&req, &self.manifest, Some(&self.included));
-                            self.mode = Mode::Form(form);
-                        }
-                        Action::Flash(s) => {
-                            self.flash = Some((s, Instant::now()));
-                        }
-                        Action::None => {}
+            if let Some(msg) = self.handle_key(key) {
+                let action = self.update_msg(msg);
+                match action {
+                    Action::Quit => break,
+                    Action::Modified => {
+                        self.dirty = true;
+                        self.rebuild_views();
                     }
+                    Action::RunForm(req) => {
+                        let form =
+                            FormState::from_request(&req, &self.manifest, Some(&self.included));
+                        self.mode = Mode::Form(form);
+                    }
+                    Action::Flash(s) => {
+                        self.flash = Some((s, Instant::now()));
+                    }
+                    Action::None => {}
                 }
             }
         }
@@ -583,6 +621,10 @@ impl App {
                 let mode = std::mem::replace(&mut self.mode, Mode::Normal);
                 match mode {
                     Mode::Confirm(ConfirmAction::Quit) => Action::Quit,
+                    Mode::Confirm(ConfirmAction::SkipWalkthrough) => {
+                        self.walkthrough = None;
+                        Action::Flash("Walkthrough skipped — press ? for help".into())
+                    }
                     Mode::SaveReview(_) => {
                         // Actually save
                         match policy_loader::write_manifest(&self.path, &self.manifest) {
@@ -626,7 +668,14 @@ impl App {
                 }
             }
             Msg::ConfirmNo => {
-                self.mode = Mode::Normal;
+                match &self.mode {
+                    Mode::Confirm(ConfirmAction::SkipWalkthrough) => {
+                        self.mode = Mode::Walkthrough;
+                    }
+                    _ => {
+                        self.mode = Mode::Normal;
+                    }
+                }
                 Action::None
             }
             Msg::DiffScrollDown => {
@@ -819,25 +868,52 @@ impl App {
 
         widgets::render_status_bar(frame, chunks[2], hints, flash_msg);
 
-        // Overlays
+        // Overlays — take click_regions out to avoid double-borrow with &mut self.mode
+        let mut clicks = std::mem::take(&mut self.click_regions);
+        clicks.clear();
+
         match &mut self.mode {
-            Mode::Help(scroll) => widgets::render_help_overlay(frame, area, scroll),
-            Mode::Confirm(ConfirmAction::Quit) => {
-                widgets::render_confirm_overlay(frame, area, "Unsaved changes. Quit anyway?");
+            Mode::Help(scroll) => {
+                let inner = widgets::render_help_overlay(frame, area, scroll);
+                for (rect, kc) in &inner.footer_buttons {
+                    clicks.push(*rect, ClickAction::Key(*kc));
+                }
+            }
+            Mode::Confirm(action) => {
+                let prompt = match action {
+                    ConfirmAction::Quit => "Unsaved changes. Quit anyway?",
+                    ConfirmAction::SkipWalkthrough => "Skip the walkthrough?",
+                };
+                let inner = widgets::render_confirm_overlay(frame, area, prompt);
+                for (rect, kc) in &inner.footer_buttons {
+                    clicks.push(*rect, ClickAction::Key(*kc));
+                }
             }
             Mode::SaveReview(state) => {
-                widgets::render_diff_overlay(frame, area, &state.lines, &mut state.scroll);
+                let inner =
+                    widgets::render_diff_overlay(frame, area, &state.lines, &mut state.scroll);
+                for (rect, kc) in &inner.footer_buttons {
+                    clicks.push(*rect, ClickAction::Key(*kc));
+                }
             }
             Mode::Form(form) => {
-                form.view(frame, area);
+                form.view(frame, area, &mut clicks);
             }
             Mode::Walkthrough => {
                 if let Some(wt) = &mut self.walkthrough {
-                    walkthrough::render_walkthrough_overlay(frame, area, wt.step, &mut wt.scroll);
+                    walkthrough::render_walkthrough_overlay(
+                        frame,
+                        area,
+                        wt.step,
+                        &mut wt.scroll,
+                        &mut clicks,
+                    );
                 }
             }
             Mode::Normal => {}
         }
+
+        self.click_regions = clicks;
     }
 }
 
@@ -988,5 +1064,169 @@ mod tests {
         // Render form overlay
         press_and_render(&mut app, &mut terminal, key(KeyCode::Esc));
         assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    // -- Click region tests ---------------------------------------------------
+
+    /// Helper: render app to populate click_regions, then return a reference-safe
+    /// snapshot of the regions for assertions.
+    fn render_and_snapshot_clicks(
+        app: &mut App,
+        terminal: &mut Terminal<TestBackend>,
+    ) -> Vec<(Rect, String)> {
+        let snap = app.manifest.clone();
+        terminal
+            .draw(|frame| app.view(frame, frame.area(), &snap))
+            .unwrap();
+        // Convert to owned descriptions for assertions
+        app.click_regions
+            .0
+            .iter()
+            .map(|(r, a)| (*r, format!("{a:?}")))
+            .collect()
+    }
+
+    #[test]
+    fn confirm_overlay_populates_footer_click_regions() {
+        let manifest = empty_manifest();
+        let mut app = App::new(PathBuf::from("/tmp/test.json"), manifest).unwrap();
+        app.dirty = true; // so quit triggers confirm
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Press 'q' to trigger confirm dialog
+        press_and_render(&mut app, &mut terminal, key(KeyCode::Char('q')));
+        assert!(matches!(app.mode, Mode::Confirm(ConfirmAction::Quit)));
+
+        // Render to populate click regions
+        let clicks = render_and_snapshot_clicks(&mut app, &mut terminal);
+
+        // Should have at least the "y" and "n" footer buttons
+        let y_regions: Vec<_> = clicks
+            .iter()
+            .filter(|(_, desc)| desc.contains("Key(Char('y'))"))
+            .collect();
+        let n_regions: Vec<_> = clicks
+            .iter()
+            .filter(|(_, desc)| desc.contains("Key(Char('n'))"))
+            .collect();
+        assert_eq!(y_regions.len(), 1, "should have one 'y' click region");
+        assert_eq!(n_regions.len(), 1, "should have one 'n' click region");
+    }
+
+    #[test]
+    fn synth_key_from_confirm_click_dismisses_dialog() {
+        let manifest = empty_manifest();
+        let mut app = App::new(PathBuf::from("/tmp/test.json"), manifest).unwrap();
+        app.dirty = true;
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Open confirm dialog
+        press_and_render(&mut app, &mut terminal, key(KeyCode::Char('q')));
+        assert!(matches!(app.mode, Mode::Confirm(ConfirmAction::Quit)));
+
+        // Render to populate click regions
+        let snap = app.manifest.clone();
+        terminal
+            .draw(|frame| app.view(frame, frame.area(), &snap))
+            .unwrap();
+
+        // Find the "n" button rect
+        let n_rect = app
+            .click_regions
+            .0
+            .iter()
+            .find(|(_, a)| matches!(a, ClickAction::Key(KeyCode::Char('n'))))
+            .map(|(r, _)| *r)
+            .expect("should find 'n' click region");
+
+        // Simulate a click at the center of the "n" button
+        let hit = app.click_regions.hit(n_rect.x + n_rect.width / 2, n_rect.y);
+        assert!(
+            matches!(hit, Some(ClickAction::Key(KeyCode::Char('n')))),
+            "hit-testing 'n' button center should return Key('n')"
+        );
+
+        // Feeding the synth key 'n' through handle_key should dismiss the confirm
+        let msg = app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()));
+        assert!(matches!(msg, Some(Msg::ConfirmNo)));
+        app.update_msg(msg.unwrap());
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "mode should be Normal after 'n' dismisses confirm"
+        );
+    }
+
+    #[test]
+    fn form_overlay_populates_field_and_option_click_regions() {
+        let manifest = empty_manifest();
+        let mut app = App::new(PathBuf::from("/tmp/test.json"), manifest).unwrap();
+        let backend = TestBackend::new(100, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Open add-rule form
+        press_and_render(&mut app, &mut terminal, key(KeyCode::Char('a')));
+        assert!(matches!(app.mode, Mode::Form(_)));
+
+        // Render to populate click regions
+        let clicks = render_and_snapshot_clicks(&mut app, &mut terminal);
+
+        // Should have FormField regions (at least for each visible field)
+        let field_regions: Vec<_> = clicks
+            .iter()
+            .filter(|(_, desc)| desc.starts_with("FormField"))
+            .collect();
+        assert!(
+            field_regions.len() >= 2,
+            "form should have at least 2 field click regions, got {}",
+            field_regions.len()
+        );
+
+        // The "Rule type" field (field index 0) is inline-select → should have
+        // SelectOption regions for its 3 options
+        let select_regions: Vec<_> = clicks
+            .iter()
+            .filter(|(_, desc)| desc.contains("SelectOption { field: 0"))
+            .collect();
+        assert_eq!(
+            select_regions.len(),
+            3,
+            "inline select should have 3 option click regions, got {}",
+            select_regions.len()
+        );
+
+        // Footer should have Enter, Tab, Esc buttons
+        let enter_regions: Vec<_> = clicks
+            .iter()
+            .filter(|(_, desc)| desc.contains("Key(Enter)"))
+            .collect();
+        let esc_regions: Vec<_> = clicks
+            .iter()
+            .filter(|(_, desc)| desc.contains("Key(Esc)"))
+            .collect();
+        assert_eq!(enter_regions.len(), 1, "should have Enter footer button");
+        assert_eq!(esc_regions.len(), 1, "should have Esc footer button");
+    }
+
+    #[test]
+    fn help_overlay_populates_no_clickable_buttons() {
+        // Help footer is ["j/k scroll", "any key close"] — neither is parseable
+        let manifest = empty_manifest();
+        let mut app = App::new(PathBuf::from("/tmp/test.json"), manifest).unwrap();
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Open help
+        press_and_render(&mut app, &mut terminal, key(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(_)));
+
+        let clicks = render_and_snapshot_clicks(&mut app, &mut terminal);
+
+        // No parseable single-key hints in the help footer
+        assert!(
+            clicks.is_empty(),
+            "help overlay should have 0 click regions since no hints are single-key parseable"
+        );
     }
 }

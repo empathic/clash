@@ -10,7 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use super::widgets::{ModalHeight, ModalOverlay, ScrollState};
+use super::widgets::{ClickAction, ClickRegions, ModalHeight, ModalOverlay, ScrollState};
 
 /// Sequential steps of the onboarding walkthrough.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +46,19 @@ impl WalkthroughStep {
             Self::Done => Self::Done,
         }
     }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Welcome => Self::Welcome,
+            Self::BaseTools => Self::Welcome,
+            Self::AddRule => Self::BaseTools,
+            Self::FillForm => Self::AddRule,
+            Self::TestIt => Self::FillForm,
+            Self::TypeTest => Self::TestIt,
+            Self::SaveFinish => Self::TypeTest,
+            Self::Done => Self::SaveFinish,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +85,11 @@ impl WalkthroughState {
         self.step = self.step.next();
         self.scroll = ScrollState::new(0);
     }
+
+    pub fn go_back(&mut self) {
+        self.step = self.step.prev();
+        self.scroll = ScrollState::new(0);
+    }
 }
 
 /// Render the walkthrough coach-mark overlay for the current step.
@@ -83,6 +101,7 @@ pub fn render_walkthrough_overlay(
     area: Rect,
     step: WalkthroughStep,
     scroll: &mut ScrollState,
+    clicks: &mut ClickRegions,
 ) {
     let (content, footer): (Vec<Line>, &[(&str, &str)]) = match step {
         WalkthroughStep::Welcome => (
@@ -95,7 +114,7 @@ pub fn render_walkthrough_overlay(
                 Line::from(""),
                 Line::from("Let's walk through your starter policy."),
             ],
-            &[("any key", "continue"), ("Esc", "skip")],
+            &[("Esc", "skip"), ("Enter", "continue")],
         ),
         WalkthroughStep::BaseTools => (
             vec![
@@ -114,7 +133,7 @@ pub fn render_walkthrough_overlay(
                 Line::from("For now we'll allow all of git. Over time you"),
                 Line::from("can add sandboxes for finer-grained control."),
             ],
-            &[("any key", "continue"), ("Esc", "skip")],
+            &[("Esc", "skip"), ("b", "back"), ("Enter", "continue")],
         ),
         WalkthroughStep::AddRule => (
             vec![
@@ -126,7 +145,7 @@ pub fn render_walkthrough_overlay(
                 Line::from(""),
                 key_hint("a", "add a new rule"),
             ],
-            &[("a", "add rule"), ("Esc", "skip")],
+            &[("Esc", "skip"), ("b", "back"), ("a", "add rule")],
         ),
         WalkthroughStep::FillForm => {
             // Overlay not rendered — form is visible with its own hints.
@@ -145,7 +164,7 @@ pub fn render_walkthrough_overlay(
                 Line::from(""),
                 key_hint("t", "open the test console"),
             ],
-            &[("t", "test console"), ("Esc", "skip")],
+            &[("Esc", "skip"), ("b", "back"), ("t", "test console")],
         ),
         WalkthroughStep::TypeTest => {
             // Test panel is focused — don't overlay, just let status bar guide.
@@ -162,7 +181,7 @@ pub fn render_walkthrough_overlay(
                 Line::from(""),
                 dim_hint("Come back anytime with: clash policy edit"),
             ],
-            &[("s", "save"), ("Esc", "skip")],
+            &[("Esc", "skip"), ("b", "back"), ("s", "save")],
         ),
         WalkthroughStep::Done => return,
     };
@@ -180,6 +199,9 @@ pub fn render_walkthrough_overlay(
         scroll: Some(scroll.to_modal_scroll()),
     };
     let inner = modal.render_chrome(frame, area);
+    for (rect, kc) in &inner.footer_buttons {
+        clicks.push(*rect, ClickAction::Key(*kc));
+    }
     scroll.update_viewport(inner.area.height as usize);
 
     let visible: Vec<Line> = content
@@ -195,22 +217,42 @@ pub fn render_walkthrough_overlay(
 /// Status bar hints for each walkthrough step.
 pub fn walkthrough_status_hints(step: WalkthroughStep) -> Vec<(&'static str, &'static str)> {
     match step {
-        WalkthroughStep::Welcome => vec![("any key", "continue"), ("Esc", "skip walkthrough")],
-        WalkthroughStep::BaseTools => vec![("any key", "continue"), ("Esc", "skip walkthrough")],
-        WalkthroughStep::AddRule => vec![("a", "add rule"), ("Esc", "skip walkthrough")],
+        WalkthroughStep::Welcome => vec![("Esc", "skip walkthrough"), ("Enter", "continue")],
+        WalkthroughStep::BaseTools => {
+            vec![
+                ("Esc", "skip walkthrough"),
+                ("b", "back"),
+                ("Enter", "continue"),
+            ]
+        }
+        WalkthroughStep::AddRule => {
+            vec![
+                ("Esc", "skip walkthrough"),
+                ("b", "back"),
+                ("a", "add rule"),
+            ]
+        }
         WalkthroughStep::FillForm => vec![
             ("Tab", "next field"),
             ("←/→", "cycle options"),
             ("Enter", "submit"),
             ("Esc", "skip walkthrough"),
         ],
-        WalkthroughStep::TestIt => vec![("t", "test console"), ("Esc", "skip walkthrough")],
+        WalkthroughStep::TestIt => {
+            vec![
+                ("Esc", "skip walkthrough"),
+                ("b", "back"),
+                ("t", "test console"),
+            ]
+        }
         WalkthroughStep::TypeTest => vec![
             ("try", "bash git status"),
             ("Enter", "run test"),
             ("Esc", "skip walkthrough"),
         ],
-        WalkthroughStep::SaveFinish => vec![("s", "save"), ("Esc", "skip walkthrough")],
+        WalkthroughStep::SaveFinish => {
+            vec![("Esc", "skip walkthrough"), ("b", "back"), ("s", "save")]
+        }
         WalkthroughStep::Done => vec![],
     }
 }

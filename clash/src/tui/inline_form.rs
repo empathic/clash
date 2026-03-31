@@ -11,7 +11,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use super::widgets::{ModalHeight, ModalOverlay};
+use super::widgets::{ClickAction, ClickRegions, ModalHeight, ModalOverlay};
 
 use crate::policy::manifest_edit;
 use crate::policy::match_tree::{
@@ -1299,6 +1299,43 @@ impl FormState {
             (FormKind::AddRule | FormKind::EditRule { .. }, 0)
         )
     }
+
+    // -- Public mutation API for mouse click dispatch -------------------------
+
+    /// Activate a visible field by its visible-index.
+    pub fn set_active(&mut self, vi: usize) {
+        if vi < self.visible.len() {
+            self.active = vi;
+        }
+    }
+
+    /// Activate the visible field that corresponds to the raw field index `fi`.
+    pub fn set_active_for_field(&mut self, fi: usize) {
+        if let Some(vi) = self.visible.iter().position(|&f| f == fi) {
+            self.active = vi;
+        }
+    }
+
+    /// Select an option in a Select field by raw field index.
+    pub fn set_select_option(&mut self, fi: usize, opt: usize) {
+        if let FormField::Select {
+            options, selected, ..
+        } = &mut self.fields[fi]
+            && opt < options.len()
+        {
+            *selected = opt;
+            self.recompute_visible();
+        }
+    }
+
+    /// Toggle a MultiSelect checkbox by raw field index.
+    pub fn toggle_multi(&mut self, fi: usize, opt: usize) {
+        if let FormField::MultiSelect { toggled, .. } = &mut self.fields[fi]
+            && opt < toggled.len()
+        {
+            toggled[opt] = !toggled[opt];
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2034,7 +2071,7 @@ impl FormState {
         self.fields[field_idx].hint()
     }
 
-    pub fn view(&self, frame: &mut Frame, area: Rect) {
+    pub fn view(&self, frame: &mut Frame, area: Rect, clicks: &mut ClickRegions) {
         // Use max possible field count for forms that change visibility dynamically,
         // so the popup stays in a fixed position when cycling options.
         let field_count = match &self.kind {
@@ -2063,12 +2100,29 @@ impl FormState {
         };
         let inner = modal.render_chrome(frame, area);
 
+        // Push footer button click regions
+        for (rect, kc) in &inner.footer_buttons {
+            clicks.push(*rect, ClickAction::Key(*kc));
+        }
+
         let mut lines: Vec<Line> = Vec::new();
         lines.push(Line::from(""));
+
+        // Track current_y for click region placement.
+        // Starts after the blank line at the top of inner.area.
+        let mut current_y = inner.area.y + 1; // +1 for the blank line
+        let inner_width = inner.area.width;
+        let inner_x = inner.area.x;
 
         for (vi, &fi) in self.visible.iter().enumerate() {
             let is_active = vi == self.active;
             let field = &self.fields[fi];
+
+            // Push a click region for the entire field row (less specific).
+            clicks.push(
+                Rect::new(inner_x, current_y, inner_width, 1),
+                ClickAction::FormField(vi),
+            );
 
             match field {
                 FormField::Text {
@@ -2147,12 +2201,17 @@ impl FormState {
                     };
 
                     if self.is_inline_select(fi) {
-                        // Inline mode: show all options, highlight selected
-                        let mut spans = vec![Span::styled(format!("  {label}: "), label_style)];
+                        // Inline mode: show all options, highlight selected.
+                        // Track x offset for each option's click region.
+                        let label_prefix = format!("  {label}: ");
+                        let mut x_off = inner_x + label_prefix.len() as u16;
+
+                        let mut spans = vec![Span::styled(label_prefix, label_style)];
                         for (i, opt) in options.iter().enumerate() {
                             if i > 0 {
                                 spans
                                     .push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                                x_off += 2;
                             }
                             let style = if i == *selected {
                                 Style::default()
@@ -2162,7 +2221,17 @@ impl FormState {
                             } else {
                                 Style::default().fg(Color::DarkGray)
                             };
+                            let opt_width = opt.len() as u16;
+                            // Push a more-specific click region for this option
+                            clicks.push(
+                                Rect::new(x_off, current_y, opt_width, 1),
+                                ClickAction::SelectOption {
+                                    field: fi,
+                                    option: i,
+                                },
+                            );
                             spans.push(Span::styled(opt.as_str(), style));
+                            x_off += opt_width;
                         }
                         if is_active {
                             spans.push(Span::styled("  ←/→", Style::default().fg(Color::DarkGray)));
@@ -2221,7 +2290,9 @@ impl FormState {
                         Style::default().fg(Color::Gray)
                     };
 
-                    let mut spans = vec![Span::styled(format!("  {label}: "), label_style)];
+                    let label_prefix = format!("  {label}: ");
+                    let mut x_off = inner_x + label_prefix.len() as u16;
+                    let mut spans = vec![Span::styled(label_prefix, label_style)];
 
                     for (i, opt) in options.iter().enumerate() {
                         let checked = if toggled[i] { "[x]" } else { "[ ]" };
@@ -2236,9 +2307,21 @@ impl FormState {
                         } else {
                             Style::default().fg(Color::DarkGray)
                         };
-                        spans.push(Span::styled(format!("{checked} {opt}"), style));
+                        let item_text = format!("{checked} {opt}");
+                        let item_width = item_text.len() as u16;
+                        // Push a more-specific click region for this checkbox
+                        clicks.push(
+                            Rect::new(x_off, current_y, item_width, 1),
+                            ClickAction::ToggleMultiSelect {
+                                field: fi,
+                                option: i,
+                            },
+                        );
+                        spans.push(Span::styled(item_text, style));
+                        x_off += item_width;
                         if i + 1 < options.len() {
                             spans.push(Span::raw("  "));
+                            x_off += 2;
                         }
                     }
 
@@ -2246,16 +2329,20 @@ impl FormState {
                 }
             }
 
+            current_y += 1; // the field value line
+
             // Context hint for active field
             if is_active && let Some(hint) = self.field_hint(fi) {
                 lines.push(Line::from(Span::styled(
                     format!("    {hint}"),
                     Style::default().fg(Color::DarkGray),
                 )));
+                current_y += 1;
             }
 
             // Spacing between fields
             lines.push(Line::from(""));
+            current_y += 1;
         }
 
         let para = Paragraph::new(lines);
