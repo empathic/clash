@@ -1,4 +1,3 @@
-load("@clash//std.star", "allow", "ask", "match", "deny", "sandbox")
 
 clashbox = sandbox(
     name="clash_box",

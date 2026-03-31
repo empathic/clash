@@ -76,87 +76,25 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
     Ok(())
 }
 
-/// Build the starter policy JSON value for onboarding.
+/// Write the starter policy.star for onboarding.
 ///
-/// Includes pre-configured rules for base Claude tools (Read, Write, Edit,
-/// Glob, Grep) so new users start with a working set of file-operation
-/// permissions out of the box.
-fn starter_policy_json() -> serde_json::Value {
-    json!({
-        "schema_version": 5,
-        "default_effect": "ask",
-        "default_sandbox": "default",
-        "includes": [{"path": "@clash//builtin.star"}],
-        "sandboxes": {
-            "default": {
-                "default": ["read", "execute"],
-                "rules": [
-                    {
-                        "effect": "allow",
-                        "caps": ["read", "write", "create"],
-                        "path": "$PWD",
-                        "path_match": "subpath"
-                    },
-                    {
-                        "effect": "allow",
-                        "caps": ["read", "write", "create"],
-                        "path": "$TMPDIR",
-                        "path_match": "subpath"
-                    },
-                    {
-                        "effect": "allow",
-                        "caps": ["read"],
-                        "path": "$HOME",
-                        "path_match": "subpath"
-                    }
-                ],
-                "network": "deny"
-            }
-        },
-        "tree": [
-            {
-                "condition": {
-                    "observe": "tool_name",
-                    "pattern": { "any_of": [
-                        { "literal": { "literal": "Read" } },
-                        { "literal": { "literal": "Glob" } },
-                        { "literal": { "literal": "Grep" } }
-                    ]},
-                    "children": [{ "decision": { "allow": "default" } }]
-                }
-            },
-            {
-                "condition": {
-                    "observe": "tool_name",
-                    "pattern": { "any_of": [
-                        { "literal": { "literal": "Write" } },
-                        { "literal": { "literal": "Edit" } }
-                    ]},
-                    "children": [{ "decision": { "allow": "default" } }]
-                }
-            }
-        ]
-    })
-}
-
-/// Write a starter policy.json for onboarding.
-///
-/// Creates a minimal policy with `default_effect: "ask"`, the builtin include,
-/// a sensible dev sandbox, and an empty rule tree. Returns the path to the file.
+/// Writes the default policy template as a `.star` file, and compiles it to
+/// a `.json` sibling for the runtime to consume.
 pub fn write_starter_policy() -> Result<std::path::PathBuf> {
+    use crate::settings::compile_default_policy_to_json;
+
     let policy_path = ClashSettings::policy_file()?;
-    let policy_path = policy_path.with_extension("json");
-    let dir = policy_path
+    let json_path = policy_path.with_extension("json");
+    let dir = json_path
         .parent()
         .context("policy file path has no parent directory")?;
     std::fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
-    let policy = starter_policy_json();
+    let json = compile_default_policy_to_json().context("compiling default policy")?;
+    std::fs::write(&json_path, &json)
+        .with_context(|| format!("failed to write {}", json_path.display()))?;
 
-    std::fs::write(&policy_path, serde_json::to_string_pretty(&policy)?)
-        .with_context(|| format!("failed to write {}", policy_path.display()))?;
-
-    Ok(policy_path)
+    Ok(json_path)
 }
 
 // ---------------------------------------------------------------------------
@@ -450,8 +388,8 @@ mod tests {
 
     #[test]
     fn starter_policy_compiles() {
-        let policy = starter_policy_json();
-        let json_str = serde_json::to_string_pretty(&policy).expect("serialize starter policy");
+        use crate::settings::compile_default_policy_to_json;
+        let json_str = compile_default_policy_to_json().expect("compile default policy");
         crate::policy::compile::compile_to_tree(&json_str)
             .expect("starter policy must compile without errors");
     }

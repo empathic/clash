@@ -192,19 +192,6 @@ fn register_globals(builder: &mut GlobalsBuilder) {
 
     // -- Registration functions (side-effecting, write into EvalContext) --
 
-    /// Register a sandbox into the evaluation context.
-    fn _register_sandbox<'v>(
-        #[starlark(require = pos)] sandbox_json: Value<'v>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> anyhow::Result<NoneType> {
-        let json = starlark_to_json(sandbox_json)?;
-        if let Some(ctx) = eval.extra.and_then(|e| e.downcast_ref::<EvalContext>()) {
-            ctx.register_sandbox(json)?;
-        }
-        // If no context (loaded file), silently skip registration
-        Ok(NoneType)
-    }
-
     /// Register settings into the evaluation context.
     fn _register_settings<'v>(
         #[starlark(require = named)] default: &str,

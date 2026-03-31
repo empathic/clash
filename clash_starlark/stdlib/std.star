@@ -3,7 +3,7 @@
 # Emits v5 match tree nodes using minimal Rust primitives.
 # Rust globals available: _mt_node, _mt_condition, _mt_pattern, _mt_prefix,
 # _mt_literal, _mt_policy, _ALLOW, _DENY, _ASK, _OS, _ARCH,
-# _register_policy, _register_sandbox, _register_settings
+# _register_policy, _register_settings
 
 # ---------------------------------------------------------------------------
 # Platform constants — re-export from Rust for use in policy files
@@ -11,6 +11,9 @@
 
 OS = _OS      # e.g. "macos", "linux"
 ARCH = _ARCH  # e.g. "aarch64", "x86_64"
+FULL = "rwcdx"
+RO = "rx"
+RW = "rwcx"
 
 # ---------------------------------------------------------------------------
 # Effect constructors
@@ -193,6 +196,20 @@ def tool(name=None, doc=None):
         tool("WebSearch", doc="No external searches").deny()
     """
     return _with_sandbox_support(_mt_tool(_pattern(name), doc=doc))
+
+
+def mode(name=None, doc=None):
+    """Build a mode matcher. Usable as a dict key in policy() or as a builder.
+
+    Usage (dict key):
+        policy("default", {
+            mode("plan"): allow(sandbox=plan_box),
+        })
+
+    Usage (builder):
+        mode("plan").allow(sandbox=plan_box)
+    """
+    return struct(_match_key="mode", _match_value=name, _doc=doc)
 
 
 # ---------------------------------------------------------------------------
@@ -840,13 +857,7 @@ def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
         else:
             fail("sandbox net= must be an effect string or a list of domain entries")
 
-    sb = _make_sandbox(name, default, fs_rules, net_policy, net_domain_names, doc=doc)
-
-    # Register the sandbox in the evaluation context (if available).
-    # In loaded library files, no context exists — the sandbox is just a value.
-    _register_sandbox(_sandbox_to_json(sb))
-
-    return sb
+    return _make_sandbox(name, default, fs_rules, net_policy, net_domain_names, doc=doc)
 
 
 # ---------------------------------------------------------------------------
@@ -968,43 +979,95 @@ def settings(default="deny", default_sandbox=None):
     _register_settings(default=default, default_sandbox=ds)
 
 
-def policy(name, default="deny", rules=None, default_sandbox=None):
+def policy(name, rules_or_dict=None, default="deny", rules=None, default_sandbox=None):
     """Register a named policy.
 
-    Usage:
+    Usage (dict form):
+        policy("default", {
+            mode("plan"): allow(sandbox=plan_box),
+            mode("edit"): allow(sandbox=edit_box),
+        })
+
+    Usage (rules form):
         policy("default", rules=[
             match({"Bash": {"git": {"push": deny()}}}),
-            match({"Bash": {"git": allow()}}),
             match({("Read", "Glob", "Grep"): allow()}),
         ])
     """
     default = _unwrap_effect(default)
 
-    if rules == None:
-        rules = []
-
     flat_nodes = []
     sandbox_list = []
     _seen_sandboxes = {}
 
+    # Dict form: policy("name", {mode("x"): allow(sandbox=box), ...})
+    if rules_or_dict != None and type(rules_or_dict) == "dict":
+        for key, value in rules_or_dict.items():
+            # Build condition from key
+            if hasattr(key, "_match_key"):
+                # Typed key from mode(), Mode(), Tool(), etc.
+                mk = key._match_key
+                doc_val = key._doc if hasattr(key, "_doc") else None
+                if mk == "mode":
+                    cond = _mt_mode(_pattern(key._match_value), doc=doc_val)
+                elif mk == "tool":
+                    cond = _mt_tool(_pattern(key._match_value), doc=doc_val)
+                else:
+                    fail("unknown match key type: " + mk)
+            elif hasattr(key, "_node"):
+                # Builder node (from tool(), etc.)
+                cond = key._node
+            elif type(key) == "string":
+                # Raw string = tool name
+                cond = _mt_tool(_pattern(key))
+            else:
+                fail("policy dict keys must be mode(), tool(), or tool name strings, got " + type(key))
+
+            # Build children from value
+            if hasattr(value, "_is_effect"):
+                decision = _effect_to_decision(value)
+                flat_nodes.append(cond.on([decision]))
+                _collect_effect_sandbox(value, sandbox_list, _seen_sandboxes)
+            elif type(value) == "dict":
+                # Nested dict — e.g. mode("edit"): {"Bash": allow()}
+                inner_nodes = []
+                for inner_key, inner_value in value.items():
+                    if hasattr(inner_key, "_match_key") and inner_key._match_key == "tool":
+                        inner_cond = _mt_tool(_pattern(inner_key._match_value))
+                    elif hasattr(inner_key, "_node"):
+                        inner_cond = inner_key._node
+                    else:
+                        inner_cond = _mt_tool(_pattern(inner_key))
+                    if hasattr(inner_value, "_is_effect"):
+                        inner_decision = _effect_to_decision(inner_value)
+                        inner_nodes.append(inner_cond.on([inner_decision]))
+                        _collect_effect_sandbox(inner_value, sandbox_list, _seen_sandboxes)
+                    else:
+                        fail("nested policy dict values must be effects")
+                flat_nodes.append(cond.on(inner_nodes))
+            else:
+                fail("policy dict values must be effects (allow/deny/ask) or dicts")
+
+    # List/rules form
+    if rules_or_dict != None and type(rules_or_dict) == "list":
+        rules = rules_or_dict
+    if rules == None:
+        rules = []
+
     for item in rules:
         if hasattr(item, "_is_path"):
-            # Path entry → expand to fs match tree nodes
             flat_nodes.extend(item._nodes)
         elif type(item) == "list":
-            # domains() returns a list
             for sub in item:
                 if hasattr(sub, "_node"):
                     _collect_node(sub, flat_nodes, sandbox_list, _seen_sandboxes)
                 else:
                     flat_nodes.append(sub)
         elif hasattr(item, "_node"):
-            # Rule builder (from exe/tool with sandbox support)
             _collect_node(item, flat_nodes, sandbox_list, _seen_sandboxes)
         else:
             flat_nodes.append(item)
 
-    # Handle default_sandbox for backward compat during transition
     if default_sandbox != None:
         if hasattr(default_sandbox, "_is_sandbox"):
             default_sandbox_json = _sandbox_to_json(default_sandbox)

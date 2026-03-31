@@ -8,61 +8,42 @@
 #   dev          — build tools, git: read+write project, no network
 #   dev_network  — package managers, gh: read+write project + network
 #   unrestricted — fully trusted: all filesystem + network access
+#
 
-load("@clash//std.star", "allow", "deny", "sandbox", "subpath")
+UNSAFE_IN_HOME = (".ssh", ".gpg", ".config", ".aws", ".gh", ".git")
 
-restricted = sandbox(
-    name="restricted",
-    default=deny(),
-    fs={
-        "$PWD": allow("rx"),
-        "$TMPDIR": allow("rx"),
+
+plan = sandbox(
+    name = "plan",
+    default = ask(),
+    fs = {
+        subpath("$PWD"): allow("rx"),
+        subpath("$HOME/.claude"): allow("r"),
     },
-    doc="Minimal access: read-only project files, no network",
+    net = allow(),
 )
 
-read_only = sandbox(
-    name="read_only",
-    default=deny(),
-    fs={
-        subpath("$PWD", follow_worktrees=True): allow("rx"),
-        "$HOME": allow("rx"),
-        "$TMPDIR": allow(),
-    },
-    doc="Read project and home, write only to temp, no network",
+edit = sandbox(
+    name = "edit",
+    default=ask(),
+    fs = {
+        subpath("$PWD"): allow(FULL),
+        subpath("$HOME/.claude"): allow("rwcd"),
+        subpath("$TMPDIR"): allow(FULL),
+    }
 )
 
-dev = sandbox(
-    name="dev",
+safe_yolo = sandbox(
+    name = "safe_yolo",
     default=deny(),
-    fs={
-        subpath("$PWD", follow_worktrees=True): allow("rwcx"),
-        "$HOME": allow("rx"),
-        "$TMPDIR": allow(),
-    },
-    doc="Development: read+write project, read home, no network",
-)
-
-dev_network = sandbox(
-    name="dev_network",
-    default=deny(),
-    fs={
-        subpath("$PWD", follow_worktrees=True): allow("rwcx"),
-        "$HOME": allow("rx"),
-        "$TMPDIR": allow(),
-    },
-    net="allow",
-    doc="Development with network: read+write project, full network",
-)
-
-unrestricted = sandbox(
-    name="unrestricted",
-    default=deny(),
-    fs={
-        subpath("$PWD", follow_worktrees=True): allow(),
+    fs = {
         "$HOME": allow(),
-        "$TMPDIR": allow(),
+        } | {
+        "$HOME/{}".format(d): deny() for d in UNSAFE_IN_HOME
     },
-    net="allow",
-    doc="Full access: all filesystem operations, full network",
+)
+
+yolo = sandbox(
+    name = "yolo",
+    default=allow(),
 )

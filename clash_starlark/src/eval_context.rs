@@ -1,8 +1,8 @@
 //! Evaluation context — accumulates registrations from top-level calls.
 //!
 //! Attached to `evaluator.extra` during module evaluation. Native functions
-//! (`_register_policy`, `_register_sandbox`, `_register_settings`) write into
-//! this context; `evaluate()` reads it after module eval completes.
+//! (`_register_policy`, `_register_settings`) write into this context;
+//! `evaluate()` reads it after module eval completes.
 
 use std::cell::RefCell;
 
@@ -31,7 +31,6 @@ pub struct PolicyRegistration {
 #[derive(Debug, ProvidesStaticType)]
 pub struct EvalContext {
     pub policy: RefCell<Option<PolicyRegistration>>,
-    pub sandboxes: RefCell<Vec<JsonValue>>,
     pub settings: RefCell<Option<SettingsValue>>,
 }
 
@@ -39,28 +38,8 @@ impl EvalContext {
     pub fn new() -> Self {
         EvalContext {
             policy: RefCell::new(None),
-            sandboxes: RefCell::new(Vec::new()),
             settings: RefCell::new(None),
         }
-    }
-
-    /// Register a sandbox definition.
-    pub fn register_sandbox(&self, sandbox_json: JsonValue) -> anyhow::Result<()> {
-        let name = sandbox_json
-            .get("name")
-            .and_then(|n| n.as_str())
-            .unwrap_or("<unnamed>")
-            .to_string();
-
-        let mut sandboxes = self.sandboxes.borrow_mut();
-        // Check for duplicate names
-        for existing in sandboxes.iter() {
-            if existing.get("name").and_then(|n| n.as_str()) == Some(&name) {
-                anyhow::bail!("sandbox \"{name}\" is already registered");
-            }
-        }
-        sandboxes.push(sandbox_json);
-        Ok(())
     }
 
     /// Register settings.
@@ -97,19 +76,9 @@ impl EvalContext {
             .map(|s| s.default_effect.clone())
             .unwrap_or_else(|| "deny".to_string());
 
-        // Merge sandboxes: policy-associated sandboxes override top-level registrations
-        // (e.g. a merged sandbox referenced in a rule takes precedence over the original)
+        // Collect sandboxes from policy rules (allow(sandbox=box) references)
         let mut sandbox_map = serde_json::Map::new();
-
-        // Policy-associated sandboxes first (from allow(sandbox=box) in rules)
         for sb in &policy.sandboxes {
-            if let Some(name) = sb.get("name").and_then(|n| n.as_str()) {
-                sandbox_map.entry(name.to_string()).or_insert_with(|| sb.clone());
-            }
-        }
-
-        // Top-level sandbox() registrations (fill in any not already present)
-        for sb in self.sandboxes.borrow().iter() {
             if let Some(name) = sb.get("name").and_then(|n| n.as_str()) {
                 sandbox_map.entry(name.to_string()).or_insert_with(|| sb.clone());
             }

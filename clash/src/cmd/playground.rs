@@ -380,6 +380,8 @@ struct PlaygroundState {
     compiled: Option<CompiledPolicy>,
     /// Pending save awaiting confirmation.
     pending_save: Option<PendingSave>,
+    /// Active mode for test evaluation (e.g. "plan", "edit").
+    mode: Option<String>,
 }
 
 const STARLARK_LOAD_NAMES: &[&str] = &[
@@ -548,6 +550,18 @@ fn dispatch(input: &str, state: &mut PlaygroundState) -> ControlFlow {
         ControlFlow::Continue(handle_test(test_input.trim(), state))
     } else if input == "test" {
         ControlFlow::Continue("Usage: test <tool invocation>".to_string())
+    } else if let Some(mode_name) = input.strip_prefix("mode ") {
+        let mode_name = mode_name.trim();
+        if mode_name == "none" || mode_name == "clear" || mode_name.is_empty() {
+            state.mode = None;
+            ControlFlow::Continue("Mode cleared (no mode set).".to_string())
+        } else {
+            state.mode = Some(mode_name.to_string());
+            ControlFlow::Continue(format!("Mode set to '{mode_name}'. Tests will evaluate with this mode."))
+        }
+    } else if input == "mode" {
+        let current = state.mode.as_deref().unwrap_or("(none)");
+        ControlFlow::Continue(format!("Current mode: {current}\nUsage: mode <name>  or  mode clear"))
     } else {
         match input {
             "help" => ControlFlow::Continue(handle_help()),
@@ -576,6 +590,7 @@ fn handle_help() -> String {
         "  save [path]              Save current policy to a .star file (default: user policy)",
         "  add rule <expr>          Add a policy rule",
         "  add sandbox <name> <expr> Define a named sandbox",
+        "  mode [name|clear]        Set/show the permission mode for test evaluation",
         "  test <tool>              Test a tool invocation against current policy",
         "  show                     Display current rules, sandboxes, and decision tree",
         "  reset                    Clear all rules and sandboxes",
@@ -909,7 +924,7 @@ fn handle_test(input: &str, state: &PlaygroundState) -> String {
         None => return "No policy loaded. Use 'add rule' first.".to_string(),
     };
 
-    match crate::policy::test_eval::evaluate_test(input, tree) {
+    match crate::policy::test_eval::evaluate_test_with_mode(input, tree, state.mode.as_deref()) {
         Ok(result) => {
             let mut lines =
                 display::format_tool_header("Input:", &result.tool_name, &result.tool_input);
