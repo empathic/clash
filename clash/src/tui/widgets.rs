@@ -462,15 +462,25 @@ impl ModalOverlay<'_> {
 
         // Render scrollbar if content overflows
         let content_area = if let Some(ref sc) = self.scroll {
-            if sc.total > inner.height as usize && inner.width > 1 {
+            let viewport = inner.height as usize;
+            if sc.total > viewport && inner.width > 1 {
                 let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                     .thumb_style(Style::default().fg(self.border_color))
                     .track_style(Style::default().fg(Color::DarkGray))
                     .begin_symbol(None)
                     .end_symbol(None);
+                // Ratatui positions the thumb at the bottom only when
+                // position == content_length - 1. Our offset maxes out at
+                // total - viewport, so we remap to the full 0..total-1 range.
+                let max_offset = sc.total.saturating_sub(viewport);
+                let sb_position = if max_offset == 0 {
+                    0
+                } else {
+                    sc.offset * sc.total.saturating_sub(1) / max_offset
+                };
                 let mut sb_state = ScrollbarState::new(sc.total)
-                    .position(sc.offset)
-                    .viewport_content_length(inner.height as usize);
+                    .position(sb_position)
+                    .viewport_content_length(viewport);
                 frame.render_stateful_widget(scrollbar, inner, &mut sb_state);
                 // Shrink content area by 1 column on the right to avoid overlap
                 Rect::new(inner.x, inner.y, inner.width - 1, inner.height)
