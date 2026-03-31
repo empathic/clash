@@ -6,7 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
-/// A session directory rooted at `<tmp>/clash-<session_id>/`.
+use crate::settings::ClashSettings;
+
+/// A session directory rooted at `~/.clash/sessions/<session_id>/`.
 ///
 /// Every session-scoped file (stats, audit log, trace, policy) is
 /// accessed through this struct, making the directory layout explicit
@@ -18,10 +20,14 @@ pub struct SessionDir {
 
 impl SessionDir {
     /// Build the session directory path for the given session ID.
+    ///
+    /// Stores sessions under `~/.clash/sessions/<id>/` so that logs
+    /// persist across reboots (unlike `$TMPDIR`).
     pub fn new(session_id: &str) -> Self {
-        Self {
-            root: std::env::temp_dir().join(format!("clash-{session_id}")),
-        }
+        let root = ClashSettings::settings_dir()
+            .map(|d| d.join("sessions").join(session_id))
+            .unwrap_or_else(|_| std::env::temp_dir().join(format!("clash-{session_id}")));
+        Self { root }
     }
 
     /// The root directory path.

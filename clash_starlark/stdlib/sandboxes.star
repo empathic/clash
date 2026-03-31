@@ -17,8 +17,8 @@ plan = sandbox(
     name = "plan",
     default = ask(),
     fs = {
-        subpath("$PWD"): allow("rx"),
-        subpath("$HOME/.claude"): allow("r"),
+        glob("$PWD/**"): allow("rx"),
+        glob("$HOME/.claude/**"): allow("r"),
     },
     net = allow(),
 )
@@ -27,9 +27,9 @@ edit = sandbox(
     name = "edit",
     default=ask(),
     fs = {
-        subpath("$PWD"): allow(FULL),
-        subpath("$HOME/.claude"): allow("rwcd"),
-        subpath("$TMPDIR"): allow(FULL),
+        glob("$PWD/**"): allow(FULL),
+        glob("$HOME/.claude/**"): allow("rwcd"),
+        glob("$TMPDIR/**"): allow(FULL),
     }
 )
 
@@ -37,9 +37,9 @@ safe_yolo = sandbox(
     name = "safe_yolo",
     default=deny(),
     fs = {
-        "$HOME": allow(),
+        glob("$HOME/**"): allow(),
         } | {
-        "$HOME/{}".format(d): deny() for d in UNSAFE_IN_HOME
+        glob("$HOME/{}/**".format(d)): deny() for d in UNSAFE_IN_HOME
     },
 )
 

@@ -112,9 +112,12 @@ pub fn compile_default_policy_to_json_with_preset(_preset: &str) -> Result<Strin
 
 /// Compile the embedded default policy template to JSON.
 pub fn compile_default_policy_to_json() -> Result<String> {
-    let output =
-        clash_starlark::evaluate(DEFAULT_POLICY_TEMPLATE, "<default_policy>", std::path::Path::new("."))
-            .context("failed to compile default policy")?;
+    let output = clash_starlark::evaluate(
+        DEFAULT_POLICY_TEMPLATE,
+        "<default_policy>",
+        std::path::Path::new("."),
+    )
+    .context("failed to compile default policy")?;
     let value: serde_json::Value =
         serde_json::from_str(&output.json).context("default policy produced invalid JSON")?;
     serde_json::to_string_pretty(&value).context("failed to pretty-print default policy JSON")

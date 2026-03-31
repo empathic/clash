@@ -105,6 +105,7 @@ fn patterns_equal(a: &Pattern, b: &Pattern) -> bool {
         (Pattern::Wildcard, Pattern::Wildcard) => return true,
         (Pattern::Literal(va), Pattern::Literal(vb)) => return va == vb,
         (Pattern::Prefix(va), Pattern::Prefix(vb)) => return va == vb,
+        (Pattern::ChildOf(va), Pattern::ChildOf(vb)) => return va == vb,
         _ => {}
     }
     // Fallback: compare JSON representations.

@@ -62,8 +62,7 @@ pub fn evaluate(source: &str, filename: &str, base_dir: &Path) -> Result<EvalOut
     let doc = ctx
         .assemble_document()
         .context("failed to assemble policy document")?;
-    let json =
-        serde_json::to_string_pretty(&doc).context("failed to serialize policy document")?;
+    let json = serde_json::to_string_pretty(&doc).context("failed to serialize policy document")?;
 
     let loaded_files = loader.loaded_files();
 

@@ -1,13 +1,12 @@
 # Python Development Policy
 # Allows python/pip/uv/pytest with sandboxed filesystem access.
-load("@clash//std.star", "match", "policy", "settings", "sandbox", "subpath", "allow", "deny", "ask")
 
 sandbox(
     name = "python",
     default = deny(),
     fs = {
         subpath("$PWD", follow_worktrees = True): allow("rwc"),
-        "$TMPDIR": allow(),
+        glob("$TMPDIR/**"): allow(),
     },
     net = allow(),
 )

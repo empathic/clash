@@ -81,6 +81,9 @@ pub enum Pattern {
     /// Matches if the string starts with the resolved value (subpath matching).
     /// Matches both exact (path == prefix) and children (path starts with prefix + "/").
     Prefix(Value),
+    /// Matches direct children of the resolved path (one level deep).
+    /// Matches paths like `prefix/name` but not `prefix/name/sub`.
+    ChildOf(Value),
 }
 
 fn serialize_regex<S: serde::Serializer>(re: &Arc<Regex>, s: S) -> Result<S::Ok, S::Error> {
@@ -107,6 +110,12 @@ impl Pattern {
                 let prefix = v.resolve();
                 value == prefix || value.starts_with(&format!("{prefix}/"))
             }
+            Pattern::ChildOf(v) => {
+                let parent = v.resolve();
+                value
+                    .strip_prefix(&format!("{parent}/"))
+                    .is_some_and(|rest| !rest.contains('/'))
+            }
         }
     }
 
@@ -118,6 +127,7 @@ impl Pattern {
             Pattern::AnyOf(_) => 1,
             Pattern::Regex(_) => 2,
             Pattern::Prefix(_) => 3,
+            Pattern::ChildOf(_) => 3,
             Pattern::Literal(_) => 4,
         }
     }
@@ -132,6 +142,7 @@ impl PartialEq for Pattern {
             (Pattern::AnyOf(a), Pattern::AnyOf(b)) => a == b,
             (Pattern::Not(a), Pattern::Not(b)) => a == b,
             (Pattern::Prefix(a), Pattern::Prefix(b)) => a == b,
+            (Pattern::ChildOf(a), Pattern::ChildOf(b)) => a == b,
             _ => false,
         }
     }

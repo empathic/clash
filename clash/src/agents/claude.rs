@@ -8,7 +8,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::protocol::HookProtocol;
-use super::{AgentKind, resolve_tool_name};
+use super::{AgentKind, resolve_permission_mode, resolve_tool_name};
 use crate::hooks::{HookOutput, SessionStartHookInput, StopHookInput, ToolUseHookInput};
 
 pub struct ClaudeProtocol;
@@ -24,11 +24,18 @@ impl HookProtocol for ClaudeProtocol {
         input.tool_name = resolve_tool_name(AgentKind::Claude, &original).to_string();
         input.original_tool_name = Some(original);
         input.agent = Some(AgentKind::Claude);
+        input.permission_mode =
+            resolve_permission_mode(AgentKind::Claude, &input.permission_mode).to_string();
         Ok(input)
     }
 
     fn parse_session_start(&self, raw: &Value) -> Result<SessionStartHookInput> {
-        Ok(serde_json::from_value(raw.clone())?)
+        let mut input: SessionStartHookInput = serde_json::from_value(raw.clone())?;
+        if let Some(mode) = &input.permission_mode {
+            input.permission_mode =
+                Some(resolve_permission_mode(AgentKind::Claude, mode).to_string());
+        }
+        Ok(input)
     }
 
     fn parse_stop(&self, raw: &Value) -> Result<StopHookInput> {

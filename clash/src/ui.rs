@@ -130,7 +130,14 @@ pub fn print_sandbox_summary(sandbox: &SandboxPolicy) {
     println!("  {}: {}", style::cyan("default"), sandbox.default.short());
     println!("  {}: {:?}", style::cyan("network"), sandbox.network);
     for rule in &sandbox.rules {
-        println!("  {:?} {} in {}", rule.effect, rule.caps.short(), rule.path);
+        use crate::policy::sandbox_types::PathMatch;
+        let path_display = match rule.path_match {
+            PathMatch::Subpath => format!("{}/**", rule.path),
+            PathMatch::ChildOf => format!("{}/*", rule.path),
+            PathMatch::Regex => format!("{} (regex)", rule.path),
+            PathMatch::Literal => rule.path.clone(),
+        };
+        println!("  {:?} {} in {}", rule.effect, rule.caps.short(), path_display);
     }
 }
 
@@ -148,6 +155,7 @@ pub fn print_sandbox_table(sandboxes: &HashMap<String, SandboxPolicy>) {
             let suffix = match rule.path_match {
                 crate::policy::sandbox_types::PathMatch::Subpath => "/**",
                 crate::policy::sandbox_types::PathMatch::Literal => "",
+                crate::policy::sandbox_types::PathMatch::ChildOf => "/*",
                 crate::policy::sandbox_types::PathMatch::Regex => " (re)",
             };
             let key = format!("{}{}", rule.path, suffix);
@@ -244,6 +252,7 @@ pub fn print_sandbox_table(sandboxes: &HashMap<String, SandboxPolicy>) {
                     let suffix = match r.path_match {
                         crate::policy::sandbox_types::PathMatch::Subpath => "/**",
                         crate::policy::sandbox_types::PathMatch::Literal => "",
+                        crate::policy::sandbox_types::PathMatch::ChildOf => "/*",
                         crate::policy::sandbox_types::PathMatch::Regex => " (re)",
                     };
                     format!("{}{}", r.path, suffix) == *path

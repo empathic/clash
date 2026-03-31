@@ -27,11 +27,8 @@ pub fn run(yes: bool) -> Result<()> {
     // 1. Remove the status line.
     remove_status_line();
 
-    // 2. Disable the plugin in Claude Code settings.
-    disable_plugin();
-
-    // 3. Uninstall the Claude Code plugin via CLI.
-    uninstall_plugin();
+    // 2. Remove clash hooks and markers from Claude Code settings.
+    remove_hooks_and_plugin();
 
     // 4. Remove ~/.clash/ directory.
     remove_settings_dir(yes);
@@ -71,58 +68,52 @@ fn remove_status_line() {
     }
 }
 
-/// Disable the clash plugin in Claude Code settings.
-fn disable_plugin() {
+/// Remove clash hooks and plugin markers from Claude Code settings.
+fn remove_hooks_and_plugin() {
     let claude = claude_settings::ClaudeSettings::new();
 
-    let is_enabled = claude
-        .read(claude_settings::SettingsLevel::User)
-        .ok()
-        .flatten()
-        .and_then(|s| s.enabled_plugins)
-        .and_then(|p| p.get("clash").copied())
-        .unwrap_or(false);
+    match claude.update(claude_settings::SettingsLevel::User, |settings| {
+        // Remove hooks.
+        let hooks_removed = settings
+            .hooks
+            .as_mut()
+            .map(|h| super::init::uninstall_clash_hooks(h))
+            .unwrap_or(false);
 
-    if !is_enabled {
-        ui::skip("clash plugin is not enabled in settings.");
-        return;
-    }
-
-    if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", false)
-    {
-        warn!(error = %e, "failed to disable plugin in settings");
-        ui::warn(&format!("Could not disable clash plugin: {e}"));
-        return;
-    }
-
-    ui::success("Disabled clash plugin in Claude Code settings.");
-}
-
-/// Uninstall the Claude Code plugin via the `claude` CLI.
-fn uninstall_plugin() {
-    let output = std::process::Command::new("claude")
-        .args(["plugin", "uninstall", "clash"])
-        .output();
-
-    match output {
-        Ok(o) if o.status.success() => {
-            info!("claude plugin uninstall succeeded");
-            ui::success("Uninstalled clash plugin from Claude Code.");
+        if hooks_removed {
+            info!("removed clash hooks from settings");
         }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            // "not installed" / "not found" is fine — nothing to uninstall.
-            if stderr.contains("not") {
-                info!("plugin was not installed, skipping");
-                ui::skip("clash plugin was not installed in Claude Code.");
-            } else {
-                warn!(stderr = %stderr, "claude plugin uninstall failed");
-                ui::warn(&format!("Could not uninstall plugin: {stderr}"));
+
+        // Clear empty hooks object.
+        if let Some(ref h) = settings.hooks {
+            if h.pre_tool_use.is_none()
+                && h.post_tool_use.is_none()
+                && h.permission_request.is_none()
+                && h.session_start.is_none()
+                && h.stop.is_none()
+                && h.notification.is_none()
+            {
+                settings.hooks = None;
             }
         }
+
+        // Remove plugin enabled flag.
+        if let Some(ref mut plugins) = settings.enabled_plugins {
+            plugins.remove("clash");
+            if plugins.is_empty() {
+                settings.enabled_plugins = None;
+            }
+        }
+
+        // Remove clash installed marker.
+        settings.clear_clash_installed();
+    }) {
+        Ok(()) => {
+            ui::success("Removed clash hooks from Claude Code settings.");
+        }
         Err(e) => {
-            warn!(error = %e, "claude CLI not found");
-            ui::warn(&format!("Could not run `claude plugin uninstall`: {e}"));
+            warn!(error = %e, "failed to remove hooks from settings");
+            ui::warn(&format!("Could not update Claude Code settings: {e}"));
         }
     }
 }

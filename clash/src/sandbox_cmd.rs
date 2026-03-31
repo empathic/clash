@@ -208,7 +208,14 @@ pub fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
             eprintln!("  default: {}", sandbox_policy.default.display());
             eprintln!("  network: {:?}", sandbox_policy.network);
             for rule in &sandbox_policy.rules {
-                eprintln!("  {:?} {} in {}", rule.effect, rule.caps.short(), rule.path);
+                use crate::policy::sandbox_types::PathMatch;
+                let path_display = match rule.path_match {
+                    PathMatch::Subpath => format!("{}/**", rule.path),
+                    PathMatch::ChildOf => format!("{}/*", rule.path),
+                    PathMatch::Regex => format!("{} (regex)", rule.path),
+                    PathMatch::Literal => rule.path.clone(),
+                };
+                eprintln!("  {:?} {} in {}", rule.effect, rule.caps.short(), path_display);
             }
             eprintln!("  command: {:?}", command);
             eprintln!("---");
@@ -326,6 +333,7 @@ fn handle_list_sandboxes(json: bool) -> Result<()> {
                     match rule.path_match {
                         PathMatch::Subpath => "",
                         PathMatch::Literal => " (literal)",
+                        PathMatch::ChildOf => " (child_of)",
                         PathMatch::Regex => " (regex)",
                     },
                 );
@@ -407,8 +415,11 @@ fn parse_path_match(s: &str) -> Result<PathMatch> {
     match s {
         "subpath" => Ok(PathMatch::Subpath),
         "literal" => Ok(PathMatch::Literal),
+        "child_of" => Ok(PathMatch::ChildOf),
         "regex" => Ok(PathMatch::Regex),
-        other => anyhow::bail!("unknown path_match '{other}' (expected: subpath, literal, regex)"),
+        other => anyhow::bail!(
+            "unknown path_match '{other}' (expected: subpath, literal, child_of, regex)"
+        ),
     }
 }
 

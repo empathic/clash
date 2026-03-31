@@ -1,15 +1,13 @@
-load("@clash//std.star", "allow", "deny", "match", "sandbox", "domains")
-
 node_sandbox = sandbox(
     name = "node_dev",
     default = deny(),
     fs = {
-        "$PWD": allow("rwcx"),
+        glob("$PWD/**"): allow("rwcx"),
         "$HOME": {
-            ".npm": allow(),
-            ".config/npm": allow("r"),
+            glob(".npm/**"): allow(),
+            glob(".config/npm/**"): allow("r"),
         },
-        "$TMPDIR": allow(),
+        glob("$TMPDIR/**"): allow(),
     },
     net = [
         domains({

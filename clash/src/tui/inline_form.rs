@@ -404,11 +404,11 @@ impl FormState {
             },
             FormField::Select {
                 label: "Path match".into(),
-                options: vec!["subpath".into(), "literal".into(), "regex".into()],
+                options: vec!["literal".into(), "subpath".into(), "regex".into()],
                 selected: 0,
                 hints: vec![
-                    "Match this path and everything under it",
                     "Match this exact path only",
+                    "Match this path and everything under it",
                     "Match paths by regular expression",
                 ],
             },
@@ -518,8 +518,8 @@ impl FormState {
         let path_cursor = path_value.len();
 
         let path_match_idx = match rule.map(|r| &r.path_match) {
-            Some(PathMatch::Subpath) | None => 0,
-            Some(PathMatch::Literal) => 1,
+            Some(PathMatch::Literal) | None => 0,
+            Some(PathMatch::Subpath) | Some(PathMatch::ChildOf) => 1,
             Some(PathMatch::Regex) => 2,
         };
 
@@ -552,11 +552,11 @@ impl FormState {
             },
             FormField::Select {
                 label: "Path match".into(),
-                options: vec!["subpath".into(), "literal".into(), "regex".into()],
+                options: vec!["literal".into(), "subpath".into(), "regex".into()],
                 selected: path_match_idx,
                 hints: vec![
-                    "Match this path and everything under it",
                     "Match this exact path only",
+                    "Match this path and everything under it",
                     "Match paths by regular expression",
                 ],
             },
@@ -1047,6 +1047,7 @@ impl FormState {
                 Pattern::Wildcard => 1,
                 Pattern::Regex(_) => 2,
                 Pattern::Prefix(_) => 3,
+                Pattern::ChildOf(_) => 3,
                 Pattern::AnyOf(_) => 4,
                 _ => 0,
             },
@@ -1705,12 +1706,7 @@ impl FormState {
                 Stmt::Blank,
                 Stmt::Expr(settings(deny(), None)),
                 Stmt::Blank,
-                Stmt::Expr(policy(
-                    "tui",
-                    deny(),
-                    vec![Expr::raw(&expr)],
-                    None,
-                )),
+                Stmt::Expr(policy("tui", deny(), vec![Expr::raw(&expr)], None)),
             ])
         };
 
@@ -1774,10 +1770,10 @@ impl FormState {
             return Err("Path is required".into());
         }
         let path_match = match self.select_value(3) {
-            0 => PathMatch::Subpath,
-            1 => PathMatch::Literal,
+            0 => PathMatch::Literal,
+            1 => PathMatch::Subpath,
             2 => PathMatch::Regex,
-            _ => PathMatch::Subpath,
+            _ => PathMatch::Literal,
         };
 
         sandbox_edit::add_rule(manifest, sandbox_name, effect, caps, path, path_match, None)
@@ -1904,10 +1900,10 @@ impl FormState {
             return Err("Path is required".into());
         }
         let path_match = match self.select_value(3) {
-            0 => PathMatch::Subpath,
-            1 => PathMatch::Literal,
+            0 => PathMatch::Literal,
+            1 => PathMatch::Subpath,
             2 => PathMatch::Regex,
-            _ => PathMatch::Subpath,
+            _ => PathMatch::Literal,
         };
 
         let sb = manifest
@@ -2371,6 +2367,7 @@ fn short_pattern_desc(pat: &Pattern) -> String {
         }
         Pattern::Regex(re) => format!("/{}/", re.as_str()),
         Pattern::Prefix(v) => format!("{}/**", v.resolve()),
+        Pattern::ChildOf(v) => format!("{}/*", v.resolve()),
         Pattern::AnyOf(pats) => format!("[{} values]", pats.len()),
         Pattern::Not(inner) => format!("not {}", short_pattern_desc(inner)),
     }
@@ -2673,6 +2670,15 @@ pattern_registry! {
             Ok(Pattern::Prefix(Value::Literal(v.to_string())))
         },
     },
+    ChildOf {
+        label: "direct children",
+        hint: "child-of: match direct children of a path (one level)",
+        value_hint: "A parent path, e.g. /home/user or $HOME",
+        parse(v): {
+            if v.is_empty() { return Err("Child-of pattern requires a value".into()); }
+            Ok(Pattern::ChildOf(Value::Literal(v.to_string())))
+        },
+    },
     AnyOf {
         label: "list of values",
         hint: "any-of: match any value in a comma-separated list",
@@ -2703,6 +2709,7 @@ fn pattern_to_value_string(pat: &Pattern) -> String {
         Pattern::Literal(v) => v.resolve(),
         Pattern::Regex(re) => re.as_str().to_string(),
         Pattern::Prefix(v) => v.resolve(),
+        Pattern::ChildOf(v) => v.resolve(),
         Pattern::AnyOf(pats) => pats
             .iter()
             .map(pattern_to_value_string)
@@ -3118,8 +3125,8 @@ mod tests {
             FormField::Text { value, .. } => assert_eq!(value, "/tmp"),
             _ => panic!("Expected Text"),
         }
-        // Path match: literal = index 1
-        assert_eq!(form.select_value(3), 1);
+        // Path match: literal = index 0
+        assert_eq!(form.select_value(3), 0);
 
         // Apply should update the rule
         form.apply(&mut manifest).unwrap();

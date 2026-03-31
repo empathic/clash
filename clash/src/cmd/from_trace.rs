@@ -306,8 +306,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     let mut stmts = vec![
         load_builtin(),
         load_std(&[
-            "match", "tool", "policy", "settings", "sandbox", "cwd", "home", "allow", "ask",
-            "deny",
+            "match", "tool", "policy", "settings", "sandbox", "cwd", "home", "allow", "ask", "deny",
         ]),
         load_sandboxes(&["dev"]),
         Stmt::Blank,

@@ -226,6 +226,7 @@ fn pattern_kind(pattern: &Pattern) -> String {
         Pattern::AnyOf(_) => "any-of".to_string(),
         Pattern::Not(_) => "negation".to_string(),
         Pattern::Prefix(_) => "prefix".to_string(),
+        Pattern::ChildOf(_) => "child-of".to_string(),
     }
 }
 

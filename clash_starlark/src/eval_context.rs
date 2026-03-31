@@ -9,7 +9,6 @@ use std::cell::RefCell;
 use serde_json::Value as JsonValue;
 use starlark::values::ProvidesStaticType;
 
-
 /// Settings registered via the `settings()` DSL call.
 #[derive(Debug, Clone)]
 pub struct SettingsValue {
@@ -80,7 +79,9 @@ impl EvalContext {
         let mut sandbox_map = serde_json::Map::new();
         for sb in &policy.sandboxes {
             if let Some(name) = sb.get("name").and_then(|n| n.as_str()) {
-                sandbox_map.entry(name.to_string()).or_insert_with(|| sb.clone());
+                sandbox_map
+                    .entry(name.to_string())
+                    .or_insert_with(|| sb.clone());
             }
         }
 

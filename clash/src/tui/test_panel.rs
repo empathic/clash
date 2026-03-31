@@ -96,7 +96,7 @@ impl TestPanel {
             input_cursor: 0,
             visible: true,
             flash: None,
-            mode: None,
+            mode: Some("default".into()),
         }
     }
 
@@ -321,7 +321,8 @@ impl TestPanel {
     /// Called whenever the policy is modified.
     pub fn re_evaluate(&mut self, policy: &CompiledPolicy) {
         for case in &mut self.cases {
-            let new_decision = policy.evaluate_with_mode(&case.tool_name, &case.tool_input, self.mode.as_deref());
+            let new_decision =
+                policy.evaluate_with_mode(&case.tool_name, &case.tool_input, self.mode.as_deref());
             let new_effect = new_decision.effect;
             let new_summary = match &new_decision.reason {
                 Some(reason) => format!("{} ({reason})", effect_str(new_effect)),

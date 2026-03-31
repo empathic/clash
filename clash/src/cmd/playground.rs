@@ -557,11 +557,15 @@ fn dispatch(input: &str, state: &mut PlaygroundState) -> ControlFlow {
             ControlFlow::Continue("Mode cleared (no mode set).".to_string())
         } else {
             state.mode = Some(mode_name.to_string());
-            ControlFlow::Continue(format!("Mode set to '{mode_name}'. Tests will evaluate with this mode."))
+            ControlFlow::Continue(format!(
+                "Mode set to '{mode_name}'. Tests will evaluate with this mode."
+            ))
         }
     } else if input == "mode" {
         let current = state.mode.as_deref().unwrap_or("(none)");
-        ControlFlow::Continue(format!("Current mode: {current}\nUsage: mode <name>  or  mode clear"))
+        ControlFlow::Continue(format!(
+            "Current mode: {current}\nUsage: mode <name>  or  mode clear"
+        ))
     } else {
         match input {
             "help" => ControlFlow::Continue(handle_help()),

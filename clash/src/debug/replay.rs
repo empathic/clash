@@ -13,12 +13,17 @@ pub struct ReplayResult {
     pub tool_input: serde_json::Value,
     pub decision: PolicyDecision,
     pub multi_level: bool,
+    /// The agent permission mode used for evaluation.
+    pub mode: Option<String>,
 }
 
 impl ReplayResult {
     /// Render as human-readable text.
     pub fn format_human(&self) -> String {
         let mut lines = display::format_tool_header("Input:", &self.tool_name, &self.tool_input);
+        if let Some(ref mode) = self.mode {
+            lines.push(format!("  {} {}", style::dim("mode:"), mode));
+        }
         lines.push(String::new());
         lines.extend(display::format_decision(&self.decision));
 
@@ -53,9 +58,12 @@ impl ReplayResult {
     pub fn format_json(&self) -> Result<String> {
         let mut output = display::decision_to_json(&self.decision);
 
-        // replay JSON includes tool_name and tool_input at the top level
+        // replay JSON includes tool_name, tool_input, and mode at the top level
         output["tool_name"] = serde_json::json!(self.tool_name);
         output["tool_input"] = self.tool_input.clone();
+        if let Some(ref mode) = self.mode {
+            output["mode"] = serde_json::json!(mode);
+        }
 
         if self.decision.effect == crate::policy::Effect::Deny {
             output["suggestion"] = serde_json::json!(self.suggest_allow_command());
@@ -70,7 +78,12 @@ impl ReplayResult {
 }
 
 /// Replay a tool invocation given CLI arguments.
-pub fn replay_from_args(tool: &str, input: Option<&str>, _cwd: &str) -> Result<ReplayResult> {
+pub fn replay_from_args(
+    tool: &str,
+    input: Option<&str>,
+    _cwd: &str,
+    mode: Option<&str>,
+) -> Result<ReplayResult> {
     let (tool_name, tool_input) = resolve_tool_input(tool, input)?;
 
     let settings = ClashSettings::load_or_create()?;
@@ -79,13 +92,14 @@ pub fn replay_from_args(tool: &str, input: Option<&str>, _cwd: &str) -> Result<R
         .ok_or_else(|| anyhow::anyhow!("no compiled policy available — run `clash init`"))?;
 
     let multi_level = settings.loaded_policies().len() > 1;
-    let decision = policy.evaluate(&tool_name, &tool_input);
+    let decision = policy.evaluate_with_mode(&tool_name, &tool_input, mode);
 
     Ok(ReplayResult {
         tool_name,
         tool_input,
         decision,
         multi_level,
+        mode: mode.map(|m| m.to_string()),
     })
 }
 
@@ -105,7 +119,12 @@ pub fn replay_last(session_filter: Option<&str>) -> Result<ReplayResult> {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    replay_from_args(&last.tool_name, Some(&last.tool_input_summary), &cwd)
+    replay_from_args(
+        &last.tool_name,
+        Some(&last.tool_input_summary),
+        &cwd,
+        last.mode.as_deref(),
+    )
 }
 
 /// Replay an audit log entry identified by its short hash.
@@ -115,7 +134,12 @@ pub fn replay_hash(hash: &str) -> Result<ReplayResult> {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    replay_from_args(&entry.tool_name, Some(&entry.tool_input_summary), &cwd)
+    replay_from_args(
+        &entry.tool_name,
+        Some(&entry.tool_input_summary),
+        &cwd,
+        entry.mode.as_deref(),
+    )
 }
 
 /// Resolve tool name and input JSON from CLI arguments.

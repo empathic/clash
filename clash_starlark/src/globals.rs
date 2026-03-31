@@ -105,6 +105,17 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
+    /// Convert a path value to a child-of pattern (direct children only).
+    fn _mt_child_of<'v>(
+        #[starlark(require = pos)] value: Value<'v>,
+        heap: &'v starlark::values::Heap,
+    ) -> anyhow::Result<MatchTreeNode> {
+        let val_json = path_value_to_json(value, heap)?;
+        Ok(MatchTreeNode {
+            json: serde_json::json!({"child_of": val_json}),
+        })
+    }
+
     /// Convert a path value to a literal (exact) pattern (needs Rust for env/join dispatch).
     fn _mt_literal<'v>(
         #[starlark(require = pos)] value: Value<'v>,
@@ -195,14 +206,17 @@ fn register_globals(builder: &mut GlobalsBuilder) {
     /// Register settings into the evaluation context.
     fn _register_settings<'v>(
         #[starlark(require = named)] default: &str,
-        #[starlark(require = named, default = starlark::values::none::NoneType)] default_sandbox: Value<'v>,
+        #[starlark(require = named, default = starlark::values::none::NoneType)]
+        default_sandbox: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<NoneType> {
         let ctx = eval
             .extra
             .and_then(|e| e.downcast_ref::<EvalContext>())
             .ok_or_else(|| {
-                anyhow::anyhow!("settings() can only be called in a policy file, not in loaded modules")
+                anyhow::anyhow!(
+                    "settings() can only be called in a policy file, not in loaded modules"
+                )
             })?;
         let ds = if default_sandbox.is_none() {
             None
@@ -232,7 +246,9 @@ fn register_globals(builder: &mut GlobalsBuilder) {
             .extra
             .and_then(|e| e.downcast_ref::<EvalContext>())
             .ok_or_else(|| {
-                anyhow::anyhow!("policy() can only be called in a policy file, not in loaded modules")
+                anyhow::anyhow!(
+                    "policy() can only be called in a policy file, not in loaded modules"
+                )
             })?;
 
         // Collect rule nodes

@@ -1,4 +1,4 @@
-set unstable
+set unstable := true
 set script-interpreter := ['uv', 'run', '--script']
 
 plugin_target := "./target/clash-dev"
@@ -10,6 +10,7 @@ default:
 
 # Build clash and launch Claude Code with the plugin for local development.
 # Builds to a temp dir and prepends it to PATH so the dev binary is found
+
 # before any system-installed version, without polluting ~/.cargo/bin.
 dev *ARGS:
     #!/usr/bin/env bash
@@ -19,7 +20,7 @@ dev *ARGS:
     trap 'rm -rf "$tmpdir"' EXIT
     cp target/debug/clash "$tmpdir/"
     echo "clash dev binary: $tmpdir/clash"
-    PATH="$tmpdir:$PATH" claude --plugin-dir ./clash-plugin --debug-file /tmp/clash-debug --allow-dangerously-skip-permissions {{ARGS}}
+    PATH="$tmpdir:$PATH" claude --plugin-dir ./clash-plugin --debug-file /tmp/clash-debug --allow-dangerously-skip-permissions {{ ARGS }}
 
 clean-configs:
     -rm -rf ~/.clash
@@ -28,11 +29,10 @@ clean-configs:
 clean-config: clean-configs
 
 # Install clash system-wide: binary to ~/.cargo/bin, plugin via Claude marketplace.
-install: 
+install:
     @just -q uninstall
     cargo install --path clash
-    claude plugin marketplace add ./
-    claude plugin install clash
+    clash init
 
 uninstall:
     -claude plugin uninstall clash
@@ -49,7 +49,7 @@ check:
 # Run clester end-to-end tests against clash
 clester *ARGS:
     cargo build --bins
-    ./target/debug/clester run clester/tests/scripts/ {{ARGS}}
+    ./target/debug/clester run clester/tests/scripts/ {{ ARGS }}
 
 # Run clester with verbose output
 clester-verbose:
@@ -63,7 +63,7 @@ clester-validate:
 # Run a single clester test script
 clester-run SCRIPT:
     cargo build --bins
-    ./target/debug/clester run {{SCRIPT}}
+    ./target/debug/clester run {{ SCRIPT }}
 
 # Full CI check: unit tests + end-to-end tests
 ci:
@@ -71,15 +71,16 @@ ci:
     just clester
 
 clash *ARGS:
-    cargo run -p clash -- {{ARGS}}
+    cargo run -p clash -- {{ ARGS }}
 
 # Prepare a release: bump versions, freeze site docs, commit on a release branch.
+
 # Usage: just release 0.5.1
 release VERSION:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    new_version="{{VERSION}}"
+    new_version="{{ VERSION }}"
     tag="v$new_version"
     branch="release/$tag"
 
@@ -111,7 +112,7 @@ release VERSION:
 
 # Fast targeted testing for a specific module (default: all clash lib tests)
 quick MODULE="":
-    cargo test -p clash --lib {{MODULE}}
+    cargo test -p clash --lib {{ MODULE }}
 
 # Run clippy lints only (no tests)
 lint:
@@ -152,13 +153,14 @@ site:
 # Launch a Claude session for a GitHub issue in a new tmux window.
 # Usage: just work 123
 #        just work https://github.com/empathic/clash/issues/123
-#        just work 123 plugin=true
+
+# just work 123 plugin=true
 work issue:
     #!/usr/bin/env bash
     set -euo pipefail
 
     # Extract issue number from URL or use as-is
-    input="{{issue}}"
+    input="{{ issue }}"
     if [[ "$input" == http* ]]; then
         id=$(echo "$input" | grep -oE '[0-9]+$')
     else
@@ -166,7 +168,7 @@ work issue:
     fi
 
     branch="gh-$id"
-    dir="{{wt_root}}/$branch"
+    dir="{{ wt_root }}/$branch"
 
     # Create worktree + branch
     git worktree add -b "eliot/$branch" "$dir" >&2 || true
@@ -185,8 +187,8 @@ work issue:
 wt-clean:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -d "{{wt_root}}" ]; then
-        for dir in "{{wt_root}}"/*; do
+    if [ -d "{{ wt_root }}" ]; then
+        for dir in "{{ wt_root }}"/*; do
             [ -d "$dir" ] && git worktree remove "$dir" && echo "Removed $dir" || true
         done
     fi

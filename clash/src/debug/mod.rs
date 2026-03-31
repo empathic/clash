@@ -34,6 +34,9 @@ pub struct AuditLogEntry {
     pub matched_rules: usize,
     pub skipped_rules: usize,
     pub resolution: String,
+    /// The agent permission mode when the decision was made.
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 impl AuditLogEntry {

@@ -84,6 +84,7 @@ pub fn check_permission(
         decision.effect,
         decision.reason.as_deref(),
         &decision.trace,
+        Some(&input.permission_mode),
     );
 
     let explanation = decision.human_explanation();
@@ -138,7 +139,10 @@ pub fn check_permission(
             // command to run through `clash shell` (brush) which handles
             // per-command sandbox enforcement internally.
             if decision.sandbox.is_some()
-                && let Some(updated) = wrap_bash_with_sandbox(input)
+                && let Some(updated) = wrap_bash_with_sandbox(
+                    input,
+                    decision.sandbox_name.as_ref().map(|s| s.0.as_str()),
+                )
             {
                 output.set_updated_input(updated);
                 info!("Rewrote Bash command to run under sandbox");
@@ -183,11 +187,14 @@ fn tool_to_verb_str(tool_name: &str) -> String {
 }
 
 /// If the tool input is a Bash command and a sandbox policy exists,
-/// rewrite the command to run through `clash sandbox exec`.
+/// rewrite the command to run through `clash shell`.
 ///
 /// Returns the updated `tool_input` JSON if rewriting is applicable, or None.
 #[instrument(level = Level::TRACE, skip(input))]
-fn wrap_bash_with_sandbox(input: &ToolUseHookInput) -> Option<serde_json::Value> {
+fn wrap_bash_with_sandbox(
+    input: &ToolUseHookInput,
+    sandbox_name: Option<&str>,
+) -> Option<serde_json::Value> {
     let bash_input = match input.typed_tool_input() {
         ToolInput::Bash(b) => b,
         _ => return None,
@@ -199,10 +206,19 @@ fn wrap_bash_with_sandbox(input: &ToolUseHookInput) -> Option<serde_json::Value>
     // sandbox enforcement internally via its external command hook. We do NOT
     // wrap in `clash sandbox exec` here — that would nest sandbox-exec inside
     // sandbox-exec, which macOS seatbelt does not support.
+    //
+    // The --sandbox flag tells clash shell which named sandbox profile from
+    // the policy to apply. Without it, clash shell has no sandbox to enforce.
+    let sandbox_flag = match sandbox_name {
+        Some(name) => format!(" --sandbox {}", shell_escape(name)),
+        None => String::new(),
+    };
+
     let sandboxed_command = format!(
-        "{} shell --cwd {} -c {}",
+        "{} shell --cwd {}{} -c {}",
         shell_escape(&clash_bin.to_string_lossy()),
         shell_escape(&input.cwd),
+        sandbox_flag,
         shell_escape(&bash_input.command),
     );
 
@@ -532,7 +548,7 @@ mod tests {
     #[test]
     fn test_wrap_bash_basic_command() {
         let input = bash_input_for_sandbox("ls -la", "/home/user/project");
-        let result = wrap_bash_with_sandbox(&input);
+        let result = wrap_bash_with_sandbox(&input, Some("edit"));
         assert!(result.is_some());
         let wrapped = result.unwrap();
         let cmd = extract_wrapped_command(&wrapped);
@@ -544,7 +560,16 @@ mod tests {
         );
         assert!(cmd.contains("shell"));
         assert!(cmd.contains("--cwd"));
+        assert!(cmd.contains("--sandbox 'edit'"), "missing --sandbox flag: {cmd}");
         assert!(cmd.contains("-c 'ls -la'"));
+    }
+
+    #[test]
+    fn test_wrap_bash_no_sandbox_name() {
+        let input = bash_input_for_sandbox("ls -la", "/home/user/project");
+        let result = wrap_bash_with_sandbox(&input, None).unwrap();
+        let cmd = extract_wrapped_command(&result);
+        assert!(!cmd.contains("--sandbox"), "should omit --sandbox when None: {cmd}");
     }
 
     #[test]
@@ -554,7 +579,7 @@ mod tests {
             tool_input: json!({"file_path": "/tmp/test.txt"}),
             ..Default::default()
         };
-        let result = wrap_bash_with_sandbox(&input);
+        let result = wrap_bash_with_sandbox(&input, Some("edit"));
         assert!(result.is_none());
     }
 

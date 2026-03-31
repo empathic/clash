@@ -236,7 +236,9 @@ mod tests {
     #[test]
     fn full_example_with_macros() {
         let stmts = vec![
-            load_std(&["match", "tool", "policy", "settings", "allow", "deny", "ask"]),
+            load_std(&[
+                "match", "tool", "policy", "settings", "allow", "deny", "ask",
+            ]),
             Stmt::Blank,
             Stmt::Expr(settings(ask(), None)),
             Stmt::Blank,

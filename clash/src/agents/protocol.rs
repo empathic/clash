@@ -58,7 +58,7 @@ pub trait HookProtocol {
             permission_mode: raw
                 .get("permission_mode")
                 .and_then(|v| v.as_str())
-                .map(String::from),
+                .map(|m| super::resolve_permission_mode(self.agent(), m).to_string()),
             hook_event_name: json_str_or(raw, "hook_event_name", "SessionStart").to_string(),
             source: raw.get("source").and_then(|v| v.as_str()).map(String::from),
             model: raw.get("model").and_then(|v| v.as_str()).map(String::from),

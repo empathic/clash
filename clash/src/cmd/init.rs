@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::json;
-use tracing::{Level, error, info, instrument, warn};
+use tracing::{Level, instrument, warn};
 
 use crate::agents::AgentKind;
 use crate::settings::ClashSettings;
@@ -14,8 +14,8 @@ struct InitActions {
     statusline_installed: bool,
 }
 
-/// GitHub repository used to install the clash plugin marketplace.
-const GITHUB_MARKETPLACE: &str = "empathic/clash";
+/// Command prefix used for all clash hooks installed into Claude Code settings.
+const HOOK_CMD_PREFIX: &str = "clash hook";
 
 /// Embedded agent plugin files — compiled into the binary so `clash init --agent <name>`
 /// can install them without needing the source repo.
@@ -118,24 +118,99 @@ fn install_agent_plugin(agent: AgentKind) -> Result<bool> {
 }
 
 fn install_claude_plugin() -> Result<bool> {
-    // Ensure settings.json records clash as an enabled plugin.
     let claude = claude_settings::ClaudeSettings::new();
-    if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true) {
-        warn!(error = %e, "Could not set enabledPlugins in Claude Code settings");
-    }
 
-    match install_plugin_from_marketplace() {
-        Ok(()) => Ok(true),
-        Err(e) => {
-            error!(error = %e, "Could not install clash plugin");
-            ui::warn(&format!(
-                "Could not install the clash plugin: {e}\n  \
-                 You can install it manually later:\n    \
-                 claude plugin marketplace add {GITHUB_MARKETPLACE}\n    \
-                 claude plugin install clash"
-            ));
-            Ok(false)
-        }
+    // Write hooks directly into ~/.claude/settings.json.
+    // This is more reliable than the plugin marketplace flow, which requires
+    // Claude Code to resolve plugin directories at runtime.
+    claude
+        .update(claude_settings::SettingsLevel::User, |settings| {
+            let hooks = settings.hooks.get_or_insert_with(Default::default);
+            install_clash_hook_config(hooks);
+            settings.mark_clash_installed();
+        })
+        .context("writing clash hooks to Claude Code settings")?;
+
+    ui::success("Clash hooks installed in Claude Code settings.");
+    Ok(true)
+}
+
+/// Install clash hook commands into a `Hooks` config.
+///
+/// Public so `doctor.rs` can reuse it for the fix-up flow.
+///
+/// Each hook event gets a `clash hook <event>` command with a wildcard matcher.
+/// Existing non-clash hooks are preserved.
+pub fn install_clash_hook_config(hooks: &mut claude_settings::Hooks) {
+    use claude_settings::{Hook, HookMatcher};
+
+    let cmd_hook = |subcommand: &str| HookMatcher {
+        matcher: String::new(),
+        hooks: vec![Hook {
+            hook_type: "command".into(),
+            command: Some(format!("{HOOK_CMD_PREFIX} {subcommand}")),
+            timeout: None,
+        }],
+    };
+
+    let cmd_hook_matched = |subcommand: &str| HookMatcher {
+        matcher: "*".into(),
+        hooks: vec![Hook {
+            hook_type: "command".into(),
+            command: Some(format!("{HOOK_CMD_PREFIX} {subcommand}")),
+            timeout: None,
+        }],
+    };
+
+    // For config types that use HookConfig (matcher-based), merge with existing hooks.
+    let merge_hook_config =
+        |existing: &mut Option<claude_settings::HookConfig>, subcommand: &str| {
+            let clash_cmd = format!("{HOOK_CMD_PREFIX} {subcommand}");
+            match existing {
+                Some(config) => {
+                    // Check if clash hook is already present.
+                    let already_installed = match config {
+                        claude_settings::HookConfig::Simple(map) => {
+                            map.values().any(|v| v.contains(HOOK_CMD_PREFIX))
+                        }
+                        claude_settings::HookConfig::Matchers(matchers) => {
+                            matchers.iter().any(|m| {
+                                m.hooks
+                                    .iter()
+                                    .any(|h| h.command.as_deref().is_some_and(|c| c.contains(HOOK_CMD_PREFIX)))
+                            })
+                        }
+                    };
+                    if !already_installed {
+                        *config = config.clone().insert("*", &clash_cmd);
+                    }
+                }
+                None => {
+                    *existing = Some(claude_settings::HookConfig::Matchers(vec![
+                        cmd_hook_matched(subcommand),
+                    ]));
+                }
+            }
+        };
+
+    merge_hook_config(&mut hooks.pre_tool_use, "pre-tool-use");
+    merge_hook_config(&mut hooks.post_tool_use, "post-tool-use");
+    merge_hook_config(&mut hooks.permission_request, "permission-request");
+    merge_hook_config(&mut hooks.notification, "notification");
+
+    // SessionStart uses Vec<HookMatcher> directly (no matcher pattern needed).
+    let session_already = hooks.session_start.as_ref().is_some_and(|matchers| {
+        matchers.iter().any(|m| {
+            m.hooks
+                .iter()
+                .any(|h| h.command.as_deref().is_some_and(|c| c.contains(HOOK_CMD_PREFIX)))
+        })
+    });
+    if !session_already {
+        hooks
+            .session_start
+            .get_or_insert_with(Vec::new)
+            .push(cmd_hook("session-start"));
     }
 }
 
@@ -337,49 +412,69 @@ fn print_summary(actions: &InitActions, agent: AgentKind) {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Claude marketplace helpers
-// ---------------------------------------------------------------------------
+/// Remove clash hooks from a `Hooks` config, preserving non-clash hooks.
+///
+/// Returns `true` if any hooks were removed.
+pub fn uninstall_clash_hooks(hooks: &mut claude_settings::Hooks) -> bool {
+    let mut changed = false;
+    changed |= remove_clash_from_config(&mut hooks.pre_tool_use);
+    changed |= remove_clash_from_config(&mut hooks.post_tool_use);
+    changed |= remove_clash_from_config(&mut hooks.permission_request);
+    changed |= remove_clash_from_config(&mut hooks.notification);
+    changed |= remove_clash_from_vec(&mut hooks.session_start);
+    changed |= remove_clash_from_vec(&mut hooks.stop);
+    changed
+}
 
-/// Install the clash plugin into Claude Code from the GitHub marketplace.
-pub fn install_plugin_from_marketplace() -> Result<()> {
-    ui::progress(&format!(
-        "Installing clash plugin from {}...",
-        GITHUB_MARKETPLACE,
-    ));
+fn is_clash_hook(h: &claude_settings::Hook) -> bool {
+    h.command
+        .as_deref()
+        .is_some_and(|c| c.contains(HOOK_CMD_PREFIX))
+}
 
-    // Register the marketplace.
-    let add_output = std::process::Command::new("claude")
-        .args(["plugin", "marketplace", "add", GITHUB_MARKETPLACE])
-        .output()
-        .context("failed to run `claude plugin marketplace add` — is claude on PATH?")?;
-
-    if !add_output.status.success() {
-        let stderr = String::from_utf8_lossy(&add_output.stderr);
-        // "already exists" is fine — marketplace was previously registered.
-        if !stderr.contains("already") {
-            anyhow::bail!("claude plugin marketplace add failed: {stderr}");
+fn remove_clash_from_config(config: &mut Option<claude_settings::HookConfig>) -> bool {
+    let Some(c) = config.take() else {
+        return false;
+    };
+    match c {
+        claude_settings::HookConfig::Simple(mut map) => {
+            let before = map.len();
+            map.retain(|_, v| !v.contains(HOOK_CMD_PREFIX));
+            let removed = map.len() != before;
+            if !map.is_empty() {
+                *config = Some(claude_settings::HookConfig::Simple(map));
+            }
+            removed
         }
-        info!("marketplace already registered, continuing");
-    }
-
-    // Install the plugin.
-    let install_output = std::process::Command::new("claude")
-        .args(["plugin", "install", "clash"])
-        .output()
-        .context("failed to run `claude plugin install`")?;
-
-    if !install_output.status.success() {
-        let stderr = String::from_utf8_lossy(&install_output.stderr);
-        // "already installed" is fine.
-        if !stderr.contains("already") {
-            anyhow::bail!("claude plugin install failed: {stderr}");
+        claude_settings::HookConfig::Matchers(mut matchers) => {
+            let before = matchers.len();
+            for m in &mut matchers {
+                m.hooks.retain(|h| !is_clash_hook(h));
+            }
+            matchers.retain(|m| !m.hooks.is_empty());
+            let removed = matchers.len() != before;
+            if !matchers.is_empty() {
+                *config = Some(claude_settings::HookConfig::Matchers(matchers));
+            }
+            removed
         }
-        info!("plugin already installed");
     }
+}
 
-    ui::success("Clash plugin installed in Claude Code.");
-    Ok(())
+fn remove_clash_from_vec(opt: &mut Option<Vec<claude_settings::HookMatcher>>) -> bool {
+    let Some(mut v) = opt.take() else {
+        return false;
+    };
+    let before = v.len();
+    for m in &mut v {
+        m.hooks.retain(|h| !is_clash_hook(h));
+    }
+    v.retain(|m| !m.hooks.is_empty());
+    let removed = v.len() != before;
+    if !v.is_empty() {
+        *opt = Some(v);
+    }
+    removed
 }
 
 #[cfg(test)]

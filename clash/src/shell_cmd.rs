@@ -381,7 +381,9 @@ mod tests {
             ],
         );
         let source = clash_starlark::codegen::serialize(&[
-            load_std(&["policy", "settings", "sandbox", "cwd", "match", "allow", "deny"]),
+            load_std(&[
+                "policy", "settings", "sandbox", "cwd", "match", "allow", "deny",
+            ]),
             Stmt::Expr(settings(deny(), None)),
             Stmt::Expr(policy(
                 "test",

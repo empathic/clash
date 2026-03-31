@@ -77,10 +77,58 @@ pub fn read_global_log() -> Result<Vec<AuditLogEntry>> {
 
 /// Read audit log entries from all known sessions, sorted by timestamp.
 pub fn read_all_session_logs() -> Result<Vec<AuditLogEntry>> {
-    let tmp = std::env::temp_dir();
     let mut all_entries = Vec::new();
 
-    if let Ok(readdir) = std::fs::read_dir(&tmp) {
+    // Scan the persistent sessions directory (~/.clash/sessions/).
+    if let Ok(sessions_dir) = crate::settings::ClashSettings::settings_dir()
+        .map(|d| d.join("sessions"))
+    {
+        scan_session_dirs(&sessions_dir, &mut all_entries);
+    }
+
+    // Also scan the legacy temp-dir location for backwards compatibility.
+    let tmp = std::env::temp_dir();
+    scan_legacy_session_dirs(&tmp, &mut all_entries);
+
+    // Sort by timestamp so entries from different sessions interleave correctly.
+    all_entries.sort_by(|a, b| {
+        a.timestamp_secs()
+            .partial_cmp(&b.timestamp_secs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Ok(all_entries)
+}
+
+/// Scan `~/.clash/sessions/<session_id>/audit.jsonl` files.
+fn scan_session_dirs(sessions_dir: &Path, all_entries: &mut Vec<AuditLogEntry>) {
+    if let Ok(readdir) = std::fs::read_dir(sessions_dir) {
+        for entry in readdir.flatten() {
+            let session_id = entry.file_name();
+            let session_id = session_id.to_string_lossy();
+            let log_path = entry.path().join("audit.jsonl");
+            if log_path.exists() {
+                match read_log_file(&log_path) {
+                    Ok(mut entries) => {
+                        backfill_session_id(&mut entries, &session_id);
+                        all_entries.extend(entries);
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            path = %log_path.display(),
+                            error = %e,
+                            "skipping unreadable session log"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Scan legacy temp-dir location (`/tmp/clash-<session_id>/audit.jsonl`).
+fn scan_legacy_session_dirs(tmp: &Path, all_entries: &mut Vec<AuditLogEntry>) {
+    if let Ok(readdir) = std::fs::read_dir(tmp) {
         for entry in readdir.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
@@ -104,15 +152,6 @@ pub fn read_all_session_logs() -> Result<Vec<AuditLogEntry>> {
             }
         }
     }
-
-    // Sort by timestamp so entries from different sessions interleave correctly.
-    all_entries.sort_by(|a, b| {
-        a.timestamp_secs()
-            .partial_cmp(&b.timestamp_secs())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    Ok(all_entries)
 }
 
 /// Fill in `session_id` for entries that predate the field being written to disk.
@@ -318,7 +357,12 @@ pub fn format_table(entries: &[AuditLogEntry]) -> String {
             subject_width,
         );
         let resolution = truncate(&entry.resolution, 40);
-        let tool = pad(&entry.tool_name, 6);
+        let tool_label = if let Some(ref mode) = entry.mode {
+            format!("{}:{}", entry.tool_name, mode)
+        } else {
+            entry.tool_name.clone()
+        };
+        let tool = pad(&tool_label, 6);
 
         if multi_session {
             let session = pad(&truncate(&short_session_id(&entry.session_id), 12), 12);
@@ -454,6 +498,7 @@ mod tests {
                 matched_rules: 1,
                 skipped_rules: 0,
                 resolution: "result: allow".into(),
+                mode: None,
             },
             AuditLogEntry {
                 timestamp: "1001.0".into(),
@@ -465,6 +510,7 @@ mod tests {
                 matched_rules: 1,
                 skipped_rules: 0,
                 resolution: "result: deny".into(),
+                mode: None,
             },
         ];
 
@@ -490,6 +536,7 @@ mod tests {
                 matched_rules: 1,
                 skipped_rules: 0,
                 resolution: "result: allow".into(),
+                mode: None,
             },
             AuditLogEntry {
                 timestamp: "1001.0".into(),
@@ -501,6 +548,7 @@ mod tests {
                 matched_rules: 1,
                 skipped_rules: 0,
                 resolution: "result: allow".into(),
+                mode: None,
             },
         ];
 
@@ -526,6 +574,7 @@ mod tests {
                 matched_rules: 1,
                 skipped_rules: 0,
                 resolution: "result: allow".into(),
+                mode: None,
             })
             .collect();
 

@@ -7,6 +7,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use tracing::{Level, instrument, warn};
 
@@ -35,6 +36,9 @@ struct AuditEntry<'a> {
     skipped_rules: usize,
     /// How the decision was resolved.
     resolution: &'a str,
+    /// The agent permission mode when the decision was made (e.g. "default", "plan").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<&'a str>,
 }
 
 /// Configuration for audit logging.
@@ -191,6 +195,9 @@ fn write_session_stats(session_id: &str, stats: &SessionStats) {
 
 /// Initialize a per-session history directory with session metadata.
 ///
+/// Also appends a record to `~/.clash/sessions.jsonl` (guarded by an
+/// advisory file lock) so that every session is tracked in one place.
+///
 /// Returns the directory path on success.
 pub fn init_session(
     session_id: &str,
@@ -213,7 +220,58 @@ pub fn init_session(
     let mut f = std::fs::File::create(&meta_path)?;
     serde_json::to_writer_pretty(&mut f, &metadata).map_err(std::io::Error::other)?;
 
+    // Upsert into the global session index with a file lock.
+    if let Err(e) = upsert_session_index(session_id, &metadata) {
+        warn!(error = %e, "Failed to update sessions.json");
+    }
+
     Ok(dir)
+}
+
+/// Upsert a session record into `~/.clash/sessions.json`, protected by
+/// an advisory file lock so concurrent clash processes don't corrupt it.
+///
+/// The file is a single JSON object keyed by session ID, so re-initing
+/// the same session just overwrites its entry rather than duplicating it.
+fn upsert_session_index(session_id: &str, metadata: &serde_json::Value) -> std::io::Result<()> {
+    let index_path = crate::settings::ClashSettings::settings_dir()
+        .map(|d| d.join("sessions.json"))
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+    if let Some(parent) = index_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&index_path)?;
+
+    // Acquire an exclusive advisory lock — blocks until available.
+    file.lock_exclusive()?;
+
+    // Read existing index (or start empty).
+    let mut contents = String::new();
+    std::io::Read::read_to_string(&mut file, &mut contents)?;
+    let mut index: serde_json::Map<String, serde_json::Value> = if contents.trim().is_empty() {
+        serde_json::Map::new()
+    } else {
+        serde_json::from_str(&contents).unwrap_or_default()
+    };
+
+    // Upsert this session.
+    index.insert(session_id.to_string(), metadata.clone());
+
+    // Rewrite the file from the beginning.
+    file.set_len(0)?;
+    std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(0))?;
+    let json = serde_json::to_string_pretty(&index).map_err(std::io::Error::other)?;
+    write!(file, "{}", json)?;
+
+    // Lock is released when `file` is dropped, but be explicit.
+    file.unlock()?;
+    Ok(())
 }
 
 /// Write an audit log entry for a policy decision.
@@ -229,6 +287,7 @@ pub fn log_decision(
     effect: Effect,
     reason: Option<&str>,
     trace: &DecisionTrace,
+    mode: Option<&str>,
 ) {
     // Truncate tool_input for the log entry.
     let input_str = tool_input.to_string();
@@ -254,6 +313,7 @@ pub fn log_decision(
         matched_rules: trace.matched_rules.len(),
         skipped_rules: trace.skipped_rules.len(),
         resolution: &trace.final_resolution,
+        mode,
     };
 
     // Write to global audit log if enabled.
@@ -496,7 +556,12 @@ mod tests {
     #[test]
     fn test_session_dir_uses_session_id() {
         let dir = session_dir("abc-123");
-        assert!(dir.ends_with("clash-abc-123"));
+        // Sessions now live under ~/.clash/sessions/<id>/.
+        assert!(
+            dir.ends_with("sessions/abc-123") || dir.ends_with("clash-abc-123"),
+            "unexpected session dir: {}",
+            dir.display()
+        );
     }
 
     #[test]
@@ -545,6 +610,7 @@ mod tests {
             Effect::Allow,
             Some("policy: allowed"),
             &mock_trace(1),
+            None,
         );
 
         let session_log = dir.join("audit.jsonl");
@@ -580,6 +646,7 @@ mod tests {
             Effect::Ask,
             None,
             &mock_trace(0),
+            None,
         );
 
         let session_log = dir.join("audit.jsonl");

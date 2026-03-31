@@ -80,11 +80,18 @@ pub fn format_sandbox_summary(sandbox: &SandboxPolicy) -> Vec<String> {
         sandbox.network
     ));
     for rule in &sandbox.rules {
+        use crate::policy::sandbox_types::PathMatch;
+        let path_display = match rule.path_match {
+            PathMatch::Subpath => format!("{}/**", rule.path),
+            PathMatch::ChildOf => format!("{}/*", rule.path),
+            PathMatch::Regex => format!("{} (regex)", rule.path),
+            PathMatch::Literal => rule.path.clone(),
+        };
         lines.push(format!(
             "  {:?} {} in {}",
             rule.effect,
             rule.caps.short(),
-            rule.path
+            path_display
         ));
     }
     lines
