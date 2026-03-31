@@ -20,7 +20,8 @@ const GITHUB_MARKETPLACE: &str = "empathic/clash";
 /// Embedded agent plugin files — compiled into the binary so `clash init --agent <name>`
 /// can install them without needing the source repo.
 const OPENCODE_PLUGIN_TS: &str = include_str!("../../clash-opencode/plugin.ts");
-const COPILOT_HOOKS_JSON: &str = include_str!("../../clash-copilot/.github/hooks/pre-tool-use.json");
+const COPILOT_HOOKS_JSON: &str =
+    include_str!("../../clash-copilot/.github/hooks/pre-tool-use.json");
 const CODEX_HOOKS_TOML: &str = include_str!("../../clash-codex/hooks.toml");
 const AMAZONQ_AGENT_JSON: &str = include_str!("../../clash-amazonq/agent.json");
 const GEMINI_EXTENSION_JSON: &str = include_str!("../../clash-gemini-ext/gemini-extension.json");
@@ -345,8 +346,8 @@ fn install_codex_plugin() -> Result<bool> {
     std::fs::create_dir_all(&codex_dir)
         .with_context(|| format!("failed to create {}", codex_dir.display()))?;
     let dest = codex_dir.join("config.toml");
-    let clash_hooks: toml::Value = toml::from_str(CODEX_HOOKS_TOML)
-        .context("failed to parse embedded Codex hooks TOML")?;
+    let clash_hooks: toml::Value =
+        toml::from_str(CODEX_HOOKS_TOML).context("failed to parse embedded Codex hooks TOML")?;
     if dest.exists() {
         let existing = std::fs::read_to_string(&dest)
             .with_context(|| format!("failed to read {}", dest.display()))?;
@@ -358,9 +359,10 @@ fn install_codex_plugin() -> Result<bool> {
             .context("codex config is not a TOML table")?
             .entry("hooks")
             .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-        if let (Some(dst), Some(src)) =
-            (hooks_table.as_table_mut(), clash_hooks.get("hooks").and_then(|h| h.as_table()))
-        {
+        if let (Some(dst), Some(src)) = (
+            hooks_table.as_table_mut(),
+            clash_hooks.get("hooks").and_then(|h| h.as_table()),
+        ) {
             for (key, value) in src {
                 dst.insert(key.clone(), value.clone());
             }
@@ -396,9 +398,10 @@ fn install_amazonq_plugin() -> Result<bool> {
             .context("amazonq config is not a JSON object")?
             .entry("hooks")
             .or_insert_with(|| json!({}));
-        if let (Some(dst), Some(src)) =
-            (dst_hooks.as_object_mut(), clash_hooks.get("hooks").and_then(|h| h.as_object()))
-        {
+        if let (Some(dst), Some(src)) = (
+            dst_hooks.as_object_mut(),
+            clash_hooks.get("hooks").and_then(|h| h.as_object()),
+        ) {
             for (key, value) in src {
                 dst.insert(key.clone(), value.clone());
             }
@@ -430,8 +433,7 @@ fn install_opencode_plugin() -> Result<bool> {
 
 fn install_copilot_plugin() -> Result<bool> {
     let hooks_dir = std::path::Path::new(".github/hooks");
-    std::fs::create_dir_all(hooks_dir)
-        .context("failed to create .github/hooks directory")?;
+    std::fs::create_dir_all(hooks_dir).context("failed to create .github/hooks directory")?;
     let dest = hooks_dir.join("pre-tool-use.json");
     std::fs::write(&dest, COPILOT_HOOKS_JSON)
         .with_context(|| format!("failed to write {}", dest.display()))?;

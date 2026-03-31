@@ -6,10 +6,12 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
+
+use super::widgets::{ModalHeight, ModalOverlay};
 
 use crate::policy::manifest_edit;
 use crate::policy::match_tree::{
@@ -2040,21 +2042,26 @@ impl FormState {
             FormKind::AddChild { .. } => self.fields.len().max(5),
             _ => self.visible.len(),
         };
-        let height = (field_count as u16 * 3) + 6; // fields + hint + spacing + title + footer
-        let height_pct = ((height as f32 / area.height as f32) * 100.0)
-            .ceil()
-            .clamp(30.0, 80.0) as u16;
+        let content_lines = (field_count as u16 * 3) + 6; // fields + hint + spacing + title + footer
 
-        let popup = centered_rect(60, height_pct, area);
-        frame.render_widget(Clear, popup);
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title(format!(" {} ", self.title));
-
-        let inner = block.inner(popup);
-        frame.render_widget(block, popup);
+        let modal = ModalOverlay {
+            width_pct: 60,
+            height: ModalHeight::FitContent {
+                lines: content_lines,
+                floor_pct: 30,
+                ceil_pct: 80,
+            },
+            border_color: Color::Cyan,
+            title: &self.title,
+            footer: &[
+                ("Enter", "submit"),
+                ("Tab", "next field"),
+                ("Esc", "cancel"),
+            ],
+            footer_right: None,
+            scroll: None,
+        };
+        let inner = modal.render_chrome(frame, area);
 
         let mut lines: Vec<Line> = Vec::new();
         lines.push(Line::from(""));
@@ -2251,35 +2258,9 @@ impl FormState {
             lines.push(Line::from(""));
         }
 
-        // Footer
-        lines.push(Line::from(vec![
-            Span::styled("  Enter", Style::default().fg(Color::Yellow)),
-            Span::styled(" submit  ", Style::default().fg(Color::Gray)),
-            Span::styled("Tab", Style::default().fg(Color::Yellow)),
-            Span::styled(" next field  ", Style::default().fg(Color::Gray)),
-            Span::styled("Esc", Style::default().fg(Color::Yellow)),
-            Span::styled(" cancel", Style::default().fg(Color::Gray)),
-        ]));
-
         let para = Paragraph::new(lines);
-        frame.render_widget(para, inner);
+        frame.render_widget(para, inner.area);
     }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(vertical[1])[1]
 }
 
 // ---------------------------------------------------------------------------
