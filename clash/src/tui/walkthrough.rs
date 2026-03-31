@@ -10,7 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use super::widgets::{ModalHeight, ModalOverlay, ScrollState};
+use super::widgets::{ClickAction, ClickRegions, ModalHeight, ModalOverlay, ScrollState};
 
 /// Sequential steps of the onboarding walkthrough.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +101,7 @@ pub fn render_walkthrough_overlay(
     area: Rect,
     step: WalkthroughStep,
     scroll: &mut ScrollState,
+    clicks: &mut ClickRegions,
 ) {
     let (content, footer): (Vec<Line>, &[(&str, &str)]) = match step {
         WalkthroughStep::Welcome => (
@@ -198,6 +199,9 @@ pub fn render_walkthrough_overlay(
         scroll: Some(scroll.to_modal_scroll()),
     };
     let inner = modal.render_chrome(frame, area);
+    for (rect, kc) in &inner.footer_buttons {
+        clicks.push(*rect, ClickAction::Key(*kc));
+    }
     scroll.update_viewport(inner.area.height as usize);
 
     let visible: Vec<Line> = content
@@ -215,10 +219,18 @@ pub fn walkthrough_status_hints(step: WalkthroughStep) -> Vec<(&'static str, &'s
     match step {
         WalkthroughStep::Welcome => vec![("Esc", "skip walkthrough"), ("Enter", "continue")],
         WalkthroughStep::BaseTools => {
-            vec![("Esc", "skip walkthrough"), ("b", "back"), ("Enter", "continue")]
+            vec![
+                ("Esc", "skip walkthrough"),
+                ("b", "back"),
+                ("Enter", "continue"),
+            ]
         }
         WalkthroughStep::AddRule => {
-            vec![("Esc", "skip walkthrough"), ("b", "back"), ("a", "add rule")]
+            vec![
+                ("Esc", "skip walkthrough"),
+                ("b", "back"),
+                ("a", "add rule"),
+            ]
         }
         WalkthroughStep::FillForm => vec![
             ("Tab", "next field"),
@@ -227,7 +239,11 @@ pub fn walkthrough_status_hints(step: WalkthroughStep) -> Vec<(&'static str, &'s
             ("Esc", "skip walkthrough"),
         ],
         WalkthroughStep::TestIt => {
-            vec![("Esc", "skip walkthrough"), ("b", "back"), ("t", "test console")]
+            vec![
+                ("Esc", "skip walkthrough"),
+                ("b", "back"),
+                ("t", "test console"),
+            ]
         }
         WalkthroughStep::TypeTest => vec![
             ("try", "bash git status"),
