@@ -80,8 +80,8 @@ pub fn read_all_session_logs() -> Result<Vec<AuditLogEntry>> {
     let mut all_entries = Vec::new();
 
     // Scan the persistent sessions directory (~/.clash/sessions/).
-    if let Ok(sessions_dir) = crate::settings::ClashSettings::settings_dir()
-        .map(|d| d.join("sessions"))
+    if let Ok(sessions_dir) =
+        crate::settings::ClashSettings::settings_dir().map(|d| d.join("sessions"))
     {
         scan_session_dirs(&sessions_dir, &mut all_entries);
     }

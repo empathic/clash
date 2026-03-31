@@ -174,12 +174,8 @@ pub fn exec_entry(entry: &super::AuditLogEntry) -> Result<()> {
     let tree = settings
         .policy_tree()
         .ok_or_else(|| anyhow::anyhow!("no compiled policy available — run `clash init`"))?;
-    let decision =
-        tree.evaluate_with_mode(&tool_name, &tool_input, entry.mode.as_deref());
-    let sandbox_name = decision
-        .sandbox_name
-        .as_ref()
-        .map(|sr| sr.0.as_str());
+    let decision = tree.evaluate_with_mode(&tool_name, &tool_input, entry.mode.as_deref());
+    let sandbox_name = decision.sandbox_name.as_ref().map(|sr| sr.0.as_str());
 
     let clash_bin = std::env::current_exe().context("failed to locate clash binary")?;
 

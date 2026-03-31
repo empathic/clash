@@ -163,35 +163,35 @@ pub fn install_clash_hook_config(hooks: &mut claude_settings::Hooks) {
     };
 
     // For config types that use HookConfig (matcher-based), merge with existing hooks.
-    let merge_hook_config =
-        |existing: &mut Option<claude_settings::HookConfig>, subcommand: &str| {
-            let clash_cmd = format!("{HOOK_CMD_PREFIX} {subcommand}");
-            match existing {
-                Some(config) => {
-                    // Check if clash hook is already present.
-                    let already_installed = match config {
-                        claude_settings::HookConfig::Simple(map) => {
-                            map.values().any(|v| v.contains(HOOK_CMD_PREFIX))
-                        }
-                        claude_settings::HookConfig::Matchers(matchers) => {
-                            matchers.iter().any(|m| {
-                                m.hooks
-                                    .iter()
-                                    .any(|h| h.command.as_deref().is_some_and(|c| c.contains(HOOK_CMD_PREFIX)))
-                            })
-                        }
-                    };
-                    if !already_installed {
-                        *config = config.clone().insert("*", &clash_cmd);
+    let merge_hook_config = |existing: &mut Option<claude_settings::HookConfig>,
+                             subcommand: &str| {
+        let clash_cmd = format!("{HOOK_CMD_PREFIX} {subcommand}");
+        match existing {
+            Some(config) => {
+                // Check if clash hook is already present.
+                let already_installed = match config {
+                    claude_settings::HookConfig::Simple(map) => {
+                        map.values().any(|v| v.contains(HOOK_CMD_PREFIX))
                     }
-                }
-                None => {
-                    *existing = Some(claude_settings::HookConfig::Matchers(vec![
-                        cmd_hook_matched(subcommand),
-                    ]));
+                    claude_settings::HookConfig::Matchers(matchers) => matchers.iter().any(|m| {
+                        m.hooks.iter().any(|h| {
+                            h.command
+                                .as_deref()
+                                .is_some_and(|c| c.contains(HOOK_CMD_PREFIX))
+                        })
+                    }),
+                };
+                if !already_installed {
+                    *config = config.clone().insert("*", &clash_cmd);
                 }
             }
-        };
+            None => {
+                *existing = Some(claude_settings::HookConfig::Matchers(vec![
+                    cmd_hook_matched(subcommand),
+                ]));
+            }
+        }
+    };
 
     merge_hook_config(&mut hooks.pre_tool_use, "pre-tool-use");
     merge_hook_config(&mut hooks.post_tool_use, "post-tool-use");
@@ -201,9 +201,11 @@ pub fn install_clash_hook_config(hooks: &mut claude_settings::Hooks) {
     // SessionStart uses Vec<HookMatcher> directly (no matcher pattern needed).
     let session_already = hooks.session_start.as_ref().is_some_and(|matchers| {
         matchers.iter().any(|m| {
-            m.hooks
-                .iter()
-                .any(|h| h.command.as_deref().is_some_and(|c| c.contains(HOOK_CMD_PREFIX)))
+            m.hooks.iter().any(|h| {
+                h.command
+                    .as_deref()
+                    .is_some_and(|c| c.contains(HOOK_CMD_PREFIX))
+            })
         })
     });
     if !session_already {

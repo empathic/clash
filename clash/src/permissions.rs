@@ -560,7 +560,10 @@ mod tests {
         );
         assert!(cmd.contains("shell"));
         assert!(cmd.contains("--cwd"));
-        assert!(cmd.contains("--sandbox 'edit'"), "missing --sandbox flag: {cmd}");
+        assert!(
+            cmd.contains("--sandbox 'edit'"),
+            "missing --sandbox flag: {cmd}"
+        );
         assert!(cmd.contains("-c 'ls -la'"));
     }
 
@@ -569,7 +572,10 @@ mod tests {
         let input = bash_input_for_sandbox("ls -la", "/home/user/project");
         let result = wrap_bash_with_sandbox(&input, None).unwrap();
         let cmd = extract_wrapped_command(&result);
-        assert!(!cmd.contains("--sandbox"), "should omit --sandbox when None: {cmd}");
+        assert!(
+            !cmd.contains("--sandbox"),
+            "should omit --sandbox when None: {cmd}"
+        );
     }
 
     #[test]

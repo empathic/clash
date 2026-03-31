@@ -215,7 +215,12 @@ pub fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
                     PathMatch::Regex => format!("{} (regex)", rule.path),
                     PathMatch::Literal => rule.path.clone(),
                 };
-                eprintln!("  {:?} {} in {}", rule.effect, rule.caps.short(), path_display);
+                eprintln!(
+                    "  {:?} {} in {}",
+                    rule.effect,
+                    rule.caps.short(),
+                    path_display
+                );
             }
             eprintln!("  command: {:?}", command);
             eprintln!("---");

@@ -137,7 +137,12 @@ pub fn print_sandbox_summary(sandbox: &SandboxPolicy) {
             PathMatch::Regex => format!("{} (regex)", rule.path),
             PathMatch::Literal => rule.path.clone(),
         };
-        println!("  {:?} {} in {}", rule.effect, rule.caps.short(), path_display);
+        println!(
+            "  {:?} {} in {}",
+            rule.effect,
+            rule.caps.short(),
+            path_display
+        );
     }
 }
 
