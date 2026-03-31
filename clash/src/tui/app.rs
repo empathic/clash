@@ -49,6 +49,7 @@ enum Mode {
 /// What action to take after confirmation.
 enum ConfirmAction {
     Quit,
+    SkipWalkthrough,
 }
 
 /// State for the diff review overlay.
@@ -225,12 +226,7 @@ impl App {
                     if let Some(ref mut wt) = self.walkthrough {
                         match key.code {
                             KeyCode::Esc => {
-                                self.walkthrough = None;
-                                self.mode = Mode::Normal;
-                                self.flash = Some((
-                                    "Walkthrough skipped — press ? for help".into(),
-                                    Instant::now(),
-                                ));
+                                self.mode = Mode::Confirm(ConfirmAction::SkipWalkthrough);
                             }
                             // j/k/arrows scroll the walkthrough overlay
                             KeyCode::Char('j') | KeyCode::Down => {
@@ -239,50 +235,55 @@ impl App {
                             KeyCode::Char('k') | KeyCode::Up => {
                                 wt.scroll.scroll_up();
                             }
-                            _ => match wt.step {
-                                WalkthroughStep::Welcome | WalkthroughStep::BaseTools => {
-                                    wt.advance();
-                                    // Stay in Walkthrough mode for the next overlay step
+                            KeyCode::Char('b') => {
+                                wt.go_back();
+                            }
+                            KeyCode::Enter
+                                if matches!(
+                                    wt.step,
+                                    WalkthroughStep::Welcome | WalkthroughStep::BaseTools
+                                ) =>
+                            {
+                                wt.advance();
+                            }
+                            KeyCode::Char('a') if wt.step == WalkthroughStep::AddRule => {
+                                wt.step = WalkthroughStep::FillForm;
+                                let form = FormState::new_add_rule_prefilled(
+                                    &self.manifest,
+                                    Some(&self.included),
+                                );
+                                self.mode = Mode::Form(form);
+                            }
+                            KeyCode::Char('t') if wt.step == WalkthroughStep::TestIt => {
+                                wt.step = WalkthroughStep::TypeTest;
+                                self.test_panel.visible = true;
+                                self.test_panel.input_active = true;
+                                self.test_focused = true;
+                                self.mode = Mode::Normal;
+                            }
+                            KeyCode::Char('s') if wt.step == WalkthroughStep::SaveFinish => {
+                                wt.step = WalkthroughStep::Done;
+                                self.mode = Mode::Normal;
+                                // Trigger the save flow
+                                if self.dirty {
+                                    let new_json = serde_json::to_string_pretty(&self.manifest)
+                                        .unwrap_or_default();
+                                    let diff_lines =
+                                        compute_diff(&self.original_json, &new_json);
+                                    let len = diff_lines.len();
+                                    self.mode = Mode::SaveReview(DiffState {
+                                        lines: diff_lines,
+                                        scroll: ScrollState::new(len),
+                                    });
+                                } else {
+                                    self.walkthrough = None;
+                                    self.flash = Some((
+                                        "No changes to save — walkthrough complete!".into(),
+                                        Instant::now(),
+                                    ));
                                 }
-                                WalkthroughStep::AddRule if key.code == KeyCode::Char('a') => {
-                                    wt.step = WalkthroughStep::FillForm;
-                                    let form = FormState::new_add_rule_prefilled(
-                                        &self.manifest,
-                                        Some(&self.included),
-                                    );
-                                    self.mode = Mode::Form(form);
-                                }
-                                WalkthroughStep::TestIt if key.code == KeyCode::Char('t') => {
-                                    wt.step = WalkthroughStep::TypeTest;
-                                    self.test_panel.visible = true;
-                                    self.test_panel.input_active = true;
-                                    self.test_focused = true;
-                                    self.mode = Mode::Normal;
-                                }
-                                WalkthroughStep::SaveFinish if key.code == KeyCode::Char('s') => {
-                                    wt.step = WalkthroughStep::Done;
-                                    self.mode = Mode::Normal;
-                                    // Trigger the save flow
-                                    if self.dirty {
-                                        let new_json = serde_json::to_string_pretty(&self.manifest)
-                                            .unwrap_or_default();
-                                        let diff_lines =
-                                            compute_diff(&self.original_json, &new_json);
-                                        let len = diff_lines.len();
-                                        self.mode = Mode::SaveReview(DiffState {
-                                            lines: diff_lines,
-                                            scroll: ScrollState::new(len),
-                                        });
-                                    } else {
-                                        self.walkthrough = None;
-                                        self.flash = Some((
-                                            "No changes to save — walkthrough complete!".into(),
-                                            Instant::now(),
-                                        ));
-                                    }
-                                }
-                                _ => {} // ignore non-matching keys
-                            },
+                            }
+                            _ => {}
                         }
                     }
                     continue;
@@ -583,6 +584,10 @@ impl App {
                 let mode = std::mem::replace(&mut self.mode, Mode::Normal);
                 match mode {
                     Mode::Confirm(ConfirmAction::Quit) => Action::Quit,
+                    Mode::Confirm(ConfirmAction::SkipWalkthrough) => {
+                        self.walkthrough = None;
+                        Action::Flash("Walkthrough skipped — press ? for help".into())
+                    }
                     Mode::SaveReview(_) => {
                         // Actually save
                         match policy_loader::write_manifest(&self.path, &self.manifest) {
@@ -626,7 +631,14 @@ impl App {
                 }
             }
             Msg::ConfirmNo => {
-                self.mode = Mode::Normal;
+                match &self.mode {
+                    Mode::Confirm(ConfirmAction::SkipWalkthrough) => {
+                        self.mode = Mode::Walkthrough;
+                    }
+                    _ => {
+                        self.mode = Mode::Normal;
+                    }
+                }
                 Action::None
             }
             Msg::DiffScrollDown => {
@@ -822,8 +834,12 @@ impl App {
         // Overlays
         match &mut self.mode {
             Mode::Help(scroll) => widgets::render_help_overlay(frame, area, scroll),
-            Mode::Confirm(ConfirmAction::Quit) => {
-                widgets::render_confirm_overlay(frame, area, "Unsaved changes. Quit anyway?");
+            Mode::Confirm(action) => {
+                let prompt = match action {
+                    ConfirmAction::Quit => "Unsaved changes. Quit anyway?",
+                    ConfirmAction::SkipWalkthrough => "Skip the walkthrough?",
+                };
+                widgets::render_confirm_overlay(frame, area, prompt);
             }
             Mode::SaveReview(state) => {
                 widgets::render_diff_overlay(frame, area, &state.lines, &mut state.scroll);
