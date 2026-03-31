@@ -3,8 +3,8 @@
 //! Provides reusable builders for policies, hook events, and tool inputs
 //! so that test files do not need to reinvent boilerplate.
 
-use crate::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput};
 use crate::policy::Effect;
+use crate::policy_decision::PolicyDecision;
 use crate::settings::ClashSettings;
 
 // ---------------------------------------------------------------------------
@@ -45,33 +45,47 @@ pub fn grep_pattern(pattern: &str) -> serde_json::Value {
 // Hook event builders
 // ---------------------------------------------------------------------------
 
-/// Build a [`ToolUseHookInput`] for a PreToolUse event.
-pub fn pre_tool_use(tool_name: &str, tool_input: serde_json::Value) -> ToolUseHookInput {
-    ToolUseHookInput {
-        session_id: "test-session".into(),
-        transcript_path: "/tmp/transcript.jsonl".into(),
-        cwd: "/tmp".into(),
-        permission_mode: "default".into(),
-        hook_event_name: "PreToolUse".into(),
-        tool_name: tool_name.into(),
-        tool_input,
-        tool_use_id: Some("toolu_test".into()),
-        tool_response: None,
-        agent: None,
-        original_tool_name: None,
+/// Build a [`clash_hooks::event::PreToolUse`] event for testing.
+pub fn pre_tool_use(
+    tool_name: &str,
+    tool_input: serde_json::Value,
+) -> clash_hooks::event::PreToolUse {
+    let json = serde_json::json!({
+        "session_id": "test-session",
+        "transcript_path": "/tmp/transcript.jsonl",
+        "cwd": "/tmp",
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "tool_use_id": "toolu_test",
+    });
+    match clash_hooks::recv_from_value(json).unwrap() {
+        clash_hooks::HookEvent::PreToolUse(e) => e,
+        _ => panic!("expected PreToolUse"),
     }
 }
 
-/// Build a [`ToolUseHookInput`] for a PostToolUse event.
+/// Build a [`clash_hooks::event::PostToolUse`] event for testing.
 pub fn post_tool_use(
     tool_name: &str,
     tool_input: serde_json::Value,
     tool_response: serde_json::Value,
-) -> ToolUseHookInput {
-    ToolUseHookInput {
-        hook_event_name: "PostToolUse".into(),
-        tool_response: Some(tool_response),
-        ..pre_tool_use(tool_name, tool_input)
+) -> clash_hooks::event::PostToolUse {
+    let json = serde_json::json!({
+        "session_id": "test-session",
+        "transcript_path": "/tmp/transcript.jsonl",
+        "cwd": "/tmp",
+        "permission_mode": "default",
+        "hook_event_name": "PostToolUse",
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "tool_use_id": "toolu_test",
+        "tool_response": tool_response,
+    });
+    match clash_hooks::recv_from_value(json).unwrap() {
+        clash_hooks::HookEvent::PostToolUse(e) => e,
+        _ => panic!("expected PostToolUse"),
     }
 }
 
@@ -238,37 +252,19 @@ impl TestEnvironment {
 // Decision extraction helpers
 // ---------------------------------------------------------------------------
 
-/// Extract the permission decision [`Effect`] from a [`HookOutput`].
-pub fn get_effect(output: &HookOutput) -> Option<Effect> {
-    match &output.hook_specific_output {
-        Some(HookSpecificOutput::PreToolUse(pre)) => {
-            pre.permission_decision
-                .as_ref()
-                .and_then(|rule| match rule {
-                    claude_settings::PermissionRule::Allow => Some(Effect::Allow),
-                    claude_settings::PermissionRule::Deny => Some(Effect::Deny),
-                    claude_settings::PermissionRule::Ask => Some(Effect::Ask),
-                    _ => None,
-                })
-        }
-        _ => None,
-    }
+/// Extract the permission decision [`Effect`] from a [`PolicyDecision`].
+pub fn get_effect(decision: &PolicyDecision) -> Option<Effect> {
+    decision.effect()
 }
 
-/// Extract the additional_context from a PreToolUse [`HookOutput`].
-pub fn get_context(output: &HookOutput) -> Option<String> {
-    match &output.hook_specific_output {
-        Some(HookSpecificOutput::PreToolUse(pre)) => pre.additional_context.clone(),
-        _ => None,
-    }
+/// Extract the additional_context from a [`PolicyDecision`].
+pub fn get_context(decision: &PolicyDecision) -> Option<String> {
+    decision.context().map(String::from)
 }
 
-/// Extract the permission_decision_reason from a PreToolUse [`HookOutput`].
-pub fn get_reason(output: &HookOutput) -> Option<String> {
-    match &output.hook_specific_output {
-        Some(HookSpecificOutput::PreToolUse(pre)) => pre.permission_decision_reason.clone(),
-        _ => None,
-    }
+/// Extract the reason from a [`PolicyDecision`].
+pub fn get_reason(decision: &PolicyDecision) -> Option<String> {
+    decision.reason().map(String::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -293,8 +289,8 @@ pub fn get_reason(output: &HookOutput) -> Option<String> {
 #[macro_export]
 macro_rules! assert_decision {
     ($settings:expr, $input:expr, $expected_effect:expr) => {{
-        let result =
-            $crate::permissions::check_permission(&$input, &$settings).expect("check_permission");
+        let result = $crate::permissions::check_permission(&$input, None, &$settings)
+            .expect("check_permission");
         let effect = $crate::test_utils::get_effect(&result);
         assert_eq!(
             effect,
@@ -332,8 +328,8 @@ mod tests {
     fn test_policy_builder_deny_all() {
         let settings = TestPolicy::deny_all().build();
         let input = pre_tool_use("Bash", bash_command("ls"));
-        let result =
-            crate::permissions::check_permission(&input, &settings).expect("check_permission");
+        let result = crate::permissions::check_permission(&input, None, &settings)
+            .expect("check_permission");
         assert_eq!(get_effect(&result), Some(Effect::Deny));
     }
 
@@ -395,18 +391,19 @@ mod tests {
 
     #[test]
     fn test_pre_tool_use_builder() {
-        let input = pre_tool_use("Bash", bash_command("ls"));
-        assert_eq!(input.tool_name, "Bash");
-        assert_eq!(input.hook_event_name, "PreToolUse");
-        assert_eq!(input.tool_input["command"], "ls");
+        use clash_hooks::ToolEvent;
+        let e = pre_tool_use("Bash", bash_command("ls"));
+        assert_eq!(e.tool_name(), "Bash");
+        assert_eq!(e.tool_input_raw()["command"], "ls");
     }
 
     #[test]
     fn test_post_tool_use_builder() {
+        use clash_hooks::ToolEvent;
         let response = serde_json::json!({"output": "file contents"});
-        let input = post_tool_use("Read", read_file("/tmp/foo"), response.clone());
-        assert_eq!(input.hook_event_name, "PostToolUse");
-        assert_eq!(input.tool_response, Some(response));
+        let e = post_tool_use("Read", read_file("/tmp/foo"), response.clone());
+        assert_eq!(e.tool_name(), "Read");
+        assert_eq!(e.tool_response().unwrap(), &response);
     }
 
     #[test]

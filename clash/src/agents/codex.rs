@@ -5,36 +5,53 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::protocol::{HookProtocol, json_str, json_str_any, json_value_any};
-use super::{AgentKind, resolve_tool_name};
-use crate::hooks::ToolUseHookInput;
+use super::AgentKind;
+use super::protocol::HookProtocol;
 
 pub struct CodexProtocol;
+
+impl CodexProtocol {
+    /// Normalize Codex JSON to Claude convention for `recv_from_value`.
+    fn normalize(raw: &Value) -> Value {
+        let mut normalized = serde_json::Map::new();
+
+        // Map field names to Claude convention
+        if let Some(obj) = raw.as_object() {
+            for (k, v) in obj {
+                normalized.insert(k.clone(), v.clone());
+            }
+        }
+
+        // Ensure cwd (Codex may use working_directory)
+        if !normalized.contains_key("cwd")
+            && let Some(wd) = raw.get("working_directory")
+        {
+            normalized.insert("cwd".into(), wd.clone());
+        }
+
+        // Ensure tool_input (Codex may use input)
+        if !normalized.contains_key("tool_input")
+            && let Some(input) = raw.get("input")
+        {
+            normalized.insert("tool_input".into(), input.clone());
+        }
+
+        // Default transcript_path if missing
+        if !normalized.contains_key("transcript_path") {
+            normalized.insert("transcript_path".into(), Value::String(String::new()));
+        }
+
+        Value::Object(normalized)
+    }
+}
 
 impl HookProtocol for CodexProtocol {
     fn agent(&self) -> AgentKind {
         AgentKind::Codex
     }
 
-    fn parse_tool_use(&self, raw: &Value) -> Result<ToolUseHookInput> {
-        let tool_name = json_str(raw, "tool_name").to_string();
-        let original = tool_name.clone();
-        let resolved = resolve_tool_name(AgentKind::Codex, &tool_name).to_string();
-
-        Ok(ToolUseHookInput {
-            session_id: json_str(raw, "session_id").to_string(),
-            transcript_path: json_str(raw, "transcript_path").to_string(),
-            cwd: json_str_any(raw, &["cwd", "working_directory"]).to_string(),
-            permission_mode: "default".to_string(),
-            hook_event_name: json_str(raw, "hook_event_name").to_string(),
-            tool_name: resolved,
-            tool_input: json_value_any(raw, &["tool_input", "input"])
-                .unwrap_or(Value::Object(serde_json::Map::new())),
-            tool_use_id: None,
-            tool_response: raw.get("tool_response").cloned(),
-            agent: Some(AgentKind::Codex),
-            original_tool_name: Some(original),
-        })
+    fn parse_event(&self, raw: &Value) -> Result<clash_hooks::HookEvent> {
+        Ok(clash_hooks::recv_from_value(Self::normalize(raw))?)
     }
 
     // Codex uses "proceed"/"block"/"modify" instead of "allow"/"deny"
@@ -70,9 +87,10 @@ impl HookProtocol for CodexProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clash_hooks::{HookEventCommon, ToolEvent};
 
     #[test]
-    fn parse_codex_shell() {
+    fn parse_event_codex_shell() {
         let raw = serde_json::json!({
             "session_id": "codex-123",
             "cwd": "/home/user",
@@ -80,9 +98,27 @@ mod tests {
             "tool_name": "shell",
             "tool_input": {"command": "git status"}
         });
-        let input = CodexProtocol.parse_tool_use(&raw).unwrap();
-        assert_eq!(input.tool_name, "Bash");
-        assert_eq!(input.original_tool_name.as_deref(), Some("shell"));
+        let event = CodexProtocol.parse_event(&raw).unwrap();
+        let clash_hooks::HookEvent::PreToolUse(e) = event else {
+            panic!("expected PreToolUse");
+        };
+        assert_eq!(e.tool_name(), "shell");
+    }
+
+    #[test]
+    fn parse_event_codex_working_directory() {
+        let raw = serde_json::json!({
+            "session_id": "codex-123",
+            "working_directory": "/home/user",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "shell",
+            "tool_input": {"command": "ls"}
+        });
+        let event = CodexProtocol.parse_event(&raw).unwrap();
+        let clash_hooks::HookEvent::PreToolUse(e) = event else {
+            panic!("expected PreToolUse");
+        };
+        assert_eq!(e.cwd(), "/home/user");
     }
 
     #[test]

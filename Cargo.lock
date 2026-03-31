@@ -729,6 +729,7 @@ dependencies = [
  "clash-brush-core",
  "clash-brush-interactive",
  "clash-brush-parser",
+ "clash_hooks",
  "clash_notify",
  "clash_starlark",
  "claude_settings",

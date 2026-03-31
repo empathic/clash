@@ -1,15 +1,18 @@
 //! Claude Code hook protocol implementation.
 //!
-//! Claude Code has a unique output format using `HookOutput` structs with
-//! `permissionDecision`, `hookSpecificOutput`, etc. This requires custom
-//! format methods — the defaults don't apply here.
+//! Claude uses the nested `{ continue, hookSpecificOutput: { hookEventName, ... } }`
+//! JSON format defined by [`HookOutput`]. All `format_*` methods serialize through
+//! `HookOutput`'s serde implementation so the output is always wire-correct.
+//!
+//! `parse_event` uses the default implementation (`recv_from_value`), which
+//! works because Claude's JSON is already in the canonical format.
 
-use anyhow::Result;
 use serde_json::Value;
 
+use super::AgentKind;
 use super::protocol::HookProtocol;
-use super::{AgentKind, resolve_tool_name};
-use crate::hooks::{HookOutput, SessionStartHookInput, StopHookInput, ToolUseHookInput};
+use crate::hooks::HookOutput;
+use crate::policy_decision::PolicyDecision;
 
 pub struct ClaudeProtocol;
 
@@ -18,67 +21,77 @@ impl HookProtocol for ClaudeProtocol {
         AgentKind::Claude
     }
 
-    fn parse_tool_use(&self, raw: &Value) -> Result<ToolUseHookInput> {
-        let mut input: ToolUseHookInput = serde_json::from_value(raw.clone())?;
-        let original = input.tool_name.clone();
-        input.tool_name = resolve_tool_name(AgentKind::Claude, &original).to_string();
-        input.original_tool_name = Some(original);
-        input.agent = Some(AgentKind::Claude);
-        Ok(input)
-    }
-
-    fn parse_session_start(&self, raw: &Value) -> Result<SessionStartHookInput> {
-        Ok(serde_json::from_value(raw.clone())?)
-    }
-
-    fn parse_stop(&self, raw: &Value) -> Result<StopHookInput> {
-        Ok(serde_json::from_value(raw.clone())?)
-    }
-
-    // Claude has a unique output format — must override all format methods.
-
-    fn format_allow(
-        &self,
-        reason: Option<&str>,
-        context: Option<&str>,
-        updated_input: Option<Value>,
-    ) -> Value {
-        let mut output = HookOutput::allow(reason.map(String::from), context.map(String::from));
-        if let Some(ui) = updated_input {
-            output.set_updated_input(ui);
-        }
-        serde_json::to_value(output).expect("HookOutput serialization cannot fail")
-    }
-
-    fn format_deny(&self, reason: &str, context: Option<&str>) -> Value {
-        let output = HookOutput::deny(reason.to_string(), context.map(String::from));
-        serde_json::to_value(output).expect("HookOutput serialization cannot fail")
-    }
-
-    fn format_ask(&self, reason: Option<&str>, context: Option<&str>) -> Value {
-        let output = HookOutput::ask(reason.map(String::from), context.map(String::from));
-        serde_json::to_value(output).expect("HookOutput serialization cannot fail")
-    }
-
-    fn format_session_start(&self, context: Option<&str>) -> Value {
-        let output = HookOutput::session_start(context.map(String::from));
-        serde_json::to_value(output).expect("HookOutput serialization cannot fail")
-    }
-
     fn session_context(&self) -> &str {
         include_str!("../../docs/session-context.md")
     }
 
-    // parse_post_tool_use — uses default (delegates to parse_tool_use)
-    // rewrite_for_sandbox — uses default (rewrites "Bash" command field)
+    // parse_event — uses default (recv_from_value), Claude JSON is canonical
+
+    fn format_decision(&self, decision: &PolicyDecision) -> Value {
+        serde_json::to_value(to_hook_output(decision)).unwrap()
+    }
+
+    fn format_session_start(&self, context: Option<&str>) -> Value {
+        serde_json::to_value(HookOutput::session_start(context.map(String::from))).unwrap()
+    }
+
+    fn format_post_tool_use(&self, context: Option<&str>) -> Value {
+        serde_json::to_value(HookOutput::post_tool_use(context.map(String::from))).unwrap()
+    }
+
+    fn format_continue(&self) -> Value {
+        serde_json::to_value(HookOutput::continue_execution()).unwrap()
+    }
+
+    fn format_permission_response(
+        &self,
+        behavior: &str,
+        message: Option<&str>,
+        updated_input: Option<&Value>,
+        interrupt: Option<bool>,
+    ) -> Value {
+        let output = match behavior {
+            "allow" => HookOutput::approve_permission(updated_input.cloned()),
+            _ => HookOutput::deny_permission(
+                message.unwrap_or("denied").to_string(),
+                interrupt.unwrap_or(false),
+            ),
+        };
+        serde_json::to_value(&output).unwrap()
+    }
+}
+
+/// Convert a [`PolicyDecision`] into a Claude-format [`HookOutput`].
+fn to_hook_output(decision: &PolicyDecision) -> HookOutput {
+    match decision {
+        PolicyDecision::Allow {
+            reason,
+            context,
+            updated_input,
+        } => {
+            let mut output = HookOutput::allow(Some(reason.clone()), context.clone());
+            if let Some(ui) = updated_input {
+                output.set_updated_input(ui.clone());
+            }
+            output
+        }
+        PolicyDecision::Deny { reason, context } => {
+            HookOutput::deny(reason.clone(), context.clone())
+        }
+        PolicyDecision::Ask { reason, context } => {
+            HookOutput::ask(Some(reason.clone()), context.clone())
+        }
+        PolicyDecision::Pass => HookOutput::continue_execution(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clash_hooks::ToolEvent;
 
     #[test]
-    fn parse_tool_use_normalizes_name() {
+    fn parse_event_claude_pre_tool_use() {
         let raw = serde_json::json!({
             "session_id": "test",
             "transcript_path": "/tmp/t.jsonl",
@@ -89,44 +102,43 @@ mod tests {
             "tool_input": {"command": "ls"},
             "tool_use_id": "toolu_01"
         });
-        let input = ClaudeProtocol.parse_tool_use(&raw).unwrap();
-        assert_eq!(input.tool_name, "Bash");
-        assert_eq!(input.original_tool_name.as_deref(), Some("Bash"));
-        assert_eq!(input.agent, Some(AgentKind::Claude));
-    }
-
-    #[test]
-    fn format_allow_matches_existing_format() {
-        let output = ClaudeProtocol.format_allow(Some("safe"), None, None);
-        assert_eq!(output["continue"], true);
-        assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
-    }
-
-    #[test]
-    fn format_deny_matches_existing_format() {
-        let output = ClaudeProtocol.format_deny("blocked", Some("context"));
-        assert_eq!(output["continue"], true);
-        assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
-    }
-
-    #[test]
-    fn format_ask_matches_existing_format() {
-        let output = ClaudeProtocol.format_ask(None, None);
-        assert_eq!(output["continue"], true);
-        assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "ask");
-    }
-
-    #[test]
-    fn rewrite_for_sandbox_uses_default() {
-        let input = ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_input: serde_json::json!({"command": "ls -la"}),
-            cwd: "/home/user".into(),
-            ..Default::default()
+        let event = ClaudeProtocol.parse_event(&raw).unwrap();
+        let clash_hooks::HookEvent::PreToolUse(e) = event else {
+            panic!("expected PreToolUse");
         };
-        let result = ClaudeProtocol
-            .rewrite_for_sandbox(&input, "/usr/bin/clash")
-            .unwrap();
-        assert!(result["command"].as_str().unwrap().contains("clash"));
+        assert_eq!(e.tool_name(), "Bash");
+    }
+
+    #[test]
+    fn format_decision_round_trip() {
+        let decision = PolicyDecision::Allow {
+            reason: "policy: allowed".into(),
+            context: None,
+            updated_input: None,
+        };
+        let json = ClaudeProtocol.format_decision(&decision);
+        let expected =
+            serde_json::to_value(&HookOutput::allow(Some("policy: allowed".into()), None)).unwrap();
+        assert_eq!(json, expected);
+    }
+
+    #[test]
+    fn format_decision_deny_round_trip() {
+        let decision = PolicyDecision::Deny {
+            reason: "blocked".into(),
+            context: Some("ctx".into()),
+        };
+        let json = ClaudeProtocol.format_decision(&decision);
+        let expected =
+            serde_json::to_value(&HookOutput::deny("blocked".into(), Some("ctx".into()))).unwrap();
+        assert_eq!(json, expected);
+    }
+
+    #[test]
+    fn format_decision_pass_round_trip() {
+        let decision = PolicyDecision::Pass;
+        let json = ClaudeProtocol.format_decision(&decision);
+        let expected = serde_json::to_value(&HookOutput::continue_execution()).unwrap();
+        assert_eq!(json, expected);
     }
 }

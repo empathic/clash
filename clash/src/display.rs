@@ -4,7 +4,7 @@
 //! and `debug::sandbox` so that each call-site only needs to join/print the
 //! returned `Vec<String>` lines.
 
-use crate::policy::ir::PolicyDecision;
+use crate::policy::ir::PolicyEvaluation;
 use crate::policy::sandbox_types::SandboxPolicy;
 use crate::style;
 
@@ -22,7 +22,7 @@ pub fn format_tool_header(
 }
 
 /// Format a policy decision: effect, reason, matched/skipped rules, resolution.
-pub fn format_decision(decision: &PolicyDecision) -> Vec<String> {
+pub fn format_decision(decision: &PolicyEvaluation) -> Vec<String> {
     let mut lines = Vec::new();
 
     lines.push(format!(
@@ -91,7 +91,7 @@ pub fn format_sandbox_summary(sandbox: &SandboxPolicy) -> Vec<String> {
 }
 
 /// Build the standard JSON representation of a policy decision.
-pub fn decision_to_json(decision: &PolicyDecision) -> serde_json::Value {
+pub fn decision_to_json(decision: &PolicyEvaluation) -> serde_json::Value {
     serde_json::json!({
         "effect": format!("{}", decision.effect),
         "reason": decision.reason,

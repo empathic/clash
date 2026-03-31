@@ -4,13 +4,10 @@
 //! verifies the event fields, builds a response, serializes with `send_to()`,
 //! and asserts the wire JSON matches Claude Code expectations.
 
-use clash_hooks::{recv_from, send_to, HookEvent, HookEventCommon, ToolEvent};
+use clash_hooks::{HookEvent, HookEventCommon, ToolEvent, recv_from, send_to};
 
 fn fixture(name: &str) -> Vec<u8> {
-    let path = format!(
-        "{}/tests/fixtures/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
     std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read fixture {path}: {e}"))
 }
 
@@ -58,7 +55,10 @@ fn test_roundtrip_pre_tool_use_write() {
 
             let json = response_json(&e.deny("not allowed"));
             assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "deny");
-            assert_eq!(json["hookSpecificOutput"]["permissionDecisionReason"], "not allowed");
+            assert_eq!(
+                json["hookSpecificOutput"]["permissionDecisionReason"],
+                "not allowed"
+            );
         }
         other => panic!("expected PreToolUse, got {other:?}"),
     }
@@ -75,7 +75,10 @@ fn test_roundtrip_post_tool_use() {
             assert_eq!(resp["stdout"], "test result: ok. 5 passed");
 
             let json = response_json(&e.context("tests passed"));
-            assert_eq!(json["hookSpecificOutput"]["additionalContext"], "tests passed");
+            assert_eq!(
+                json["hookSpecificOutput"]["additionalContext"],
+                "tests passed"
+            );
         }
         other => panic!("expected PostToolUse, got {other:?}"),
     }
@@ -91,7 +94,10 @@ fn test_roundtrip_post_tool_use_failure() {
             assert!(!e.is_interrupt());
 
             let json = response_json(&e.context("command failed"));
-            assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PostToolUseFailure");
+            assert_eq!(
+                json["hookSpecificOutput"]["hookEventName"],
+                "PostToolUseFailure"
+            );
         }
         other => panic!("expected PostToolUseFailure, got {other:?}"),
     }
@@ -108,13 +114,19 @@ fn test_roundtrip_permission_request() {
 
             // Test approve
             let json = response_json(&e.approve());
-            assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PermissionRequest");
+            assert_eq!(
+                json["hookSpecificOutput"]["hookEventName"],
+                "PermissionRequest"
+            );
             assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "allow");
 
             // Test deny
             let json = response_json(&e.deny("denied by policy"));
             assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "deny");
-            assert_eq!(json["hookSpecificOutput"]["decision"]["message"], "denied by policy");
+            assert_eq!(
+                json["hookSpecificOutput"]["decision"]["message"],
+                "denied by policy"
+            );
         }
         other => panic!("expected PermissionRequest, got {other:?}"),
     }
@@ -131,7 +143,10 @@ fn test_roundtrip_session_start() {
 
             let json = response_json(&e.context("clash is active"));
             assert_eq!(json["hookSpecificOutput"]["hookEventName"], "SessionStart");
-            assert_eq!(json["hookSpecificOutput"]["additionalContext"], "clash is active");
+            assert_eq!(
+                json["hookSpecificOutput"]["additionalContext"],
+                "clash is active"
+            );
         }
         other => panic!("expected SessionStart, got {other:?}"),
     }
@@ -273,7 +288,10 @@ fn test_roundtrip_config_change() {
     match event {
         HookEvent::ConfigChange(ref e) => {
             assert_eq!(e.source(), Some("project_settings"));
-            assert_eq!(e.file_path(), Some("/home/user/project/.claude/settings.json"));
+            assert_eq!(
+                e.file_path(),
+                Some("/home/user/project/.claude/settings.json")
+            );
 
             let json = response_json(&e.block("config change blocked"));
             assert_eq!(json["decision"], "block");
@@ -288,7 +306,10 @@ fn test_roundtrip_pre_compact() {
     match event {
         HookEvent::PreCompact(ref e) => {
             assert_eq!(e.trigger(), Some("auto"));
-            assert_eq!(e.custom_instructions(), Some("Keep the test plan in context"));
+            assert_eq!(
+                e.custom_instructions(),
+                Some("Keep the test plan in context")
+            );
         }
         other => panic!("expected PreCompact, got {other:?}"),
     }
@@ -300,7 +321,10 @@ fn test_roundtrip_post_compact() {
     match event {
         HookEvent::PostCompact(ref e) => {
             assert_eq!(e.trigger(), Some("auto"));
-            assert_eq!(e.compact_summary(), Some("Summarized 50 messages into 5 key points"));
+            assert_eq!(
+                e.compact_summary(),
+                Some("Summarized 50 messages into 5 key points")
+            );
         }
         other => panic!("expected PostCompact, got {other:?}"),
     }
@@ -326,7 +350,10 @@ fn test_roundtrip_unknown_future() {
             assert_eq!(e.session_id(), "sess_abc123");
             // Extra fields are preserved
             let extra = e.extra();
-            assert_eq!(extra.get("new_field_1").and_then(|v| v.as_str()), Some("some_value"));
+            assert_eq!(
+                extra.get("new_field_1").and_then(|v| v.as_str()),
+                Some("some_value")
+            );
             assert_eq!(extra.get("new_field_2").and_then(|v| v.as_i64()), Some(42));
         }
         other => panic!("expected Unknown, got {other:?}"),
@@ -523,6 +550,9 @@ fn test_typed_tool_input_is_cached() {
         // Call typed_tool_input twice — the second should return the cached ref.
         let first = e.typed_tool_input() as *const _;
         let second = e.typed_tool_input() as *const _;
-        assert_eq!(first, second, "typed_tool_input should return same cached reference");
+        assert_eq!(
+            first, second,
+            "typed_tool_input should return same cached reference"
+        );
     }
 }

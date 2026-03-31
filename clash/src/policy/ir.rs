@@ -9,7 +9,7 @@ use crate::policy::sandbox_types::SandboxPolicy;
 
 /// The result of evaluating a policy.
 #[derive(Debug, Clone)]
-pub struct PolicyDecision {
+pub struct PolicyEvaluation {
     pub effect: Effect,
     pub reason: Option<String>,
     /// Structured trace of how this decision was reached.
@@ -19,7 +19,7 @@ pub struct PolicyDecision {
     pub sandbox_name: Option<SandboxRef>,
 }
 
-impl PolicyDecision {
+impl PolicyEvaluation {
     /// Render the decision trace as a list of human-readable strings.
     pub fn explanation(&self) -> Vec<String> {
         self.trace.render()

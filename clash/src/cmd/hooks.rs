@@ -4,14 +4,16 @@ use anyhow::{Context, Result};
 use tracing::{Level, info, instrument};
 
 use crate::agents::AgentKind;
-use crate::agents::protocol::{HookProtocol, get_protocol};
+use crate::agents::protocol::get_protocol;
 use crate::cli::{HookCmd, HookSubcommand};
-use crate::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput, is_interactive_tool};
+use crate::hooks::{HookOutput, HookSpecificOutput, PermissionBehavior, is_interactive_tool};
 use crate::permissions::check_permission;
-use crate::policy::Effect;
+use crate::policy_decision::PolicyDecision;
 use crate::session_policy;
 use crate::settings::{ClashSettings, HookContext};
 use crate::trace;
+
+use clash_hooks::{HookEvent, HookEventCommon, ToolEvent};
 
 /// Generate a fallback session ID when the agent doesn't provide one.
 ///
@@ -22,8 +24,6 @@ fn fallback_session_id(agent: AgentKind) -> String {
     format!("{agent}-{ppid}")
 }
 
-use claude_settings::PermissionRule;
-
 impl HookCmd {
     /// Handle hook when clash is disabled — drain stdin and return pass-through.
     fn run_disabled(&self) -> Result<()> {
@@ -31,7 +31,7 @@ impl HookCmd {
         let output = match self.subcommand {
             HookSubcommand::SessionStart => {
                 // Still read stdin to avoid broken pipe.
-                let _ = crate::hooks::SessionStartHookInput::from_reader(std::io::stdin().lock());
+                let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
                 HookOutput::session_start(Some(
                     "Clash is disabled (CLASH_DISABLE is set). \
                      All hooks are pass-through — no policy enforcement is active. \
@@ -51,6 +51,12 @@ impl HookCmd {
         Ok(())
     }
 
+    /// Read a hook event from stdin, dispatching via the agent's protocol.
+    fn recv_event(&self) -> Result<HookEvent> {
+        let raw: serde_json::Value = serde_json::from_reader(std::io::stdin().lock())?;
+        get_protocol(self.agent).parse_event(&raw)
+    }
+
     #[instrument(level = Level::TRACE, skip(self), fields(agent = %self.agent))]
     pub fn run(&self) -> Result<()> {
         if crate::settings::is_disabled() {
@@ -59,99 +65,100 @@ impl HookCmd {
 
         let passthrough = crate::settings::is_passthrough();
 
-        let output = match self.subcommand {
-            HookSubcommand::PreToolUse => {
-                let input = self.parse_tool_use_input()
-                    .context("parsing PreToolUse hook input from stdin — expected JSON with tool_name and tool_input fields")?;
+        // Read the event from stdin via the agent's protocol.
+        let event = self.recv_event().context("parsing hook event from stdin")?;
+
+        // Dispatch on the event type.
+        match event {
+            HookEvent::PreToolUse(ref e) => {
+                let mut session_id = e.session_id().to_string();
+                if session_id.is_empty() {
+                    session_id = fallback_session_id(self.agent);
+                    info!(session_id = %session_id, "Agent did not provide session_id, using fallback");
+                }
 
                 if passthrough {
                     info!(
-                        tool = %input.tool_name,
+                        tool = %e.tool_name(),
                         "CLASH_PASSTHROUGH: deferring to native permissions"
                     );
-                    if let Err(e) = trace::sync_trace(&input.session_id, None) {
-                        tracing::warn!(error = %e, "Failed to sync trace (PreToolUse/passthrough)");
+                    if let Err(err) = trace::sync_trace(&session_id, None) {
+                        tracing::warn!(error = %err, "Failed to sync trace (PreToolUse/passthrough)");
                     }
-                    HookOutput::continue_execution()
+                    self.write_output(&HookOutput::continue_execution())?;
                 } else {
-                    let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+                    let hook_ctx = HookContext::from_transcript_path(e.transcript_path());
                     let settings = ClashSettings::load_or_create_with_session(
-                        Some(&input.session_id),
+                        Some(&session_id),
                         Some(&hook_ctx),
                     )?;
-                    let output = check_permission(&input, &settings)?;
+                    let decision = check_permission(e, Some(self.agent), &settings)?;
 
                     // Interactive tools (e.g., AskUserQuestion) require user input
-                    // via Claude Code's native UI. When the policy says "ask", pass
-                    // through to CC's native prompt. When the policy explicitly allows
-                    // or denies, enforce it — this enables mode-aware automation
-                    // (e.g., allow ExitPlanMode in plan mode).
-                    if is_interactive_tool(&input.tool_name)
-                        && !is_deny_decision(&output)
-                        && is_ask_decision(&output)
+                    // via Claude Code's native UI.
+                    if is_interactive_tool(e.tool_name())
+                        && !decision.is_deny()
+                        && decision.is_ask()
                     {
-                        info!(tool = %input.tool_name, "Passthrough: interactive tool deferred to Claude Code");
-                        HookOutput::continue_execution()
+                        info!(tool = %e.tool_name(), "Passthrough: interactive tool deferred to Claude Code");
+                        self.write_output(&HookOutput::continue_execution())?;
                     } else {
-                        // Update session stats for the status line (only here, not in
-                        // log_decision, to avoid double-counting PermissionRequest).
-                        if let Some(effect) = extract_effect(&output) {
+                        // Update session stats.
+                        if let Some(effect) = decision.effect() {
                             crate::audit::update_session_stats(
-                                &input.session_id,
-                                &input.tool_name,
-                                &input.tool_input,
+                                &session_id,
+                                e.tool_name(),
+                                e.tool_input_raw(),
                                 effect,
-                                &input.cwd,
+                                e.cwd(),
                             );
                         }
 
-                        // If the decision is Ask, record it so PostToolUse can detect
-                        // user approval and suggest a session policy rule.
-                        if is_ask_decision(&output)
-                            && let Some(ref tool_use_id) = input.tool_use_id
+                        // Record Ask for session policy advice.
+                        if decision.is_ask()
+                            && let Some(tool_use_id) = e.tool_use_id()
                         {
                             session_policy::record_pending_ask(
-                                &input.session_id,
+                                &session_id,
                                 tool_use_id,
-                                &input.tool_name,
-                                &input.tool_input,
-                                &input.cwd,
+                                e.tool_name(),
+                                e.tool_input_raw(),
+                                e.cwd(),
                             );
                         }
 
-                        // Sync trace with the policy decision for this tool use.
-                        let decision = input.tool_use_id.as_ref().and_then(|id| {
-                            let effect = extract_effect(&output)?;
-                            Some(trace::PolicyDecision {
-                                tool_use_id: id.clone(),
-                                tool_name: Some(input.tool_name.clone()),
+                        // Sync trace.
+                        let trace_decision = e.tool_use_id().and_then(|id| {
+                            let effect = decision.effect()?;
+                            Some(trace::TraceDecision {
+                                tool_use_id: id.to_string(),
+                                tool_name: Some(e.tool_name().to_string()),
                                 effect,
                                 reason: None,
                             })
                         });
-                        if let Err(e) = trace::sync_trace(&input.session_id, decision) {
-                            tracing::warn!(error = %e, "Failed to sync trace (PreToolUse)");
+                        if let Err(err) = trace::sync_trace(&session_id, trace_decision) {
+                            tracing::warn!(error = %err, "Failed to sync trace (PreToolUse)");
                         }
 
-                        output
+                        self.write_decision(&decision)?;
                     }
                 }
             }
-            HookSubcommand::PostToolUse => {
-                let input = self
-                    .parse_tool_use_input()
-                    .context("parsing PostToolUse hook input from stdin")?;
+            HookEvent::PostToolUse(ref e) => {
+                let mut session_id = e.session_id().to_string();
+                if session_id.is_empty() {
+                    session_id = fallback_session_id(self.agent);
+                }
 
-                // Check if this tool use was previously "ask"ed and the user
-                // accepted. If so, return advisory context suggesting a session
-                // rule for Claude to offer the user.
-                let session_context = input.tool_use_id.as_deref().and_then(|tool_use_id| {
+                // Check if this tool use was previously "ask"ed.
+                let session_context = e.tool_use_id().and_then(|tool_use_id| {
                     let advice = session_policy::process_post_tool_use(
                         tool_use_id,
-                        &input.session_id,
-                        &input.tool_name,
-                        &input.tool_input,
-                        &input.cwd,
+                        &session_id,
+                        e.tool_name(),
+                        e.tool_input_raw(),
+                        e.cwd(),
                     )?;
                     info!(
                         rule = %advice.suggested_rule,
@@ -160,25 +167,24 @@ impl HookCmd {
                     Some(advice.as_context())
                 });
 
-                // Check if a sandboxed Bash command failed with network or
-                // filesystem errors, and provide hints about sandbox restrictions.
+                // Check for sandbox hints.
                 let (network_context, fs_context) = {
-                    let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+                    let hook_ctx = HookContext::from_transcript_path(e.transcript_path());
                     let settings = ClashSettings::load_or_create_with_session(
-                        Some(&input.session_id),
+                        Some(&session_id),
                         Some(&hook_ctx),
                     )
                     .ok();
-                    let net = settings.as_ref().and_then(|s| {
-                        crate::network_hints::check_for_sandbox_network_hint(&input, s)
-                    });
+                    let net = settings
+                        .as_ref()
+                        .and_then(|s| crate::network_hints::check_for_sandbox_network_hint(e, s));
                     let fs = settings
                         .as_ref()
-                        .and_then(|s| crate::sandbox_hints::check_for_sandbox_fs_hint(&input, s));
+                        .and_then(|s| crate::sandbox_hints::check_for_sandbox_fs_hint(e, s));
                     (net, fs)
                 };
 
-                // Combine contexts (session policy advice + sandbox hints).
+                // Combine contexts.
                 let context = [session_context, network_context, fs_context]
                     .into_iter()
                     .flatten()
@@ -189,157 +195,104 @@ impl HookCmd {
                     Some(context.join("\n\n"))
                 };
 
-                // Sync trace to pick up tool responses.
-                if let Err(e) = trace::sync_trace(&input.session_id, None) {
-                    tracing::warn!(error = %e, "Failed to sync trace (PostToolUse)");
+                if let Err(err) = trace::sync_trace(&session_id, None) {
+                    tracing::warn!(error = %err, "Failed to sync trace (PostToolUse)");
                 }
 
-                HookOutput::post_tool_use(context)
+                self.write_output(&HookOutput::post_tool_use(context))?;
             }
-            HookSubcommand::PermissionRequest => {
-                let input = self
-                    .parse_tool_use_input()
-                    .context("parsing PermissionRequest hook input from stdin")?;
+            HookEvent::PermissionRequest(ref e) => {
+                let mut session_id = e.session_id().to_string();
+                if session_id.is_empty() {
+                    session_id = fallback_session_id(self.agent);
+                }
+
                 if passthrough {
                     info!(
-                        tool = %input.tool_name,
+                        tool = %e.tool_name(),
                         "CLASH_PASSTHROUGH: deferring permission request to native UI"
                     );
-                    HookOutput::continue_execution()
+                    self.write_output(&HookOutput::continue_execution())?;
                 } else {
-                    let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+                    let hook_ctx = HookContext::from_transcript_path(e.transcript_path());
                     let settings = ClashSettings::load_or_create_with_session(
-                        Some(&input.session_id),
+                        Some(&session_id),
                         Some(&hook_ctx),
                     )?;
-                    crate::handlers::handle_permission_request(&input, &settings)?
+                    let output =
+                        crate::handlers::handle_permission_request(e, Some(self.agent), &settings)?;
+                    self.write_output(&output)?;
                 }
             }
-            HookSubcommand::SessionStart => {
-                let mut input = self
-                    .parse_session_start_input()
-                    .context("parsing SessionStart hook input from stdin")?;
-                if input.session_id.is_empty() {
-                    input.session_id = fallback_session_id(self.agent);
-                    info!(session_id = %input.session_id, "Agent did not provide session_id, using fallback");
+            HookEvent::SessionStart(ref e) => {
+                let mut session_id = e.session_id().to_string();
+                if session_id.is_empty() {
+                    session_id = fallback_session_id(self.agent);
+                    info!(session_id = %session_id, "Agent did not provide session_id, using fallback");
                 }
-                crate::handlers::handle_session_start(&input)?
+                let output = crate::handlers::handle_session_start(e, &session_id)?;
+                self.write_output(&output)?;
             }
-            HookSubcommand::Stop => {
-                let mut input = self
-                    .parse_stop_input()
-                    .context("parsing Stop hook input from stdin")?;
-                if input.session_id.is_empty() {
-                    input.session_id = fallback_session_id(self.agent);
-                    info!(session_id = %input.session_id, "Agent did not provide session_id, using fallback");
+            HookEvent::Stop(ref e) => {
+                let mut session_id = e.session_id().to_string();
+                if session_id.is_empty() {
+                    session_id = fallback_session_id(self.agent);
+                    info!(session_id = %session_id, "Agent did not provide session_id, using fallback");
                 }
 
-                // Final catch-up sync for non-tool conversation turns.
-                if let Err(e) = trace::sync_trace(&input.session_id, None) {
-                    tracing::warn!(error = %e, "Failed to sync trace (Stop)");
+                if let Err(err) = trace::sync_trace(&session_id, None) {
+                    tracing::warn!(error = %err, "Failed to sync trace (Stop)");
                 }
 
-                HookOutput::continue_execution()
+                self.write_output(&HookOutput::continue_execution())?;
             }
-        };
-
-        // For Claude, write the HookOutput directly (existing format).
-        // For other agents, convert the decision to their protocol format.
-        if self.agent == AgentKind::Claude {
-            output
-                .write_stdout()
-                .context("serializing hook response to stdout")?;
-        } else {
-            let protocol = get_protocol(self.agent);
-            let json = hook_output_to_protocol(&*protocol, &output);
-            serde_json::to_writer(std::io::stdout().lock(), &json)
-                .context("serializing hook response to stdout")?;
-            writeln!(std::io::stdout().lock())?;
+            _ => {
+                // Unknown or unhandled events — pass through.
+                self.write_output(&HookOutput::continue_execution())?;
+            }
         }
+
         Ok(())
     }
 
-    /// Read stdin as raw JSON, then delegate to the agent's protocol.
-    fn read_stdin_json(&self) -> Result<serde_json::Value> {
-        Ok(serde_json::from_reader(std::io::stdin().lock())?)
+    /// Write a [`PolicyDecision`] directly to stdout in the agent's format.
+    fn write_decision(&self, decision: &PolicyDecision) -> Result<()> {
+        let json = get_protocol(self.agent).format_decision(decision);
+        serde_json::to_writer(std::io::stdout().lock(), &json)
+            .context("serializing hook response to stdout")?;
+        writeln!(std::io::stdout().lock())?;
+        Ok(())
     }
 
-    /// Parse tool-use input from stdin via the agent's protocol.
-    fn parse_tool_use_input(&self) -> Result<ToolUseHookInput> {
+    /// Write a HookOutput to stdout, converting to agent protocol format.
+    ///
+    /// Used for non-PreToolUse events (PostToolUse, SessionStart, PermissionRequest, etc.)
+    fn write_output(&self, output: &HookOutput) -> Result<()> {
         let protocol = get_protocol(self.agent);
-        let raw = self.read_stdin_json()?;
-        let mut input = protocol.parse_tool_use(&raw)?;
-        if input.session_id.is_empty() {
-            input.session_id = fallback_session_id(self.agent);
-            info!(session_id = %input.session_id, "Agent did not provide session_id, using fallback");
-        }
-        Ok(input)
-    }
-
-    /// Parse session-start input from stdin via the agent's protocol.
-    fn parse_session_start_input(&self) -> Result<crate::hooks::SessionStartHookInput> {
-        let protocol = get_protocol(self.agent);
-        let raw = self.read_stdin_json()?;
-        protocol.parse_session_start(&raw)
-    }
-
-    /// Parse stop input from stdin via the agent's protocol.
-    fn parse_stop_input(&self) -> Result<crate::hooks::StopHookInput> {
-        let protocol = get_protocol(self.agent);
-        let raw = self.read_stdin_json()?;
-        protocol.parse_stop(&raw)
-    }
-}
-
-fn extract_effect(output: &HookOutput) -> Option<Effect> {
-    match &output.hook_specific_output {
-        Some(HookSpecificOutput::PreToolUse(pre)) => match pre.permission_decision {
-            Some(PermissionRule::Allow) => Some(Effect::Allow),
-            Some(PermissionRule::Deny) => Some(Effect::Deny),
-            Some(PermissionRule::Ask) => Some(Effect::Ask),
-            Some(PermissionRule::Unset) | None => None,
-        },
-        _ => None,
-    }
-}
-
-fn is_ask_decision(output: &HookOutput) -> bool {
-    matches!(extract_effect(output), Some(Effect::Ask))
-}
-
-fn is_deny_decision(output: &HookOutput) -> bool {
-    matches!(extract_effect(output), Some(Effect::Deny))
-}
-
-/// Convert a Claude-format HookOutput into the agent's protocol format.
-fn hook_output_to_protocol(protocol: &dyn HookProtocol, output: &HookOutput) -> serde_json::Value {
-    let (reason, context, updated_input) = match &output.hook_specific_output {
-        Some(HookSpecificOutput::PreToolUse(pre)) => (
-            pre.permission_decision_reason.as_deref(),
-            pre.additional_context.as_deref(),
-            pre.updated_input.clone(),
-        ),
-        Some(HookSpecificOutput::SessionStart(ss)) => {
-            return protocol.format_session_start(ss.additional_context.as_deref());
-        }
-        Some(HookSpecificOutput::PostToolUse(pt)) => {
-            // PostToolUse is advisory — just continue
-            return protocol.format_allow(
-                Some("post-tool-use"),
-                pt.additional_context.as_deref(),
-                None,
-            );
-        }
-        _ => (None, None, None),
-    };
-
-    match extract_effect(output) {
-        Some(Effect::Allow) => protocol.format_allow(reason, context, updated_input),
-        Some(Effect::Deny) => protocol.format_deny(reason.unwrap_or("policy: denied"), context),
-        Some(Effect::Ask) => protocol.format_ask(reason, context),
-        None => {
-            // No decision (e.g., continue_execution) — allow passthrough
-            protocol.format_allow(None, None, None)
-        }
+        let json = match &output.hook_specific_output {
+            Some(HookSpecificOutput::SessionStart(ss)) => {
+                protocol.format_session_start(ss.additional_context.as_deref())
+            }
+            Some(HookSpecificOutput::PostToolUse(pt)) => {
+                protocol.format_post_tool_use(pt.additional_context.as_deref())
+            }
+            Some(HookSpecificOutput::PermissionRequest(pr)) => {
+                let behavior = match pr.decision.behavior {
+                    PermissionBehavior::Allow => "allow",
+                    PermissionBehavior::Deny => "deny",
+                };
+                protocol.format_permission_response(
+                    behavior,
+                    pr.decision.message.as_deref(),
+                    pr.decision.updated_input.as_ref(),
+                    pr.decision.interrupt,
+                )
+            }
+            _ => protocol.format_continue(),
+        };
+        serde_json::to_writer(std::io::stdout().lock(), &json)
+            .context("serializing hook response to stdout")?;
+        writeln!(std::io::stdout().lock())?;
+        Ok(())
     }
 }

@@ -1,15 +1,39 @@
+use clash_hooks::ToolEvent;
+
+use crate::agents::AgentKind;
 use crate::policy::Effect;
+use crate::policy_decision::PolicyDecision;
 use tracing::{Level, info, instrument, warn};
 
-use crate::hooks::{HookOutput, ToolInput, ToolUseHookInput};
 use crate::settings::ClashSettings;
 
 /// Check if a tool invocation should be allowed, denied, or require user confirmation.
-#[instrument(level = Level::TRACE, ret)]
+#[instrument(level = Level::TRACE, skip(input), ret)]
 pub fn check_permission(
-    input: &ToolUseHookInput,
+    input: &impl ToolEvent,
+    agent: Option<AgentKind>,
     settings: &ClashSettings,
-) -> anyhow::Result<HookOutput> {
+) -> anyhow::Result<PolicyDecision> {
+    check_permission_raw(
+        input.tool_name(),
+        input.tool_input_raw(),
+        input.permission_mode().unwrap_or("default"),
+        input.session_id(),
+        input.cwd(),
+        agent,
+        settings,
+    )
+}
+
+fn check_permission_raw(
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    permission_mode: &str,
+    session_id: &str,
+    cwd: &str,
+    agent: Option<AgentKind>,
+    settings: &ClashSettings,
+) -> anyhow::Result<PolicyDecision> {
     let tree = match settings.policy_tree() {
         Some(t) => t,
         None => {
@@ -54,20 +78,23 @@ pub fn check_permission(
             );
 
             warn!("{}", reason);
-            return Ok(HookOutput::ask(Some(reason), Some(context)));
+            return Ok(PolicyDecision::Ask {
+                reason,
+                context: Some(context),
+            });
         }
     };
 
     let decision = tree.evaluate_with_context(
-        &input.tool_name,
-        &input.tool_input,
-        Some(&input.permission_mode),
-        input.agent.as_ref().map(|a| a.to_string()).as_deref(),
+        tool_name,
+        tool_input,
+        Some(permission_mode),
+        agent.as_ref().map(|a| a.to_string()).as_deref(),
     );
-    let noun = extract_noun(&input.tool_name, &input.tool_input);
+    let noun = extract_noun(tool_name, tool_input);
 
     info!(
-        tool = %input.tool_name,
+        tool = %tool_name,
         noun = %noun,
         effect = %decision.effect,
         reason = ?decision.reason,
@@ -78,9 +105,9 @@ pub fn check_permission(
     // Write audit log entry (global + session).
     crate::audit::log_decision(
         &settings.audit,
-        &input.session_id,
-        &input.tool_name,
-        &input.tool_input,
+        session_id,
+        tool_name,
+        tool_input,
         decision.effect,
         decision.reason.as_deref(),
         &decision.trace,
@@ -95,7 +122,7 @@ pub fn check_permission(
 
     // Print a concise denial message to stderr so the user sees it in the terminal.
     if decision.effect == Effect::Deny {
-        let verb_str = tool_to_verb_str(&input.tool_name);
+        let verb_str = tool_to_verb_str(tool_name);
         let noun_summary = truncate_noun(&noun, 60);
 
         eprintln!(
@@ -132,34 +159,36 @@ pub fn check_permission(
 
     Ok(match decision.effect {
         Effect::Allow => {
-            let mut output =
-                HookOutput::allow(decision.reason.or(Some("policy: allowed".into())), None);
             // If the policy decision includes a per-command sandbox, rewrite the
             // command to run through `clash shell` (brush) which handles
             // per-command sandbox enforcement internally.
-            if decision.sandbox.is_some()
-                && let Some(updated) = wrap_bash_with_sandbox(input)
-            {
-                output.set_updated_input(updated);
-                info!("Rewrote Bash command to run under sandbox");
+            let updated_input = if decision.sandbox.is_some() {
+                let updated = wrap_bash_with_sandbox(tool_name, tool_input, cwd);
+                if updated.is_some() {
+                    info!("Rewrote Bash command to run under sandbox");
+                }
+                updated
+            } else {
+                None
+            };
+            PolicyDecision::Allow {
+                reason: decision.reason.unwrap_or_else(|| "policy: allowed".into()),
+                context: None,
+                updated_input,
             }
-            output
         }
         Effect::Deny => {
-            let deny_context = build_deny_context(
-                &input.tool_name,
-                decision.reason.as_deref(),
-                &input.tool_input,
-            );
-            HookOutput::deny(
-                decision.reason.unwrap_or_else(|| "policy: denied".into()),
-                Some(deny_context),
-            )
+            let deny_context =
+                build_deny_context(tool_name, decision.reason.as_deref(), tool_input);
+            PolicyDecision::Deny {
+                reason: decision.reason.unwrap_or_else(|| "policy: denied".into()),
+                context: Some(deny_context),
+            }
         }
-        Effect::Ask => HookOutput::ask(
-            decision.reason.or(Some("policy: ask".into())),
-            additional_context,
-        ),
+        Effect::Ask => PolicyDecision::Ask {
+            reason: decision.reason.unwrap_or_else(|| "policy: ask".into()),
+            context: additional_context,
+        },
     })
 }
 
@@ -186,13 +215,17 @@ fn tool_to_verb_str(tool_name: &str) -> String {
 /// rewrite the command to run through `clash sandbox exec`.
 ///
 /// Returns the updated `tool_input` JSON if rewriting is applicable, or None.
-#[instrument(level = Level::TRACE, skip(input))]
-fn wrap_bash_with_sandbox(input: &ToolUseHookInput) -> Option<serde_json::Value> {
-    let bash_input = match input.typed_tool_input() {
-        ToolInput::Bash(b) => b,
-        _ => return None,
-    };
+#[instrument(level = Level::TRACE, skip(tool_name, tool_input, cwd))]
+fn wrap_bash_with_sandbox(
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    cwd: &str,
+) -> Option<serde_json::Value> {
+    if tool_name != "Bash" {
+        return None;
+    }
 
+    let command = tool_input.get("command")?.as_str()?;
     let clash_bin = std::env::current_exe().ok()?;
 
     // Run the command through `clash shell` (brush) which handles per-command
@@ -202,11 +235,11 @@ fn wrap_bash_with_sandbox(input: &ToolUseHookInput) -> Option<serde_json::Value>
     let sandboxed_command = format!(
         "{} shell --cwd {} -c {}",
         shell_escape(&clash_bin.to_string_lossy()),
-        shell_escape(&input.cwd),
-        shell_escape(&bash_input.command),
+        shell_escape(cwd),
+        shell_escape(command),
     );
 
-    let mut updated = input.tool_input.clone();
+    let mut updated = tool_input.clone();
     if let Some(obj) = updated.as_object_mut() {
         obj.insert(
             "command".into(),
@@ -342,12 +375,11 @@ pub fn extract_noun(tool_name: &str, tool_input: &serde_json::Value) -> String {
 mod tests {
     use super::*;
     use crate::assert_decision;
-    use crate::hooks::ToolUseHookInput;
     use crate::test_utils::{TestPolicy, bash_command, get_context, pre_tool_use, read_file};
     use anyhow::Result;
     use serde_json::json;
 
-    fn bash_input(command: &str) -> ToolUseHookInput {
+    fn bash_input(command: &str) -> clash_hooks::event::PreToolUse {
         pre_tool_use("Bash", bash_command(command))
     }
 
@@ -426,14 +458,14 @@ mod tests {
     fn test_explanation_contains_matched_rule() -> Result<()> {
         let settings = TestPolicy::deny_all().allow_exec("git").build();
         let input = pre_tool_use("Bash", bash_command("git status"));
-        let _result = check_permission(&input, &settings)?;
+        let _result = check_permission(&input, None, &settings)?;
         Ok(())
     }
 
     #[test]
     fn test_explanation_no_rules_matched() -> Result<()> {
         let settings = TestPolicy::ask_all().allow_exec("git").build();
-        let result = check_permission(&bash_input("ls"), &settings)?;
+        let result = check_permission(&bash_input("ls"), None, &settings)?;
         let ctx = get_context(&result).expect("should have additional_context");
         assert!(
             ctx.contains("No rules matched"),
@@ -513,15 +545,6 @@ mod tests {
 
     // --- wrap_bash_with_sandbox tests ---
 
-    fn bash_input_for_sandbox(command: &str, cwd: &str) -> ToolUseHookInput {
-        ToolUseHookInput {
-            tool_name: "Bash".into(),
-            tool_input: json!({"command": command}),
-            cwd: cwd.into(),
-            ..Default::default()
-        }
-    }
-
     fn extract_wrapped_command(result: &serde_json::Value) -> &str {
         result
             .get("command")
@@ -531,8 +554,8 @@ mod tests {
 
     #[test]
     fn test_wrap_bash_basic_command() {
-        let input = bash_input_for_sandbox("ls -la", "/home/user/project");
-        let result = wrap_bash_with_sandbox(&input);
+        let tool_input = json!({"command": "ls -la"});
+        let result = wrap_bash_with_sandbox("Bash", &tool_input, "/home/user/project");
         assert!(result.is_some());
         let wrapped = result.unwrap();
         let cmd = extract_wrapped_command(&wrapped);
@@ -549,12 +572,8 @@ mod tests {
 
     #[test]
     fn test_wrap_bash_returns_none_for_read_tool() {
-        let input = ToolUseHookInput {
-            tool_name: "Read".into(),
-            tool_input: json!({"file_path": "/tmp/test.txt"}),
-            ..Default::default()
-        };
-        let result = wrap_bash_with_sandbox(&input);
+        let tool_input = json!({"file_path": "/tmp/test.txt"});
+        let result = wrap_bash_with_sandbox("Read", &tool_input, "/tmp");
         assert!(result.is_none());
     }
 

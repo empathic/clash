@@ -19,7 +19,7 @@ mod proptests;
 
 pub use compile::compile_multi_level_to_tree;
 pub use error::{CompileError, PolicyError, PolicyParseError};
-pub use ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
+pub use ir::{DecisionTrace, PolicyEvaluation, RuleMatch, RuleSkip};
 pub use match_tree::{CompiledPolicy, IncludeEntry, PolicyManifest};
 
 use std::fmt;

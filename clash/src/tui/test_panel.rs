@@ -583,7 +583,7 @@ mod tests {
         };
         manifest_edit::upsert_rule(
             &mut manifest,
-            manifest_edit::build_tool_rule("Read", Decision::Allow(None)),
+            manifest_edit::build_tool_rule("Read", MatchVerdict::Allow(None)),
         );
         manifest.policy
     }

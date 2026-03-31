@@ -5,76 +5,39 @@
 //! core permission logic works identically regardless of which agent
 //! is calling Clash.
 //!
-//! Most methods have default implementations that handle the common case.
-//! Adding a new agent typically requires overriding only [`HookProtocol::agent`]
-//! and [`HookProtocol::parse_tool_use`]. Override format methods only if
-//! the agent uses a non-standard output format.
+//! Required methods: [`agent`](HookProtocol::agent) and
+//! [`parse_event`](HookProtocol::parse_event). Override format methods
+//! only if the agent uses a non-standard output format.
 
 use anyhow::Result;
 use serde_json::Value;
 
 use super::AgentKind;
-use crate::hooks::{SessionStartHookInput, StopHookInput, ToolUseHookInput};
+use crate::policy_decision::PolicyDecision;
 
 /// Abstraction over agent-specific hook JSON formats.
 ///
 /// Each agent (Claude Code, Gemini CLI, etc.) implements this trait to handle:
-/// - Parsing its native JSON stdin into Clash's internal types
+/// - Parsing its native JSON stdin into typed [`clash_hooks::HookEvent`]s
 /// - Formatting Clash decisions back into the agent's expected JSON output
-/// - Rewriting tool inputs for sandbox enforcement
 ///
 /// # Adding a New Agent
 ///
-/// Only two methods are required: [`agent`](HookProtocol::agent) and
-/// [`parse_tool_use`](HookProtocol::parse_tool_use). All other methods
-/// have sensible defaults. Override them only when your agent's protocol
+/// Two methods are required: [`agent`](HookProtocol::agent) and
+/// [`parse_event`](HookProtocol::parse_event). All other methods have
+/// sensible defaults. Override them only when your agent's protocol
 /// diverges from the common JSON format.
 pub trait HookProtocol {
     /// Which agent this protocol handles. **Required.**
     fn agent(&self) -> AgentKind;
 
-    /// Parse the agent's PreToolUse JSON into a `ToolUseHookInput`. **Required.**
+    /// Parse the agent's raw JSON into a typed [`clash_hooks::HookEvent`].
     ///
-    /// The returned `tool_name` MUST be the internal (Claude-style) name,
-    /// translated via [`super::resolve_tool_name`]. The original agent-native
-    /// name is preserved in `original_tool_name`.
-    fn parse_tool_use(&self, raw: &Value) -> Result<ToolUseHookInput>;
-
-    /// Parse the agent's PostToolUse JSON into a `ToolUseHookInput`.
-    ///
-    /// Default: delegates to `parse_tool_use`.
-    fn parse_post_tool_use(&self, raw: &Value) -> Result<ToolUseHookInput> {
-        self.parse_tool_use(raw)
-    }
-
-    /// Parse the agent's SessionStart JSON.
-    ///
-    /// Default: extracts common fields (session_id, cwd, source, model).
-    fn parse_session_start(&self, raw: &Value) -> Result<SessionStartHookInput> {
-        Ok(SessionStartHookInput {
-            session_id: json_str(raw, "session_id").to_string(),
-            transcript_path: json_str(raw, "transcript_path").to_string(),
-            cwd: json_str(raw, "cwd").to_string(),
-            permission_mode: raw
-                .get("permission_mode")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            hook_event_name: json_str_or(raw, "hook_event_name", "SessionStart").to_string(),
-            source: raw.get("source").and_then(|v| v.as_str()).map(String::from),
-            model: raw.get("model").and_then(|v| v.as_str()).map(String::from),
-        })
-    }
-
-    /// Parse the agent's Stop JSON.
-    ///
-    /// Default: extracts common fields (session_id, cwd).
-    fn parse_stop(&self, raw: &Value) -> Result<StopHookInput> {
-        Ok(StopHookInput {
-            session_id: json_str(raw, "session_id").to_string(),
-            transcript_path: json_str(raw, "transcript_path").to_string(),
-            cwd: json_str(raw, "cwd").to_string(),
-            hook_event_name: json_str_or(raw, "hook_event_name", "Stop").to_string(),
-        })
+    /// Default: assumes the JSON is in Claude convention and delegates to
+    /// [`clash_hooks::recv_from_value`]. Override for agents that need
+    /// field normalization before deserialization.
+    fn parse_event(&self, raw: &Value) -> Result<clash_hooks::HookEvent> {
+        Ok(clash_hooks::recv_from_value(raw.clone())?)
     }
 
     /// Format an "allow" decision in the agent's expected output format.
@@ -124,25 +87,55 @@ pub trait HookProtocol {
         output
     }
 
-    /// Rewrite a shell command's tool_input to run through `clash shell`.
+    /// Format a post-tool-use response with optional advisory context.
     ///
-    /// Default: rewrites the `command` field for tools with internal name "Bash".
-    fn rewrite_for_sandbox(&self, input: &ToolUseHookInput, sandbox_cmd: &str) -> Option<Value> {
-        if input.tool_name != "Bash" {
-            return None;
+    /// Default: delegates to `format_allow` with reason "post-tool-use".
+    fn format_post_tool_use(&self, context: Option<&str>) -> Value {
+        self.format_allow(Some("post-tool-use"), context, None)
+    }
+
+    /// Format a continue/passthrough response.
+    ///
+    /// Default: `{ "continue": true }`
+    fn format_continue(&self) -> Value {
+        serde_json::json!({"continue": true})
+    }
+
+    /// Format a permission request response (approve or deny on behalf of user).
+    ///
+    /// Default: `{ "continue": true }` (passthrough to agent's native UI).
+    fn format_permission_response(
+        &self,
+        _behavior: &str,
+        _message: Option<&str>,
+        _updated_input: Option<&Value>,
+        _interrupt: Option<bool>,
+    ) -> Value {
+        self.format_continue()
+    }
+
+    /// Format a [`PolicyDecision`] into the agent's expected JSON output.
+    ///
+    /// Default: dispatches to `format_allow` / `format_deny` / `format_ask`.
+    fn format_decision(&self, decision: &PolicyDecision) -> Value {
+        match decision {
+            PolicyDecision::Allow {
+                reason,
+                context,
+                updated_input,
+            } => self.format_allow(
+                Some(reason.as_str()),
+                context.as_deref(),
+                updated_input.clone(),
+            ),
+            PolicyDecision::Deny { reason, context } => {
+                self.format_deny(reason, context.as_deref())
+            }
+            PolicyDecision::Ask { reason, context } => {
+                self.format_ask(Some(reason.as_str()), context.as_deref())
+            }
+            PolicyDecision::Pass => self.format_ask(None, None),
         }
-        let command = input.tool_input.get("command")?.as_str()?;
-        let sandboxed = format!(
-            "{} shell --cwd {} -c {}",
-            shell_escape(sandbox_cmd),
-            shell_escape(&input.cwd),
-            shell_escape(command),
-        );
-        let mut updated = input.tool_input.clone();
-        updated
-            .as_object_mut()?
-            .insert("command".into(), Value::String(sandboxed));
-        Some(updated)
     }
 
     /// Context string injected into the agent's session at startup.
@@ -157,16 +150,6 @@ pub trait HookProtocol {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Extract a string field from JSON, returning "" if missing.
-pub(crate) fn json_str<'a>(raw: &'a Value, field: &str) -> &'a str {
-    raw.get(field).and_then(|v| v.as_str()).unwrap_or("")
-}
-
-/// Extract a string field from JSON with a default value.
-pub(crate) fn json_str_or<'a>(raw: &'a Value, field: &str, default: &'a str) -> &'a str {
-    raw.get(field).and_then(|v| v.as_str()).unwrap_or(default)
-}
 
 /// Extract a string from one of several possible field names.
 pub(crate) fn json_str_any<'a>(raw: &'a Value, fields: &[&str]) -> &'a str {
@@ -186,10 +169,6 @@ pub(crate) fn json_value_any(raw: &Value, fields: &[&str]) -> Option<Value> {
         }
     }
     None
-}
-
-pub(crate) fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Construct the appropriate protocol implementation for an agent.

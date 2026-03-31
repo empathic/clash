@@ -6,14 +6,14 @@
 
 use tracing::{Level, info, instrument, warn};
 
-use crate::hooks::{
-    HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput, is_interactive_tool,
-};
+use clash_hooks::{HookEventCommon, ToolEvent};
+
+use crate::agents::AgentKind;
+use crate::hooks::{HookOutput, is_interactive_tool};
 use crate::notifications;
 use crate::permissions::check_permission;
+use crate::policy_decision::PolicyDecision;
 use crate::settings::ClashSettings;
-
-use claude_settings::PermissionRule;
 
 /// Handle a permission request — decide whether to approve or deny on behalf of user.
 ///
@@ -22,71 +22,51 @@ use claude_settings::PermissionRule;
 /// present or the poll times out, we fall through to let the terminal user decide.
 #[instrument(level = Level::TRACE, skip(input, settings))]
 pub fn handle_permission_request(
-    input: &ToolUseHookInput,
+    input: &(impl ToolEvent + std::fmt::Debug),
+    agent: Option<AgentKind>,
     settings: &ClashSettings,
 ) -> anyhow::Result<HookOutput> {
     // Interactive tools (AskUserQuestion, EnterPlanMode, ExitPlanMode):
     // When the policy says "ask", pass through to CC's native UI so the
     // user sees the prompt. When the policy explicitly allows or denies,
     // enforce it — this enables mode-aware automation.
-    if is_interactive_tool(&input.tool_name) {
-        let pre_tool_result = check_permission(input, settings)?;
-        let is_deny = matches!(
-            pre_tool_result.hook_specific_output,
-            Some(HookSpecificOutput::PreToolUse(ref pre))
-                if matches!(pre.permission_decision, Some(PermissionRule::Deny))
-        );
-        let is_allow = matches!(
-            pre_tool_result.hook_specific_output,
-            Some(HookSpecificOutput::PreToolUse(ref pre))
-                if matches!(pre.permission_decision, Some(PermissionRule::Allow))
-        );
-        if is_deny {
-            let reason = match &pre_tool_result.hook_specific_output {
-                Some(HookSpecificOutput::PreToolUse(pre)) => pre
-                    .permission_decision_reason
-                    .clone()
-                    .unwrap_or_else(|| "denied by policy".into()),
-                _ => "denied by policy".into(),
-            };
+    if is_interactive_tool(input.tool_name()) {
+        let decision = check_permission(input, agent, settings)?;
+        if decision.is_deny() {
+            let reason = decision.reason().unwrap_or("denied by policy").to_string();
             return Ok(HookOutput::deny_permission(reason, false));
         }
-        if is_allow {
-            info!(tool = %input.tool_name, "Policy allows interactive tool");
+        if decision.is_allow() {
+            info!(tool = %input.tool_name(), "Policy allows interactive tool");
             return Ok(HookOutput::approve_permission(None));
         }
-        info!(tool = %input.tool_name, "Passthrough: interactive tool deferred to Claude Code");
+        info!(tool = %input.tool_name(), "Passthrough: interactive tool deferred to Claude Code");
         return Ok(HookOutput::continue_execution());
     }
 
-    let pre_tool_result = check_permission(input, settings)?;
+    let decision = check_permission(input, agent, settings)?;
 
-    // Convert PreToolUse decision to PermissionRequest format.
+    // Convert PolicyDecision to PermissionRequest format.
     // Claude Code validates that hookEventName matches the event type.
-    Ok(match pre_tool_result.hook_specific_output {
-        Some(HookSpecificOutput::PreToolUse(ref pre)) => match pre.permission_decision {
-            Some(PermissionRule::Allow) => HookOutput::approve_permission(None),
-            Some(PermissionRule::Deny) => {
-                let reason = pre
-                    .permission_decision_reason
-                    .clone()
-                    .unwrap_or_else(|| "denied by policy".into());
-                HookOutput::deny_permission(reason, false)
-            }
-            // Ask or no decision: try interactive desktop prompt first,
-            // then fall through to Zulip / terminal.
-            _ => resolve_via_desktop_or_zulip(input, settings),
-        },
-        _ => pre_tool_result,
+    Ok(match decision {
+        PolicyDecision::Allow { .. } => HookOutput::approve_permission(None),
+        PolicyDecision::Deny { reason, .. } => HookOutput::deny_permission(reason, false),
+        // Ask or Pass: try interactive desktop prompt first,
+        // then fall through to Zulip / terminal.
+        PolicyDecision::Ask { .. } | PolicyDecision::Pass => {
+            resolve_via_desktop_or_zulip(input, settings)
+        }
     })
 }
 
 /// Build a human-readable summary of the permission request for notifications.
-fn permission_summary(input: &ToolUseHookInput) -> String {
-    let display = crate::agents::display_name(&input.tool_name);
-    match input.tool_name.as_str() {
+fn permission_summary(input: &impl ToolEvent) -> String {
+    let display = crate::agents::display_name(input.tool_name());
+    match input.tool_name() {
         "Bash" => {
-            let cmd = input.tool_input["command"].as_str().unwrap_or("(unknown)");
+            let cmd = input.tool_input_raw()["command"]
+                .as_str()
+                .unwrap_or("(unknown)");
             format!("{}: {}", display, cmd)
         }
         _ => display.to_string(),
@@ -96,7 +76,7 @@ fn permission_summary(input: &ToolUseHookInput) -> String {
 /// Try to resolve a permission ask via desktop notification and/or Zulip.
 #[instrument(level = Level::TRACE, skip(input, settings))]
 pub fn resolve_via_desktop_or_zulip(
-    input: &ToolUseHookInput,
+    input: &impl ToolEvent,
     settings: &ClashSettings,
 ) -> HookOutput {
     let has_desktop = settings.notifications.desktop;
@@ -119,7 +99,7 @@ pub fn resolve_via_desktop_or_zulip(
 }
 
 fn resolve_via_desktop_then_continue(
-    input: &ToolUseHookInput,
+    input: &impl ToolEvent,
     settings: &ClashSettings,
 ) -> HookOutput {
     let summary = permission_summary(input);
@@ -146,13 +126,13 @@ fn resolve_via_desktop_then_continue(
     }
 }
 
-/// Build a [`notifications::PermissionRequest`] from a tool use hook input.
-fn build_permission_request(input: &ToolUseHookInput) -> notifications::PermissionRequest {
+/// Build a [`notifications::PermissionRequest`] from a tool event.
+fn build_permission_request(input: &impl ToolEvent) -> notifications::PermissionRequest {
     notifications::PermissionRequest {
-        tool_name: input.tool_name.clone(),
-        tool_input: input.tool_input.clone(),
-        session_id: input.session_id.clone(),
-        cwd: input.cwd.clone(),
+        tool_name: input.tool_name().to_string(),
+        tool_input: input.tool_input_raw().clone(),
+        session_id: input.session_id().to_string(),
+        cwd: input.cwd().to_string(),
     }
 }
 
@@ -175,7 +155,7 @@ fn zulip_result_to_output(
     }
 }
 
-fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
+fn start_zulip_background(input: &impl ToolEvent, settings: &ClashSettings) {
     let Some(ref zulip_config) = settings.notifications.zulip else {
         return;
     };
@@ -205,7 +185,7 @@ fn start_zulip_background(input: &ToolUseHookInput, settings: &ClashSettings) {
 }
 
 #[instrument(level = Level::TRACE, skip(input, settings))]
-fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSettings) -> HookOutput {
+fn resolve_via_zulip_or_continue(input: &impl ToolEvent, settings: &ClashSettings) -> HookOutput {
     let Some(ref zulip_config) = settings.notifications.zulip else {
         return HookOutput::continue_execution();
     };
@@ -221,14 +201,21 @@ fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSetti
 }
 
 /// Handle a session start event — validate policy/settings and report status to Claude.
+///
+/// # Arguments
+/// * `input` — the SessionStart event (may have empty session_id)
+/// * `session_id` — the effective session ID (may be a fallback derived from
+///   parent PID if the agent didn't provide one)
 #[instrument(level = Level::TRACE, skip(input))]
-pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOutput> {
+pub fn handle_session_start(
+    input: &clash_hooks::event::SessionStart,
+    session_id: &str,
+) -> anyhow::Result<HookOutput> {
     // Ensure the user has a policy file — create one with safe defaults if not.
     let created_policy = ClashSettings::ensure_user_policy_exists()?;
 
-    let hook_ctx = crate::settings::HookContext::from_transcript_path(&input.transcript_path);
-    let _settings =
-        ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx))?;
+    let hook_ctx = crate::settings::HookContext::from_transcript_path(input.transcript_path());
+    let _settings = ClashSettings::load_or_create_with_session(Some(session_id), Some(&hook_ctx))?;
 
     let mut lines = Vec::new();
 
@@ -246,7 +233,7 @@ pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<Hoo
 
     lines.push("Clash is managing permissions via hooks.".into());
 
-    check_sandbox_and_session(&mut lines, input);
+    check_sandbox_and_session(&mut lines, input, session_id);
 
     finish_session_start(lines)
 }
@@ -260,7 +247,17 @@ fn clash_session_context() -> &'static str {
 }
 
 /// Check sandbox support, init session, and symlink — shared by both paths.
-fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookInput) {
+///
+/// # Arguments
+/// * `lines` — accumulator for status messages to return to the agent
+/// * `input` — the SessionStart event (may have empty session_id)
+/// * `session_id` — the effective session ID (may be a fallback derived from
+///   parent PID if the agent didn't provide one)
+fn check_sandbox_and_session(
+    lines: &mut Vec<String>,
+    input: &clash_hooks::event::SessionStart,
+    session_id: &str,
+) {
     // 3. Check sandbox support
     let support = crate::sandbox::check_support();
     match support {
@@ -279,12 +276,7 @@ fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookIn
     }
 
     // 4. Initialize per-session history directory
-    match crate::audit::init_session(
-        &input.session_id,
-        &input.cwd,
-        input.source.as_deref(),
-        input.model.as_deref(),
-    ) {
+    match crate::audit::init_session(session_id, input.cwd(), input.source(), input.model()) {
         Ok(session_dir) => {
             lines.push(format!("session history: {}", session_dir.display()));
         }
@@ -294,26 +286,26 @@ fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookIn
     }
 
     // 4b. Write active session marker so CLI commands can find this session.
-    if let Err(e) = ClashSettings::set_active_session(&input.session_id) {
+    if let Err(e) = ClashSettings::set_active_session(session_id) {
         warn!(error = %e, "Failed to write active session marker");
     }
 
     // 4c. Initialize toolpath tracing for this session.
     if let Err(e) = crate::trace::init_trace(
-        &input.session_id,
-        &input.transcript_path,
-        &input.cwd,
-        input.model.as_deref(),
-        input.source.as_deref(),
+        session_id,
+        input.transcript_path(),
+        input.cwd(),
+        input.model(),
+        input.source(),
     ) {
         warn!(error = %e, "Failed to initialize session trace");
     }
 
     // 5. Session metadata
-    if let Some(ref source) = input.source {
+    if let Some(source) = input.source() {
         lines.push(format!("session source: {}", source));
     }
-    if let Some(ref model) = input.model {
+    if let Some(model) = input.model() {
         lines.push(format!("model: {}", model));
     }
 }
@@ -333,9 +325,11 @@ fn finish_session_start(lines: Vec<String>) -> anyhow::Result<HookOutput> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::HookSpecificOutput;
 
-    fn session_start_context(input: &SessionStartHookInput) -> String {
-        let output = handle_session_start(input).expect("session start should succeed");
+    fn session_start_context(input: &clash_hooks::event::SessionStart) -> String {
+        let output =
+            handle_session_start(input, input.session_id()).expect("session start should succeed");
         match &output.hook_specific_output {
             Some(HookSpecificOutput::SessionStart(s)) => {
                 s.additional_context.clone().expect("should have context")
@@ -344,21 +338,25 @@ mod tests {
         }
     }
 
-    fn default_session_start_input() -> SessionStartHookInput {
-        SessionStartHookInput {
-            session_id: "test-session".into(),
-            transcript_path: "/tmp/transcript.jsonl".into(),
-            cwd: "/tmp".into(),
-            permission_mode: Some("default".into()),
-            hook_event_name: "SessionStart".into(),
-            source: Some("startup".into()),
-            model: Some("claude-sonnet-4-20250514".into()),
+    fn default_session_start_event() -> clash_hooks::event::SessionStart {
+        let json = serde_json::json!({
+            "session_id": "test-session",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": "/tmp",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-20250514",
+        });
+        match clash_hooks::recv_from_value(json).unwrap() {
+            clash_hooks::HookEvent::SessionStart(e) => e,
+            _ => panic!("expected SessionStart"),
         }
     }
 
     #[test]
     fn test_session_start_reports_sandbox_support() {
-        let ctx = session_start_context(&default_session_start_input());
+        let ctx = session_start_context(&default_session_start_event());
         assert!(
             ctx.contains("sandbox:"),
             "should report sandbox status, got: {ctx}"
@@ -367,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_session_start_reports_session_metadata() {
-        let ctx = session_start_context(&default_session_start_input());
+        let ctx = session_start_context(&default_session_start_event());
         assert!(ctx.contains("session source: startup"), "got: {ctx}");
         assert!(
             ctx.contains("model: claude-sonnet-4-20250514"),
@@ -377,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_session_start_reports_managing_permissions() {
-        let ctx = session_start_context(&default_session_start_input());
+        let ctx = session_start_context(&default_session_start_event());
         assert!(
             ctx.contains("Clash is managing permissions via hooks"),
             "should report clash is managing permissions, got: {ctx}"

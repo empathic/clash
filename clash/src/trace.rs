@@ -24,7 +24,7 @@ use toolpath_claude::derive::{DeriveConfig, derive_path};
 use toolpath_claude::types::ContentPart;
 
 /// A policy decision to record as a trace Step.
-pub struct PolicyDecision {
+pub struct TraceDecision {
     pub tool_use_id: String,
     pub tool_name: Option<String>,
     pub effect: crate::policy::Effect,
@@ -117,7 +117,7 @@ pub fn init_trace(
 
 /// Read new conversation entries, derive toolpath Steps, and append them to the trace.
 /// Optionally record a policy decision as an additional Step.
-pub fn sync_trace(session_id: &str, decision: Option<PolicyDecision>) -> anyhow::Result<()> {
+pub fn sync_trace(session_id: &str, decision: Option<TraceDecision>) -> anyhow::Result<()> {
     let mut meta = load_meta(session_id)?;
 
     let (entries, new_offset) =
@@ -659,7 +659,7 @@ mod tests {
         .unwrap();
         sync_trace(
             &session_id,
-            Some(PolicyDecision {
+            Some(TraceDecision {
                 tool_use_id: "tu-123".into(),
                 tool_name: Some("Bash".into()),
                 effect: crate::policy::Effect::Allow,
@@ -719,7 +719,7 @@ mod tests {
         .unwrap();
         sync_trace(
             &session_id,
-            Some(PolicyDecision {
+            Some(TraceDecision {
                 tool_use_id: "tu-789".into(),
                 tool_name: None,
                 effect: crate::policy::Effect::Deny,
@@ -821,7 +821,7 @@ mod tests {
         // Policy denies the tool use.
         sync_trace(
             &session_id,
-            Some(PolicyDecision {
+            Some(TraceDecision {
                 tool_use_id: "tu-denied".into(),
                 tool_name: Some("Bash".into()),
                 effect: crate::policy::Effect::Deny,
@@ -946,7 +946,7 @@ mod tests {
         // Policy evaluates the tool use.
         sync_trace(
             &session_id,
-            Some(PolicyDecision {
+            Some(TraceDecision {
                 tool_use_id: "tu-bash-1".into(),
                 tool_name: Some("Bash".into()),
                 effect: crate::policy::Effect::Allow,
@@ -991,7 +991,7 @@ mod tests {
         }
         sync_trace(
             &session_id,
-            Some(PolicyDecision {
+            Some(TraceDecision {
                 tool_use_id: "tu-read-1".into(),
                 tool_name: Some("Read".into()),
                 effect: crate::policy::Effect::Allow,

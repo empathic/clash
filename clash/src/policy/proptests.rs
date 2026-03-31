@@ -8,7 +8,7 @@ use regex::Regex;
 
 use super::Effect;
 use super::match_tree::{
-    CompiledPolicy, Decision, Node, Observable, Pattern, QueryContext, Value, eval,
+    CompiledPolicy, MatchVerdict, Node, Observable, Pattern, QueryContext, Value, eval,
 };
 
 // ---------------------------------------------------------------------------
@@ -45,12 +45,12 @@ fn arb_effect() -> impl Strategy<Value = Effect> {
     prop_oneof![Just(Effect::Allow), Just(Effect::Deny), Just(Effect::Ask),]
 }
 
-/// Generate a Decision from an Effect.
-fn arb_decision() -> impl Strategy<Value = Decision> {
+/// Generate a MatchVerdict from an Effect.
+fn arb_decision() -> impl Strategy<Value = MatchVerdict> {
     arb_effect().prop_map(|e| match e {
-        Effect::Allow => Decision::Allow(None),
-        Effect::Deny => Decision::Deny,
-        Effect::Ask => Decision::Ask(None),
+        Effect::Allow => MatchVerdict::Allow(None),
+        Effect::Deny => MatchVerdict::Deny,
+        Effect::Ask => MatchVerdict::Ask(None),
     })
 }
 
@@ -128,7 +128,7 @@ proptest! {
             tree: vec![Node::Condition {
                 observe: Observable::ToolName,
                 pattern: Pattern::Literal(Value::Literal("__nonexistent_tool__".into())),
-                children: vec![Node::Decision(Decision::Deny)],
+                children: vec![Node::Decision(MatchVerdict::Deny)],
                 doc: None,
                 source: None,
                 terminal: false,
@@ -302,7 +302,7 @@ proptest! {
         let nodes = vec![Node::Condition {
             observe: Observable::ToolName,
             pattern: Pattern::Not(Box::new(Pattern::Wildcard)),
-            children: vec![Node::Decision(Decision::Allow(None))],
+            children: vec![Node::Decision(MatchVerdict::Allow(None))],
             doc: None,
             source: None,
             terminal: false,

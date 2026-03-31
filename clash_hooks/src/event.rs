@@ -1256,10 +1256,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(json["continue"], true);
         assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PreToolUse");
-        assert_eq!(
-            json["hookSpecificOutput"]["permissionDecision"],
-            "allow"
-        );
+        assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "allow");
     }
 
     #[test]
@@ -1272,10 +1269,7 @@ mod tests {
         let mut buf = Vec::new();
         crate::send_to(&response, &mut buf).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
-        assert_eq!(
-            json["hookSpecificOutput"]["permissionDecision"],
-            "deny"
-        );
+        assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "deny");
         assert_eq!(
             json["hookSpecificOutput"]["permissionDecisionReason"],
             "not allowed"
@@ -1303,10 +1297,7 @@ mod tests {
             json["hookSpecificOutput"]["hookEventName"],
             "PermissionRequest"
         );
-        assert_eq!(
-            json["hookSpecificOutput"]["decision"]["behavior"],
-            "allow"
-        );
+        assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "allow");
     }
 
     #[test]
@@ -1326,10 +1317,7 @@ mod tests {
         let mut buf = Vec::new();
         crate::send_to(&response, &mut buf).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
-        assert_eq!(
-            json["hookSpecificOutput"]["decision"]["behavior"],
-            "deny"
-        );
+        assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "deny");
         assert_eq!(
             json["hookSpecificOutput"]["decision"]["message"],
             "absolutely not"
@@ -1347,10 +1335,7 @@ mod tests {
         let mut buf = Vec::new();
         crate::send_to(&response, &mut buf).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
-        assert_eq!(
-            json["hookSpecificOutput"]["hookEventName"],
-            "SessionStart"
-        );
+        assert_eq!(json["hookSpecificOutput"]["hookEventName"], "SessionStart");
         assert_eq!(
             json["hookSpecificOutput"]["additionalContext"],
             "Hook is active"
@@ -1443,9 +1428,7 @@ mod tests {
         }"#;
         let event = crate::recv_from(json.as_bytes()).unwrap();
         let response = match event {
-            HookEvent::Elicitation(e) => {
-                e.accept(serde_json::json!({"api_key": "sk-123"}))
-            }
+            HookEvent::Elicitation(e) => e.accept(serde_json::json!({"api_key": "sk-123"})),
             _ => unreachable!(),
         };
         let mut buf = Vec::new();

@@ -95,6 +95,17 @@ pub fn recv_from(reader: impl Read) -> Result<HookEvent, Error> {
     Ok(HookEvent::from_parsed(envelope.common, payload))
 }
 
+/// Parse a hook event from an already-deserialized JSON [`serde_json::Value`].
+///
+/// This is the key enabler for non-Claude agent protocols: normalize their
+/// JSON to Claude convention, then feed it through this function for typed
+/// deserialization.
+pub fn recv_from_value(value: serde_json::Value) -> Result<HookEvent, Error> {
+    let envelope: wire::Envelope = serde_json::from_value(value)?;
+    let payload = wire::parse_payload(&envelope.common.hook_event_name, envelope.extra);
+    Ok(HookEvent::from_parsed(envelope.common, payload))
+}
+
 /// Write a hook response to stdout.
 pub fn send(response: &Response) -> Result<(), Error> {
     send_to(response, std::io::stdout().lock())
@@ -134,8 +145,7 @@ pub fn main(
 ) -> ! {
     let result = (|| {
         let event = recv()?;
-        let response = f(event)
-            .map_err(|e| Error::Output(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        let response = f(event).map_err(|e| Error::Output(std::io::Error::other(e)))?;
         send(&response)?;
         Ok::<(), Error>(())
     })();
@@ -146,5 +156,87 @@ pub fn main(
             eprintln!("{e}");
             std::process::exit(exit_code::BLOCKING_ERROR);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recv_from_value_round_trips_pre_tool_use() {
+        let json = serde_json::json!({
+            "session_id": "test-session",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": "/home/user/project",
+            "permission_mode": "default",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git status"},
+            "tool_use_id": "toolu_01"
+        });
+        let event = recv_from_value(json).unwrap();
+        match event {
+            HookEvent::PreToolUse(e) => {
+                assert_eq!(e.session_id(), "test-session");
+                assert_eq!(e.tool_name(), "Bash");
+                assert_eq!(e.bash().unwrap().command, "git status");
+            }
+            other => panic!("expected PreToolUse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recv_from_value_round_trips_session_start() {
+        let json = serde_json::json!({
+            "session_id": "s1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/tmp",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-20250514"
+        });
+        let event = recv_from_value(json).unwrap();
+        match event {
+            HookEvent::SessionStart(e) => {
+                assert_eq!(e.session_id(), "s1");
+                assert_eq!(e.source(), Some("startup"));
+                assert_eq!(e.model(), Some("claude-sonnet-4-20250514"));
+            }
+            other => panic!("expected SessionStart, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recv_from_value_matches_recv_from() {
+        let json = serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "t",
+            "cwd": "c",
+            "permission_mode": "default",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/tmp/f.txt", "content": "hi"}
+        });
+        // recv_from_value
+        let event = recv_from_value(json.clone()).unwrap();
+        let response = match event {
+            HookEvent::PreToolUse(e) => e.allow(),
+            _ => unreachable!(),
+        };
+        let mut buf_val = Vec::new();
+        send_to(&response, &mut buf_val).unwrap();
+
+        // recv_from (via bytes)
+        let bytes = serde_json::to_vec(&json).unwrap();
+        let event2 = recv_from(bytes.as_slice()).unwrap();
+        let response2 = match event2 {
+            HookEvent::PreToolUse(e) => e.allow(),
+            _ => unreachable!(),
+        };
+        let mut buf_from = Vec::new();
+        send_to(&response2, &mut buf_from).unwrap();
+
+        assert_eq!(buf_val, buf_from);
     }
 }

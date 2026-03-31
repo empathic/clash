@@ -5,38 +5,44 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::protocol::{HookProtocol, json_str};
-use super::{AgentKind, resolve_tool_name};
-use crate::hooks::ToolUseHookInput;
+use super::AgentKind;
+use super::protocol::HookProtocol;
 
 pub struct AmazonQProtocol;
+
+impl AmazonQProtocol {
+    /// Normalize Amazon Q JSON to Claude convention for `recv_from_value`.
+    fn normalize(raw: &Value) -> Value {
+        let mut normalized = serde_json::Map::new();
+
+        if let Some(obj) = raw.as_object() {
+            for (k, v) in obj {
+                normalized.insert(k.clone(), v.clone());
+            }
+        }
+
+        // Amazon Q may use camelCase hook_event_name
+        if let Some(name) = normalized.get("hook_event_name").and_then(|v| v.as_str()) {
+            let pascal = super::copilot::normalize_event_name(name);
+            normalized.insert("hook_event_name".into(), Value::String(pascal));
+        }
+
+        // Default transcript_path if missing
+        if !normalized.contains_key("transcript_path") {
+            normalized.insert("transcript_path".into(), Value::String(String::new()));
+        }
+
+        Value::Object(normalized)
+    }
+}
 
 impl HookProtocol for AmazonQProtocol {
     fn agent(&self) -> AgentKind {
         AgentKind::AmazonQ
     }
 
-    fn parse_tool_use(&self, raw: &Value) -> Result<ToolUseHookInput> {
-        let tool_name = json_str(raw, "tool_name").to_string();
-        let original = tool_name.clone();
-        let resolved = resolve_tool_name(AgentKind::AmazonQ, &tool_name).to_string();
-
-        Ok(ToolUseHookInput {
-            session_id: json_str(raw, "session_id").to_string(),
-            transcript_path: json_str(raw, "transcript_path").to_string(),
-            cwd: json_str(raw, "cwd").to_string(),
-            permission_mode: "default".to_string(),
-            hook_event_name: json_str(raw, "hook_event_name").to_string(),
-            tool_name: resolved,
-            tool_input: raw
-                .get("tool_input")
-                .cloned()
-                .unwrap_or(Value::Object(serde_json::Map::new())),
-            tool_use_id: None,
-            tool_response: raw.get("tool_response").cloned(),
-            agent: Some(AgentKind::AmazonQ),
-            original_tool_name: Some(original),
-        })
+    fn parse_event(&self, raw: &Value) -> Result<clash_hooks::HookEvent> {
+        Ok(clash_hooks::recv_from_value(Self::normalize(raw))?)
     }
 
     // Amazon Q uses "action" instead of "decision"
@@ -65,9 +71,10 @@ impl HookProtocol for AmazonQProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clash_hooks::ToolEvent;
 
     #[test]
-    fn parse_amazonq_execute_bash() {
+    fn parse_event_amazonq_execute_bash() {
         let raw = serde_json::json!({
             "session_id": "q-123",
             "cwd": "/home/user",
@@ -75,9 +82,11 @@ mod tests {
             "tool_name": "execute_bash",
             "tool_input": {"command": "npm test"}
         });
-        let input = AmazonQProtocol.parse_tool_use(&raw).unwrap();
-        assert_eq!(input.tool_name, "Bash");
-        assert_eq!(input.original_tool_name.as_deref(), Some("execute_bash"));
+        let event = AmazonQProtocol.parse_event(&raw).unwrap();
+        let clash_hooks::HookEvent::PreToolUse(e) = event else {
+            panic!("expected PreToolUse");
+        };
+        assert_eq!(e.tool_name(), "execute_bash");
     }
 
     #[test]
