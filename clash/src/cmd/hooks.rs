@@ -216,7 +216,8 @@ impl HookCmd {
                 }
             }
             HookSubcommand::SessionStart => {
-                let mut input = self.parse_session_start_input()
+                let mut input = self
+                    .parse_session_start_input()
                     .context("parsing SessionStart hook input from stdin")?;
                 if input.session_id.is_empty() {
                     input.session_id = fallback_session_id(self.agent);
@@ -225,7 +226,8 @@ impl HookCmd {
                 crate::handlers::handle_session_start(&input)?
             }
             HookSubcommand::Stop => {
-                let mut input = self.parse_stop_input()
+                let mut input = self
+                    .parse_stop_input()
                     .context("parsing Stop hook input from stdin")?;
                 if input.session_id.is_empty() {
                     input.session_id = fallback_session_id(self.agent);

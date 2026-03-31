@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -25,7 +25,7 @@ use super::tea::{Action, Component};
 use super::test_panel::{self, TestPanel, TestPanelAction};
 use super::tree_view::TreeView;
 use super::walkthrough::{self, WalkthroughState, WalkthroughStep};
-use super::widgets::{self, DiffLine};
+use super::widgets::{self, DiffLine, ScrollState};
 
 /// Which tab is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +39,7 @@ pub enum Tab {
 /// Overlay mode the app can be in.
 enum Mode {
     Normal,
-    Help,
+    Help(ScrollState),
     Confirm(ConfirmAction),
     SaveReview(DiffState),
     Form(FormState),
@@ -54,7 +54,7 @@ enum ConfirmAction {
 /// State for the diff review overlay.
 struct DiffState {
     lines: Vec<DiffLine>,
-    scroll: usize,
+    scroll: ScrollState,
 }
 
 /// Messages for the App component.
@@ -71,6 +71,8 @@ pub enum Msg {
     ConfirmNo,
     DiffScrollDown,
     DiffScrollUp,
+    HelpScrollDown,
+    HelpScrollUp,
     TreeMsg(<TreeView as Component>::Msg),
     SandboxMsg(<SandboxView as Component>::Msg),
     IncludesMsg(<IncludesView as Component>::Msg),
@@ -180,6 +182,43 @@ impl App {
             if matches!(event, Event::Resize(_, _)) {
                 continue; // redraw with new dimensions
             }
+            // Mouse events: handle scroll in overlay modes, skip everything else
+            // to avoid busy-redraw loops from MouseEventKind::Moved.
+            if let Event::Mouse(mouse) = &event {
+                match mouse.kind {
+                    MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                        let down = matches!(mouse.kind, MouseEventKind::ScrollDown);
+                        match &mut self.mode {
+                            Mode::Help(scroll) => {
+                                if down {
+                                    scroll.scroll_down();
+                                } else {
+                                    scroll.scroll_up();
+                                }
+                            }
+                            Mode::SaveReview(state) => {
+                                if down {
+                                    state.scroll.scroll_down();
+                                } else {
+                                    state.scroll.scroll_up();
+                                }
+                            }
+                            Mode::Walkthrough => {
+                                if let Some(wt) = &mut self.walkthrough {
+                                    if down {
+                                        wt.scroll.scroll_down();
+                                    } else {
+                                        wt.scroll.scroll_up();
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             if let Event::Key(key) = event {
                 // Walkthrough mode intercepts keys to advance steps.
                 if matches!(self.mode, Mode::Walkthrough) {
@@ -192,6 +231,13 @@ impl App {
                                     "Walkthrough skipped — press ? for help".into(),
                                     Instant::now(),
                                 ));
+                            }
+                            // j/k/arrows scroll the walkthrough overlay
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                wt.scroll.scroll_down();
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                wt.scroll.scroll_up();
                             }
                             _ => match wt.step {
                                 WalkthroughStep::Welcome | WalkthroughStep::BaseTools => {
@@ -222,9 +268,10 @@ impl App {
                                             .unwrap_or_default();
                                         let diff_lines =
                                             compute_diff(&self.original_json, &new_json);
+                                        let len = diff_lines.len();
                                         self.mode = Mode::SaveReview(DiffState {
                                             lines: diff_lines,
-                                            scroll: 0,
+                                            scroll: ScrollState::new(len),
                                         });
                                     } else {
                                         self.walkthrough = None;
@@ -413,7 +460,13 @@ impl App {
     fn handle_key(&self, key: KeyEvent) -> Option<Msg> {
         // Mode-specific key handling
         match &self.mode {
-            Mode::Help => return Some(Msg::ToggleHelp), // any key closes help
+            Mode::Help(_) => {
+                return match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => Some(Msg::HelpScrollDown),
+                    KeyCode::Char('k') | KeyCode::Up => Some(Msg::HelpScrollUp),
+                    _ => Some(Msg::ToggleHelp),
+                };
+            }
             Mode::Confirm(_) => {
                 return match key.code {
                     KeyCode::Char('y') | KeyCode::Char('Y') => Some(Msg::ConfirmYes),
@@ -492,9 +545,10 @@ impl App {
                 }
                 let new_json = serde_json::to_string_pretty(&self.manifest).unwrap_or_default();
                 let diff_lines = compute_diff(&self.original_json, &new_json);
+                let len = diff_lines.len();
                 self.mode = Mode::SaveReview(DiffState {
                     lines: diff_lines,
-                    scroll: 0,
+                    scroll: ScrollState::new(len),
                 });
                 Action::None
             }
@@ -508,9 +562,21 @@ impl App {
             }
             Msg::ToggleHelp => {
                 self.mode = match self.mode {
-                    Mode::Help => Mode::Normal,
-                    _ => Mode::Help,
+                    Mode::Help(_) => Mode::Normal,
+                    _ => Mode::Help(ScrollState::new(widgets::help_content().len())),
                 };
+                Action::None
+            }
+            Msg::HelpScrollDown => {
+                if let Mode::Help(scroll) = &mut self.mode {
+                    scroll.scroll_down();
+                }
+                Action::None
+            }
+            Msg::HelpScrollUp => {
+                if let Mode::Help(scroll) = &mut self.mode {
+                    scroll.scroll_up();
+                }
                 Action::None
             }
             Msg::ConfirmYes => {
@@ -564,16 +630,14 @@ impl App {
                 Action::None
             }
             Msg::DiffScrollDown => {
-                if let Mode::SaveReview(ref mut state) = self.mode
-                    && state.scroll + 1 < state.lines.len()
-                {
-                    state.scroll += 1;
+                if let Mode::SaveReview(state) = &mut self.mode {
+                    state.scroll.scroll_down();
                 }
                 Action::None
             }
             Msg::DiffScrollUp => {
-                if let Mode::SaveReview(ref mut state) = self.mode {
-                    state.scroll = state.scroll.saturating_sub(1);
+                if let Mode::SaveReview(state) = &mut self.mode {
+                    state.scroll.scroll_up();
                 }
                 Action::None
             }
@@ -636,7 +700,7 @@ impl App {
         }
     }
 
-    fn view(&self, frame: &mut Frame, area: Rect, manifest: &PolicyManifest) {
+    fn view(&mut self, frame: &mut Frame, area: Rect, manifest: &PolicyManifest) {
         let chunks = Layout::vertical([
             Constraint::Length(2), // title + tab bar
             Constraint::Min(3),    // content
@@ -756,20 +820,20 @@ impl App {
         widgets::render_status_bar(frame, chunks[2], hints, flash_msg);
 
         // Overlays
-        match &self.mode {
-            Mode::Help => widgets::render_help_overlay(frame, area),
+        match &mut self.mode {
+            Mode::Help(scroll) => widgets::render_help_overlay(frame, area, scroll),
             Mode::Confirm(ConfirmAction::Quit) => {
                 widgets::render_confirm_overlay(frame, area, "Unsaved changes. Quit anyway?");
             }
             Mode::SaveReview(state) => {
-                widgets::render_diff_overlay(frame, area, &state.lines, state.scroll);
+                widgets::render_diff_overlay(frame, area, &state.lines, &mut state.scroll);
             }
             Mode::Form(form) => {
                 form.view(frame, area);
             }
             Mode::Walkthrough => {
-                if let Some(ref wt) = self.walkthrough {
-                    walkthrough::render_walkthrough_overlay(frame, area, wt.step);
+                if let Some(wt) = &mut self.walkthrough {
+                    walkthrough::render_walkthrough_overlay(frame, area, wt.step, &mut wt.scroll);
                 }
             }
             Mode::Normal => {}
