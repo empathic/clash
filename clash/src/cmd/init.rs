@@ -9,7 +9,10 @@ use crate::ui;
 
 #[derive(Default)]
 struct InitActions {
+    /// Whether a new policy file was created (false when one already existed).
     policy_created: bool,
+    /// Whether the policy was reviewed/edited via the TUI (true even for existing policies).
+    policy_reviewed: bool,
     plugin_installed: bool,
     statusline_installed: bool,
 }
@@ -60,7 +63,19 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
 
     let mut actions = InitActions::default();
 
-    let policy_path = write_starter_policy()?;
+    let (policy_path, created_new) = ensure_starter_policy()?;
+    let outcome = crate::tui::run_with_options(&policy_path, false, true)?;
+    if outcome == crate::tui::TuiOutcome::Aborted {
+        if created_new {
+            let _ = std::fs::remove_file(&policy_path);
+        }
+        println!();
+        ui::warn("Setup cancelled. Run `clash init` to try again.");
+        return Ok(());
+    }
+    actions.policy_created = created_new;
+    actions.policy_reviewed = true;
+
     actions.plugin_installed = install_agent_plugin(agent)?;
     if agent == AgentKind::Claude {
         if let Err(e) = super::statusline::install() {
@@ -69,22 +84,26 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
             actions.statusline_installed = true;
         }
     }
-    crate::tui::run_with_options(&policy_path, false, true)?;
-    actions.policy_created = true;
     print_summary(&actions, agent);
 
     Ok(())
 }
 
-/// Write the starter policy.star for onboarding.
+/// Ensure a compiled policy file exists, writing the starter template only if
+/// one doesn't already exist.
 ///
-/// Writes the default policy template as a `.star` file, and compiles it to
-/// a `.json` sibling for the runtime to consume.
-pub fn write_starter_policy() -> Result<std::path::PathBuf> {
+/// Returns `(path, created_new)` — callers use `created_new` to decide whether
+/// cleanup is safe on abort (only delete what we created).
+pub fn ensure_starter_policy() -> Result<(std::path::PathBuf, bool)> {
     use crate::settings::compile_default_policy_to_json;
 
     let policy_path = ClashSettings::policy_file()?;
     let json_path = policy_path.with_extension("json");
+
+    if json_path.exists() {
+        return Ok((json_path, false));
+    }
+
     let dir = json_path
         .parent()
         .context("policy file path has no parent directory")?;
@@ -94,7 +113,7 @@ pub fn write_starter_policy() -> Result<std::path::PathBuf> {
     std::fs::write(&json_path, &json)
         .with_context(|| format!("failed to write {}", json_path.display()))?;
 
-    Ok(json_path)
+    Ok((json_path, true))
 }
 
 // ---------------------------------------------------------------------------
@@ -362,8 +381,10 @@ fn install_copilot_plugin() -> Result<bool> {
 // ---------------------------------------------------------------------------
 
 fn print_summary(actions: &InitActions, agent: AgentKind) {
-    let any_action =
-        actions.policy_created || actions.plugin_installed || actions.statusline_installed;
+    let any_action = actions.policy_created
+        || actions.policy_reviewed
+        || actions.plugin_installed
+        || actions.statusline_installed;
     if !any_action {
         return;
     }
@@ -377,6 +398,8 @@ fn print_summary(actions: &InitActions, agent: AgentKind) {
 
     if actions.policy_created {
         ui::success("Policy created");
+    } else if actions.policy_reviewed {
+        ui::success("Policy reviewed");
     }
     if actions.plugin_installed {
         ui::success(&format!("Clash plugin installed for {agent}"));

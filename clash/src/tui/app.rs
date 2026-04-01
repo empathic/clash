@@ -17,6 +17,7 @@ use similar::TextDiff;
 use crate::policy::match_tree::{CompiledPolicy, Node, PolicyManifest};
 use crate::policy_loader;
 
+use super::TuiOutcome;
 use super::includes_view::IncludesView;
 use super::inline_form::{FormEvent, FormState};
 use super::sandbox_view::SandboxView;
@@ -50,6 +51,8 @@ enum Mode {
 enum ConfirmAction {
     Quit,
     SkipWalkthrough,
+    /// Quit the editor entirely during walkthrough, discarding any changes.
+    QuitWalkthrough,
 }
 
 /// State for the diff review overlay.
@@ -176,7 +179,8 @@ impl App {
     pub fn run<B: Backend<Error: Send + Sync + 'static>>(
         &mut self,
         terminal: &mut Terminal<B>,
-    ) -> Result<()> {
+    ) -> Result<TuiOutcome> {
+        let mut outcome = TuiOutcome::Completed;
         loop {
             // Clone manifest for view to avoid borrow issues
             let manifest_snapshot = self.manifest.clone();
@@ -265,6 +269,9 @@ impl App {
             if matches!(self.mode, Mode::Walkthrough) {
                 if let Some(ref mut wt) = self.walkthrough {
                     match key.code {
+                        KeyCode::Char('q') => {
+                            self.mode = Mode::Confirm(ConfirmAction::QuitWalkthrough);
+                        }
                         KeyCode::Esc => {
                             self.mode = Mode::Confirm(ConfirmAction::SkipWalkthrough);
                         }
@@ -387,6 +394,10 @@ impl App {
                 let action = self.update_msg(msg);
                 match action {
                     Action::Quit => break,
+                    Action::Abort => {
+                        outcome = TuiOutcome::Aborted;
+                        break;
+                    }
                     Action::Modified => {
                         self.dirty = true;
                         self.rebuild_views();
@@ -403,7 +414,7 @@ impl App {
                 }
             }
         }
-        Ok(())
+        Ok(outcome)
     }
 
     /// Handle a key event when in Form mode.
@@ -621,6 +632,10 @@ impl App {
                 let mode = std::mem::replace(&mut self.mode, Mode::Normal);
                 match mode {
                     Mode::Confirm(ConfirmAction::Quit) => Action::Quit,
+                    Mode::Confirm(ConfirmAction::QuitWalkthrough) => {
+                        self.walkthrough = None;
+                        Action::Abort
+                    }
                     Mode::Confirm(ConfirmAction::SkipWalkthrough) => {
                         self.walkthrough = None;
                         Action::Flash("Walkthrough skipped — press ? for help".into())
@@ -669,7 +684,9 @@ impl App {
             }
             Msg::ConfirmNo => {
                 match &self.mode {
-                    Mode::Confirm(ConfirmAction::SkipWalkthrough) => {
+                    Mode::Confirm(
+                        ConfirmAction::SkipWalkthrough | ConfirmAction::QuitWalkthrough,
+                    ) => {
                         self.mode = Mode::Walkthrough;
                     }
                     _ => {
@@ -883,6 +900,9 @@ impl App {
                 let prompt = match action {
                     ConfirmAction::Quit => "Unsaved changes. Quit anyway?",
                     ConfirmAction::SkipWalkthrough => "Skip the walkthrough?",
+                    ConfirmAction::QuitWalkthrough => {
+                        "Quit without saving? Your policy will remain unchanged."
+                    }
                 };
                 let inner = widgets::render_confirm_overlay(frame, area, prompt);
                 for (rect, kc) in &inner.footer_buttons {
@@ -979,13 +999,36 @@ mod tests {
     /// Simulate pressing a key and rendering the result.
     /// Panics if the render crashes.
     fn press_and_render(app: &mut App, terminal: &mut Terminal<TestBackend>, key_event: KeyEvent) {
-        // Handle key
-        if matches!(app.mode, Mode::Form(_)) {
+        // Handle key — mirror the event loop dispatch order
+        if matches!(app.mode, Mode::Walkthrough) {
+            if let Some(ref mut wt) = app.walkthrough {
+                match key_event.code {
+                    KeyCode::Char('q') => {
+                        app.mode = Mode::Confirm(ConfirmAction::QuitWalkthrough);
+                    }
+                    KeyCode::Esc => {
+                        app.mode = Mode::Confirm(ConfirmAction::SkipWalkthrough);
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => wt.scroll.scroll_down(),
+                    KeyCode::Char('k') | KeyCode::Up => wt.scroll.scroll_up(),
+                    KeyCode::Char('b') => wt.go_back(),
+                    KeyCode::Enter
+                        if matches!(
+                            wt.step,
+                            WalkthroughStep::Welcome | WalkthroughStep::BaseTools
+                        ) =>
+                    {
+                        wt.advance();
+                    }
+                    _ => {}
+                }
+            }
+        } else if matches!(app.mode, Mode::Form(_)) {
             let FormHandled::Continue = app.handle_form_key(key_event);
         } else if let Some(msg) = app.handle_key(key_event) {
             let action = app.update_msg(msg);
             match action {
-                Action::Quit => {}
+                Action::Quit | Action::Abort => {}
                 Action::Modified => {
                     app.dirty = true;
                     app.rebuild_views();
@@ -1227,6 +1270,95 @@ mod tests {
         assert!(
             clicks.is_empty(),
             "help overlay should have 0 click regions since no hints are single-key parseable"
+        );
+    }
+
+    // -- Walkthrough quit tests -----------------------------------------------
+
+    #[test]
+    fn walkthrough_q_opens_quit_confirm() {
+        let manifest = empty_manifest();
+        let mut app = App::new(PathBuf::from("/tmp/test.json"), manifest).unwrap();
+        app.start_walkthrough();
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Initial render
+        let snap = app.manifest.clone();
+        terminal
+            .draw(|frame| app.view(frame, frame.area(), &snap))
+            .unwrap();
+
+        assert!(matches!(app.mode, Mode::Walkthrough));
+
+        // Press 'q' → should open QuitWalkthrough confirm
+        press_and_render(&mut app, &mut terminal, key(KeyCode::Char('q')));
+        assert!(matches!(
+            app.mode,
+            Mode::Confirm(ConfirmAction::QuitWalkthrough)
+        ));
+    }
+
+    #[test]
+    fn walkthrough_quit_confirm_yes_exits() {
+        let manifest = empty_manifest();
+        let mut app = App::new(PathBuf::from("/tmp/test.json"), manifest).unwrap();
+        app.start_walkthrough();
+
+        // Simulate 'q' → opens confirm
+        app.mode = Mode::Confirm(ConfirmAction::QuitWalkthrough);
+
+        // 'y' → should trigger Abort action
+        let msg = app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty()));
+        assert!(matches!(msg, Some(Msg::ConfirmYes)));
+        let action = app.update_msg(msg.unwrap());
+        assert!(matches!(action, Action::Abort));
+        assert!(app.walkthrough.is_none(), "walkthrough should be cleared");
+    }
+
+    #[test]
+    fn walkthrough_quit_confirm_no_returns_to_walkthrough() {
+        let manifest = empty_manifest();
+        let mut app = App::new(PathBuf::from("/tmp/test.json"), manifest).unwrap();
+        app.start_walkthrough();
+
+        // Simulate 'q' → opens confirm
+        app.mode = Mode::Confirm(ConfirmAction::QuitWalkthrough);
+
+        // 'n' → should return to walkthrough
+        let msg = app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()));
+        assert!(matches!(msg, Some(Msg::ConfirmNo)));
+        app.update_msg(msg.unwrap());
+        assert!(
+            matches!(app.mode, Mode::Walkthrough),
+            "should return to walkthrough after 'n'"
+        );
+        assert!(
+            app.walkthrough.is_some(),
+            "walkthrough state should be preserved"
+        );
+    }
+
+    #[test]
+    fn walkthrough_q_clickable_in_footer() {
+        let manifest = empty_manifest();
+        let mut app = App::new(PathBuf::from("/tmp/test.json"), manifest).unwrap();
+        app.start_walkthrough();
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Render to populate click regions
+        let clicks = render_and_snapshot_clicks(&mut app, &mut terminal);
+
+        // Should have a 'q' click region from the left footer
+        let q_regions: Vec<_> = clicks
+            .iter()
+            .filter(|(_, desc)| desc.contains("Key(Char('q'))"))
+            .collect();
+        assert_eq!(
+            q_regions.len(),
+            1,
+            "walkthrough overlay should have a 'q' click region"
         );
     }
 }

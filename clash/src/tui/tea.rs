@@ -15,6 +15,9 @@ pub enum Action {
     None,
     /// The component wants to quit.
     Quit,
+    /// The user aborted the onboarding walkthrough — caller should skip
+    /// remaining setup steps.
+    Abort,
     /// The manifest was modified — mark dirty.
     Modified,
     /// Request a dialoguer form (exits raw mode).

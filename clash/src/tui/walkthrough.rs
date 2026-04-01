@@ -92,6 +92,8 @@ impl WalkthroughState {
     }
 }
 
+type HintSlice = &'static [(&'static str, &'static str)];
+
 /// Render the walkthrough coach-mark overlay for the current step.
 ///
 /// Only renders for steps that show an overlay (not FillForm — that's
@@ -103,7 +105,7 @@ pub fn render_walkthrough_overlay(
     scroll: &mut ScrollState,
     clicks: &mut ClickRegions,
 ) {
-    let (content, footer): (Vec<Line>, &[(&str, &str)]) = match step {
+    let (content, footer, footer_left): (Vec<Line>, HintSlice, HintSlice) = match step {
         WalkthroughStep::Welcome => (
             vec![
                 styled_title("Welcome to the Policy Editor"),
@@ -115,6 +117,7 @@ pub fn render_walkthrough_overlay(
                 Line::from("Let's walk through your starter policy."),
             ],
             &[("Esc", "skip"), ("Enter", "continue")],
+            &[("q", "quit")],
         ),
         WalkthroughStep::BaseTools => (
             vec![
@@ -134,6 +137,7 @@ pub fn render_walkthrough_overlay(
                 Line::from("can add sandboxes for finer-grained control."),
             ],
             &[("Esc", "skip"), ("b", "back"), ("Enter", "continue")],
+            &[("q", "quit")],
         ),
         WalkthroughStep::AddRule => (
             vec![
@@ -146,6 +150,7 @@ pub fn render_walkthrough_overlay(
                 key_hint("a", "add a new rule"),
             ],
             &[("Esc", "skip"), ("b", "back"), ("a", "add rule")],
+            &[("q", "quit")],
         ),
         WalkthroughStep::FillForm => {
             // Overlay not rendered — form is visible with its own hints.
@@ -165,6 +170,7 @@ pub fn render_walkthrough_overlay(
                 key_hint("t", "open the test console"),
             ],
             &[("Esc", "skip"), ("b", "back"), ("t", "test console")],
+            &[("q", "quit")],
         ),
         WalkthroughStep::TypeTest => {
             // Test panel is focused — don't overlay, just let status bar guide.
@@ -182,6 +188,7 @@ pub fn render_walkthrough_overlay(
                 dim_hint("Come back anytime with: clash policy edit"),
             ],
             &[("Esc", "skip"), ("b", "back"), ("s", "save")],
+            &[("q", "quit")],
         ),
         WalkthroughStep::Done => return,
     };
@@ -195,6 +202,7 @@ pub fn render_walkthrough_overlay(
         border_color: Color::Cyan,
         title: "Walkthrough",
         footer,
+        footer_left,
         footer_right: None,
         scroll: Some(scroll.to_modal_scroll()),
     };
@@ -217,9 +225,14 @@ pub fn render_walkthrough_overlay(
 /// Status bar hints for each walkthrough step.
 pub fn walkthrough_status_hints(step: WalkthroughStep) -> Vec<(&'static str, &'static str)> {
     match step {
-        WalkthroughStep::Welcome => vec![("Esc", "skip walkthrough"), ("Enter", "continue")],
+        WalkthroughStep::Welcome => vec![
+            ("q", "quit"),
+            ("Esc", "skip walkthrough"),
+            ("Enter", "continue"),
+        ],
         WalkthroughStep::BaseTools => {
             vec![
+                ("q", "quit"),
                 ("Esc", "skip walkthrough"),
                 ("b", "back"),
                 ("Enter", "continue"),
@@ -227,6 +240,7 @@ pub fn walkthrough_status_hints(step: WalkthroughStep) -> Vec<(&'static str, &'s
         }
         WalkthroughStep::AddRule => {
             vec![
+                ("q", "quit"),
                 ("Esc", "skip walkthrough"),
                 ("b", "back"),
                 ("a", "add rule"),
@@ -240,6 +254,7 @@ pub fn walkthrough_status_hints(step: WalkthroughStep) -> Vec<(&'static str, &'s
         ],
         WalkthroughStep::TestIt => {
             vec![
+                ("q", "quit"),
                 ("Esc", "skip walkthrough"),
                 ("b", "back"),
                 ("t", "test console"),
@@ -251,7 +266,12 @@ pub fn walkthrough_status_hints(step: WalkthroughStep) -> Vec<(&'static str, &'s
             ("Esc", "skip walkthrough"),
         ],
         WalkthroughStep::SaveFinish => {
-            vec![("Esc", "skip walkthrough"), ("b", "back"), ("s", "save")]
+            vec![
+                ("q", "quit"),
+                ("Esc", "skip walkthrough"),
+                ("b", "back"),
+                ("s", "save"),
+            ]
         }
         WalkthroughStep::Done => vec![],
     }
