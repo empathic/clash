@@ -73,7 +73,7 @@ impl ReplayResult {
     }
 
     fn suggest_allow_command(&self) -> String {
-        format!("clash allow '{}'", self.tool_name.to_lowercase())
+        format!("clash policy allow '{}'", self.tool_name.to_lowercase())
     }
 }
 

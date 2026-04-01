@@ -127,7 +127,7 @@ pub fn check_permission(
         );
         eprintln!(
             "  {}",
-            crate::style::err_dim("(run \"clash allow --help\" for more options)")
+            crate::style::err_dim("(run \"clash policy allow --help\" for more options)")
         );
     }
 
