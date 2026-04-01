@@ -52,7 +52,7 @@ pub fn run_install(agent: Option<AgentKind>) -> Result<()> {
 }
 
 #[instrument(level = Level::TRACE)]
-pub fn run(scope: Option<String>, quick: bool, agent: Option<AgentKind>) -> Result<()> {
+pub fn run(agent: Option<AgentKind>) -> Result<()> {
     let agent = match agent {
         Some(a) => a,
         None => *crate::dialog::select::<AgentKind>("Which coding agent are you using?")?,
@@ -60,27 +60,8 @@ pub fn run(scope: Option<String>, quick: bool, agent: Option<AgentKind>) -> Resu
 
     let mut actions = InitActions::default();
 
-    // 1. Policy setup — same for all agents.
-    match scope.as_deref() {
-        Some("project") => {
-            run_init_project()?;
-            actions.policy_created = true;
-        }
-        _ if quick => {
-            run_init_quick()?;
-            actions.policy_created = true;
-        }
-        _ => {
-            let policy_path = write_starter_policy()?;
-            crate::tui::run_with_options(&policy_path, false, true)?;
-            actions.policy_created = true;
-        }
-    }
-
-    // 2. Agent-specific plugin installation.
+    let policy_path = write_starter_policy()?;
     actions.plugin_installed = install_agent_plugin(agent)?;
-
-    // 3. Claude-specific extras: status line.
     if agent == AgentKind::Claude {
         if let Err(e) = super::statusline::install() {
             warn!(error = %e, "Could not install status line");
@@ -88,89 +69,9 @@ pub fn run(scope: Option<String>, quick: bool, agent: Option<AgentKind>) -> Resu
             actions.statusline_installed = true;
         }
     }
-
+    crate::tui::run_with_options(&policy_path, false, true)?;
+    actions.policy_created = true;
     print_summary(&actions, agent);
-
-    Ok(())
-}
-
-/// Quick-init: skip the interactive editor and write a sensible default policy directly.
-fn run_init_quick() -> Result<()> {
-    let settings_dir =
-        ClashSettings::settings_dir().context("could not determine clash settings directory")?;
-
-    std::fs::create_dir_all(&settings_dir)
-        .with_context(|| format!("failed to create {}", settings_dir.display()))?;
-
-    let policy_path = settings_dir.join("policy.star");
-
-    let quick_policy = {
-        use clash_starlark::codegen::ast::Stmt;
-        use clash_starlark::codegen::builder::*;
-
-        clash_starlark::codegen::serialize(&[
-            load_std(&["match", "tool", "policy", "allow", "ask"]),
-            Stmt::Blank,
-            Stmt::def(
-                "main",
-                vec![Stmt::Return(policy(
-                    ask(),
-                    vec![
-                        clash_starlark::match_tree! {
-                            "Bash" => {
-                                ("git", "cargo", "npm", "npx", "node", "bun", "python", "pip", "uv") => allow(),
-                            },
-                        },
-                        tool(&["Read"]).allow(),
-                        tool(&["Write"]).allow(),
-                        tool(&["Edit"]).allow(),
-                        tool(&["Glob"]).allow(),
-                        tool(&["Grep"]).allow(),
-                    ],
-                    None,
-                ))],
-            ),
-        ])
-    };
-
-    std::fs::write(&policy_path, quick_policy)
-        .with_context(|| format!("failed to write {}", policy_path.display()))?;
-
-    ui::success(&format!(
-        "Quick setup: policy created at {}",
-        policy_path.display()
-    ));
-
-    Ok(())
-}
-
-/// Initialize a project-level policy in the project root's `.clash/` directory.
-fn run_init_project() -> Result<()> {
-    let project_root = ClashSettings::project_root()
-        .context("could not find project root — are you inside a git repository?")?;
-
-    let clash_dir = project_root.join(".clash");
-    let policy_path = clash_dir.join("policy.star");
-
-    if policy_path.exists() {
-        ui::skip(&format!(
-            "Project policy already exists at {}",
-            policy_path.display()
-        ));
-        return Ok(());
-    }
-
-    std::fs::create_dir_all(&clash_dir)
-        .with_context(|| format!("failed to create {}", clash_dir.display()))?;
-
-    let project_policy = "load(\"@clash//std.star\", \"policy\", \"deny\")\ndef main():\n    return policy(default = deny(), rules = [])\n";
-    std::fs::write(&policy_path, project_policy)
-        .with_context(|| format!("failed to write {}", policy_path.display()))?;
-
-    ui::success(&format!(
-        "Project policy initialized at {}",
-        policy_path.display()
-    ));
 
     Ok(())
 }

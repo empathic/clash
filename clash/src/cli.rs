@@ -189,16 +189,10 @@ pub enum Commands {
     /// "project" to create a repo-scoped policy (.clash/policy.star).
     /// When no scope is given, an interactive prompt lets you choose.
     Init {
-        /// Scope to initialize: "user" (global) or "project" (this repo)
-        #[arg(conflicts_with = "from_trace")]
-        scope: Option<String>,
         /// Generate policy from an observed session trace file.
         /// Pass a path to trace.jsonl or audit.jsonl, or "latest" to auto-detect.
         #[arg(long = "from-trace", value_name = "PATH")]
         from_trace: Option<std::path::PathBuf>,
-        /// Skip the interactive editor and create a sensible default policy
-        #[arg(long)]
-        quick: bool,
         /// Which coding agent to set up (prompts if omitted)
         #[arg(long)]
         agent: Option<crate::agents::AgentKind>,
