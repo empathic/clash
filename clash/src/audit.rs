@@ -474,12 +474,12 @@ fn parent_dir_suggestion(path: &str) -> String {
 
 /// Generate the narrowest possible allow rule for a denied tool invocation.
 ///
-/// Returns a `clash allow '...'` command string. Uses the v5 match-tree
+/// Returns a `clash policy allow '...'` command string. Uses the v5 match-tree
 /// suggestion format (e.g. `exe("git")`, `tool("Read")`).
 fn deny_hint(tool_name: &str, tool_input: &serde_json::Value, cwd: &str) -> Result<String, String> {
     let rule = crate::session_policy::suggest_rule_description(tool_name, tool_input, cwd)
         .ok_or_else(|| format!("cannot generate hint for {tool_name}"))?;
-    Ok(format!("clash allow '{}'", rule))
+    Ok(format!("clash policy allow '{}'", rule))
 }
 
 /// Concise, human-readable summary of a tool invocation for display.
