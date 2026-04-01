@@ -470,7 +470,7 @@ load(\"@clash//std.star\",
         let stmts = vec![
             Stmt::load(
                 "@clash//std.star",
-                &["match", "tool", "policy", "settings", "allow", "ask"],
+                &["match", "policy", "settings", "allow", "ask"],
             ),
             Stmt::Blank,
             Stmt::Expr(settings(ask(), None)),
@@ -484,8 +484,8 @@ load(\"@clash//std.star\",
                             ("git", "cargo") => allow(),
                         },
                     },
-                    tool(&["Read"]).allow(),
-                    tool(&["Write"]).allow(),
+                    tool_match(&["Read"], allow()),
+                    tool_match(&["Write"], allow()),
                 ],
                 None,
             )),
@@ -494,7 +494,7 @@ load(\"@clash//std.star\",
         assert_eq!(
             src,
             "\
-load(\"@clash//std.star\", \"match\", \"tool\", \"policy\", \"settings\", \"allow\", \"ask\")
+load(\"@clash//std.star\", \"match\", \"policy\", \"settings\", \"allow\", \"ask\")
 
 settings(default = ask())
 
@@ -503,8 +503,8 @@ policy(
     default = ask(),
     rules = [
         match({\"Bash\": {(\"git\", \"cargo\"): allow()}}),
-        tool([\"Read\"]).allow(),
-        tool([\"Write\"]).allow(),
+        match({\"Read\": allow()}),
+        match({\"Write\": allow()}),
     ],
 )
 "

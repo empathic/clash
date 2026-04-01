@@ -201,20 +201,8 @@ def _mt_or(patterns):
 
 
 # ---------------------------------------------------------------------------
-# Tool builders
+# Mode key builder
 # ---------------------------------------------------------------------------
-
-
-def tool(name=None, doc=None):
-    """Build a tool rule.
-
-    Usage:
-        tool().allow()
-        tool("WebSearch").deny()
-        tool(["Read", "Glob", "Grep"]).allow()
-        tool("WebSearch", doc="No external searches").deny()
-    """
-    return _with_sandbox_support(_mt_tool(_pattern(name), doc=doc))
 
 
 def mode(name=None, doc=None):
@@ -922,74 +910,6 @@ def _merge_sandboxes(*sandboxes):
     return merged
 
 
-def _with_sandbox_support(node):
-    """Wrap a match tree node with .sandbox(), .on(), and decision support."""
-
-    def _allow():
-        result = node.allow()
-        return struct(_node=result, _sandbox=None)
-
-    def _deny():
-        result = node.deny()
-        return struct(_node=result, _sandbox=None)
-
-    def _ask():
-        result = node.ask()
-        return struct(_node=result, _sandbox=None)
-
-    def _set_sandbox(*sandboxes):
-        return _with_sandbox_and_node(node, _merge_sandboxes(*sandboxes))
-
-    def _on(children):
-        expanded = _expand_children(children)
-        result = node.on(expanded)
-        return _with_sandbox_support(result)
-
-    return struct(
-        allow=_allow,
-        deny=_deny,
-        ask=_ask,
-        sandbox=_set_sandbox,
-        on=_on,
-        _node=node,
-        _sandbox=None,
-    )
-
-
-def _with_sandbox_and_node(node, sb):
-    """Create a rule builder with sandbox attached."""
-
-    def _allow():
-        result = node.allow(sandbox=sb._name)
-        return struct(_node=result, _sandbox=sb)
-
-    def _deny():
-        result = node.deny()
-        return struct(_node=result, _sandbox=sb)
-
-    def _ask():
-        result = node.ask(sandbox=sb._name)
-        return struct(_node=result, _sandbox=sb)
-
-    def _set_sandbox(*sandboxes):
-        return _with_sandbox_and_node(node, _merge_sandboxes(*sandboxes))
-
-    def _on(children):
-        expanded = _expand_children(children)
-        result = node.on(expanded)
-        return _with_sandbox_and_node(result, sb)
-
-    return struct(
-        allow=_allow,
-        deny=_deny,
-        ask=_ask,
-        sandbox=_set_sandbox,
-        on=_on,
-        _node=node,
-        _sandbox=sb,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Policy wrapper
 # ---------------------------------------------------------------------------
@@ -1051,14 +971,11 @@ def policy(name, rules_or_dict=None, default="deny", rules=None, default_sandbox
                         cond = _mt_tool(_pattern(k._match_value), doc=doc_val)
                     else:
                         fail("unknown match key type: " + mk)
-                elif hasattr(k, "_node"):
-                    # Builder node (from tool(), etc.)
-                    cond = k._node
                 elif type(k) == "string":
                     # Raw string = tool name
                     cond = _mt_tool(_pattern(k))
                 else:
-                    fail("policy dict keys must be mode(), tool(), or tool name strings, got " + type(k))
+                    fail("policy dict keys must be mode(), Tool(), or tool name strings, got " + type(k))
 
                 # Build children from value
                 if hasattr(value, "_is_effect"):

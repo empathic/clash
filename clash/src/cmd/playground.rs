@@ -23,11 +23,6 @@ const STARLARK_FUNCTIONS: &[(&str, &str, &str)] = &[
         r#"match({ "ToolName": { ... }, ... })"#,
         "Build rules from a nested dict tree (roots are tool names)",
     ),
-    (
-        "tool",
-        r#"tool(name=None, doc=None)"#,
-        "Build a tool rule (Read, Write, Glob, etc.)",
-    ),
     ("allow", "allow(sandbox=None)", "Create an allow effect"),
     ("deny", "deny(sandbox=None)", "Create a deny effect"),
     ("ask", "ask(sandbox=None)", "Create an ask effect"),
@@ -70,7 +65,6 @@ const STARLARK_FUNCTIONS: &[(&str, &str, &str)] = &[
 const COMPLETIONS: &[&str] = &[
     // DSL functions
     "match(",
-    "tool(",
     "allow(",
     "deny(",
     "ask(",
@@ -228,7 +222,7 @@ impl Completer for PlaygroundCompleter {
 
 /// DSL function names that get highlighted as builtins.
 const DSL_FUNCTIONS: &[&str] = &[
-    "match", "tool", "allow", "deny", "ask", "cwd", "home", "tempdir", "path", "domains", "domain",
+    "match", "allow", "deny", "ask", "cwd", "home", "tempdir", "path", "domains", "domain",
     "sandbox", "regex", "policy",
 ];
 
@@ -385,7 +379,7 @@ struct PlaygroundState {
 }
 
 const STARLARK_LOAD_NAMES: &[&str] = &[
-    "match", "tool", "policy", "settings", "sandbox", "cwd", "home", "tempdir", "path", "regex",
+    "match", "policy", "settings", "sandbox", "cwd", "home", "tempdir", "path", "regex",
     "domains", "domain", "allow", "deny", "ask",
 ];
 
@@ -636,10 +630,6 @@ fn handle_functions() -> String {
                     "        match({(\"Read\", \"Glob\"): allow(), \"WebSearch\": deny()})"
                         .to_string(),
                 );
-            }
-            "tool" => {
-                lines.push("        tool(\"Read\").allow()".to_string());
-                lines.push("        tool([\"Read\", \"Glob\", \"Grep\"]).allow()".to_string());
             }
             "cwd" => {
                 lines.push(
@@ -1204,12 +1194,14 @@ mod tests {
         state
             .rules
             .push(r#"match({"Bash": {"git": allow()}})"#.to_string());
-        state.rules.push(r#"tool("Read").allow()"#.to_string());
+        state
+            .rules
+            .push(r#"match({"Read": allow()})"#.to_string());
 
         let source = state.build_starlark_source();
         assert!(source.contains("settings("));
         assert!(source.contains(r#"match({"Bash": {"git": allow()}})"#));
-        assert!(source.contains(r#"tool("Read").allow()"#));
+        assert!(source.contains(r#"match({"Read": allow()})"#));
         assert!(source.contains("policy("));
         assert!(source.contains("\"match\""));
         assert!(source.contains("\"allow\""));
@@ -1258,7 +1250,7 @@ mod tests {
     #[test]
     fn test_completer_dot_methods() {
         let mut completer = PlaygroundCompleter;
-        let suggestions = completer.complete("add rule tool(\"Read\").al", 24);
+        let suggestions = completer.complete("add rule cwd().al", 17);
         assert!(
             suggestions.iter().any(|s| s.value == ".allow()"),
             "expected .allow() completion, got: {:?}",

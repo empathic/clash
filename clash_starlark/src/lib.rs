@@ -83,10 +83,10 @@ mod tests {
     fn test_simple_policy() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "tool", "policy", "settings")
+load("@clash//std.star", "deny", "match", "policy", "settings")
 
 settings(default = deny())
-policy("test", rules = [tool().allow()])
+policy("test", rules = match({None: allow()}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -103,7 +103,7 @@ policy("test", rules = [tool().allow()])
         let doc = eval_to_doc(
             r#"
 settings(default = deny())
-policy("test", rules = [tool().allow()])
+policy("test", rules = match({None: allow()}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -137,7 +137,7 @@ policy("test", {
     #[test]
     fn test_sandbox_policy() {
         let source = r#"
-load("@clash//std.star", "allow", "deny", "match", "tool", "policy", "settings", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "cwd")
 
 _box = sandbox(
     name = "test",
@@ -151,9 +151,8 @@ _box = sandbox(
 settings(default = deny())
 
 policy("test",
-    rules = match({"Bash": {"git": allow(sandbox=_box)}}) + [
-        tool().allow(),
-    ],
+    rules = match({"Bash": {"git": allow(sandbox=_box)}}) +
+        match({None: allow()}),
 )
 "#;
         let doc = eval_to_doc(source);
@@ -179,13 +178,13 @@ policy("test",
     fn test_tool_bindings() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "tool", "policy", "settings")
+load("@clash//std.star", "deny", "match", "policy", "settings")
 
 settings(default = deny())
-policy("test", rules = [
-    tool("WebSearch").allow(),
-    tool("Bash").deny(),
-])
+policy("test", rules =
+    match({"WebSearch": allow()}) +
+    match({"Bash": deny()}),
+)
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -497,7 +496,7 @@ policy("test", rules = match({"Bash": {"test": allow(sandbox=my_sandbox)}}))
         let doc = eval_to_doc(
             r#"
 load("@clash//rust.star", "rust_sandbox")
-load("@clash//std.star", "allow", "deny", "match", "tool", "policy", "settings", "sandbox", "cwd", "home")
+load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "cwd", "home")
 
 _box = sandbox(
     name = "gitbox",
@@ -517,9 +516,9 @@ policy("test", rules = match({
         "git": allow(sandbox=_box),
         ("rustc", "cargo"): allow(sandbox=rust_sandbox),
     },
-}) + [
-    tool().allow(),
-])
+}) +
+    match({None: allow()}),
+)
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -527,10 +526,6 @@ policy("test", rules = match({
 
         let tree = doc["tree"].as_array().unwrap();
         assert_eq!(tree.len(), 2, "expected 2 tree nodes, got {}", tree.len());
-
-        for node in tree {
-            assert!(node["condition"].is_object(), "expected condition node");
-        }
 
         let sandboxes = doc["sandboxes"].as_object().unwrap();
         assert!(sandboxes.len() >= 2, "expected >= 2 sandboxes");
@@ -583,12 +578,12 @@ policy("test", rules = match({
     fn test_tool_regex_pattern() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "tool", "regex", "policy", "settings")
+load("@clash//std.star", "deny", "match", "regex", "policy", "settings")
 
 settings(default = deny())
-policy("test", rules = [
-    tool(regex("mcp__.*")).ask(),
-])
+policy("test", rules = match({
+    regex("mcp__.*"): ask(),
+}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -629,13 +624,13 @@ policy("test", rules = match({
     fn test_exe_with_args_deny() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "tool", "policy", "settings")
+load("@clash//std.star", "allow", "deny", "match", "policy", "settings")
 
 settings(default = deny())
 policy("test", rules =
     match({"Bash": {"git": {"push": deny()}}}) +
     match({"Bash": {"git": allow()}}) +
-    [tool("Read").allow()],
+    match({"Read": allow()}),
 )
 "#,
         );
@@ -746,14 +741,13 @@ policy(rules = [
     fn test_file_exact_match() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "tool", "policy", "settings", "cwd")
+load("@clash//std.star", "deny", "policy", "settings", "cwd")
 
 settings(default = deny())
 policy("test", rules = [
     cwd().file(".env").deny(write = True),
     cwd().allow(read = True, write = True),
-    tool().allow(),
-])
+] + match({None: allow()}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -796,63 +790,58 @@ policy("test", rules = match({"Bash": {"test": allow(sandbox=_box)}}))
     }
 
     #[test]
-    fn test_tool_on_with_path_entries() {
+    fn test_tool_with_path_entries() {
+        // Tool-scoped path rules: a match dict + path rules in the policy
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "tool", "policy", "settings", "cwd")
+load("@clash//std.star", "deny", "match", "policy", "settings", "cwd")
 
 settings(default = deny())
-policy("test", rules = [
-    tool("Glob").on([
-        cwd().child("src").allow(read = True),
-    ]),
+policy("test", rules = match({"Glob": allow()}) + [
+    cwd().child("src").allow(read = True),
 ])
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
         let tree = doc["tree"].as_array().unwrap();
-        assert_eq!(tree.len(), 1);
+        // Tool rule + fs rule = 2 top-level nodes
+        assert_eq!(tree.len(), 2);
         let tool_node = &tree[0]["condition"];
         assert_eq!(tool_node["observe"], "tool_name");
-        let children = tool_node["children"].as_array().unwrap();
-        assert!(!children.is_empty());
-        assert_eq!(children[0]["condition"]["observe"], "fs_op");
+        let fs_node = &tree[1]["condition"];
+        assert_eq!(fs_node["observe"], "fs_op");
     }
 
     #[test]
-    fn test_tool_on_mixed_children() {
+    fn test_mixed_path_children() {
+        // Multiple path rules in the policy (deny .env, allow cwd)
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "tool", "policy", "settings", "cwd")
+load("@clash//std.star", "deny", "match", "policy", "settings", "cwd")
 
 settings(default = deny())
 policy("test", rules = [
-    tool("Read").on([
-        cwd().file(".env").deny(read = True),
-        cwd().allow(read = True),
-    ]),
-])
+    cwd().file(".env").deny(read = True),
+    cwd().allow(read = True),
+] + match({"Read": allow()}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
         let tree = doc["tree"].as_array().unwrap();
-        assert_eq!(tree.len(), 1);
-        let tool_node = &tree[0]["condition"];
-        let children = tool_node["children"].as_array().unwrap();
-        assert_eq!(children.len(), 2);
+        // fs deny + fs allow + tool allow = 3 nodes
+        assert_eq!(tree.len(), 3);
     }
 
     #[test]
     fn test_path_match_with_regex() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "tool", "policy", "settings", "cwd", "regex")
+load("@clash//std.star", "deny", "policy", "settings", "cwd", "regex")
 
 settings(default = deny())
 policy("test", rules = [
     cwd().match(regex(".*\\.log")).deny(write = True),
-    tool().allow(),
-])
+] + match({None: allow()}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -870,7 +859,7 @@ policy("test", rules = [
     fn test_docstrings_persist_in_ir() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "tool", "policy", "settings", "sandbox", "cwd")
+load("@clash//std.star", "deny", "match", "policy", "settings", "sandbox", "cwd")
 
 _box = sandbox(
     name = "dev",
@@ -882,19 +871,12 @@ _box = sandbox(
 )
 
 settings(default = deny(), default_sandbox = _box)
-policy("test", rules = [
-    tool("WebSearch", doc = "No external searches").deny(),
-], default_sandbox = _box)
+policy("test", rules = match({
+    "WebSearch": deny(),
+}), default_sandbox = _box)
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
-
-        let tree = doc["tree"].as_array().unwrap();
-        let ws_node = &tree[0]["condition"];
-        assert_eq!(
-            ws_node["doc"], "No external searches",
-            "tool doc should persist on condition"
-        );
 
         let sandbox = &doc["sandboxes"]["dev"];
         assert_eq!(
@@ -981,7 +963,7 @@ policy("test",
     fn test_os_and_arch_constants() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "policy", "settings", "tool", "OS", "ARCH")
+load("@clash//std.star", "deny", "policy", "settings", "OS", "ARCH")
 
 def _check():
     if not OS or not ARCH:
@@ -990,7 +972,7 @@ def _check():
 _check()
 
 settings(default = deny())
-policy("test", rules = [tool().allow()])
+policy("test", rules = match({None: allow()}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);

@@ -163,6 +163,19 @@ pub enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Convert policy.json to policy.star (Starlark format)
+    ///
+    /// Reads the JSON policy, converts it to idiomatic Starlark, and writes
+    /// a .star file alongside it. The original .json is preserved unless
+    /// --replace is passed.
+    Convert {
+        /// Path to the policy.json file (default: auto-detect active policy)
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+        /// Delete the .json file after successful conversion
+        #[arg(long)]
+        replace: bool,
+    },
     /// Explain which policy rule would match a given tool invocation
     #[command(hide = true)]
     Explain {

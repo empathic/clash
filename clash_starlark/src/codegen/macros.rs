@@ -251,14 +251,14 @@ mod tests {
                             ("git", "cargo") => allow(),
                         },
                     },
-                    tool(&["Read"]).allow(),
+                    tool_match(&["Read"], allow()),
                 ],
                 None,
             )),
         ];
         let src = serialize(&stmts);
         assert!(src.contains("(\"git\", \"cargo\"): allow()"));
-        assert!(src.contains("tool([\"Read\"]).allow()"));
+        assert!(src.contains("\"Read\": allow()"));
     }
 
     #[test]

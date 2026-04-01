@@ -153,22 +153,22 @@ impl Expr {
 
     // ---- Chainable DSL methods (Clash policy shortcuts) ----------------------
 
-    /// Chain `.allow()` — e.g. `tool(["Read"]).allow()`
+    /// Chain `.allow()` — e.g. `cwd().allow()`
     pub fn allow(self) -> Self {
         self.method("allow", vec![], Vec::<(&str, Expr)>::new())
     }
 
-    /// Chain `.deny()` — e.g. `tool(["Read"]).deny()`
+    /// Chain `.deny()` — e.g. `cwd().deny()`
     pub fn deny(self) -> Self {
         self.method("deny", vec![], Vec::<(&str, Expr)>::new())
     }
 
-    /// Chain `.ask()` — e.g. `tool(["Read"]).ask()`
+    /// Chain `.ask()` — e.g. `cwd().ask()`
     pub fn ask(self) -> Self {
         self.method("ask", vec![], Vec::<(&str, Expr)>::new())
     }
 
-    /// Chain `.sandbox(expr)` — e.g. `tool(["Read"]).sandbox(_fs_box)`
+    /// Chain `.sandbox(expr)` — e.g. `cwd().sandbox(_fs_box)`
     pub fn sandbox(self, sb: Expr) -> Self {
         self.method("sandbox", vec![sb], Vec::<(&str, Expr)>::new())
     }

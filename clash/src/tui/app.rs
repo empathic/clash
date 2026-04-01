@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -13,6 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use similar::TextDiff;
 
+use clash_starlark::codegen::StarDocument;
 use crate::policy::match_tree::{CompiledPolicy, Node, PolicyManifest};
 use crate::policy_loader;
 
@@ -90,6 +91,8 @@ pub struct App {
     included: CompiledPolicy,
     original_json: String,
     path: PathBuf,
+    /// When editing a `.star` file, holds the parsed document for round-trip.
+    star_doc: Option<StarDocument>,
     active_tab: Tab,
     tree_view: TreeView,
     sandbox_view: SandboxView,
@@ -149,6 +152,7 @@ impl App {
             included,
             original_json,
             path,
+            star_doc: None,
             active_tab: Tab::Tree,
             tree_view,
             sandbox_view,
@@ -163,6 +167,22 @@ impl App {
             click_regions: ClickRegions::default(),
             theme: Theme::from_env(),
         })
+    }
+
+    /// Create an App from a parsed `.star` document.
+    ///
+    /// Evaluates the Starlark source to derive the initial `PolicyManifest`,
+    /// then delegates to `App::new()` and attaches the star document.
+    pub fn new_star(doc: StarDocument) -> Result<Self> {
+        let json = doc
+            .evaluate_to_json()
+            .context("failed to evaluate .star policy")?;
+        let manifest: PolicyManifest = serde_json::from_str(&json)
+            .context("failed to parse evaluated policy JSON")?;
+        let path = doc.path.clone();
+        let mut app = Self::new(path, manifest)?;
+        app.star_doc = Some(doc);
+        Ok(app)
     }
 
     /// Show the test panel and focus it (called by --test flag).
@@ -316,9 +336,17 @@ impl App {
                             self.mode = Mode::Normal;
                             // Trigger the save flow
                             if self.dirty {
-                                let new_json = serde_json::to_string_pretty(&self.manifest)
-                                    .unwrap_or_default();
-                                let diff_lines = compute_diff(&self.original_json, &new_json);
+                                self.sync_manifest_to_star();
+                                let diff_lines =
+                                    if let Some(ref doc) = self.star_doc {
+                                        let new_source = doc.to_source();
+                                        compute_diff(&doc.original_source, &new_source)
+                                    } else {
+                                        let new_json =
+                                            serde_json::to_string_pretty(&self.manifest)
+                                                .unwrap_or_default();
+                                        compute_diff(&self.original_json, &new_json)
+                                    };
                                 let len = diff_lines.len();
                                 self.mode = Mode::SaveReview(DiffState {
                                     lines: diff_lines,
@@ -595,8 +623,16 @@ impl App {
                 if !self.dirty {
                     return Action::Flash("No changes to save".into());
                 }
-                let new_json = serde_json::to_string_pretty(&self.manifest).unwrap_or_default();
-                let diff_lines = compute_diff(&self.original_json, &new_json);
+                // Sync manifest into star doc if editing .star
+                self.sync_manifest_to_star();
+                let diff_lines = if let Some(ref doc) = self.star_doc {
+                    let new_source = doc.to_source();
+                    compute_diff(&doc.original_source, &new_source)
+                } else {
+                    let new_json =
+                        serde_json::to_string_pretty(&self.manifest).unwrap_or_default();
+                    compute_diff(&self.original_json, &new_json)
+                };
                 let len = diff_lines.len();
                 self.mode = Mode::SaveReview(DiffState {
                     lines: diff_lines,
@@ -645,10 +681,20 @@ impl App {
                     }
                     Mode::SaveReview(_) => {
                         // Actually save
-                        match policy_loader::write_manifest(&self.path, &self.manifest) {
+                        // Sync manifest into star doc if editing .star
+                        self.sync_manifest_to_star();
+                        let save_result = if let Some(ref mut doc) = self.star_doc {
+                            doc.save()
+                        } else {
+                            policy_loader::write_manifest(&self.path, &self.manifest)
+                        };
+                        match save_result {
                             Ok(()) => {
-                                self.original_json = serde_json::to_string_pretty(&self.manifest)
-                                    .unwrap_or_default();
+                                if self.star_doc.is_none() {
+                                    self.original_json =
+                                        serde_json::to_string_pretty(&self.manifest)
+                                            .unwrap_or_default();
+                                }
                                 self.dirty = false;
 
                                 // Clear walkthrough on successful save
@@ -753,6 +799,43 @@ impl App {
                 .or_insert_with(|| v.clone());
         }
         Some(merged)
+    }
+
+    /// Sync the current manifest state into the star document's AST.
+    ///
+    /// Called before save and diff when editing a `.star` file. Replaces the
+    /// rules, sandboxes, and settings in the AST with values derived from the
+    /// manifest, preserving load statements, comments, and file structure.
+    fn sync_manifest_to_star(&mut self) {
+        if let Some(ref mut doc) = self.star_doc {
+            // Serialize manifest to JSON so we can use the JSON-based sync
+            let manifest_json = serde_json::to_value(&self.manifest.policy).unwrap_or_default();
+            let tree = manifest_json
+                .get("tree")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let sandboxes = manifest_json
+                .get("sandboxes")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default();
+            let default_effect = manifest_json
+                .get("default_effect")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ask");
+            let default_sandbox = manifest_json
+                .get("default_sandbox")
+                .and_then(|v| v.as_str());
+
+            clash_starlark::codegen::from_manifest::sync_manifest_to_ast(
+                &mut doc.stmts,
+                &tree,
+                &sandboxes,
+                default_effect,
+                default_sandbox,
+            );
+        }
     }
 
     fn rebuild_views(&mut self) {

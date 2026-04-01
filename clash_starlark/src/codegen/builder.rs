@@ -50,28 +50,6 @@ pub fn ask_with_sandbox(sandbox: Expr) -> Expr {
 }
 
 // ---------------------------------------------------------------------------
-// Tool rules
-// ---------------------------------------------------------------------------
-
-/// `tool(["a"])` or `tool(["a", "b"])`
-///
-/// Always uses list form for consistency and easier future modification.
-pub fn tool(names: &[&str]) -> Expr {
-    let list = names.iter().map(|n| Expr::string(*n)).collect::<Vec<_>>();
-    Expr::call("tool", vec![Expr::list(list)])
-}
-
-/// `tool(["a"], doc="reason")` — tool rule with documentation.
-pub fn tool_doc(names: &[&str], doc: &str) -> Expr {
-    let list = names.iter().map(|n| Expr::string(*n)).collect::<Vec<_>>();
-    Expr::call_kwargs(
-        "tool",
-        vec![Expr::list(list)],
-        vec![("doc", Expr::string(doc))],
-    )
-}
-
-// ---------------------------------------------------------------------------
 // Match rules
 // ---------------------------------------------------------------------------
 
@@ -117,6 +95,17 @@ pub enum MatchValue {
 /// Build a `match({...})` expression from a nested key-value structure.
 pub fn match_rule(entries: Vec<(MatchKey, MatchValue)>) -> Expr {
     Expr::call("match", vec![match_dict(entries)])
+}
+
+/// Build a simple tool match rule: `match({"Name": effect()})` or
+/// `match({("A", "B"): effect()})` for multiple tool names.
+pub fn tool_match(names: &[&str], effect: Expr) -> Expr {
+    let key: MatchKey = if names.len() == 1 {
+        MatchKey::Single(names[0].to_owned())
+    } else {
+        MatchKey::Tuple(names.iter().map(|s| (*s).to_owned()).collect())
+    };
+    match_rule(vec![(key, MatchValue::Effect(effect))])
 }
 
 fn match_dict(entries: Vec<(MatchKey, MatchValue)>) -> Expr {
@@ -206,23 +195,24 @@ mod tests {
     use crate::codegen::serialize::serialize;
 
     #[test]
-    fn tool_rule_single() {
-        let expr = tool(&["Read"]).allow();
+    fn tool_match_single() {
+        let expr = tool_match(&["Read"], allow());
         let stmts = vec![Stmt::Expr(expr)];
         let src = serialize(&stmts);
-        assert_eq!(src, "tool([\"Read\"]).allow()\n");
+        assert_eq!(src, "match({\"Read\": allow()})\n");
     }
 
     #[test]
-    fn tool_rule_multiple_with_sandbox() {
-        let expr = tool(&["Read", "Glob", "Grep"])
-            .sandbox(Expr::ident("_fs_box"))
-            .allow();
+    fn tool_match_multiple_with_sandbox() {
+        let expr = tool_match(
+            &["Read", "Glob", "Grep"],
+            allow_with_sandbox(Expr::ident("_fs_box")),
+        );
         let stmts = vec![Stmt::Expr(expr)];
         let src = serialize(&stmts);
-        assert_eq!(
-            src,
-            "tool([\"Read\", \"Glob\", \"Grep\"]).sandbox(_fs_box).allow()\n"
+        assert!(
+            src.contains("(\"Read\", \"Glob\", \"Grep\"): allow(sandbox = _fs_box)"),
+            "got:\n{src}"
         );
     }
 
@@ -247,14 +237,14 @@ mod tests {
     #[test]
     fn full_policy() {
         let stmts = vec![
-            load_std(&["match", "tool", "policy", "settings", "allow", "deny"]),
+            load_std(&["match", "policy", "settings", "allow", "deny"]),
             Stmt::Blank,
             Stmt::Expr(settings(deny(), None)),
             Stmt::Blank,
             Stmt::Expr(policy(
                 "default",
                 deny(),
-                vec![tool(&["Read"]).allow()],
+                vec![tool_match(&["Read"], allow())],
                 None,
             )),
         ];
@@ -262,6 +252,6 @@ mod tests {
         assert!(src.contains("load(\"@clash//std.star\""));
         assert!(src.contains("settings("));
         assert!(src.contains("policy(\"default\""));
-        assert!(src.contains("tool([\"Read\"]).allow()"));
+        assert!(src.contains("match({\"Read\": allow()})"));
     }
 }

@@ -28,6 +28,8 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+use clash_starlark::codegen::StarDocument;
+
 use crate::policy_loader;
 
 /// Outcome of running the TUI.
@@ -59,15 +61,18 @@ pub fn run(path: &Path) -> Result<TuiOutcome> {
 }
 
 /// Launch the TUI with options.
-pub fn run_with_options(
-    path: &Path,
-    show_test_panel: bool,
-    onboarding: bool,
-) -> Result<TuiOutcome> {
-    let manifest = policy_loader::read_manifest(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+pub fn run_with_options(path: &Path, show_test_panel: bool, onboarding: bool) -> Result<()> {
+    let is_star = path.extension().is_some_and(|ext| ext == "star");
 
-    let mut app = app::App::new(path.to_path_buf(), manifest)?;
+    let mut app = if is_star {
+        let doc = StarDocument::open(path)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
+        app::App::new_star(doc)?
+    } else {
+        let manifest = policy_loader::read_manifest(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        app::App::new(path.to_path_buf(), manifest)?
+    };
     if show_test_panel {
         app.show_test_panel();
     }

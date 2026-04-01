@@ -17,6 +17,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 regex = { workspace = true }
 include_dir = { workspace = true }
+thiserror = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-starlark = { workspace = true }
 

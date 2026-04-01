@@ -130,13 +130,13 @@ pub fn suggest_rule_description(
                 .or_else(|| tool_input.get("path"))
                 .and_then(|v| v.as_str())?;
             let parent = PathBuf::from(path).parent()?.to_string_lossy().to_string();
-            let expr = tool(&[tool_name]);
+            let expr = tool_match(&[tool_name], allow());
             Some(format!("{} # path: {}", expr_to_string(&expr), parent))
         }
         "Write" | "Edit" | "NotebookEdit" => {
             let path = tool_input.get("file_path")?.as_str()?;
             let parent = PathBuf::from(path).parent()?.to_string_lossy().to_string();
-            let expr = tool(&[tool_name]);
+            let expr = tool_match(&[tool_name], allow());
             Some(format!("{} # path: {}", expr_to_string(&expr), parent))
         }
         "WebFetch" => {
@@ -152,7 +152,7 @@ pub fn suggest_rule_description(
             }
             Some(expr_to_string(&net(domain)))
         }
-        _ => Some(expr_to_string(&tool(&[tool_name]))),
+        _ => Some(expr_to_string(&tool_match(&[tool_name], allow()))),
     }
 }
 

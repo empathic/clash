@@ -111,7 +111,14 @@ pub fn run(trace_path: &Path) -> Result<std::path::PathBuf> {
             .iter()
             .map(|t| format!("\"{}\"", t))
             .collect();
-        ui::info(&format!("  tool([{}]).allow()", tool_names.join(", ")));
+        if tool_names.len() == 1 {
+            ui::info(&format!("  match({{{}: allow()}})", tool_names[0]));
+        } else {
+            ui::info(&format!(
+                "  match({{({}): allow()}})",
+                tool_names.join(", ")
+            ));
+        }
     }
     ui::info("  default = ask");
 
@@ -306,7 +313,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     let mut stmts = vec![
         load_builtin(),
         load_std(&[
-            "match", "tool", "policy", "settings", "sandbox", "cwd", "home", "allow", "ask", "deny",
+            "match", "policy", "settings", "sandbox", "cwd", "home", "allow", "ask", "deny",
         ]),
         load_sandboxes(&["dev"]),
         Stmt::Blank,
@@ -370,7 +377,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Read-only fs tools
     if !read_tools.is_empty() {
-        let expr = tool(&read_tools).sandbox(Expr::ident("_fs_box")).allow();
+        let expr = tool_match(&read_tools, allow_with_sandbox(Expr::ident("_fs_box")));
         rules.push(Expr::commented(
             "Read-only fs tools — observed in session",
             expr,
@@ -379,7 +386,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Write fs tools
     if !write_tools.is_empty() {
-        let expr = tool(&write_tools).sandbox(Expr::ident("_fs_box")).allow();
+        let expr = tool_match(&write_tools, allow_with_sandbox(Expr::ident("_fs_box")));
         rules.push(Expr::commented(
             "Write fs tools — observed in session",
             expr,
@@ -388,7 +395,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Network tools — prompt user (safer default)
     if !net_tools.is_empty() {
-        let expr = tool(&net_tools).ask();
+        let expr = tool_match(&net_tools, ask());
         rules.push(Expr::commented(
             "Network tools — prompt before allowing",
             expr,
@@ -397,7 +404,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Other tools (e.g., Agent)
     for t in &other_tools {
-        rules.push(tool(&[t.as_str()]).allow());
+        rules.push(tool_match(&[t.as_str()], allow()));
     }
 
     // Deny destructive git ops if git was observed
@@ -618,8 +625,8 @@ mod tests {
         assert!(policy.contains("load(\"@clash//std.star\""));
 
         // Should contain tool rules
-        assert!(policy.contains("tool([\"Read\", \"Grep\"]).sandbox(_fs_box).allow()"));
-        assert!(policy.contains("tool([\"Write\"]).sandbox(_fs_box).allow()"));
+        assert!(policy.contains("(\"Read\", \"Grep\"): allow(sandbox = _fs_box)"));
+        assert!(policy.contains("\"Write\": allow(sandbox = _fs_box)"));
 
         // Should contain match rules for binaries
         assert!(policy.contains("match({\"Bash\":"));
@@ -646,8 +653,8 @@ mod tests {
         };
 
         let policy = generate_starlark(&analysis);
-        assert!(policy.contains("tool([\"Read\"]).sandbox(_fs_box).allow()"));
-        assert!(policy.contains("tool([\"Edit\"]).sandbox(_fs_box).allow()"));
+        assert!(policy.contains("\"Read\": allow(sandbox = _fs_box)"));
+        assert!(policy.contains("\"Edit\": allow(sandbox = _fs_box)"));
         // No binary-specific rules (no "git", "cargo" etc.)
         assert!(!policy.contains("# Observed binaries"));
     }
@@ -698,6 +705,6 @@ mod tests {
 
         let policy = generate_starlark(&analysis);
         // Network tools should use ask(), not allow()
-        assert!(policy.contains("tool([\"WebFetch\", \"WebSearch\"]).ask()"));
+        assert!(policy.contains("(\"WebFetch\", \"WebSearch\"): ask()"));
     }
 }
