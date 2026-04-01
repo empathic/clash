@@ -2,7 +2,8 @@
 #
 # Emits v5 match tree nodes using minimal Rust primitives.
 # Rust globals available: _mt_node, _mt_condition, _mt_pattern, _mt_prefix,
-# _mt_literal, _mt_policy, _ALLOW, _DENY, _ASK, _OS, _ARCH
+# _mt_literal, _mt_policy, _ALLOW, _DENY, _ASK, _OS, _ARCH,
+# _register_policy, _register_settings
 
 # ---------------------------------------------------------------------------
 # Platform constants — re-export from Rust for use in policy files
@@ -10,6 +11,9 @@
 
 OS = _OS      # e.g. "macos", "linux"
 ARCH = _ARCH  # e.g. "aarch64", "x86_64"
+FULL = "rwcdx"
+RO = "rx"
+RW = "rwcx"
 
 # ---------------------------------------------------------------------------
 # Effect constructors
@@ -79,6 +83,25 @@ def _pattern(value):
 def regex(pattern):
     """Create a regex pattern."""
     return struct(_regex=pattern)
+
+
+def glob(pattern):
+    """Create a glob pattern for matching.
+
+    - glob("*")            → wildcard (match anything)
+    - glob("$HOME/*")      → direct children of $HOME
+    - glob("$HOME/**/*")   → $HOME and all descendants (recursive)
+    - glob("$HOME/**")     → same as /**/*
+    """
+    if pattern in ("*", "**"):
+        return struct(_glob="*", _glob_type="wildcard")
+    if pattern.endswith("/**/*"):
+        return struct(_glob=pattern[:-5], _glob_type="recursive")
+    if pattern.endswith("/**"):
+        return struct(_glob=pattern[:-3], _glob_type="recursive")
+    if pattern.endswith("/*"):
+        return struct(_glob=pattern[:-2], _glob_type="children")
+    fail("glob() pattern must end with /*, /**, or /**/* (got: " + pattern + ")")
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +217,20 @@ def tool(name=None, doc=None):
     return _with_sandbox_support(_mt_tool(_pattern(name), doc=doc))
 
 
+def mode(name=None, doc=None):
+    """Build a mode matcher. Usable as a dict key in policy() or as a builder.
+
+    Usage (dict key):
+        policy("default", {
+            mode("plan"): allow(sandbox=plan_box),
+        })
+
+    Usage (builder):
+        mode("plan").allow(sandbox=plan_box)
+    """
+    return struct(_match_key="mode", _match_value=name, _doc=doc)
+
+
 # ---------------------------------------------------------------------------
 # Typed match keys — used in match() dicts to distinguish observables
 # ---------------------------------------------------------------------------
@@ -226,9 +263,12 @@ def _collect_effect_sandbox(eff, sandboxes, seen):
     """Collect sandbox from an effect descriptor if present."""
     if eff._sandbox != None:
         sb = eff._sandbox
-        if sb._name not in seen:
-            seen[sb._name] = True
-            sandboxes.append(_sandbox_to_json(sb))
+        if hasattr(sb, "_name"):
+            # Sandbox struct — collect its JSON
+            if sb._name not in seen:
+                seen[sb._name] = True
+                sandboxes.append(_sandbox_to_json(sb))
+        # String sandbox names are resolved at document assembly time — no collection needed
 
 
 def _match_build_tree(tree, arg_index, sandboxes, seen):
@@ -416,7 +456,10 @@ def _effect_decision(effect):
 
 def _effect_to_decision(eff):
     """Convert an effect descriptor struct to a match tree decision node."""
-    sandbox_name = eff._sandbox._name if eff._sandbox != None else None
+    if eff._sandbox != None:
+        sandbox_name = eff._sandbox._name if hasattr(eff._sandbox, "_name") else str(eff._sandbox)
+    else:
+        sandbox_name = None
     if eff._effect == _ALLOW:
         return _mt_allow(sandbox_name)
     elif eff._effect == _DENY:
@@ -484,7 +527,8 @@ def _process_fs_dict(fs_dict, parent_path=None):
 
     Keys:
       - bare string with dict value → literal path join, recurse into children
-      - bare string with decision value → subpath match (path + all descendants)
+      - bare string with decision value → literal match (exact path only)
+      - glob("...") → PathMatch::Subpath (prefix/recursive match)
       - literal("...") → PathMatch::Literal
       - regex("...") → PathMatch::Regex
       - subpath("...") → PathMatch::Subpath (explicit)
@@ -500,6 +544,18 @@ def _process_fs_dict(fs_dict, parent_path=None):
             key_path = key._path
             explicit_type = key._matcher_type
             follow_wt = hasattr(key, "_follow_worktrees") and key._follow_worktrees
+        elif hasattr(key, "_glob"):
+            key_path = key._glob
+            if key._glob_type == "wildcard":
+                key_path = "/"
+                explicit_type = "subpath"
+            elif key._glob_type == "recursive":
+                explicit_type = "subpath"
+            elif key._glob_type == "children":
+                explicit_type = "child_of"
+            else:
+                fail("unknown glob type: " + key._glob_type)
+            follow_wt = False
         elif hasattr(key, "_regex"):
             key_path = key._regex
             explicit_type = "regex"
@@ -521,7 +577,7 @@ def _process_fs_dict(fs_dict, parent_path=None):
             rules.extend(_process_fs_dict(value, full_path))
         elif hasattr(value, "_is_effect"):
             # Terminal decision
-            match_type = explicit_type if explicit_type != None else "subpath"
+            match_type = explicit_type if explicit_type != None else "literal"
             caps = _caps_from_effect(value)
             rule = {
                 "effect": value._effect,
@@ -543,6 +599,8 @@ def _make_path_pattern(path_value, match_type):
         return _mt_literal(path_value)
     elif match_type == "regex":
         return _mt_pattern(path_value)
+    elif match_type == "child_of":
+        return _mt_child_of(path_value)
     else:
         return _mt_prefix(path_value)
 
@@ -937,62 +995,127 @@ def _with_sandbox_and_node(node, sb):
 # ---------------------------------------------------------------------------
 
 
-def policy(default="deny", rules=None, default_sandbox=None):
-    """Build a policy.
+def settings(default="deny", default_sandbox=None):
+    """Register policy settings.
 
     Usage:
-        policy(default=deny(), rules=[
-            match({"Bash": {"git": {"push": deny()}}}),
-            match({"Bash": {"git": allow()}}),
-            match({("Read", "Glob", "Grep"): allow()}),
-        ], default_sandbox=sandbox(
-            name="default",
-            default=deny(),
-            fs={"$PWD": allow("r")},
-        ))
+        settings(default=ask(), default_sandbox="dev")
     """
     default = _unwrap_effect(default)
+    ds = None
+    if default_sandbox != None:
+        if hasattr(default_sandbox, "_is_sandbox"):
+            ds = default_sandbox._name
+        elif type(default_sandbox) == "string":
+            ds = default_sandbox
+        else:
+            fail("default_sandbox must be a sandbox name string or sandbox() value")
+    _register_settings(default=default, default_sandbox=ds)
 
-    if rules == None:
-        rules = []
+
+def policy(name, rules_or_dict=None, default="deny", rules=None, default_sandbox=None):
+    """Register a named policy.
+
+    Usage (dict form):
+        policy("default", {
+            mode("plan"): allow(sandbox=plan_box),
+            mode("edit"): allow(sandbox=edit_box),
+        })
+
+    Usage (rules form):
+        policy("default", rules=[
+            match({"Bash": {"git": {"push": deny()}}}),
+            match({("Read", "Glob", "Grep"): allow()}),
+        ])
+    """
+    default = _unwrap_effect(default)
 
     flat_nodes = []
     sandbox_list = []
     _seen_sandboxes = {}
 
+    # Dict form: policy("name", {mode("x"): allow(sandbox=box), ...})
+    if rules_or_dict != None and type(rules_or_dict) == "dict":
+        for key, value in rules_or_dict.items():
+            # Tuples of keys share the same value
+            keys = key if type(key) == "tuple" else (key,)
+            for k in keys:
+                # Build condition from key
+                if hasattr(k, "_match_key"):
+                    # Typed key from mode(), Mode(), Tool(), etc.
+                    mk = k._match_key
+                    doc_val = k._doc if hasattr(k, "_doc") else None
+                    if mk == "mode":
+                        cond = _mt_mode(_pattern(k._match_value), doc=doc_val)
+                    elif mk == "tool":
+                        cond = _mt_tool(_pattern(k._match_value), doc=doc_val)
+                    else:
+                        fail("unknown match key type: " + mk)
+                elif hasattr(k, "_node"):
+                    # Builder node (from tool(), etc.)
+                    cond = k._node
+                elif type(k) == "string":
+                    # Raw string = tool name
+                    cond = _mt_tool(_pattern(k))
+                else:
+                    fail("policy dict keys must be mode(), tool(), or tool name strings, got " + type(k))
+
+                # Build children from value
+                if hasattr(value, "_is_effect"):
+                    decision = _effect_to_decision(value)
+                    flat_nodes.append(cond.on([decision]))
+                    _collect_effect_sandbox(value, sandbox_list, _seen_sandboxes)
+                elif type(value) == "dict":
+                    # Nested dict — e.g. mode("edit"): {"Bash": allow()}
+                    inner_nodes = []
+                    for inner_key, inner_value in value.items():
+                        if hasattr(inner_key, "_match_key") and inner_key._match_key == "tool":
+                            inner_cond = _mt_tool(_pattern(inner_key._match_value))
+                        elif hasattr(inner_key, "_node"):
+                            inner_cond = inner_key._node
+                        else:
+                            inner_cond = _mt_tool(_pattern(inner_key))
+                        if hasattr(inner_value, "_is_effect"):
+                            inner_decision = _effect_to_decision(inner_value)
+                            inner_nodes.append(inner_cond.on([inner_decision]))
+                            _collect_effect_sandbox(inner_value, sandbox_list, _seen_sandboxes)
+                        else:
+                            fail("nested policy dict values must be effects")
+                    flat_nodes.append(cond.on(inner_nodes))
+                else:
+                    fail("policy dict values must be effects (allow/deny/ask) or dicts")
+
+    # List/rules form
+    if rules_or_dict != None and type(rules_or_dict) == "list":
+        rules = rules_or_dict
+    if rules == None:
+        rules = []
+
     for item in rules:
         if hasattr(item, "_is_path"):
-            # Path entry → expand to fs match tree nodes
             flat_nodes.extend(item._nodes)
         elif type(item) == "list":
-            # domains() returns a list
             for sub in item:
                 if hasattr(sub, "_node"):
                     _collect_node(sub, flat_nodes, sandbox_list, _seen_sandboxes)
                 else:
                     flat_nodes.append(sub)
         elif hasattr(item, "_node"):
-            # Rule builder (from exe/tool with sandbox support)
             _collect_node(item, flat_nodes, sandbox_list, _seen_sandboxes)
         else:
             flat_nodes.append(item)
 
-    # Convert default_sandbox to JSON if provided
-    default_sandbox_json = None
     if default_sandbox != None:
-        if not hasattr(default_sandbox, "_is_sandbox"):
-            fail("default_sandbox must be a sandbox() value")
-        default_sandbox_json = _sandbox_to_json(default_sandbox)
-        # Also register it in the sandbox map if not already seen
-        if default_sandbox._name not in _seen_sandboxes:
-            _seen_sandboxes[default_sandbox._name] = True
-            sandbox_list.append(default_sandbox_json)
+        if hasattr(default_sandbox, "_is_sandbox"):
+            default_sandbox_json = _sandbox_to_json(default_sandbox)
+            if default_sandbox._name not in _seen_sandboxes:
+                _seen_sandboxes[default_sandbox._name] = True
+                sandbox_list.append(default_sandbox_json)
 
-    return _mt_policy(
-        default=default,
-        sandboxes=sandbox_list,
+    _register_policy(
+        name=name,
         rules=flat_nodes,
-        default_sandbox=default_sandbox_json,
+        sandboxes=sandbox_list,
     )
 
 
@@ -1024,7 +1147,7 @@ def _sandbox_to_json(sb):
             "effect": r.get("effect", "allow"),
             "caps": caps,
             "path": path_str,
-            "path_match": r.get("match_type", "subpath"),
+            "path_match": r.get("match_type", "literal"),
         }
         if r.get("follow_worktrees", False):
             rule_dict["follow_worktrees"] = True

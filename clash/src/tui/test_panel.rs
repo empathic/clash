@@ -75,6 +75,8 @@ pub struct TestPanel {
     pub visible: bool,
     /// Flash message (error from last submit).
     flash: Option<String>,
+    /// Active permission mode for test evaluation (e.g. "plan", "edit").
+    mode: Option<String>,
 }
 
 impl Default for TestPanel {
@@ -94,6 +96,7 @@ impl TestPanel {
             input_cursor: 0,
             visible: true,
             flash: None,
+            mode: Some("default".into()),
         }
     }
 
@@ -248,12 +251,36 @@ impl TestPanel {
                     return TestPanelAction::None;
                 }
 
+                // Handle "mode <name>" command
+                if let Some(mode_arg) = input.strip_prefix("mode") {
+                    let mode_arg = mode_arg.trim();
+                    if mode_arg.is_empty() {
+                        let current = self.mode.as_deref().unwrap_or("(none)");
+                        self.flash = Some(format!("mode: {current}"));
+                        self.input_line.clear();
+                        self.input_cursor = 0;
+                        return TestPanelAction::Flash(format!("mode: {current}"));
+                    } else if mode_arg == "none" || mode_arg == "clear" {
+                        self.mode = None;
+                        self.flash = Some("mode cleared".into());
+                        self.input_line.clear();
+                        self.input_cursor = 0;
+                        return TestPanelAction::Flash("mode cleared".into());
+                    } else {
+                        self.mode = Some(mode_arg.to_string());
+                        self.flash = Some(format!("mode: {mode_arg}"));
+                        self.input_line.clear();
+                        self.input_cursor = 0;
+                        return TestPanelAction::Flash(format!("mode: {mode_arg}"));
+                    }
+                }
+
                 let Some(policy) = policy else {
                     self.flash = Some("No policy loaded".into());
                     return TestPanelAction::Flash("No policy loaded".into());
                 };
 
-                match test_eval::evaluate_test(&input, policy) {
+                match test_eval::evaluate_test_with_mode(&input, policy, self.mode.as_deref()) {
                     Ok(result) => {
                         let effect = result.effect();
                         let summary = result.summary();
@@ -294,7 +321,8 @@ impl TestPanel {
     /// Called whenever the policy is modified.
     pub fn re_evaluate(&mut self, policy: &CompiledPolicy) {
         for case in &mut self.cases {
-            let new_decision = policy.evaluate(&case.tool_name, &case.tool_input);
+            let new_decision =
+                policy.evaluate_with_mode(&case.tool_name, &case.tool_input, self.mode.as_deref());
             let new_effect = new_decision.effect;
             let new_summary = match &new_decision.reason {
                 Some(reason) => format!("{} ({reason})", effect_str(new_effect)),
@@ -517,8 +545,12 @@ impl TestPanel {
                     Style::default().fg(Color::Red),
                 )));
             } else {
+                let hint = match &self.mode {
+                    Some(m) => format!("   mode: {m}  |  Tab: history  p: pin"),
+                    None => "   mode <name> to set  |  Tab: history  p: pin".to_string(),
+                };
                 lines.push(Line::from(Span::styled(
-                    "   Tab: focus history  p: pin",
+                    hint,
                     Style::default().fg(Color::DarkGray),
                 )));
             }

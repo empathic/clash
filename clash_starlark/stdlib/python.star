@@ -1,15 +1,13 @@
-load("@clash//std.star", "allow", "deny", "match", "sandbox", "domains", "regex")
-
 python_sandbox = sandbox(
     name = "python_dev",
     default = deny(),
     fs = {
-        "$PWD": allow("rwcx"),
+        glob("$PWD/**"): allow("rwcx"),
         "$HOME": {
-            ".local": allow("rwc"),
-            ".cache/pip": allow(),
+            glob(".local/**"): allow("rwc"),
+            glob(".cache/pip/**"): allow(),
         },
-        "$TMPDIR": allow(),
+        glob("$TMPDIR/**"): allow(),
     },
     net = [
         domains({

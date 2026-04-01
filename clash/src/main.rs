@@ -14,16 +14,11 @@ fn main() -> Result<()> {
 
     debug_span!("main", cmd = ?cli.command).in_scope(|| {
         let resp = match cli.command {
-            Commands::Init {
-                scope,
-                from_trace,
-                quick,
-                agent,
-            } => {
+            Commands::Init { from_trace, agent } => {
                 if let Some(trace_path) = from_trace {
                     cmd::from_trace::run(&trace_path).map(|_| ())
                 } else {
-                    cmd::init::run(scope, quick, agent)
+                    cmd::init::run(agent)
                 }
             }
             Commands::Install { agent } => cmd::init::run_install(agent),

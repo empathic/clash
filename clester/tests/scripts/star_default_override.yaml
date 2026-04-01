@@ -4,13 +4,13 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "policy", "allow")
-    def main():
-        return policy(default=allow(), rules=[])
+    load("@clash//std.star", "policy", "settings", "allow")
+    settings(default=allow())
+    policy("test", rules=[])
   project_policy_star: |
-    load("@clash//std.star", "policy", "deny")
-    def main():
-        return policy(default=deny(), rules=[])
+    load("@clash//std.star", "policy", "settings", "deny")
+    settings(default=deny())
+    policy("test", rules=[])
 
 steps:
   - name: unknown command denied by project default (overrides user allow)

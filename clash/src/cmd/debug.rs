@@ -198,7 +198,7 @@ fn run_replay(
             let cwd = std::env::current_dir()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            replay::replay_from_args(&tool, input.as_deref(), &cwd)?
+            replay::replay_from_args(&tool, input.as_deref(), &cwd, None)?
         }
     };
 
@@ -257,7 +257,11 @@ fn run_sandbox(
 
     // Inspect mode (default).
     let report = if let Some(entry) = resolved_entry {
-        sandbox::inspect(&entry.tool_name, Some(&entry.tool_input_summary))?
+        sandbox::inspect_with_mode(
+            &entry.tool_name,
+            Some(&entry.tool_input_summary),
+            entry.mode.as_deref(),
+        )?
     } else {
         let tool = tool.ok_or_else(|| {
             anyhow::anyhow!(

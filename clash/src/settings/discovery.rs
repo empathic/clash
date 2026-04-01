@@ -104,23 +104,23 @@ impl crate::dialog::SelectItem for SandboxPreset {
     }
 }
 
-/// Compile the default policy with the given sandbox preset to JSON.
-///
-/// Substitutes `{preset}` in the template with the chosen preset name,
-/// then evaluates the Starlark source and returns pretty-printed JSON.
-pub fn compile_default_policy_to_json_with_preset(preset: &str) -> Result<String> {
-    let source = DEFAULT_POLICY_TEMPLATE.replace("{preset}", preset);
-    let output =
-        clash_starlark::evaluate(&source, "<default_policy>", std::path::Path::new("."))
-            .with_context(|| format!("failed to compile default policy with preset '{preset}'"))?;
+/// Compile the default policy with a preset name (legacy — presets are now
+/// baked into the template). Ignores the preset argument.
+pub fn compile_default_policy_to_json_with_preset(_preset: &str) -> Result<String> {
+    compile_default_policy_to_json()
+}
+
+/// Compile the embedded default policy template to JSON.
+pub fn compile_default_policy_to_json() -> Result<String> {
+    let output = clash_starlark::evaluate(
+        DEFAULT_POLICY_TEMPLATE,
+        "<default_policy>",
+        std::path::Path::new("."),
+    )
+    .context("failed to compile default policy")?;
     let value: serde_json::Value =
         serde_json::from_str(&output.json).context("default policy produced invalid JSON")?;
     serde_json::to_string_pretty(&value).context("failed to pretty-print default policy JSON")
-}
-
-/// Compile the default policy with the `dev` preset (used for auto-creation).
-pub fn compile_default_policy_to_json() -> Result<String> {
-    compile_default_policy_to_json_with_preset("dev")
 }
 
 /// Returns the clash settings directory (`~/.clash/`).
@@ -308,12 +308,12 @@ mod test {
     }
 
     #[test]
-    fn default_policy_cwd_sandbox_uses_subpath() -> anyhow::Result<()> {
-        let json_str = compile_default_policy_to_json_with_preset("dev")?;
+    fn default_policy_sandbox_uses_subpath() -> anyhow::Result<()> {
+        let json_str = compile_default_policy_to_json()?;
         let policy: serde_json::Value = serde_json::from_str(&json_str)?;
-        let cwd_sandbox = &policy["sandboxes"]["cwd"];
-        let rules = cwd_sandbox["rules"].as_array().unwrap();
-        // The $PWD rule should be subpath (from .recurse()), not literal.
+        // The "edit" sandbox should have a $PWD subpath rule
+        let edit_sandbox = &policy["sandboxes"]["edit"];
+        let rules = edit_sandbox["rules"].as_array().unwrap();
         let pwd_rule = rules
             .iter()
             .find(|r| r["path"].as_str() == Some("$PWD"))
@@ -321,7 +321,7 @@ mod test {
         assert_eq!(
             pwd_rule["path_match"].as_str(),
             Some("subpath"),
-            "cwd() with .recurse() should produce subpath match, got: {pwd_rule}"
+            "subpath($PWD) should produce subpath match, got: {pwd_rule}"
         );
         Ok(())
     }

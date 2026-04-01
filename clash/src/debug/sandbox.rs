@@ -144,65 +144,83 @@ impl SandboxReport {
 /// Inspect sandbox enforcement for an audit log entry identified by its short hash.
 pub fn inspect_hash(hash: &str) -> Result<SandboxReport> {
     let entry = crate::debug::log::find_by_hash(hash)?;
-    inspect(&entry.tool_name, Some(&entry.tool_input_summary))
+    inspect_with_mode(
+        &entry.tool_name,
+        Some(&entry.tool_input_summary),
+        entry.mode.as_deref(),
+    )
 }
 
 /// Execute a command under sandbox enforcement, resolved from an audit log entry.
 ///
-/// Looks up the entry, evaluates it against the current policy to obtain the
-/// sandbox policy, extracts the shell command, and runs it sandboxed.
+/// Delegates to `clash shell -c <cmd>` which handles sandbox enforcement
+/// itself, avoiding double-nesting of sandbox wrappers. Passes `--sandbox`
+/// so the correct sandbox policy is applied.
 pub fn exec_entry(entry: &super::AuditLogEntry) -> Result<()> {
     let (tool_name, tool_input) = crate::debug::replay::resolve_tool_input(
         &entry.tool_name,
         Some(&entry.tool_input_summary),
     )?;
 
-    let command = extract_shell_command(&tool_name, &tool_input).ok_or_else(|| {
+    let cmd = extract_shell_command_str(&tool_name, &tool_input).ok_or_else(|| {
         anyhow::anyhow!(
             "cannot execute tool '{}' in a sandbox — only Bash commands are supported",
             tool_name,
         )
     })?;
 
+    // Evaluate the policy to find the sandbox name.
     let settings = ClashSettings::load_or_create()?;
     let tree = settings
         .policy_tree()
         .ok_or_else(|| anyhow::anyhow!("no compiled policy available — run `clash init`"))?;
+    let decision = tree.evaluate_with_mode(&tool_name, &tool_input, entry.mode.as_deref());
+    let sandbox_name = decision.sandbox_name.as_ref().map(|sr| sr.0.as_str());
 
-    let decision = tree.evaluate(&tool_name, &tool_input);
-    let sandbox = decision.sandbox.ok_or_else(|| {
-        anyhow::anyhow!(
-            "no sandbox policy applies to this command (effect: {})",
-            decision.effect,
-        )
-    })?;
+    let clash_bin = std::env::current_exe().context("failed to locate clash binary")?;
 
-    let cwd = std::env::current_dir().context("failed to determine current directory")?;
+    let mut args = vec!["shell"];
+    if let Some(name) = sandbox_name {
+        eprintln!("Replaying in sandbox '{}': clash shell -c {}", name, cmd);
+        args.extend(["--sandbox", name]);
+    } else {
+        eprintln!("Replaying: clash shell -c {}", cmd);
+    }
+    args.extend(["-c", &cmd]);
 
-    eprintln!("Replaying in sandbox: {}", command.join(" "));
-    crate::sandbox_cmd::run_sandboxed_command(&sandbox, &cwd, &command, None, None)
+    let status = std::process::Command::new(clash_bin)
+        .args(&args)
+        .status()
+        .context("failed to execute clash shell")?;
+
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
 }
 
-/// Extract a shell command from a tool invocation.
+/// Extract the raw shell command string from a Bash tool invocation.
 ///
-/// Returns `Some(["<clash>", "shell", "-c", <command>])` for Bash tool inputs,
-/// `None` for other tools that can't be meaningfully run in a shell sandbox.
-fn extract_shell_command(tool_name: &str, tool_input: &serde_json::Value) -> Option<Vec<String>> {
+/// Returns `Some(command_string)` for Bash tool inputs,
+/// `None` for other tools.
+fn extract_shell_command_str(tool_name: &str, tool_input: &serde_json::Value) -> Option<String> {
     if tool_name != "Bash" {
         return None;
     }
-    let cmd = tool_input.get("command")?.as_str()?;
-    let clash_bin = std::env::current_exe().ok()?.to_string_lossy().to_string();
-    Some(vec![
-        clash_bin,
-        "shell".to_string(),
-        "-c".to_string(),
-        cmd.to_string(),
-    ])
+    tool_input.get("command")?.as_str().map(|s| s.to_string())
 }
 
-/// Inspect sandbox enforcement for a tool invocation.
+/// Inspect sandbox enforcement for a tool invocation (no mode context).
 pub fn inspect(tool: &str, input: Option<&str>) -> Result<SandboxReport> {
+    inspect_with_mode(tool, input, None)
+}
+
+/// Inspect sandbox enforcement for a tool invocation with mode context.
+pub fn inspect_with_mode(
+    tool: &str,
+    input: Option<&str>,
+    mode: Option<&str>,
+) -> Result<SandboxReport> {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
@@ -214,7 +232,7 @@ pub fn inspect(tool: &str, input: Option<&str>) -> Result<SandboxReport> {
         .policy_tree()
         .ok_or_else(|| anyhow::anyhow!("no compiled policy available — run `clash init`"))?;
 
-    let decision = tree.evaluate(&tool_name, &tool_input);
+    let decision = tree.evaluate_with_mode(&tool_name, &tool_input, mode);
 
     let sandbox = decision.sandbox.clone();
     let cwd_path = Path::new(&cwd);

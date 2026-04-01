@@ -6,10 +6,12 @@
 use starlark::environment::{GlobalsBuilder, LibraryExtension};
 use starlark::eval::Evaluator;
 use starlark::starlark_module;
+use starlark::values::none::NoneType;
 use starlark::values::{Value, ValueLike};
 
 use crate::builders::base::BasePolicyValue;
 use crate::builders::match_tree::{self as mt, MatchTreeNode, path_value_to_json, pattern_to_json};
+use crate::eval_context::{EvalContext, PolicyRegistration, SettingsValue};
 
 /// Build the globals environment with all Clash DSL functions and constants.
 pub fn clash_globals() -> starlark::environment::Globals {
@@ -103,6 +105,17 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
+    /// Convert a path value to a child-of pattern (direct children only).
+    fn _mt_child_of<'v>(
+        #[starlark(require = pos)] value: Value<'v>,
+        heap: &'v starlark::values::Heap,
+    ) -> anyhow::Result<MatchTreeNode> {
+        let val_json = path_value_to_json(value, heap)?;
+        Ok(MatchTreeNode {
+            json: serde_json::json!({"child_of": val_json}),
+        })
+    }
+
     /// Convert a path value to a literal (exact) pattern (needs Rust for env/join dispatch).
     fn _mt_literal<'v>(
         #[starlark(require = pos)] value: Value<'v>,
@@ -114,7 +127,7 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
-    /// Internal match tree policy constructor.
+    /// Internal match tree policy constructor (legacy — used by match_tree.star).
     fn _mt_policy<'v>(
         #[starlark(require = named)] default: Option<&str>,
         #[starlark(require = named)] sandboxes: Option<Value<'v>>,
@@ -186,5 +199,91 @@ fn register_globals(builder: &mut GlobalsBuilder) {
             base_doc: Some(doc),
             default_effect,
         })
+    }
+
+    // -- Registration functions (side-effecting, write into EvalContext) --
+
+    /// Register settings into the evaluation context.
+    fn _register_settings<'v>(
+        #[starlark(require = named)] default: &str,
+        #[starlark(require = named, default = starlark::values::none::NoneType)]
+        default_sandbox: Value<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<NoneType> {
+        let ctx = eval
+            .extra
+            .and_then(|e| e.downcast_ref::<EvalContext>())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "settings() can only be called in a policy file, not in loaded modules"
+                )
+            })?;
+        let ds = if default_sandbox.is_none() {
+            None
+        } else {
+            Some(
+                default_sandbox
+                    .unpack_str()
+                    .ok_or_else(|| anyhow::anyhow!("default_sandbox must be a string"))?
+                    .to_string(),
+            )
+        };
+        ctx.register_settings(SettingsValue {
+            default_effect: default.to_string(),
+            default_sandbox: ds,
+        })?;
+        Ok(NoneType)
+    }
+
+    /// Register a policy into the evaluation context.
+    fn _register_policy<'v>(
+        #[starlark(require = named)] name: &str,
+        #[starlark(require = named)] rules: Option<Value<'v>>,
+        #[starlark(require = named)] sandboxes: Option<Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<NoneType> {
+        let ctx = eval
+            .extra
+            .and_then(|e| e.downcast_ref::<EvalContext>())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "policy() can only be called in a policy file, not in loaded modules"
+                )
+            })?;
+
+        // Collect rule nodes
+        let mut tree_nodes = Vec::new();
+        if let Some(rules_val) = rules
+            && let Some(list) = starlark::values::list::ListRef::from_value(rules_val)
+        {
+            for item in list.iter() {
+                if let Some(node) = item.downcast_ref::<MatchTreeNode>() {
+                    tree_nodes.push(node.json.clone());
+                } else {
+                    anyhow::bail!(
+                        "policy rules must be MatchTreeNode values, got {}",
+                        item.get_type()
+                    );
+                }
+            }
+        }
+
+        // Collect sandbox JSON from rules
+        let mut sandbox_list = Vec::new();
+        if let Some(sb_val) = sandboxes
+            && let Some(list) = starlark::values::list::ListRef::from_value(sb_val)
+        {
+            for item in list.iter() {
+                let sb_json = starlark_to_json(item)?;
+                sandbox_list.push(sb_json);
+            }
+        }
+
+        ctx.register_policy(PolicyRegistration {
+            name: name.to_string(),
+            tree_nodes,
+            sandboxes: sandbox_list,
+        })?;
+        Ok(NoneType)
     }
 }

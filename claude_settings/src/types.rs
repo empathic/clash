@@ -94,6 +94,14 @@ pub struct Hooks {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_tool_use: Option<HookConfig>,
 
+    /// Hooks that run when a permission request is shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_request: Option<HookConfig>,
+
+    /// Hooks that run at session start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_start: Option<Vec<HookMatcher>>,
+
     /// Hooks that run when Claude Code stops.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<HookMatcher>>,

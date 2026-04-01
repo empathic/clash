@@ -245,10 +245,13 @@ pub struct SandboxRule {
 #[serde(rename_all = "lowercase")]
 pub enum PathMatch {
     /// Match this path and all descendants (recursive).
-    #[default]
     Subpath,
     /// Match exactly this path (non-recursive).
+    #[default]
     Literal,
+    /// Match direct children of this path (one level deep).
+    #[serde(rename = "child_of")]
+    ChildOf,
     /// Match paths against a regex pattern.
     /// Supported on macOS (Seatbelt SBPL). Skipped on Linux (Landlock).
     Regex,
@@ -501,6 +504,9 @@ impl SandboxPolicy {
                     canonical_path.starts_with(&canonical_rule) || canonical_path == canonical_rule
                 }
                 PathMatch::Literal => canonical_path == canonical_rule,
+                PathMatch::ChildOf => canonical_path
+                    .strip_prefix(&format!("{canonical_rule}/"))
+                    .is_some_and(|rest| !rest.contains('/')),
                 PathMatch::Regex => regex::Regex::new(&rule_path)
                     .map(|re| re.is_match(path))
                     .unwrap_or(false),
@@ -510,7 +516,7 @@ impl SandboxPolicy {
                 matched.push(MatchedRule {
                     effect: rule.effect,
                     caps: rule.caps,
-                    depth: rule_path.matches('/').count(),
+                    depth: std::path::Path::new(&rule_path).components().count(),
                 });
             }
         }
@@ -573,12 +579,15 @@ impl SandboxPolicy {
                     canonical_path.starts_with(&canonical_rule) || canonical_path == canonical_rule
                 }
                 PathMatch::Literal => canonical_path == canonical_rule,
+                PathMatch::ChildOf => canonical_path
+                    .strip_prefix(&format!("{canonical_rule}/"))
+                    .is_some_and(|rest| !rest.contains('/')),
                 PathMatch::Regex => regex::Regex::new(&rule_path)
                     .map(|re| re.is_match(path))
                     .unwrap_or(false),
             };
             if matches {
-                let depth = rule_path.matches('/').count();
+                let depth = std::path::Path::new(&rule_path).components().count();
                 if best.is_none() || depth >= best_depth {
                     best_depth = depth;
                     best = Some((rule, rule_path));
@@ -590,6 +599,7 @@ impl SandboxPolicy {
             let match_type = match rule.path_match {
                 PathMatch::Subpath => "subpath",
                 PathMatch::Literal => "literal",
+                PathMatch::ChildOf => "child_of",
                 PathMatch::Regex => "regex",
             };
             Some(format!(

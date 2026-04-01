@@ -306,7 +306,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     let mut stmts = vec![
         load_builtin(),
         load_std(&[
-            "match", "tool", "policy", "sandbox", "cwd", "home", "allow", "ask", "deny",
+            "match", "tool", "policy", "settings", "sandbox", "cwd", "home", "allow", "ask", "deny",
         ]),
         load_sandboxes(&["dev"]),
         Stmt::Blank,
@@ -448,16 +448,17 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
         ));
     }
 
-    let policy_expr = policy(Expr::ident("ask"), rules, Some(Expr::ident("dev")));
-    let body = vec![
-        Stmt::assign("my_policy", policy_expr),
-        Stmt::Return(Expr::ident("base").method(
-            "update",
-            vec![Expr::ident("my_policy")],
-            Vec::<(&str, Expr)>::new(),
-        )),
-    ];
-    stmts.push(main_fn(body));
+    stmts.push(Stmt::Expr(settings(
+        Expr::ident("ask"),
+        Some(Expr::ident("dev")),
+    )));
+    stmts.push(Stmt::Blank);
+    stmts.push(Stmt::Expr(policy(
+        "default",
+        Expr::ident("ask"),
+        rules,
+        None,
+    )));
 
     clash_starlark::codegen::serialize(&stmts)
 }
@@ -632,8 +633,8 @@ mod tests {
         assert!(policy.contains("default = ask"));
 
         // Should be valid structure
-        assert!(policy.contains("def main():"));
-        assert!(policy.contains("return base.update(my_policy)"));
+        assert!(policy.contains("settings("));
+        assert!(policy.contains("policy("));
     }
 
     #[test]

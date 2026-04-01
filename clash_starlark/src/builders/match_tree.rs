@@ -204,6 +204,23 @@ pub fn pattern_to_json<'v>(value: Value<'v>, heap: &'v Heap) -> anyhow::Result<J
     {
         return Ok(json!({"regex": s}));
     }
+    // Check for glob struct
+    if value.get_type() == "struct"
+        && let Ok(Some(glob_val)) = value.get_attr("_glob", heap)
+        && let Some(s) = glob_val.unpack_str()
+    {
+        let glob_type = value
+            .get_attr("_glob_type", heap)
+            .ok()
+            .flatten()
+            .and_then(|v| v.unpack_str())
+            .unwrap_or("recursive");
+        return match glob_type {
+            "wildcard" => Ok(json!("wildcard")),
+            "children" => Ok(json!({"child_of": {"literal": s}})),
+            _ => Ok(json!({"prefix": {"literal": s}})),
+        };
+    }
     anyhow::bail!(
         "cannot convert {} to a match tree pattern",
         value.get_type()

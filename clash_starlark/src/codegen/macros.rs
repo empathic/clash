@@ -236,23 +236,25 @@ mod tests {
     #[test]
     fn full_example_with_macros() {
         let stmts = vec![
-            load_std(&["match", "tool", "policy", "allow", "deny", "ask"]),
+            load_std(&[
+                "match", "tool", "policy", "settings", "allow", "deny", "ask",
+            ]),
             Stmt::Blank,
-            Stmt::def(
-                "main",
-                vec![Stmt::Return(policy(
-                    ask(),
-                    vec![
-                        match_tree! {
-                            "Bash" => {
-                                ("git", "cargo") => allow(),
-                            },
+            Stmt::Expr(settings(ask(), None)),
+            Stmt::Blank,
+            Stmt::Expr(policy(
+                "test",
+                ask(),
+                vec![
+                    match_tree! {
+                        "Bash" => {
+                            ("git", "cargo") => allow(),
                         },
-                        tool(&["Read"]).allow(),
-                    ],
-                    None,
-                ))],
-            ),
+                    },
+                    tool(&["Read"]).allow(),
+                ],
+                None,
+            )),
         ];
         let src = serialize(&stmts);
         assert!(src.contains("(\"git\", \"cargo\"): allow()"));

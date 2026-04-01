@@ -229,12 +229,17 @@ fn run_onboard() -> Result<()> {
             style::bold("Claude Code plugin"),
         );
         if offer_fix(OnboardFix::InstallPlugin)? {
-            ui::progress("Installing plugin...");
-            match super::init::install_plugin_from_marketplace() {
+            ui::progress("Installing hooks...");
+            let claude = claude_settings::ClaudeSettings::new();
+            match claude.update(claude_settings::SettingsLevel::User, |settings| {
+                let hooks = settings.hooks.get_or_insert_with(Default::default);
+                super::init::install_clash_hook_config(hooks);
+                settings.mark_clash_installed();
+            }) {
                 Ok(()) => fixed += 1,
                 Err(e) => {
-                    warn!(error = %e, "Plugin install failed during onboard");
-                    ui::fail(&format!("Could not install plugin: {e}"));
+                    warn!(error = %e, "Hook install failed during onboard");
+                    ui::fail(&format!("Could not install hooks: {e}"));
                 }
             }
         }
@@ -726,9 +731,7 @@ mod tests {
                     timeout: None,
                 }],
             }])),
-            post_tool_use: None,
-            stop: None,
-            notification: None,
+            ..Default::default()
         };
 
         assert!(hooks_reference_clash(&hooks));
@@ -747,9 +750,7 @@ mod tests {
                     timeout: None,
                 }],
             }])),
-            post_tool_use: None,
-            stop: None,
-            notification: None,
+            ..Default::default()
         };
 
         assert!(!hooks_reference_clash(&hooks));
@@ -757,12 +758,7 @@ mod tests {
 
     #[test]
     fn hooks_reference_clash_handles_empty_hooks() {
-        let hooks = claude_settings::Hooks {
-            pre_tool_use: None,
-            post_tool_use: None,
-            stop: None,
-            notification: None,
-        };
+        let hooks = claude_settings::Hooks::default();
 
         assert!(!hooks_reference_clash(&hooks));
     }

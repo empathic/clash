@@ -35,7 +35,7 @@ pub fn init_tracing() {
             .with_writer(file)
             .pretty()
             .with_ansi(false)
-            .with_filter(LevelFilter::from_level(Level::DEBUG))
+            .with_filter(LevelFilter::from_level(Level::TRACE))
             .boxed(),
         None => {
             // Fallback to stderr if log file can't be opened.

@@ -139,8 +139,8 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
     // are emitted first.  Within the same depth, deny before allow so
     // that a same-level allow wins via last-match-wins.
     resolved_rules.sort_by(|a, b| {
-        let depth_a = a.canonical.matches('/').count();
-        let depth_b = b.canonical.matches('/').count();
+        let depth_a = std::path::Path::new(&a.canonical).components().count();
+        let depth_b = std::path::Path::new(&b.canonical).components().count();
         depth_a.cmp(&depth_b).then_with(|| {
             // Deny = 0 (first), Allow = 1 (last) — allow wins at same depth
             let effect_ord = |e: &RuleEffect| match e {
@@ -224,6 +224,10 @@ fn sbpl_filter(path: &str, path_match: PathMatch) -> String {
     match path_match {
         PathMatch::Subpath => format!("(subpath \"{}\")", sbpl_escape(path)),
         PathMatch::Literal => format!("(literal \"{}\")", sbpl_escape(path)),
+        PathMatch::ChildOf => {
+            // Match direct children: path itself is a directory, match any immediate child
+            format!("(regex #\"^{}/[^/]+$\")", sbpl_escape(path))
+        }
         PathMatch::Regex => format!("(regex #\"{}\")", path),
     }
 }

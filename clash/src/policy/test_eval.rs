@@ -45,8 +45,17 @@ impl TestResult {
 /// Accepts both JSON format (`Bash { "command": "git push" }`) and
 /// shorthand (`bash "git push"`).
 pub fn evaluate_test(input: &str, policy: &CompiledPolicy) -> Result<TestResult> {
+    evaluate_test_with_mode(input, policy, None)
+}
+
+/// Parse a test input string and evaluate with an optional mode.
+pub fn evaluate_test_with_mode(
+    input: &str,
+    policy: &CompiledPolicy,
+    mode: Option<&str>,
+) -> Result<TestResult> {
     let (tool_name, tool_input) = parse_test_input(input)?;
-    let decision = policy.evaluate(&tool_name, &tool_input);
+    let decision = policy.evaluate_with_mode(&tool_name, &tool_input, mode);
     Ok(TestResult {
         tool_name,
         tool_input,

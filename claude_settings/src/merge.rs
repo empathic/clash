@@ -78,6 +78,14 @@ impl Merge for Hooks {
                 .post_tool_use
                 .clone()
                 .or_else(|| self.post_tool_use.clone()),
+            permission_request: other
+                .permission_request
+                .clone()
+                .or_else(|| self.permission_request.clone()),
+            session_start: other
+                .session_start
+                .clone()
+                .or_else(|| self.session_start.clone()),
             stop: other.stop.clone().or_else(|| self.stop.clone()),
             notification: other
                 .notification

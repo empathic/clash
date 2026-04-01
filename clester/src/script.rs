@@ -470,9 +470,9 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "exe", "policy")
-    def main():
-        return policy(default=deny, rules=[exe("git").allow()])
+    load("@clash//std.star", "exe", "policy", "settings")
+    settings(default=deny)
+    policy("test", rules=[exe("git").allow()])
 
 steps:
   - name: add allow rule

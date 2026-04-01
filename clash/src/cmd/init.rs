@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::json;
-use tracing::{Level, error, info, instrument, warn};
+use tracing::{Level, instrument, warn};
 
 use crate::agents::AgentKind;
 use crate::settings::ClashSettings;
@@ -14,8 +14,8 @@ struct InitActions {
     statusline_installed: bool,
 }
 
-/// GitHub repository used to install the clash plugin marketplace.
-const GITHUB_MARKETPLACE: &str = "empathic/clash";
+/// Command prefix used for all clash hooks installed into Claude Code settings.
+const HOOK_CMD_PREFIX: &str = "clash hook";
 
 /// Embedded agent plugin files — compiled into the binary so `clash init --agent <name>`
 /// can install them without needing the source repo.
@@ -52,7 +52,7 @@ pub fn run_install(agent: Option<AgentKind>) -> Result<()> {
 }
 
 #[instrument(level = Level::TRACE)]
-pub fn run(scope: Option<String>, quick: bool, agent: Option<AgentKind>) -> Result<()> {
+pub fn run(agent: Option<AgentKind>) -> Result<()> {
     let agent = match agent {
         Some(a) => a,
         None => *crate::dialog::select::<AgentKind>("Which coding agent are you using?")?,
@@ -60,27 +60,8 @@ pub fn run(scope: Option<String>, quick: bool, agent: Option<AgentKind>) -> Resu
 
     let mut actions = InitActions::default();
 
-    // 1. Policy setup — same for all agents.
-    match scope.as_deref() {
-        Some("project") => {
-            run_init_project()?;
-            actions.policy_created = true;
-        }
-        _ if quick => {
-            run_init_quick()?;
-            actions.policy_created = true;
-        }
-        _ => {
-            let policy_path = write_starter_policy()?;
-            crate::tui::run_with_options(&policy_path, false, true)?;
-            actions.policy_created = true;
-        }
-    }
-
-    // 2. Agent-specific plugin installation.
+    let policy_path = write_starter_policy()?;
     actions.plugin_installed = install_agent_plugin(agent)?;
-
-    // 3. Claude-specific extras: status line.
     if agent == AgentKind::Claude {
         if let Err(e) = super::statusline::install() {
             warn!(error = %e, "Could not install status line");
@@ -88,174 +69,32 @@ pub fn run(scope: Option<String>, quick: bool, agent: Option<AgentKind>) -> Resu
             actions.statusline_installed = true;
         }
     }
-
+    crate::tui::run_with_options(&policy_path, false, true)?;
+    actions.policy_created = true;
     print_summary(&actions, agent);
 
     Ok(())
 }
 
-/// Quick-init: skip the interactive editor and write a sensible default policy directly.
-fn run_init_quick() -> Result<()> {
-    let settings_dir =
-        ClashSettings::settings_dir().context("could not determine clash settings directory")?;
-
-    std::fs::create_dir_all(&settings_dir)
-        .with_context(|| format!("failed to create {}", settings_dir.display()))?;
-
-    let policy_path = settings_dir.join("policy.star");
-
-    let quick_policy = {
-        use clash_starlark::codegen::ast::Stmt;
-        use clash_starlark::codegen::builder::*;
-
-        clash_starlark::codegen::serialize(&[
-            load_std(&["match", "tool", "policy", "allow", "ask"]),
-            Stmt::Blank,
-            Stmt::def(
-                "main",
-                vec![Stmt::Return(policy(
-                    ask(),
-                    vec![
-                        clash_starlark::match_tree! {
-                            "Bash" => {
-                                ("git", "cargo", "npm", "npx", "node", "bun", "python", "pip", "uv") => allow(),
-                            },
-                        },
-                        tool(&["Read"]).allow(),
-                        tool(&["Write"]).allow(),
-                        tool(&["Edit"]).allow(),
-                        tool(&["Glob"]).allow(),
-                        tool(&["Grep"]).allow(),
-                    ],
-                    None,
-                ))],
-            ),
-        ])
-    };
-
-    std::fs::write(&policy_path, quick_policy)
-        .with_context(|| format!("failed to write {}", policy_path.display()))?;
-
-    ui::success(&format!(
-        "Quick setup: policy created at {}",
-        policy_path.display()
-    ));
-
-    Ok(())
-}
-
-/// Initialize a project-level policy in the project root's `.clash/` directory.
-fn run_init_project() -> Result<()> {
-    let project_root = ClashSettings::project_root()
-        .context("could not find project root — are you inside a git repository?")?;
-
-    let clash_dir = project_root.join(".clash");
-    let policy_path = clash_dir.join("policy.star");
-
-    if policy_path.exists() {
-        ui::skip(&format!(
-            "Project policy already exists at {}",
-            policy_path.display()
-        ));
-        return Ok(());
-    }
-
-    std::fs::create_dir_all(&clash_dir)
-        .with_context(|| format!("failed to create {}", clash_dir.display()))?;
-
-    let project_policy = "load(\"@clash//std.star\", \"policy\", \"deny\")\ndef main():\n    return policy(default = deny(), rules = [])\n";
-    std::fs::write(&policy_path, project_policy)
-        .with_context(|| format!("failed to write {}", policy_path.display()))?;
-
-    ui::success(&format!(
-        "Project policy initialized at {}",
-        policy_path.display()
-    ));
-
-    Ok(())
-}
-
-/// Build the starter policy JSON value for onboarding.
+/// Write the starter policy.star for onboarding.
 ///
-/// Includes pre-configured rules for base Claude tools (Read, Write, Edit,
-/// Glob, Grep) so new users start with a working set of file-operation
-/// permissions out of the box.
-fn starter_policy_json() -> serde_json::Value {
-    json!({
-        "schema_version": 5,
-        "default_effect": "ask",
-        "default_sandbox": "default",
-        "includes": [{"path": "@clash//builtin.star"}],
-        "sandboxes": {
-            "default": {
-                "default": ["read", "execute"],
-                "rules": [
-                    {
-                        "effect": "allow",
-                        "caps": ["read", "write", "create"],
-                        "path": "$PWD",
-                        "path_match": "subpath"
-                    },
-                    {
-                        "effect": "allow",
-                        "caps": ["read", "write", "create"],
-                        "path": "$TMPDIR",
-                        "path_match": "subpath"
-                    },
-                    {
-                        "effect": "allow",
-                        "caps": ["read"],
-                        "path": "$HOME",
-                        "path_match": "subpath"
-                    }
-                ],
-                "network": "deny"
-            }
-        },
-        "tree": [
-            {
-                "condition": {
-                    "observe": "tool_name",
-                    "pattern": { "any_of": [
-                        { "literal": { "literal": "Read" } },
-                        { "literal": { "literal": "Glob" } },
-                        { "literal": { "literal": "Grep" } }
-                    ]},
-                    "children": [{ "decision": { "allow": "default" } }]
-                }
-            },
-            {
-                "condition": {
-                    "observe": "tool_name",
-                    "pattern": { "any_of": [
-                        { "literal": { "literal": "Write" } },
-                        { "literal": { "literal": "Edit" } }
-                    ]},
-                    "children": [{ "decision": { "allow": "default" } }]
-                }
-            }
-        ]
-    })
-}
-
-/// Write a starter policy.json for onboarding.
-///
-/// Creates a minimal policy with `default_effect: "ask"`, the builtin include,
-/// a sensible dev sandbox, and an empty rule tree. Returns the path to the file.
+/// Writes the default policy template as a `.star` file, and compiles it to
+/// a `.json` sibling for the runtime to consume.
 pub fn write_starter_policy() -> Result<std::path::PathBuf> {
+    use crate::settings::compile_default_policy_to_json;
+
     let policy_path = ClashSettings::policy_file()?;
-    let policy_path = policy_path.with_extension("json");
-    let dir = policy_path
+    let json_path = policy_path.with_extension("json");
+    let dir = json_path
         .parent()
         .context("policy file path has no parent directory")?;
     std::fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
-    let policy = starter_policy_json();
+    let json = compile_default_policy_to_json().context("compiling default policy")?;
+    std::fs::write(&json_path, &json)
+        .with_context(|| format!("failed to write {}", json_path.display()))?;
 
-    std::fs::write(&policy_path, serde_json::to_string_pretty(&policy)?)
-        .with_context(|| format!("failed to write {}", policy_path.display()))?;
-
-    Ok(policy_path)
+    Ok(json_path)
 }
 
 // ---------------------------------------------------------------------------
@@ -279,24 +118,101 @@ fn install_agent_plugin(agent: AgentKind) -> Result<bool> {
 }
 
 fn install_claude_plugin() -> Result<bool> {
-    // Ensure settings.json records clash as an enabled plugin.
     let claude = claude_settings::ClaudeSettings::new();
-    if let Err(e) = claude.set_plugin_enabled(claude_settings::SettingsLevel::User, "clash", true) {
-        warn!(error = %e, "Could not set enabledPlugins in Claude Code settings");
-    }
 
-    match install_plugin_from_marketplace() {
-        Ok(()) => Ok(true),
-        Err(e) => {
-            error!(error = %e, "Could not install clash plugin");
-            ui::warn(&format!(
-                "Could not install the clash plugin: {e}\n  \
-                 You can install it manually later:\n    \
-                 claude plugin marketplace add {GITHUB_MARKETPLACE}\n    \
-                 claude plugin install clash"
-            ));
-            Ok(false)
+    // Write hooks directly into ~/.claude/settings.json.
+    // This is more reliable than the plugin marketplace flow, which requires
+    // Claude Code to resolve plugin directories at runtime.
+    claude
+        .update(claude_settings::SettingsLevel::User, |settings| {
+            let hooks = settings.hooks.get_or_insert_with(Default::default);
+            install_clash_hook_config(hooks);
+            settings.mark_clash_installed();
+        })
+        .context("writing clash hooks to Claude Code settings")?;
+
+    ui::success("Clash hooks installed in Claude Code settings.");
+    Ok(true)
+}
+
+/// Install clash hook commands into a `Hooks` config.
+///
+/// Public so `doctor.rs` can reuse it for the fix-up flow.
+///
+/// Each hook event gets a `clash hook <event>` command with a wildcard matcher.
+/// Existing non-clash hooks are preserved.
+pub fn install_clash_hook_config(hooks: &mut claude_settings::Hooks) {
+    use claude_settings::{Hook, HookMatcher};
+
+    let cmd_hook = |subcommand: &str| HookMatcher {
+        matcher: String::new(),
+        hooks: vec![Hook {
+            hook_type: "command".into(),
+            command: Some(format!("{HOOK_CMD_PREFIX} {subcommand}")),
+            timeout: None,
+        }],
+    };
+
+    let cmd_hook_matched = |subcommand: &str| HookMatcher {
+        matcher: "*".into(),
+        hooks: vec![Hook {
+            hook_type: "command".into(),
+            command: Some(format!("{HOOK_CMD_PREFIX} {subcommand}")),
+            timeout: None,
+        }],
+    };
+
+    // For config types that use HookConfig (matcher-based), merge with existing hooks.
+    let merge_hook_config = |existing: &mut Option<claude_settings::HookConfig>,
+                             subcommand: &str| {
+        let clash_cmd = format!("{HOOK_CMD_PREFIX} {subcommand}");
+        match existing {
+            Some(config) => {
+                // Check if clash hook is already present.
+                let already_installed = match config {
+                    claude_settings::HookConfig::Simple(map) => {
+                        map.values().any(|v| v.contains(HOOK_CMD_PREFIX))
+                    }
+                    claude_settings::HookConfig::Matchers(matchers) => matchers.iter().any(|m| {
+                        m.hooks.iter().any(|h| {
+                            h.command
+                                .as_deref()
+                                .is_some_and(|c| c.contains(HOOK_CMD_PREFIX))
+                        })
+                    }),
+                };
+                if !already_installed {
+                    *config = config.clone().insert("*", &clash_cmd);
+                }
+            }
+            None => {
+                *existing = Some(claude_settings::HookConfig::Matchers(vec![
+                    cmd_hook_matched(subcommand),
+                ]));
+            }
         }
+    };
+
+    merge_hook_config(&mut hooks.pre_tool_use, "pre-tool-use");
+    merge_hook_config(&mut hooks.post_tool_use, "post-tool-use");
+    merge_hook_config(&mut hooks.permission_request, "permission-request");
+    merge_hook_config(&mut hooks.notification, "notification");
+
+    // SessionStart uses Vec<HookMatcher> directly (no matcher pattern needed).
+    let session_already = hooks.session_start.as_ref().is_some_and(|matchers| {
+        matchers.iter().any(|m| {
+            m.hooks.iter().any(|h| {
+                h.command
+                    .as_deref()
+                    .is_some_and(|c| c.contains(HOOK_CMD_PREFIX))
+            })
+        })
+    });
+    if !session_already {
+        hooks
+            .session_start
+            .get_or_insert_with(Vec::new)
+            .push(cmd_hook("session-start"));
     }
 }
 
@@ -498,49 +414,69 @@ fn print_summary(actions: &InitActions, agent: AgentKind) {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Claude marketplace helpers
-// ---------------------------------------------------------------------------
+/// Remove clash hooks from a `Hooks` config, preserving non-clash hooks.
+///
+/// Returns `true` if any hooks were removed.
+pub fn uninstall_clash_hooks(hooks: &mut claude_settings::Hooks) -> bool {
+    let mut changed = false;
+    changed |= remove_clash_from_config(&mut hooks.pre_tool_use);
+    changed |= remove_clash_from_config(&mut hooks.post_tool_use);
+    changed |= remove_clash_from_config(&mut hooks.permission_request);
+    changed |= remove_clash_from_config(&mut hooks.notification);
+    changed |= remove_clash_from_vec(&mut hooks.session_start);
+    changed |= remove_clash_from_vec(&mut hooks.stop);
+    changed
+}
 
-/// Install the clash plugin into Claude Code from the GitHub marketplace.
-pub fn install_plugin_from_marketplace() -> Result<()> {
-    ui::progress(&format!(
-        "Installing clash plugin from {}...",
-        GITHUB_MARKETPLACE,
-    ));
+fn is_clash_hook(h: &claude_settings::Hook) -> bool {
+    h.command
+        .as_deref()
+        .is_some_and(|c| c.contains(HOOK_CMD_PREFIX))
+}
 
-    // Register the marketplace.
-    let add_output = std::process::Command::new("claude")
-        .args(["plugin", "marketplace", "add", GITHUB_MARKETPLACE])
-        .output()
-        .context("failed to run `claude plugin marketplace add` — is claude on PATH?")?;
-
-    if !add_output.status.success() {
-        let stderr = String::from_utf8_lossy(&add_output.stderr);
-        // "already exists" is fine — marketplace was previously registered.
-        if !stderr.contains("already") {
-            anyhow::bail!("claude plugin marketplace add failed: {stderr}");
+fn remove_clash_from_config(config: &mut Option<claude_settings::HookConfig>) -> bool {
+    let Some(c) = config.take() else {
+        return false;
+    };
+    match c {
+        claude_settings::HookConfig::Simple(mut map) => {
+            let before = map.len();
+            map.retain(|_, v| !v.contains(HOOK_CMD_PREFIX));
+            let removed = map.len() != before;
+            if !map.is_empty() {
+                *config = Some(claude_settings::HookConfig::Simple(map));
+            }
+            removed
         }
-        info!("marketplace already registered, continuing");
-    }
-
-    // Install the plugin.
-    let install_output = std::process::Command::new("claude")
-        .args(["plugin", "install", "clash"])
-        .output()
-        .context("failed to run `claude plugin install`")?;
-
-    if !install_output.status.success() {
-        let stderr = String::from_utf8_lossy(&install_output.stderr);
-        // "already installed" is fine.
-        if !stderr.contains("already") {
-            anyhow::bail!("claude plugin install failed: {stderr}");
+        claude_settings::HookConfig::Matchers(mut matchers) => {
+            let before = matchers.len();
+            for m in &mut matchers {
+                m.hooks.retain(|h| !is_clash_hook(h));
+            }
+            matchers.retain(|m| !m.hooks.is_empty());
+            let removed = matchers.len() != before;
+            if !matchers.is_empty() {
+                *config = Some(claude_settings::HookConfig::Matchers(matchers));
+            }
+            removed
         }
-        info!("plugin already installed");
     }
+}
 
-    ui::success("Clash plugin installed in Claude Code.");
-    Ok(())
+fn remove_clash_from_vec(opt: &mut Option<Vec<claude_settings::HookMatcher>>) -> bool {
+    let Some(mut v) = opt.take() else {
+        return false;
+    };
+    let before = v.len();
+    for m in &mut v {
+        m.hooks.retain(|h| !is_clash_hook(h));
+    }
+    v.retain(|m| !m.hooks.is_empty());
+    let removed = v.len() != before;
+    if !v.is_empty() {
+        *opt = Some(v);
+    }
+    removed
 }
 
 #[cfg(test)]
@@ -549,8 +485,8 @@ mod tests {
 
     #[test]
     fn starter_policy_compiles() {
-        let policy = starter_policy_json();
-        let json_str = serde_json::to_string_pretty(&policy).expect("serialize starter policy");
+        use crate::settings::compile_default_policy_to_json;
+        let json_str = compile_default_policy_to_json().expect("compile default policy");
         crate::policy::compile::compile_to_tree(&json_str)
             .expect("starter policy must compile without errors");
     }

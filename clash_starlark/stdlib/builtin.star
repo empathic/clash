@@ -1,11 +1,10 @@
-load("@clash//std.star", "allow", "ask", "match", "deny", "sandbox")
 
 clashbox = sandbox(
     name="clash_box",
     default=deny(),
     fs={
-        "$HOME/.clash": allow("r"),
-        "$HOME": allow("rx"),
+        glob("$HOME/.clash/**"): allow("r"),
+        glob("$HOME/**"): allow("rx"),
     },
     net=allow(),
 )
@@ -26,8 +25,8 @@ clash = match({
 _claude_fs = sandbox(
     name="claude_fs",
     fs={
-        "$HOME/.claude": allow("rwc"),
-        "$TRANSCRIPT_DIR": allow("r"),
+        glob("$HOME/.claude/**"): allow("rwc"),
+        glob("$TRANSCRIPT_DIR/**"): allow("r"),
     },
 )
 

@@ -98,6 +98,57 @@ impl FromStr for AgentKind {
 }
 
 // ---------------------------------------------------------------------------
+// Canonical permission mode table
+// ---------------------------------------------------------------------------
+
+/// Maps agent-specific permission mode strings to canonical Clash modes.
+///
+/// Canonical modes: "default", "plan", "edit", "unrestricted".
+/// Unknown modes pass through as-is so agent-specific extensions still work.
+struct ModeAlias {
+    /// Clash's canonical mode name.
+    canonical: &'static str,
+    /// Agent-specific names that map to this mode.
+    agent_names: &'static [(AgentKind, &'static str)],
+}
+
+const MODE_ALIASES: &[ModeAlias] = &[
+    ModeAlias {
+        canonical: "default",
+        agent_names: &[(AgentKind::Claude, "default")],
+    },
+    ModeAlias {
+        canonical: "plan",
+        agent_names: &[(AgentKind::Claude, "plan")],
+    },
+    ModeAlias {
+        canonical: "edit",
+        agent_names: &[(AgentKind::Claude, "edit")],
+    },
+    ModeAlias {
+        canonical: "unrestricted",
+        agent_names: &[(AgentKind::Claude, "dangerously_skip_permissions")],
+    },
+];
+
+/// Given an agent's native permission mode string, return the canonical mode.
+///
+/// Case-insensitive. Returns the original string unchanged if no mapping exists.
+pub fn resolve_permission_mode<'a>(agent: AgentKind, native_mode: &'a str) -> &'a str {
+    let lower = native_mode.to_lowercase();
+    for alias in MODE_ALIASES {
+        for &(a, name) in alias.agent_names {
+            if a == agent && name.to_lowercase() == lower {
+                // Safety: canonical strings are 'static, but we return 'a to
+                // keep the API simple — leak the static lifetime down.
+                return alias.canonical;
+            }
+        }
+    }
+    native_mode
+}
+
+// ---------------------------------------------------------------------------
 // Canonical tool alias table
 // ---------------------------------------------------------------------------
 
@@ -394,6 +445,57 @@ mod tests {
     #[test]
     fn resolve_any_unknown() {
         assert_eq!(resolve_any_to_internal("CustomTool"), None);
+    }
+
+    // --- resolve_permission_mode tests ---
+
+    #[test]
+    fn resolve_mode_claude_default() {
+        assert_eq!(
+            resolve_permission_mode(AgentKind::Claude, "default"),
+            "default"
+        );
+    }
+
+    #[test]
+    fn resolve_mode_claude_plan() {
+        assert_eq!(resolve_permission_mode(AgentKind::Claude, "plan"), "plan");
+    }
+
+    #[test]
+    fn resolve_mode_claude_dangerously_skip() {
+        assert_eq!(
+            resolve_permission_mode(AgentKind::Claude, "dangerously_skip_permissions"),
+            "unrestricted"
+        );
+    }
+
+    #[test]
+    fn resolve_mode_case_insensitive() {
+        assert_eq!(
+            resolve_permission_mode(AgentKind::Claude, "DANGEROUSLY_SKIP_PERMISSIONS"),
+            "unrestricted"
+        );
+    }
+
+    #[test]
+    fn resolve_mode_unknown_passthrough() {
+        assert_eq!(
+            resolve_permission_mode(AgentKind::Claude, "custom_mode"),
+            "custom_mode"
+        );
+    }
+
+    #[test]
+    fn resolve_mode_other_agents_default() {
+        assert_eq!(
+            resolve_permission_mode(AgentKind::Gemini, "default"),
+            "default"
+        );
+        assert_eq!(
+            resolve_permission_mode(AgentKind::Codex, "default"),
+            "default"
+        );
     }
 
     #[test]

@@ -51,7 +51,7 @@
 * The policy speaks in capabilities, not Claude Code tool names — the eval layer maps tools to capabilities
 * Policy files use `.json` or `.star` extension (`.json` preferred when both exist)
 * The `clash-starlark` crate evaluates `.star` files → JSON using Starlark (a Python-like config language)
-* Starlark policies define a `main()` function that returns a policy value
+* Starlark policies use top-level `settings()`, `sandbox()`, and `policy()` registration calls (no `main()` function)
 
 ## Site
 

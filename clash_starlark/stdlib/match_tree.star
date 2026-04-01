@@ -150,12 +150,11 @@ def not_pat(pattern):
 # Policy wrapper
 # ---------------------------------------------------------------------------
 
-def policy(default = "deny", sandboxes = None, rules = None):
-    """Build a match tree policy.
+def policy(name = "default", default = "deny", sandboxes = None, rules = None):
+    """Register a match tree policy.
 
     Usage:
-        policy(
-            sandboxes = [cwd_sb],
+        policy("my-policy",
             rules = [
                 exe("git").on([
                     has_arg("--force").deny(),
@@ -165,4 +164,5 @@ def policy(default = "deny", sandboxes = None, rules = None):
             ],
         )
     """
-    return _mt_policy(default = default, sandboxes = sandboxes, rules = rules)
+    _register_settings(default = default)
+    _register_policy(name = name, sandboxes = sandboxes, rules = rules)

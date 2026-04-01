@@ -198,5 +198,6 @@ pub fn format_pattern(pat: &Pattern) -> String {
         }
         Pattern::Not(inner) => format!("!{}", format_pattern(inner)),
         Pattern::Prefix(v) => format!("{}/**", v.resolve()),
+        Pattern::ChildOf(v) => format!("{}/*", v.resolve()),
     }
 }
