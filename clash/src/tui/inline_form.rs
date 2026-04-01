@@ -2094,6 +2094,7 @@ impl FormState {
                 ("Tab", "next field"),
                 ("Esc", "cancel"),
             ],
+            footer_left: &[],
             footer_right: None,
             scroll: None,
         };

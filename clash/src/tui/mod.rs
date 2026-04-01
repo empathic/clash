@@ -29,6 +29,15 @@ use ratatui::backend::CrosstermBackend;
 
 use crate::policy_loader;
 
+/// Outcome of running the TUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiOutcome {
+    /// User finished normally (saved, quit after editing, etc.).
+    Completed,
+    /// User aborted during onboarding — caller should skip remaining setup.
+    Aborted,
+}
+
 /// Restore the terminal to its normal state.
 ///
 /// Idempotent — safe to call even if the terminal was never fully initialised.
@@ -44,12 +53,16 @@ pub(crate) fn restore_terminal() {
 }
 
 /// Launch the interactive policy editor TUI.
-pub fn run(path: &Path) -> Result<()> {
+pub fn run(path: &Path) -> Result<TuiOutcome> {
     run_with_options(path, false, false)
 }
 
 /// Launch the TUI with options.
-pub fn run_with_options(path: &Path, show_test_panel: bool, onboarding: bool) -> Result<()> {
+pub fn run_with_options(
+    path: &Path,
+    show_test_panel: bool,
+    onboarding: bool,
+) -> Result<TuiOutcome> {
     let manifest = policy_loader::read_manifest(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
 
@@ -78,7 +91,7 @@ pub fn run_with_options(path: &Path, show_test_panel: bool, onboarding: bool) ->
 }
 
 /// Set up the terminal, run the TUI, and always restore before returning.
-fn setup_and_run(app: &mut app::App) -> Result<()> {
+fn setup_and_run(app: &mut app::App) -> Result<TuiOutcome> {
     enable_raw_mode()?;
 
     // Once raw mode is active we must restore no matter what, so run the rest

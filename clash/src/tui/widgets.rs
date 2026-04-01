@@ -231,6 +231,7 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, scroll: &mut ScrollSta
         border_color: Color::Cyan,
         title: "Help",
         footer: &[("j/k", "scroll"), ("any key", "close")],
+        footer_left: &[],
         footer_right: None,
         scroll: Some(scroll.to_modal_scroll()),
     };
@@ -256,6 +257,7 @@ pub fn render_confirm_overlay(frame: &mut Frame, area: Rect, prompt: &str) -> Mo
         border_color: Color::Yellow,
         title: "Confirm",
         footer: &[("y", "yes"), ("n", "no")],
+        footer_left: &[],
         footer_right: None,
         scroll: None,
     };
@@ -297,6 +299,7 @@ pub fn render_diff_overlay(
         border_color: Color::Cyan,
         title: "Save Review",
         footer: &[("y", "confirm"), ("n", "cancel"), ("j/k", "scroll")],
+        footer_left: &[],
         footer_right: scroll_info,
         scroll: Some(scroll.to_modal_scroll()),
     };
@@ -373,10 +376,12 @@ pub struct ModalOverlay<'a> {
     pub height: ModalHeight,
     pub border_color: Color,
     pub title: &'a str,
-    /// Key-hint pairs rendered as `title_bottom`; empty slice = no footer.
+    /// Key-hint pairs rendered right-aligned in the bottom border; empty = no footer.
     pub footer: &'a [(&'a str, &'a str)],
     /// Optional right-aligned footer text, e.g. scroll position "[3-10/20]".
     pub footer_right: Option<String>,
+    /// Key-hint pairs rendered left-aligned in the bottom border.
+    pub footer_left: &'a [(&'a str, &'a str)],
     /// When set, a vertical scrollbar is rendered on the right edge if content overflows.
     pub scroll: Option<ModalScroll>,
 }
@@ -560,6 +565,45 @@ impl ModalOverlay<'_> {
             block = block.title_bottom(Line::from(spans).alignment(Alignment::Right));
         }
 
+        // Left-aligned footer hints
+        if !self.footer_left.is_empty() {
+            let mut spans: Vec<Span> = Vec::new();
+            let mut char_offset: u16 = 0;
+
+            spans.push(Span::raw(" "));
+            char_offset += 1;
+
+            for (i, (key, desc)) in self.footer_left.iter().enumerate() {
+                if i > 0 {
+                    spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                    char_offset += 2;
+                }
+                let button_text = format!("{key} {desc}");
+                let button_width = button_text.len() as u16;
+                if let Some(kc) = parse_hint_key(key) {
+                    // Left-aligned: x starts at popup.x + 1 (inside left border)
+                    let btn_x = popup.x + 1 + char_offset;
+                    let btn_y = popup.y + popup.height.saturating_sub(1);
+                    footer_buttons.push((Rect::new(btn_x, btn_y, button_width, 1), kc));
+                }
+                spans.push(Span::styled(
+                    *key,
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                char_offset += key.len() as u16;
+                spans.push(Span::styled(
+                    format!(" {desc}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+                char_offset += 1 + desc.len() as u16;
+            }
+            spans.push(Span::raw(" "));
+
+            block = block.title_bottom(Line::from(spans).alignment(Alignment::Left));
+        }
+
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
@@ -732,6 +776,7 @@ mod tests {
                     border_color: Color::Yellow,
                     title: "Test",
                     footer: &[("y", "yes"), ("n", "no")],
+                    footer_left: &[],
                     footer_right: None,
                     scroll: None,
                 };
@@ -779,6 +824,7 @@ mod tests {
                     border_color: Color::Cyan,
                     title: "Help",
                     footer: &[("j/k", "scroll"), ("any key", "close")],
+                    footer_left: &[],
                     footer_right: None,
                     scroll: None,
                 };
@@ -804,6 +850,7 @@ mod tests {
                     border_color: Color::Cyan,
                     title: "Save Review",
                     footer: &[("y", "confirm"), ("n", "cancel"), ("j/k", "scroll")],
+                    footer_left: &[],
                     footer_right: None,
                     scroll: None,
                 };
@@ -831,6 +878,7 @@ mod tests {
                     border_color: Color::Yellow,
                     title: "Confirm",
                     footer: &[("y", "yes"), ("n", "no")],
+                    footer_left: &[],
                     footer_right: None,
                     scroll: None,
                 };
