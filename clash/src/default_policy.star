@@ -7,9 +7,9 @@ policy("default",
             glob("**"): allow(sandbox=readonly),
         },
         (mode("edit"), mode("default")): {
-            tool("Bash"): {
+            Tool("Bash"): {
                 "git": {
-                    glob("**"): allow(sandbox=git)
+                    glob("**"): allow(sandbox=project)
                 }
             }
         },
