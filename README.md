@@ -51,7 +51,7 @@ This downloads the latest release binary to `~/.local/bin/` (Apple Silicon Mac, 
 cargo install clash
 ```
 
-`clash init` writes a default `.star` policy (or `.json`), installs the Claude Code plugin from GitHub, installs the status line, and walks you through initial configuration. After init, every `claude` session automatically loads clash.
+`clash init` imports permissions from your coding agent's existing configuration and generates a matching Clash policy. It also installs the agent plugin, the status line, and prints next steps. Use `clash init --no-import` to skip policy generation and just install hooks. After init, every `claude` session automatically loads clash.
 
 If you have the repo checked out, you can also use `just install` which registers the plugin from the local source tree instead of GitHub.
 
