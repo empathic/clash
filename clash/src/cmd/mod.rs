@@ -5,6 +5,7 @@ pub mod doctor;
 pub mod explain;
 pub mod fmt;
 pub mod from_trace;
+pub mod import_settings;
 pub mod hooks;
 pub mod init;
 pub mod launch;

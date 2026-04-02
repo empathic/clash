@@ -198,14 +198,17 @@ pub enum PolicyCmd {
 pub enum Commands {
     /// Initialize a new clash policy with a safe default configuration
     ///
-    /// Pass "user" to create a global policy (~/.clash/policy.star) or
-    /// "project" to create a repo-scoped policy (.clash/policy.star).
-    /// When no scope is given, an interactive prompt lets you choose.
+    /// By default, imports permissions from your coding agent's existing
+    /// configuration and generates a matching Clash policy. Use --no-import
+    /// to skip policy generation and just install hooks.
     Init {
         /// Generate policy from an observed session trace file.
         /// Pass a path to trace.jsonl or audit.jsonl, or "latest" to auto-detect.
-        #[arg(long = "from-trace", value_name = "PATH")]
+        #[arg(long = "from-trace", value_name = "PATH", conflicts_with = "no_import")]
         from_trace: Option<std::path::PathBuf>,
+        /// Skip policy import — just install hooks and print setup instructions
+        #[arg(long = "no-import", conflicts_with = "from_trace")]
+        no_import: bool,
         /// Which coding agent to set up (prompts if omitted)
         #[arg(long)]
         agent: Option<crate::agents::AgentKind>,

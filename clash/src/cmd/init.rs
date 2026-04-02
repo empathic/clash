@@ -54,6 +54,36 @@ pub fn run_install(agent: Option<AgentKind>) -> Result<()> {
     Ok(())
 }
 
+/// Minimal init: install hooks/plugin only, no policy generation.
+pub fn run_no_import(agent: Option<AgentKind>) -> Result<()> {
+    let agent = match agent {
+        Some(a) => a,
+        None => *crate::dialog::select::<AgentKind>("Which coding agent are you using?")?,
+    };
+
+    install_agent_plugin(agent)?;
+
+    if agent == AgentKind::Claude {
+        if let Err(e) = super::statusline::install() {
+            warn!(error = %e, "Could not install status line");
+        }
+    }
+
+    println!();
+    ui::success("Clash hooks installed.");
+    println!();
+    println!(
+        "  Run {} to configure your policy.",
+        style::bold("clash policy edit")
+    );
+    println!(
+        "  Run {} to verify the setup.",
+        style::bold(&format!("clash doctor --agent {agent}"))
+    );
+
+    Ok(())
+}
+
 #[instrument(level = Level::TRACE)]
 pub fn run(agent: Option<AgentKind>) -> Result<()> {
     let agent = match agent {
@@ -113,7 +143,7 @@ pub fn write_starter_policy() -> Result<std::path::PathBuf> {
 // ---------------------------------------------------------------------------
 
 /// Install the agent-specific plugin/hooks. Returns true if installation succeeded.
-fn install_agent_plugin(agent: AgentKind) -> Result<bool> {
+pub(crate) fn install_agent_plugin(agent: AgentKind) -> Result<bool> {
     println!();
     style::header(&format!("Installing {agent} plugin"));
     println!();
