@@ -320,11 +320,11 @@ impl Theme {
 
     /// Select a theme from the `CLASH_THEME` environment variable.
     ///
-    /// Supported values: `dark`, `adaptive`. Defaults to `dark`.
+    /// Supported values: `dark`, `adaptive`. Defaults to `adaptive`.
     pub fn from_env() -> Self {
         match std::env::var("CLASH_THEME").as_deref() {
-            Ok("adaptive") => Self::adaptive(),
-            _ => Self::default_dark(),
+            Ok("dark") => Self::default_dark(),
+            _ => Self::adaptive(),
         }
     }
 
