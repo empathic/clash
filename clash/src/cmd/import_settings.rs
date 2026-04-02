@@ -1,10 +1,13 @@
 //! Import permissions from a coding agent's settings and generate a Clash policy.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use claude_settings::permission::{Permission, PermissionPattern};
 
 use crate::agents::AgentKind;
+use crate::settings::ClashSettings;
+use crate::style;
+use crate::ui;
 
 // ---------------------------------------------------------------------------
 // Posture — for the interactive prompt when nothing to import
@@ -375,17 +378,128 @@ pub(crate) fn generate_starlark_from_analysis(analysis: &ImportAnalysis) -> Stri
 }
 
 // ---------------------------------------------------------------------------
-// Entry point (stub — implemented in Task 9)
+// Entry point
 // ---------------------------------------------------------------------------
 
 /// Import settings from the agent and generate a Clash policy.
 pub fn run(agent: Option<AgentKind>) -> Result<()> {
-    let _agent = match agent {
+    let agent = match agent {
         Some(a) => a,
         None => *crate::dialog::select::<AgentKind>("Which coding agent are you using?")?,
     };
 
-    anyhow::bail!("import not yet implemented — use `clash init --no-import` for now")
+    // Read effective Claude settings
+    let claude = claude_settings::ClaudeSettings::new();
+    let settings = claude.effective().unwrap_or_default();
+    let analysis = analyze_settings(&settings);
+
+    // Generate policy
+    let policy_content = if analysis.needs_posture_prompt() {
+        if analysis.bypass_permissions {
+            ui::info("Claude Code is running with bypass_permissions enabled.");
+        } else {
+            ui::info("No existing permissions found in Claude Code settings.");
+        }
+        println!();
+        let posture = crate::dialog::select::<Posture>("Pick a starting posture")?;
+        generate_starlark_from_posture(*posture)
+    } else {
+        print_import_summary(&analysis);
+        generate_starlark_from_analysis(&analysis)
+    };
+
+    // Write policy file
+    let policy_path = write_policy(&policy_content)?;
+    ui::success(&format!("Policy written to {}", policy_path.display()));
+
+    // Install agent plugin
+    super::init::install_agent_plugin(agent)?;
+
+    // Install statusline for Claude
+    if agent == AgentKind::Claude {
+        if let Err(e) = super::statusline::install() {
+            tracing::warn!(error = %e, "Could not install status line");
+        }
+    }
+
+    // Print next steps
+    println!();
+    println!(
+        "  Run {} to tweak your policy.",
+        style::bold("clash policy edit")
+    );
+    println!(
+        "  Run {} to verify the setup.",
+        style::bold(&format!("clash doctor --agent {agent}"))
+    );
+
+    Ok(())
+}
+
+/// Print a summary of what was found in the settings.
+fn print_import_summary(analysis: &ImportAnalysis) {
+    println!();
+    ui::info("Importing permissions from Claude Code settings:");
+
+    if !analysis.bash_allows.is_empty() {
+        let bins: Vec<&str> = analysis
+            .bash_allows
+            .iter()
+            .filter_map(|segs| segs.first().map(|s| s.as_str()))
+            .collect();
+        ui::success(&format!("  Bash commands: {}", bins.join(", ")));
+    }
+
+    let all_tools: Vec<&str> = analysis
+        .tool_allows
+        .iter()
+        .chain(analysis.tool_asks.iter())
+        .map(|s| s.as_str())
+        .collect();
+    if !all_tools.is_empty() {
+        ui::success(&format!("  Tools: {}", all_tools.join(", ")));
+    }
+
+    if !analysis.file_denies.is_empty() {
+        let denied: Vec<String> = analysis
+            .file_denies
+            .iter()
+            .map(|(tool, path)| format!("{tool}({path})"))
+            .collect();
+        ui::success(&format!("  Denied: {}", denied.join(", ")));
+    }
+
+    if !analysis.skipped.is_empty() {
+        ui::warn(&format!(
+            "  Skipped {} unsupported patterns: {}",
+            analysis.skipped.len(),
+            analysis.skipped.join(", ")
+        ));
+    }
+
+    println!();
+}
+
+/// Write a policy string to the user's policy file.
+fn write_policy(content: &str) -> Result<std::path::PathBuf> {
+    let policy_path = ClashSettings::policy_file()
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".clash")
+                .join("policy.star")
+        })
+        .with_extension("star");
+
+    if let Some(parent) = policy_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating directory {}", parent.display()))?;
+    }
+
+    std::fs::write(&policy_path, content)
+        .with_context(|| format!("writing policy to {}", policy_path.display()))?;
+
+    Ok(policy_path)
 }
 
 // ---------------------------------------------------------------------------
