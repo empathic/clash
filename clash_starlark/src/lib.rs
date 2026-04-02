@@ -162,30 +162,29 @@ policy("test", {
     fn test_policy_roundtrip_via_canonicalize() {
         // Simulates the TUI path: parse .star → canonicalize → serialize → re-evaluate
         let source = r#"load("@clash//builtin.star", "builtins")
-load("@clash//sandboxes.star", "plan", "edit", "safe_yolo")
+load("@clash//sandboxes.star", "readonly", "project", "workspace")
 
 policy("default",
     {
         mode("plan"): {
-            glob("**"): allow(sandbox=plan),
+            glob("**"): allow(sandbox=readonly),
         },
         (mode("edit"), mode("default")): {
-            glob("**"): allow(sandbox=edit),
+            glob("**"): allow(sandbox=project),
         },
         mode("unrestricted"): {
-            glob("**"): allow(sandbox=safe_yolo),
+            glob("**"): allow(sandbox=workspace),
         },
     },
 )
 "#;
-        let doc = crate::codegen::StarDocument::from_source(
-            source.into(),
-            "test.star".into(),
-        )
-        .unwrap();
+        let doc =
+            crate::codegen::StarDocument::from_source(source.into(), "test.star".into()).unwrap();
         let canonical = doc.to_source();
         eprintln!("canonical:\n{canonical}");
-        let json = doc.evaluate_to_json().expect("evaluate_to_json should succeed after canonicalize");
+        let json = doc
+            .evaluate_to_json()
+            .expect("evaluate_to_json should succeed after canonicalize");
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["schema_version"], 5);
     }
@@ -195,18 +194,18 @@ policy("default",
         let doc = eval_to_doc(
             r#"
 load("@clash//builtin.star", "builtins")
-load("@clash//sandboxes.star", "plan", "edit", "safe_yolo")
+load("@clash//sandboxes.star", "readonly", "project", "workspace")
 
 policy("default",
     {
         mode("plan"): {
-            glob("**"): allow(sandbox=plan),
+            glob("**"): allow(sandbox=readonly),
         },
         (mode("edit"), mode("default")): {
-            glob("**"): allow(sandbox=edit),
+            glob("**"): allow(sandbox=project),
         },
         mode("unrestricted"): {
-            glob("**"): allow(sandbox=safe_yolo),
+            glob("**"): allow(sandbox=workspace),
         },
     },
 )
@@ -214,7 +213,11 @@ policy("default",
         );
         assert_eq!(doc["schema_version"], 5);
         let tree = doc["tree"].as_array().unwrap();
-        assert!(tree.len() >= 4, "expected at least 4 mode rules, got {}", tree.len());
+        assert!(
+            tree.len() >= 4,
+            "expected at least 4 mode rules, got {}",
+            tree.len()
+        );
     }
 
     #[test]
