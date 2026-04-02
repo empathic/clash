@@ -315,7 +315,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
         load_std(&[
             "when", "policy", "settings", "sandbox", "cwd", "home", "allow", "ask", "deny",
         ]),
-        load_sandboxes(&["dev"]),
+        load_sandboxes(&["project"]),
         Stmt::Blank,
     ];
 
@@ -334,9 +334,9 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
         )],
     );
     stmts.push(Stmt::comment(
-        "Tighter sandbox for Claude fs tools (scoped to cwd + ~/.claude)",
+        "Sandbox for file-access tools (scoped to project + ~/.claude)",
     ));
-    stmts.push(Stmt::assign("_fs_box", fs_box));
+    stmts.push(Stmt::assign("project_files", fs_box));
     stmts.push(Stmt::Blank);
 
     // Categorize tools
@@ -377,7 +377,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Read-only fs tools
     if !read_tools.is_empty() {
-        let expr = tool_match(&read_tools, allow_with_sandbox(Expr::ident("_fs_box")));
+        let expr = tool_match(&read_tools, allow_with_sandbox(Expr::ident("project_files")));
         rules.push(Expr::commented(
             "Read-only fs tools — observed in session",
             expr,
@@ -386,7 +386,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Write fs tools
     if !write_tools.is_empty() {
-        let expr = tool_match(&write_tools, allow_with_sandbox(Expr::ident("_fs_box")));
+        let expr = tool_match(&write_tools, allow_with_sandbox(Expr::ident("project_files")));
         rules.push(Expr::commented(
             "Write fs tools — observed in session",
             expr,
@@ -435,7 +435,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
         };
         let expr = clash_starlark::match_tree! {
             "Bash" => {
-                key => allow_with_sandbox(Expr::ident("dev")),
+                key => allow_with_sandbox(Expr::ident("project")),
             },
         };
         rules.push(Expr::commented("Observed binaries — sandboxed", expr));
@@ -447,7 +447,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
         && analysis.tools.len() < analysis.total_invocations;
     if saw_bash {
         let expr = clash_starlark::match_tree! {
-            "Bash" => allow_with_sandbox(Expr::ident("dev")),
+            "Bash" => allow_with_sandbox(Expr::ident("project")),
         };
         rules.push(Expr::commented(
             "Bash commands observed (binaries unknown) — sandboxed",
@@ -457,7 +457,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     stmts.push(Stmt::Expr(settings(
         Expr::ident("ask"),
-        Some(Expr::ident("dev")),
+        Some(Expr::ident("project")),
     )));
     stmts.push(Stmt::Blank);
     stmts.push(Stmt::Expr(policy(
@@ -625,12 +625,12 @@ mod tests {
         assert!(policy.contains("load(\"@clash//std.star\""));
 
         // Should contain tool rules
-        assert!(policy.contains("(\"Read\", \"Grep\"): allow(sandbox = _fs_box)"));
-        assert!(policy.contains("\"Write\": allow(sandbox = _fs_box)"));
+        assert!(policy.contains("(\"Read\", \"Grep\"): allow(sandbox = project_files)"));
+        assert!(policy.contains("\"Write\": allow(sandbox = project_files)"));
 
         // Should contain when rules for binaries
         assert!(policy.contains("\"Bash\":"));
-        assert!(policy.contains("allow(sandbox = dev)"));
+        assert!(policy.contains("allow(sandbox = project)"));
 
         // Should contain git safety rules
         assert!(policy.contains("\"--force\": deny()"));
@@ -653,8 +653,8 @@ mod tests {
         };
 
         let policy = generate_starlark(&analysis);
-        assert!(policy.contains("\"Read\": allow(sandbox = _fs_box)"));
-        assert!(policy.contains("\"Edit\": allow(sandbox = _fs_box)"));
+        assert!(policy.contains("\"Read\": allow(sandbox = project_files)"));
+        assert!(policy.contains("\"Edit\": allow(sandbox = project_files)"));
         // No binary-specific rules (no "git", "cargo" etc.)
         assert!(!policy.contains("# Observed binaries"));
     }
@@ -671,7 +671,7 @@ mod tests {
         let policy = generate_starlark(&analysis);
         // Should generate a generic Bash when rule since we know bash was used
         // but total_invocations > tools count
-        assert!(policy.contains("when({\"Bash\": allow(sandbox = dev)})"));
+        assert!(policy.contains("when({\"Bash\": allow(sandbox = project)})"));
     }
 
     #[test]
