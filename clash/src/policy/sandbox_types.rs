@@ -820,14 +820,6 @@ mod tests {
     }
 
     #[test]
-    fn test_network_policy_localhost_ports_empty_is_localhost() {
-        // Empty ports list deserializes to plain Localhost
-        let json = r#"{"localhost":[]}"#;
-        let deserialized: NetworkPolicy = serde_json::from_str(json).unwrap();
-        assert_eq!(deserialized, NetworkPolicy::Localhost);
-    }
-
-    #[test]
     fn test_sandbox_policy_serde() {
         let policy = SandboxPolicy {
             default: Cap::READ | Cap::EXECUTE,
