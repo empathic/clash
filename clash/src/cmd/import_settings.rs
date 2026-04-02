@@ -203,7 +203,7 @@ use clash_starlark::codegen::ast::{DictEntry, Expr, Stmt};
 use clash_starlark::codegen::builder::*;
 
 /// Generate a minimal Starlark policy from a posture choice.
-pub(crate) fn generate_starlark_from_posture(posture: Posture) -> String {
+fn generate_starlark_from_posture(posture: Posture) -> String {
     let effect_name = posture.default_effect();
     let preset = posture.sandbox_preset();
 
@@ -246,10 +246,7 @@ fn build_bash_rules(commands: &[Vec<String>], effect: Expr) -> Expr {
         sorted.as_slice().into()
     };
 
-    let glob_entry = DictEntry::new(
-        Expr::call("glob", vec![Expr::string("**")]),
-        effect,
-    );
+    let glob_entry = DictEntry::new(Expr::call("glob", vec![Expr::string("**")]), effect);
     let glob_dict = Expr::dict(vec![glob_entry]);
 
     match_rule(vec![(
@@ -259,7 +256,7 @@ fn build_bash_rules(commands: &[Vec<String>], effect: Expr) -> Expr {
 }
 
 /// Generate a full Starlark policy from analyzed settings.
-pub(crate) fn generate_starlark_from_analysis(analysis: &ImportAnalysis) -> String {
+fn generate_starlark_from_analysis(analysis: &ImportAnalysis) -> String {
     let mut stmts = vec![
         Stmt::comment("Imported from Claude Code settings"),
         load_builtin(),
@@ -290,10 +287,7 @@ pub(crate) fn generate_starlark_from_analysis(analysis: &ImportAnalysis) -> Stri
     stmts.push(Stmt::assign("project_files", fs_box));
     stmts.push(Stmt::Blank);
 
-    stmts.push(Stmt::Expr(settings(
-        ask(),
-        Some(Expr::ident("project")),
-    )));
+    stmts.push(Stmt::Expr(settings(ask(), Some(Expr::ident("project")))));
     stmts.push(Stmt::Blank);
 
     // Build rules list
@@ -303,10 +297,7 @@ pub(crate) fn generate_starlark_from_analysis(analysis: &ImportAnalysis) -> Stri
     for (tool, path) in &analysis.file_denies {
         let expr = match_rule(vec![(
             tool.as_str().into(),
-            MatchValue::Nested(vec![(
-                path.as_str().into(),
-                MatchValue::Effect(deny()),
-            )]),
+            MatchValue::Nested(vec![(path.as_str().into(), MatchValue::Effect(deny()))]),
         )]);
         rules.push(Expr::commented(&format!("deny {} on {}", tool, path), expr));
     }
@@ -319,14 +310,20 @@ pub(crate) fn generate_starlark_from_analysis(analysis: &ImportAnalysis) -> Stri
 
     // 3. Bash allows
     if !analysis.bash_allows.is_empty() {
-        let expr = build_bash_rules(&analysis.bash_allows, allow_with_sandbox(Expr::ident("project")));
+        let expr = build_bash_rules(
+            &analysis.bash_allows,
+            allow_with_sandbox(Expr::ident("project")),
+        );
         rules.push(Expr::commented("allowed bash commands (sandboxed)", expr));
     }
 
     // 4. Bash asks
     if !analysis.bash_asks.is_empty() {
         let expr = build_bash_rules(&analysis.bash_asks, ask());
-        rules.push(Expr::commented("bash commands requiring confirmation", expr));
+        rules.push(Expr::commented(
+            "bash commands requiring confirmation",
+            expr,
+        ));
     }
 
     // 5. Tool denies
@@ -343,7 +340,10 @@ pub(crate) fn generate_starlark_from_analysis(analysis: &ImportAnalysis) -> Stri
         .copied()
         .collect();
     if !read_tools.is_empty() {
-        let expr = tool_match(&read_tools, allow_with_sandbox(Expr::ident("project_files")));
+        let expr = tool_match(
+            &read_tools,
+            allow_with_sandbox(Expr::ident("project_files")),
+        );
         rules.push(Expr::commented("read-only fs tools", expr));
     }
 
@@ -354,7 +354,10 @@ pub(crate) fn generate_starlark_from_analysis(analysis: &ImportAnalysis) -> Stri
         .copied()
         .collect();
     if !write_tools.is_empty() {
-        let expr = tool_match(&write_tools, allow_with_sandbox(Expr::ident("project_files")));
+        let expr = tool_match(
+            &write_tools,
+            allow_with_sandbox(Expr::ident("project_files")),
+        );
         rules.push(Expr::commented("write fs tools", expr));
     }
 
@@ -378,12 +381,7 @@ pub(crate) fn generate_starlark_from_analysis(analysis: &ImportAnalysis) -> Stri
         rules.push(Expr::commented("tools requiring confirmation", expr));
     }
 
-    stmts.push(Stmt::Expr(policy(
-        "imported",
-        ask(),
-        rules,
-        None,
-    )));
+    stmts.push(Stmt::Expr(policy("imported", ask(), rules, None)));
 
     clash_starlark::codegen::serialize(&stmts)
 }
@@ -586,9 +584,7 @@ mod tests {
     #[test]
     fn test_analyze_skips_globs() {
         use claude_settings::permission::PermissionSet;
-        let perms = PermissionSet::new()
-            .allow("Read(**/*.rs)")
-            .allow("Edit");
+        let perms = PermissionSet::new().allow("Read(**/*.rs)").allow("Edit");
         let settings = claude_settings::Settings::default().with_permissions(perms);
         let analysis = analyze_settings(&settings);
 
@@ -650,9 +646,7 @@ mod tests {
     #[test]
     fn test_generate_denies_first() {
         use claude_settings::permission::PermissionSet;
-        let perms = PermissionSet::new()
-            .allow("Read")
-            .deny("Read(.env)");
+        let perms = PermissionSet::new().allow("Read").deny("Read(.env)");
         let settings = claude_settings::Settings::default().with_permissions(perms);
         let analysis = analyze_settings(&settings);
         let starlark = generate_starlark_from_analysis(&analysis);
