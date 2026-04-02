@@ -142,10 +142,7 @@ pub fn help_content(t: &Theme) -> Vec<Line<'static>> {
     vec![
         Line::from(Span::styled("Keybindings", t.text_emphasis)),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("1-5    ", key),
-            Span::raw("Switch tabs"),
-        ]),
+        Line::from(vec![Span::styled("1-5    ", key), Span::raw("Switch tabs")]),
         Line::from(vec![
             Span::styled("j/k    ", key),
             Span::raw("Move down/up"),
@@ -487,10 +484,11 @@ impl ModalOverlay<'_> {
 
         // Resolve theme-aware styles (fall back to hardcoded defaults when no theme is provided,
         // keeping the test suite working without requiring a Theme everywhere).
-        let hint_key_style = self
-            .theme
-            .map(|t| t.hint_key)
-            .unwrap_or_else(|| Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        let hint_key_style = self.theme.map(|t| t.hint_key).unwrap_or_else(|| {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        });
         let hint_desc_style = self
             .theme
             .map(|t| t.text_disabled)

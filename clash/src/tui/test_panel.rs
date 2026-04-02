@@ -456,7 +456,11 @@ impl TestPanel {
 
         let effect_style = t.policy_effect(case.effect);
 
-        let style = if is_selected { t.selection } else { Style::default() };
+        let style = if is_selected {
+            t.selection
+        } else {
+            Style::default()
+        };
 
         let mut spans = vec![
             Span::styled(pin_marker.to_string(), style),
@@ -472,7 +476,10 @@ impl TestPanel {
         ];
 
         if !changed_badge.is_empty() {
-            spans.push(Span::styled(changed_badge.to_string(), t.test_changed_badge));
+            spans.push(Span::styled(
+                changed_badge.to_string(),
+                t.test_changed_badge,
+            ));
         }
 
         Line::from(spans)
