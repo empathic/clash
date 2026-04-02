@@ -96,7 +96,18 @@ struct ImportAnalysis {
 impl ImportAnalysis {
     /// Returns true if there are no meaningful permissions to import.
     fn needs_posture_prompt(&self) -> bool {
-        self.is_empty || self.bypass_permissions
+        self.is_empty || self.bypass_permissions || self.has_no_actionable_rules()
+    }
+
+    /// True when all permissions were skipped (e.g., only MCP/glob patterns).
+    fn has_no_actionable_rules(&self) -> bool {
+        self.tool_allows.is_empty()
+            && self.tool_denies.is_empty()
+            && self.tool_asks.is_empty()
+            && self.bash_allows.is_empty()
+            && self.bash_denies.is_empty()
+            && self.bash_asks.is_empty()
+            && self.file_denies.is_empty()
     }
 }
 
@@ -280,7 +291,7 @@ pub(crate) fn generate_starlark_from_analysis(analysis: &ImportAnalysis) -> Stri
     stmts.push(Stmt::Blank);
 
     stmts.push(Stmt::Expr(settings(
-        Expr::ident("ask"),
+        ask(),
         Some(Expr::ident("project")),
     )));
     stmts.push(Stmt::Blank);
@@ -369,7 +380,7 @@ pub(crate) fn generate_starlark_from_analysis(analysis: &ImportAnalysis) -> Stri
 
     stmts.push(Stmt::Expr(policy(
         "imported",
-        Expr::ident("ask"),
+        ask(),
         rules,
         None,
     )));
