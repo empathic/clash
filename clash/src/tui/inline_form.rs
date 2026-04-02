@@ -7,10 +7,11 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use super::theme::Theme;
 use super::widgets::{ClickAction, ClickRegions, ModalHeight, ModalOverlay};
 
 use crate::policy::manifest_edit;
@@ -2070,7 +2071,7 @@ impl FormState {
         self.fields[field_idx].hint()
     }
 
-    pub fn view(&self, frame: &mut Frame, area: Rect, clicks: &mut ClickRegions) {
+    pub fn view(&self, frame: &mut Frame, area: Rect, clicks: &mut ClickRegions, t: &Theme) {
         // Use max possible field count for forms that change visibility dynamically,
         // so the popup stays in a fixed position when cycling options.
         let field_count = match &self.kind {
@@ -2087,7 +2088,7 @@ impl FormState {
                 floor_pct: 30,
                 ceil_pct: 80,
             },
-            border_color: Color::Cyan,
+            border_style: t.border_focused,
             title: &self.title,
             footer: &[
                 ("Enter", "submit"),
@@ -2097,6 +2098,7 @@ impl FormState {
             footer_left: &[],
             footer_right: None,
             scroll: None,
+            theme: Some(t),
         };
         let inner = modal.render_chrome(frame, area);
 
@@ -2133,11 +2135,9 @@ impl FormState {
                     ..
                 } => {
                     let label_style = if is_active {
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD)
+                        t.field_label_active
                     } else {
-                        Style::default().fg(Color::Gray)
+                        t.field_label_inactive
                     };
 
                     let display_value = if value.is_empty() && !is_active {
@@ -2149,11 +2149,11 @@ impl FormState {
                     };
 
                     let value_style = if value.is_empty() && !is_active {
-                        Style::default().fg(Color::DarkGray)
+                        t.field_value_placeholder
                     } else if is_active {
-                        Style::default().fg(Color::White)
+                        t.field_value_active
                     } else {
-                        Style::default().fg(Color::Cyan)
+                        t.field_value_inactive
                     };
 
                     if is_active && !value.is_empty() {
@@ -2168,16 +2168,13 @@ impl FormState {
                         lines.push(Line::from(vec![
                             Span::styled(format!("  {label}: "), label_style),
                             Span::styled(before, value_style),
-                            Span::styled(
-                                cursor_char.to_string(),
-                                Style::default().fg(Color::Black).bg(Color::White),
-                            ),
+                            Span::styled(cursor_char.to_string(), t.cursor),
                             Span::styled(after, value_style),
                         ]));
                     } else if is_active && value.is_empty() {
                         lines.push(Line::from(vec![
                             Span::styled(format!("  {label}: "), label_style),
-                            Span::styled(" ", Style::default().fg(Color::Black).bg(Color::White)),
+                            Span::styled(" ", t.cursor),
                         ]));
                     } else {
                         lines.push(Line::from(vec![
@@ -2193,36 +2190,28 @@ impl FormState {
                     ..
                 } => {
                     let label_style = if is_active {
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD)
+                        t.field_label_active
                     } else {
-                        Style::default().fg(Color::Gray)
+                        t.field_label_inactive
                     };
 
                     if self.is_inline_select(fi) {
                         // Inline mode: show all options, highlight selected.
-                        // Track x offset for each option's click region.
                         let label_prefix = format!("  {label}: ");
                         let mut x_off = inner_x + label_prefix.len() as u16;
 
                         let mut spans = vec![Span::styled(label_prefix, label_style)];
                         for (i, opt) in options.iter().enumerate() {
                             if i > 0 {
-                                spans
-                                    .push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                                spans.push(Span::styled("  ", t.field_option_unselected));
                                 x_off += 2;
                             }
                             let style = if i == *selected {
-                                Style::default()
-                                    .fg(Color::Cyan)
-                                    .add_modifier(Modifier::BOLD)
-                                    .add_modifier(Modifier::UNDERLINED)
+                                t.field_option_selected
                             } else {
-                                Style::default().fg(Color::DarkGray)
+                                t.field_option_unselected
                             };
                             let opt_width = opt.len() as u16;
-                            // Push a more-specific click region for this option
                             clicks.push(
                                 Rect::new(x_off, current_y, opt_width, 1),
                                 ClickAction::SelectOption {
@@ -2234,7 +2223,7 @@ impl FormState {
                             x_off += opt_width;
                         }
                         if is_active {
-                            spans.push(Span::styled("  ←/→", Style::default().fg(Color::DarkGray)));
+                            spans.push(Span::styled("  ←/→", t.text_disabled));
                         }
                         lines.push(Line::from(spans));
                     } else {
@@ -2246,32 +2235,21 @@ impl FormState {
                             ("  ", "  ")
                         };
                         let value_style = if is_active {
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD)
+                            t.field_value_inactive.add_modifier(Modifier::BOLD)
                         } else {
-                            Style::default().fg(Color::Cyan)
+                            t.field_value_inactive
+                        };
+                        let arrow_style = if is_active {
+                            t.field_arrows_active
+                        } else {
+                            t.field_arrows_inactive
                         };
 
                         lines.push(Line::from(vec![
                             Span::styled(format!("  {label}: "), label_style),
-                            Span::styled(
-                                arrows.0,
-                                Style::default().fg(if is_active {
-                                    Color::Yellow
-                                } else {
-                                    Color::DarkGray
-                                }),
-                            ),
+                            Span::styled(arrows.0, arrow_style),
                             Span::styled(option.as_str(), value_style),
-                            Span::styled(
-                                arrows.1,
-                                Style::default().fg(if is_active {
-                                    Color::Yellow
-                                } else {
-                                    Color::DarkGray
-                                }),
-                            ),
+                            Span::styled(arrows.1, arrow_style),
                         ]));
                     }
                 }
@@ -2283,11 +2261,9 @@ impl FormState {
                     ..
                 } => {
                     let label_style = if is_active {
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD)
+                        t.field_label_active
                     } else {
-                        Style::default().fg(Color::Gray)
+                        t.field_label_inactive
                     };
 
                     let label_prefix = format!("  {label}: ");
@@ -2298,18 +2274,14 @@ impl FormState {
                         let checked = if toggled[i] { "[x]" } else { "[ ]" };
                         let is_cursor = is_active && i == *cursor;
                         let style = if is_cursor {
-                            Style::default()
-                                .fg(Color::White)
-                                .bg(Color::DarkGray)
-                                .add_modifier(Modifier::BOLD)
+                            t.field_multi_cursor
                         } else if toggled[i] {
-                            Style::default().fg(Color::Green)
+                            t.field_multi_checked
                         } else {
-                            Style::default().fg(Color::DarkGray)
+                            t.field_multi_unchecked
                         };
                         let item_text = format!("{checked} {opt}");
                         let item_width = item_text.len() as u16;
-                        // Push a more-specific click region for this checkbox
                         clicks.push(
                             Rect::new(x_off, current_y, item_width, 1),
                             ClickAction::ToggleMultiSelect {
@@ -2335,7 +2307,7 @@ impl FormState {
             if is_active && let Some(hint) = self.field_hint(fi) {
                 lines.push(Line::from(Span::styled(
                     format!("    {hint}"),
-                    Style::default().fg(Color::DarkGray),
+                    t.text_disabled,
                 )));
                 current_y += 1;
             }

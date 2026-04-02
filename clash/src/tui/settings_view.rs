@@ -3,11 +3,12 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::tea::{Action, Component};
+use super::theme::ViewContext;
 use crate::policy::Effect;
 use crate::policy::match_tree::PolicyManifest;
 
@@ -108,20 +109,18 @@ impl Component for SettingsView {
         }
     }
 
-    fn view(&self, frame: &mut Frame, area: Rect, manifest: &PolicyManifest) {
+    fn view(&self, frame: &mut Frame, area: Rect, ctx: &ViewContext) {
+        let t = ctx.theme;
+        let manifest = ctx.manifest;
         let block = Block::default()
             .borders(Borders::LEFT | Borders::RIGHT)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(t.border_unfocused);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
         let effect_str = manifest.policy.default_effect.to_string();
-        let effect_color = match manifest.policy.default_effect {
-            Effect::Allow => Color::Green,
-            Effect::Deny => Color::Red,
-            Effect::Ask => Color::Yellow,
-        };
+        let effect_style = t.policy_effect(manifest.policy.default_effect);
 
         let sandbox_str = manifest
             .policy
@@ -130,29 +129,24 @@ impl Component for SettingsView {
             .unwrap_or("(none)");
 
         let fields = [
-            ("default_effect", effect_str.as_str(), effect_color),
-            ("default_sandbox", sandbox_str, Color::Cyan),
+            ("default_effect", effect_str.as_str(), effect_style),
+            ("default_sandbox", sandbox_str, t.detail_value),
         ];
 
         let lines: Vec<Line> = fields
             .iter()
             .enumerate()
-            .flat_map(|(i, (label, value, color))| {
+            .flat_map(|(i, (label, value, base_style))| {
                 let selected = i == self.selected_field;
                 let label_style = if selected {
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD)
+                    t.field_label_active
                 } else {
-                    Style::default().fg(Color::Gray)
+                    t.field_label_inactive
                 };
                 let value_style = if selected {
-                    Style::default()
-                        .fg(*color)
-                        .bg(Color::DarkGray)
-                        .add_modifier(Modifier::BOLD)
+                    base_style.add_modifier(Modifier::BOLD).patch(t.selection)
                 } else {
-                    Style::default().fg(*color)
+                    *base_style
                 };
 
                 let hint = if selected {
@@ -166,7 +160,7 @@ impl Component for SettingsView {
                     Line::from(vec![
                         Span::styled(format!("  {label}: "), label_style),
                         Span::styled(*value, value_style),
-                        Span::styled(hint, Style::default().fg(Color::DarkGray)),
+                        Span::styled(hint, t.text_disabled),
                     ]),
                 ]
             })

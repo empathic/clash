@@ -6,10 +6,10 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use super::theme::Theme;
 use super::widgets::{ClickAction, ClickRegions, ModalHeight, ModalOverlay, ScrollState};
 
 /// Sequential steps of the onboarding walkthrough.
@@ -104,11 +104,12 @@ pub fn render_walkthrough_overlay(
     step: WalkthroughStep,
     scroll: &mut ScrollState,
     clicks: &mut ClickRegions,
+    t: &Theme,
 ) {
     let (content, footer, footer_left): (Vec<Line>, HintSlice, HintSlice) = match step {
         WalkthroughStep::Welcome => (
             vec![
-                styled_title("Welcome to the Policy Editor"),
+                styled_title("Welcome to the Policy Editor", t),
                 Line::from(""),
                 Line::from("Your policy controls what Claude can do."),
                 Line::from("It starts with a sensible default: ask for"),
@@ -121,7 +122,7 @@ pub fn render_walkthrough_overlay(
         ),
         WalkthroughStep::BaseTools => (
             vec![
-                styled_title("Base Tools — Pre-configured"),
+                styled_title("Base Tools — Pre-configured", t),
                 Line::from(""),
                 Line::from("Your policy already allows the tools Claude"),
                 Line::from("uses most: Read, Write, Edit, Glob, and Grep."),
@@ -141,13 +142,13 @@ pub fn render_walkthrough_overlay(
         ),
         WalkthroughStep::AddRule => (
             vec![
-                styled_title("Step 1: Allow git"),
+                styled_title("Step 1: Allow git", t),
                 Line::from(""),
                 Line::from("Let's add a rule that allows all git commands."),
                 Line::from("You can refine this later — e.g. deny push"),
                 Line::from("--force or sandbox network-dependent ops."),
                 Line::from(""),
-                key_hint("a", "add a new rule"),
+                key_hint("a", "add a new rule", t),
             ],
             &[("Esc", "skip"), ("b", "back"), ("a", "add rule")],
             &[("q", "quit")],
@@ -158,16 +159,16 @@ pub fn render_walkthrough_overlay(
         }
         WalkthroughStep::TestIt => (
             vec![
-                styled_title("Step 2: Test Your Rule"),
+                styled_title("Step 2: Test Your Rule", t),
                 Line::from(""),
                 Line::from("The test console lets you check how your"),
                 Line::from("policy handles different commands."),
                 Line::from(""),
                 Line::from("Type a tool name followed by its arguments:"),
-                dim_hint("  bash git status"),
-                dim_hint("  Read /etc/hosts"),
+                dim_hint("  bash git status", t),
+                dim_hint("  Read /etc/hosts", t),
                 Line::from(""),
-                key_hint("t", "open the test console"),
+                key_hint("t", "open the test console", t),
             ],
             &[("Esc", "skip"), ("b", "back"), ("t", "test console")],
             &[("q", "quit")],
@@ -178,14 +179,14 @@ pub fn render_walkthrough_overlay(
         }
         WalkthroughStep::SaveFinish => (
             vec![
-                styled_title("Step 3: Save"),
+                styled_title("Step 3: Save", t),
                 Line::from(""),
                 Line::from("Your rule is ready. Save your policy to"),
                 Line::from("start using it in Claude Code."),
                 Line::from(""),
-                key_hint("s", "save your policy"),
+                key_hint("s", "save your policy", t),
                 Line::from(""),
-                dim_hint("Come back anytime with: clash policy edit"),
+                dim_hint("Come back anytime with: clash policy edit", t),
             ],
             &[("Esc", "skip"), ("b", "back"), ("s", "save")],
             &[("q", "quit")],
@@ -199,12 +200,13 @@ pub fn render_walkthrough_overlay(
     let modal = ModalOverlay {
         width_pct: 50,
         height: ModalHeight::Percent(45),
-        border_color: Color::Cyan,
+        border_style: t.border_focused,
         title: "Walkthrough",
         footer,
         footer_left,
         footer_right: None,
         scroll: Some(scroll.to_modal_scroll()),
+        theme: Some(t),
     };
     let inner = modal.render_chrome(frame, area);
     for (rect, kc) in &inner.footer_buttons {
@@ -277,28 +279,18 @@ pub fn walkthrough_status_hints(step: WalkthroughStep) -> Vec<(&'static str, &'s
     }
 }
 
-fn styled_title(text: &str) -> Line<'_> {
-    Line::from(Span::styled(
-        text,
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    ))
+fn styled_title<'a>(text: &'a str, t: &Theme) -> Line<'a> {
+    Line::from(Span::styled(text, t.walkthrough_title))
 }
 
-fn key_hint<'a>(key: &'a str, description: &'a str) -> Line<'a> {
+fn key_hint<'a>(key: &'a str, description: &'a str, t: &Theme) -> Line<'a> {
     Line::from(vec![
         Span::raw("Press "),
-        Span::styled(
-            key,
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(key, t.hint_key),
         Span::raw(format!(" to {description}")),
     ])
 }
 
-fn dim_hint(text: &str) -> Line<'_> {
-    Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
+fn dim_hint<'a>(text: &'a str, t: &Theme) -> Line<'a> {
+    Line::from(Span::styled(text, t.text_disabled))
 }

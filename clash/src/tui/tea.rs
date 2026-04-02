@@ -8,6 +8,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::policy::match_tree::PolicyManifest;
+use super::theme::ViewContext;
 
 /// An action returned from [`Component::update`] to signal the parent.
 pub enum Action {
@@ -65,5 +66,5 @@ pub trait Component {
     fn update(&mut self, msg: Self::Msg, manifest: &mut PolicyManifest) -> Action;
 
     /// Render the component into a ratatui Frame area.
-    fn view(&self, frame: &mut Frame, area: Rect, manifest: &PolicyManifest);
+    fn view(&self, frame: &mut Frame, area: Rect, ctx: &ViewContext);
 }

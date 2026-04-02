@@ -3,11 +3,11 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::tea::{Action, Component, FormRequest};
+use super::theme::ViewContext;
 use crate::policy::match_tree::PolicyManifest;
 
 pub struct IncludesView {
@@ -108,27 +108,21 @@ impl Component for IncludesView {
         }
     }
 
-    fn view(&self, frame: &mut Frame, area: Rect, manifest: &PolicyManifest) {
+    fn view(&self, frame: &mut Frame, area: Rect, ctx: &ViewContext) {
+        let t = ctx.theme;
+        let manifest = ctx.manifest;
         let block = Block::default()
             .borders(Borders::LEFT | Borders::RIGHT)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(t.border_unfocused);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
         if manifest.includes.is_empty() {
             let empty = Paragraph::new(Line::from(vec![
-                Span::styled(
-                    "  No includes. Press ",
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    "a",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" to add one.", Style::default().fg(Color::DarkGray)),
+                Span::styled("  No includes. Press ", t.text_disabled),
+                Span::styled("a", t.hint_key),
+                Span::styled(" to add one.", t.text_disabled),
             ]));
             frame.render_widget(empty, inner);
             return;
@@ -140,20 +134,14 @@ impl Component for IncludesView {
             .enumerate()
             .map(|(i, include)| {
                 let style = if i == self.selected {
-                    Style::default()
-                        .bg(Color::DarkGray)
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD)
+                    t.selection
                 } else {
-                    Style::default().fg(Color::White)
+                    t.text_primary
                 };
 
                 let priority = format!("[{}]", i + 1);
                 Line::from(vec![
-                    Span::styled(
-                        format!("  {priority} "),
-                        Style::default().fg(Color::DarkGray),
-                    ),
+                    Span::styled(format!("  {priority} "), t.text_disabled),
                     Span::styled(&include.path, style),
                 ])
             })

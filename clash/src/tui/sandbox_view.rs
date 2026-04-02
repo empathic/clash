@@ -3,11 +3,11 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::tea::{Action, Component, FormRequest};
+use super::theme::{Theme, ViewContext};
 use crate::policy::match_tree::{CompiledPolicy, PolicyManifest};
 use crate::policy::sandbox_types::{RuleEffect, SandboxPolicy};
 
@@ -293,28 +293,28 @@ impl Component for SandboxView {
         }
     }
 
-    fn view(&self, frame: &mut Frame, area: Rect, _manifest: &PolicyManifest) {
+    fn view(&self, frame: &mut Frame, area: Rect, ctx: &ViewContext) {
         let chunks = Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
             .split(area);
 
         // Left pane: sandbox list
-        self.render_sandbox_list(frame, chunks[0]);
+        self.render_sandbox_list(frame, chunks[0], ctx.theme);
 
         // Right pane: sandbox detail + rules
-        self.render_sandbox_detail(frame, chunks[1]);
+        self.render_sandbox_detail(frame, chunks[1], ctx.theme);
     }
 }
 
 impl SandboxView {
-    fn render_sandbox_list(&self, frame: &mut Frame, area: Rect) {
-        let border_color = if self.focus == Focus::SandboxList {
-            Color::Blue
+    fn render_sandbox_list(&self, frame: &mut Frame, area: Rect, t: &Theme) {
+        let border_style = if self.focus == Focus::SandboxList {
+            t.border_active
         } else {
-            Color::DarkGray
+            t.border_unfocused
         };
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color))
+            .border_style(border_style)
             .title(" Sandboxes ");
 
         let inner = block.inner(area);
@@ -322,17 +322,9 @@ impl SandboxView {
 
         if self.sandbox_names.is_empty() {
             let empty = Paragraph::new(Line::from(vec![
-                Span::styled(
-                    "  No sandboxes. Press ",
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    "a",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" to add one.", Style::default().fg(Color::DarkGray)),
+                Span::styled("  No sandboxes. Press ", t.text_disabled),
+                Span::styled("a", t.hint_key),
+                Span::styled(" to add one.", t.text_disabled),
             ]));
             frame.render_widget(empty, inner);
             return;
@@ -350,18 +342,13 @@ impl SandboxView {
                     format!("  {name}")
                 };
                 let style = if i == self.selected_sandbox && self.focus == Focus::SandboxList {
-                    Style::default()
-                        .bg(Color::DarkGray)
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD)
+                    t.selection
                 } else if i == self.selected_sandbox {
-                    Style::default().fg(Color::Cyan)
+                    t.text_emphasis
                 } else if is_included {
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::DIM)
+                    t.effect_read_only(None)
                 } else {
-                    Style::default().fg(Color::White)
+                    t.text_primary
                 };
                 Line::from(Span::styled(display, style))
             })
@@ -371,15 +358,15 @@ impl SandboxView {
         frame.render_widget(para, inner);
     }
 
-    fn render_sandbox_detail(&self, frame: &mut Frame, area: Rect) {
-        let border_color = if self.focus == Focus::RuleList {
-            Color::Blue
+    fn render_sandbox_detail(&self, frame: &mut Frame, area: Rect, t: &Theme) {
+        let border_style = if self.focus == Focus::RuleList {
+            t.border_active
         } else {
-            Color::DarkGray
+            t.border_unfocused
         };
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color))
+            .border_style(border_style)
             .title(" Details ");
 
         let inner = block.inner(area);
@@ -393,49 +380,31 @@ impl SandboxView {
 
         // Header info
         lines.push(Line::from(vec![
-            Span::styled("  Default: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(sb.default.display(), Style::default().fg(Color::Cyan)),
+            Span::styled("  Default: ", t.detail_label),
+            Span::styled(sb.default.display(), t.detail_value),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("  Network: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format_network(&sb.network),
-                Style::default().fg(Color::Cyan),
-            ),
+            Span::styled("  Network: ", t.detail_label),
+            Span::styled(format_network(&sb.network), t.detail_value),
         ]));
         if let Some(doc) = &sb.doc {
             lines.push(Line::from(Span::styled(
                 format!("  Doc: {doc}"),
-                Style::default().fg(Color::DarkGray),
+                t.detail_label,
             )));
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  Rules:",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(Span::styled("  Rules:", t.section_header)));
 
         if sb.rules.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "    (no rules)",
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.push(Line::from(Span::styled("    (no rules)", t.text_disabled)));
         } else {
             for (i, rule) in sb.rules.iter().enumerate() {
-                let effect_color = match rule.effect {
-                    RuleEffect::Allow => Color::Green,
-                    RuleEffect::Deny => Color::Red,
-                };
                 let selected = i == self.selected_rule && self.focus == Focus::RuleList;
                 let style = if selected {
-                    Style::default()
-                        .bg(Color::DarkGray)
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD)
+                    t.selection
                 } else {
-                    Style::default().fg(effect_color)
+                    t.sandbox_effect(rule.effect)
                 };
                 let effect_str = match rule.effect {
                     RuleEffect::Allow => "allow",
