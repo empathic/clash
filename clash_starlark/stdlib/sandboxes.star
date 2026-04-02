@@ -3,18 +3,17 @@
 # These presets express what you trust a command to do, not what
 # the command literally says.  Pick a preset based on intent:
 #
-#   restricted   — untrusted scripts: read-only project, no network
-#   read_only    — linters, analyzers: read project + home, no writes
-#   dev          — build tools, git: read+write project, no network
-#   dev_network  — package managers, gh: read+write project + network
+#   readonly     — read-only project access, network allowed
+#   project      — build tools, git: read+write project, no network
+#   workspace    — full home directory access, deny sensitive dirs
 #   unrestricted — fully trusted: all filesystem + network access
 #
 
 UNSAFE_IN_HOME = (".ssh", ".gpg", ".config", ".aws", ".gh", ".git")
 
 
-plan = sandbox(
-    name = "plan",
+readonly = sandbox(
+    name = "readonly",
     default = ask(),
     fs = {
         glob("$PWD/**"): allow("rx"),
@@ -23,8 +22,8 @@ plan = sandbox(
     net = allow(),
 )
 
-edit = sandbox(
-    name = "edit",
+project = sandbox(
+    name = "project",
     default=ask(),
     fs = {
         glob("$PWD/**"): allow(FULL),
@@ -33,8 +32,8 @@ edit = sandbox(
     }
 )
 
-safe_yolo = sandbox(
-    name = "safe_yolo",
+workspace = sandbox(
+    name = "workspace",
     default=deny(),
     fs = {
         glob("$HOME/**"): allow(),
@@ -43,7 +42,7 @@ safe_yolo = sandbox(
     },
 )
 
-yolo = sandbox(
-    name = "yolo",
+unrestricted = sandbox(
+    name = "unrestricted",
     default=allow(),
 )
