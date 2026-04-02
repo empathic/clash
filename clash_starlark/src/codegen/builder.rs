@@ -14,7 +14,7 @@ pub fn load_std(names: &[&str]) -> Stmt {
 }
 
 pub fn load_builtin() -> Stmt {
-    Stmt::load("@clash//builtin.star", &["base"])
+    Stmt::load("@clash//builtin.star", &["builtins"])
 }
 
 pub fn load_sandboxes(names: &[&str]) -> Stmt {

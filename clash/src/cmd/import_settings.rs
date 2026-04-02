@@ -651,11 +651,17 @@ mod tests {
         let analysis = analyze_settings(&settings);
         let starlark = generate_starlark_from_analysis(&analysis);
 
-        let deny_pos = starlark.find("deny()").expect("should contain deny");
-        let allow_pos = starlark.find("allow(").expect("should contain allow");
+        // Find deny() and allow(sandbox = ...) within the rules list, not in
+        // the settings/sandbox definitions above it.
+        let rules_start = starlark.find("rules = [").expect("should contain rules");
+        let rules_section = &starlark[rules_start..];
+        let deny_pos = rules_section.find("deny()").expect("should contain deny in rules");
+        let allow_pos = rules_section
+            .find("allow(sandbox")
+            .expect("should contain allow in rules");
         assert!(
             deny_pos < allow_pos,
-            "deny rules should come before allow rules"
+            "deny rules should come before allow rules in:\n{rules_section}"
         );
     }
 }
