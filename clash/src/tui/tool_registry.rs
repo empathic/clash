@@ -133,10 +133,10 @@ pub fn is_observable_relevant(tool_name: &str, tag: ObservableTag) -> bool {
 
 /// Build the effect options and hints for a given tool context.
 /// Returns (labels, hints) vecs filtered to allowed effects.
-pub fn effect_options_for_tool(tool_name: Option<&str>) -> (Vec<String>, Vec<&'static str>) {
+pub fn effect_options_for_tool(tool_name: Option<&str>) -> (Vec<String>, Vec<String>) {
     let all = [
-        (EffectOption::Allow, "allow (permit)", ""),
-        (EffectOption::Deny, "deny (block)", ""),
+        (EffectOption::Allow, "auto allow", ""),
+        (EffectOption::Deny, "auto deny", ""),
         (EffectOption::Ask, "ask (prompt)", ""),
     ];
     match tool_name.and_then(lookup) {
@@ -146,14 +146,14 @@ pub fn effect_options_for_tool(tool_name: Option<&str>) -> (Vec<String>, Vec<&'s
             for &(effect, label, hint) in &all {
                 if info.allowed_effects.contains(&effect) {
                     labels.push(label.into());
-                    hints.push(hint);
+                    hints.push(hint.into());
                 }
             }
             (labels, hints)
         }
         None => {
             let labels = all.iter().map(|(_, l, _)| l.to_string()).collect();
-            let hints = all.iter().map(|(_, _, h)| *h).collect();
+            let hints = all.iter().map(|(_, _, h)| String::from(*h)).collect();
             (labels, hints)
         }
     }
@@ -208,8 +208,8 @@ mod tests {
     fn test_effect_filtering() {
         let (labels, _) = effect_options_for_tool(Some("Bash"));
         assert_eq!(labels.len(), 2);
-        assert!(labels.contains(&"allow (permit)".to_string()));
-        assert!(labels.contains(&"deny (block)".to_string()));
+        assert!(labels.contains(&"auto allow".to_string()));
+        assert!(labels.contains(&"auto deny".to_string()));
         assert!(!labels.contains(&"ask (prompt)".to_string()));
     }
 

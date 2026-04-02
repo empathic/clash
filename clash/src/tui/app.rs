@@ -771,10 +771,7 @@ impl App {
 
     fn view(&mut self, frame: &mut Frame, area: Rect, manifest: &PolicyManifest) {
         let t = &self.theme;
-        let ctx = ViewContext {
-            manifest,
-            theme: t,
-        };
+        let ctx = ViewContext { manifest, theme: t };
 
         let chunks = Layout::vertical([
             Constraint::Length(2), // title + tab bar
@@ -786,10 +783,7 @@ impl App {
         // Title bar
         let title = Line::from(vec![
             Span::styled(" clash policy editor ", t.text_emphasis),
-            Span::styled(
-                format!("-- {} ", self.path.display()),
-                t.text_disabled,
-            ),
+            Span::styled(format!("-- {} ", self.path.display()), t.text_disabled),
         ]);
         frame.render_widget(
             Paragraph::new(title).alignment(Alignment::Left),

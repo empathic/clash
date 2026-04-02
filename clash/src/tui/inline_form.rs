@@ -19,7 +19,7 @@ use crate::policy::match_tree::{
     Decision, IncludeEntry, Node, Observable, Pattern, PolicyManifest, SandboxRef, Value,
 };
 use crate::policy::sandbox_edit;
-use crate::policy::sandbox_types::{Cap, NetworkPolicy, PathMatch, RuleEffect};
+use crate::policy::sandbox_types::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy};
 use crate::tui::tool_registry;
 
 use super::tea::FormRequest;
@@ -46,7 +46,7 @@ pub enum FormField {
         options: Vec<String>,
         selected: usize,
         /// Per-option hints — `hints[selected]` is shown when this field is active.
-        hints: Vec<&'static str>,
+        hints: Vec<String>,
     },
     MultiSelect {
         label: String,
@@ -59,13 +59,13 @@ pub enum FormField {
 
 impl FormField {
     /// Returns the contextual hint for this field's current state.
-    fn hint(&self) -> Option<&'static str> {
+    fn hint(&self) -> Option<&str> {
         match self {
             FormField::Text { hint, .. } => *hint,
             FormField::Select {
                 hints, selected, ..
             } => {
-                let h = hints.get(*selected).copied().unwrap_or("");
+                let h = hints.get(*selected).map(|s| s.as_str()).unwrap_or("");
                 if h.is_empty() { None } else { Some(h) }
             }
             FormField::MultiSelect { hint, .. } => *hint,
@@ -88,6 +88,9 @@ pub struct FormState {
     /// Tool name context (from ancestor nodes or typed value), used to
     /// filter effects and validate observables.
     tool_context: Option<String>,
+    /// Sandbox policies keyed by sandbox option index, for rendering
+    /// entitlement summaries when a sandbox field is active.
+    sandbox_summaries: Vec<Option<SandboxPolicy>>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,7 +174,7 @@ impl FormState {
         manifest: &PolicyManifest,
         included: Option<&crate::policy::match_tree::CompiledPolicy>,
     ) -> Self {
-        let (sandbox_opts, sb_default) =
+        let (sandbox_opts, sandbox_policies, sb_default) =
             Self::build_sandbox_options_with_included(manifest, included);
 
         let fields = vec![
@@ -184,9 +187,9 @@ impl FormState {
                 ],
                 selected: 0,
                 hints: vec![
-                    "Match a Claude tool like Read, Write, Bash, Edit",
-                    "Match a shell command like git, npm, curl",
-                    "Write a raw Starlark policy expression",
+                    "Match a Claude tool like Read, Write, Bash, Edit".into(),
+                    "Match a shell command like git, npm, curl".into(),
+                    "Write a raw Starlark policy expression".into(),
                 ],
             },
             FormField::Text {
@@ -213,12 +216,12 @@ impl FormState {
             FormField::Select {
                 label: "When matched".into(),
                 options: vec![
-                    "allow (permit)".into(),
-                    "deny (block)".into(),
+                    "auto allow".into(),
+                    "auto deny".into(),
                     "ask (prompt)".into(),
                 ],
                 selected: 0,
-                hints: vec!["", "", ""],
+                hints: vec![String::new(), String::new(), String::new()],
             },
             FormField::Select {
                 label: "Sandbox".into(),
@@ -244,6 +247,7 @@ impl FormState {
             visible: vec![],
             active: 0,
             tool_context: None,
+            sandbox_summaries: sandbox_policies,
         };
         form.recompute_visible();
         form
@@ -254,7 +258,7 @@ impl FormState {
         manifest: &PolicyManifest,
         included: Option<&crate::policy::match_tree::CompiledPolicy>,
     ) -> Self {
-        let (sandbox_opts, sb_default) =
+        let (sandbox_opts, sandbox_policies, sb_default) =
             Self::build_sandbox_options_with_included(manifest, included);
 
         let fields = vec![
@@ -267,9 +271,9 @@ impl FormState {
                 ],
                 selected: 1, // Shell command
                 hints: vec![
-                    "Match a Claude tool like Read, Write, Bash, Edit",
-                    "Match a shell command like git, npm, curl",
-                    "Write a raw Starlark policy expression",
+                    "Match a Claude tool like Read, Write, Bash, Edit".into(),
+                    "Match a shell command like git, npm, curl".into(),
+                    "Write a raw Starlark policy expression".into(),
                 ],
             },
             FormField::Text {
@@ -296,12 +300,12 @@ impl FormState {
             FormField::Select {
                 label: "When matched".into(),
                 options: vec![
-                    "allow (permit)".into(),
-                    "deny (block)".into(),
+                    "auto allow".into(),
+                    "auto deny".into(),
                     "ask (prompt)".into(),
                 ],
                 selected: 0, // allow
-                hints: vec!["", "", ""],
+                hints: vec![String::new(), String::new(), String::new()],
             },
             FormField::Select {
                 label: "Sandbox".into(),
@@ -326,6 +330,7 @@ impl FormState {
             visible: vec![],
             active: 0,
             tool_context: None,
+            sandbox_summaries: sandbox_policies,
         };
         form.recompute_visible();
         form
@@ -358,9 +363,9 @@ impl FormState {
                 options: vec!["deny".into(), "allow".into(), "localhost".into()],
                 selected: 0,
                 hints: vec![
-                    "Block all network access",
-                    "Permit all network access",
-                    "Only allow connections to 127.0.0.1",
+                    "Block all network access".into(),
+                    "Permit all network access".into(),
+                    "Only allow connections to 127.0.0.1".into(),
                 ],
             },
         ];
@@ -372,6 +377,7 @@ impl FormState {
             visible: vec![0, 1, 2],
             active: 0,
             tool_context: None,
+            sandbox_summaries: vec![],
         }
     }
 
@@ -381,7 +387,7 @@ impl FormState {
                 label: "Effect".into(),
                 options: vec!["allow".into(), "deny".into()],
                 selected: 0,
-                hints: vec!["", ""],
+                hints: vec![String::new(), String::new()],
             },
             FormField::MultiSelect {
                 label: "Caps".into(),
@@ -408,9 +414,9 @@ impl FormState {
                 options: vec!["literal".into(), "subpath".into(), "regex".into()],
                 selected: 0,
                 hints: vec![
-                    "Match this exact path only",
-                    "Match this path and everything under it",
-                    "Match paths by regular expression",
+                    "Match this exact path only".into(),
+                    "Match this path and everything under it".into(),
+                    "Match paths by regular expression".into(),
                 ],
             },
         ];
@@ -424,6 +430,7 @@ impl FormState {
             visible: vec![0, 1, 2, 3],
             active: 0,
             tool_context: None,
+            sandbox_summaries: vec![],
         }
     }
 
@@ -468,9 +475,9 @@ impl FormState {
                 options: vec!["deny".into(), "allow".into(), "localhost".into()],
                 selected: network_idx,
                 hints: vec![
-                    "Block all network access",
-                    "Permit all network access",
-                    "Only allow connections to 127.0.0.1",
+                    "Block all network access".into(),
+                    "Permit all network access".into(),
+                    "Only allow connections to 127.0.0.1".into(),
                 ],
             },
         ];
@@ -484,6 +491,7 @@ impl FormState {
             visible: vec![0, 1],
             active: 0,
             tool_context: None,
+            sandbox_summaries: vec![],
         }
     }
 
@@ -529,7 +537,7 @@ impl FormState {
                 label: "Effect".into(),
                 options: vec!["allow".into(), "deny".into()],
                 selected: effect_idx,
-                hints: vec!["", ""],
+                hints: vec![String::new(), String::new()],
             },
             FormField::MultiSelect {
                 label: "Caps".into(),
@@ -556,9 +564,9 @@ impl FormState {
                 options: vec!["literal".into(), "subpath".into(), "regex".into()],
                 selected: path_match_idx,
                 hints: vec![
-                    "Match this exact path only",
-                    "Match this path and everything under it",
-                    "Match paths by regular expression",
+                    "Match this exact path only".into(),
+                    "Match this path and everything under it".into(),
+                    "Match paths by regular expression".into(),
                 ],
             },
         ];
@@ -573,6 +581,7 @@ impl FormState {
             visible: vec![0, 1, 2, 3],
             active: 0,
             tool_context: None,
+            sandbox_summaries: vec![],
         }
     }
 
@@ -592,6 +601,7 @@ impl FormState {
             visible: vec![0],
             active: 0,
             tool_context: None,
+            sandbox_summaries: vec![],
         }
     }
 
@@ -644,6 +654,7 @@ impl FormState {
             visible: vec![],
             active: 0,
             tool_context: Self::ancestor_tool_name(&manifest.policy.tree, path),
+            sandbox_summaries: vec![],
         };
         form.recompute_visible();
         form
@@ -657,7 +668,7 @@ impl FormState {
         included: Option<&crate::policy::match_tree::CompiledPolicy>,
     ) -> Self {
         let tree = &manifest.policy.tree;
-        let (sandbox_opts, sb_default) =
+        let (sandbox_opts, sandbox_policies, sb_default) =
             Self::build_sandbox_options_with_included(manifest, included);
 
         // Read condition info
@@ -706,9 +717,9 @@ impl FormState {
                 ],
                 selected: rule_type_selected,
                 hints: vec![
-                    "Match a Claude tool like Read, Write, Bash, Edit",
-                    "Match a shell command like git, npm, curl",
-                    "Write a raw Starlark policy expression",
+                    "Match a Claude tool like Read, Write, Bash, Edit".into(),
+                    "Match a shell command like git, npm, curl".into(),
+                    "Write a raw Starlark policy expression".into(),
                 ],
             },
             FormField::Text {
@@ -735,12 +746,12 @@ impl FormState {
             FormField::Select {
                 label: "When matched".into(),
                 options: vec![
-                    "allow (permit)".into(),
-                    "deny (block)".into(),
+                    "auto allow".into(),
+                    "auto deny".into(),
                     "ask (prompt)".into(),
                 ],
                 selected: effect_idx,
-                hints: vec!["", "", ""],
+                hints: vec![String::new(), String::new(), String::new()],
             },
             FormField::Select {
                 label: "Sandbox".into(),
@@ -781,6 +792,7 @@ impl FormState {
             } else {
                 Self::ancestor_tool_name(tree, path)
             },
+            sandbox_summaries: sandbox_policies,
         };
         // Set pat_type_idx on the hidden pattern type field if we're editing a
         // tool rule with a non-literal pattern (e.g. AnyOf).  The AddRule form
@@ -806,7 +818,7 @@ impl FormState {
         // Clamp effect_idx if it's beyond filtered options
         let selected_effect = effect_idx.min(effect_labels.len().saturating_sub(1));
 
-        let (sandbox_opts, sb_default) =
+        let (sandbox_opts, sandbox_policies, sb_default) =
             Self::build_sandbox_options_with_included(manifest, included);
 
         // Use existing sandbox if set, otherwise fall back to default
@@ -843,6 +855,7 @@ impl FormState {
             visible: vec![],
             active: 0,
             tool_context: tool_ctx,
+            sandbox_summaries: sandbox_policies,
         };
         form.recompute_visible();
         form
@@ -878,7 +891,7 @@ impl FormState {
     ) -> Self {
         let parent_desc = Self::describe_condition_at_path(&manifest.policy.tree, parent_path);
 
-        let (sandbox_opts, sb_default) =
+        let (sandbox_opts, sandbox_policies, sb_default) =
             Self::build_sandbox_options_with_included(manifest, included);
 
         let fields = vec![
@@ -887,8 +900,8 @@ impl FormState {
                 options: vec!["Match condition".into(), "Effect (allow/deny/ask)".into()],
                 selected: 0,
                 hints: vec![
-                    "Add a branch that narrows what this rule matches",
-                    "Add a final allow/deny/ask decision",
+                    "Add a branch that narrows what this rule matches".into(),
+                    "Add a final allow/deny/ask decision".into(),
                 ],
             },
             FormField::Select {
@@ -920,12 +933,12 @@ impl FormState {
             FormField::Select {
                 label: "When matched".into(),
                 options: vec![
-                    "allow (permit)".into(),
-                    "deny (block)".into(),
+                    "auto allow".into(),
+                    "auto deny".into(),
                     "ask (prompt)".into(),
                 ],
                 selected: 0,
-                hints: vec!["", "", ""],
+                hints: vec![String::new(), String::new(), String::new()],
             },
             FormField::Select {
                 label: "Sandbox".into(),
@@ -944,6 +957,7 @@ impl FormState {
             visible: vec![],
             active: 0,
             tool_context: Self::ancestor_tool_name(&manifest.policy.tree, parent_path),
+            sandbox_summaries: sandbox_policies,
         };
         form.recompute_visible();
         form
@@ -1056,15 +1070,17 @@ impl FormState {
         }
     }
 
-    /// Build sandbox options list and default selection index.
+    /// Build sandbox options list, per-option hint summaries, and default
+    /// selection index.
     ///
     /// Includes sandboxes from both inline policy and resolved `.star` includes.
     /// Defaults to `default_sandbox` if set, otherwise "(none)".
     fn build_sandbox_options_with_included(
         manifest: &PolicyManifest,
         included: Option<&crate::policy::match_tree::CompiledPolicy>,
-    ) -> (Vec<String>, usize) {
+    ) -> (Vec<String>, Vec<Option<SandboxPolicy>>, usize) {
         let mut opts = vec!["(none)".to_string()];
+        let mut policies: Vec<Option<SandboxPolicy>> = vec![None]; // no policy for "(none)"
         let mut names: Vec<String> = manifest.policy.sandboxes.keys().cloned().collect();
         // Add included sandbox names
         if let Some(inc) = included {
@@ -1075,6 +1091,15 @@ impl FormState {
             }
         }
         names.sort();
+
+        for name in &names {
+            let sb = manifest
+                .policy
+                .sandboxes
+                .get(name)
+                .or_else(|| included.and_then(|inc| inc.sandboxes.get(name)));
+            policies.push(sb.cloned());
+        }
         opts.extend(names);
 
         let default_idx = manifest
@@ -1084,7 +1109,7 @@ impl FormState {
             .and_then(|name| opts.iter().position(|s| s == name))
             .unwrap_or(0);
 
-        (opts, default_idx)
+        (opts, policies, default_idx)
     }
 
     /// Walk ancestor nodes to find the nearest ToolName condition's pattern value.
@@ -1135,6 +1160,19 @@ impl FormState {
                 if *selected >= options.len() {
                     *selected = options.len().saturating_sub(1);
                 }
+            }
+        }
+    }
+
+    /// Set the label on a Select field based on whether the effect is "ask".
+    fn set_sandbox_label(field: &mut FormField, is_ask: bool) {
+        if let FormField::Select { label, .. } = field {
+            if label == "Sandbox" || label == "Sandbox when allowed" {
+                *label = if is_ask {
+                    "Sandbox when allowed".into()
+                } else {
+                    "Sandbox".into()
+                };
             }
         }
     }
@@ -1198,6 +1236,7 @@ impl FormState {
                 if canonical != 1 && has_sandboxes {
                     vis.push(5);
                 }
+                Self::set_sandbox_label(&mut self.fields[5], canonical == 2);
                 self.visible = vis;
             }
             FormKind::EditCondition { .. } => {
@@ -1232,6 +1271,7 @@ impl FormState {
                 if canonical != 1 && has_sandboxes {
                     vis.push(1);
                 }
+                Self::set_sandbox_label(&mut self.fields[1], canonical == 2);
                 self.visible = vis;
             }
             FormKind::AddChild { .. } => {
@@ -1269,6 +1309,7 @@ impl FormState {
                     if canonical != 1 && has_sandboxes {
                         vis.push(6); // sandbox
                     }
+                    Self::set_sandbox_label(&mut self.fields[6], canonical == 2);
                     self.visible = vis;
                 }
             }
@@ -2067,8 +2108,98 @@ impl FormState {
 
 impl FormState {
     /// Return the contextual hint for the given raw field index.
-    fn field_hint(&self, field_idx: usize) -> Option<&'static str> {
+    fn field_hint(&self, field_idx: usize) -> Option<&str> {
         self.fields[field_idx].hint()
+    }
+
+    /// If `field_idx` is a sandbox Select and a sandbox is selected, return
+    /// styled lines showing its full entitlements (matching the Sandboxes tab).
+    fn sandbox_hint_lines(&self, field_idx: usize, t: &Theme) -> Option<Vec<Line<'static>>> {
+        let FormField::Select {
+            label, selected, ..
+        } = &self.fields[field_idx]
+        else {
+            return None;
+        };
+        if !label.starts_with("Sandbox") {
+            return None;
+        }
+        let sb = self.sandbox_summaries.get(*selected)?.as_ref()?;
+
+        let mut out = Vec::new();
+
+        // Default capabilities
+        out.push(Line::from(vec![
+            Span::styled("    Default: ", t.detail_label),
+            Span::styled(sb.default.display(), t.detail_value),
+        ]));
+
+        // Network policy
+        let net_str = match &sb.network {
+            NetworkPolicy::Deny => "deny".to_string(),
+            NetworkPolicy::Allow => "allow".to_string(),
+            NetworkPolicy::Localhost => "localhost".to_string(),
+            NetworkPolicy::AllowDomains(d) => format!("[{}]", d.join(", ")),
+        };
+        let net_style = match &sb.network {
+            NetworkPolicy::Deny => t.effect_deny,
+            NetworkPolicy::Allow => t.effect_allow,
+            _ => t.detail_value,
+        };
+        out.push(Line::from(vec![
+            Span::styled("    Network: ", t.detail_label),
+            Span::styled(net_str, net_style),
+        ]));
+
+        // Rules
+        if !sb.rules.is_empty() {
+            for rule in &sb.rules {
+                let effect_str = match rule.effect {
+                    RuleEffect::Allow => "allow",
+                    RuleEffect::Deny => "deny",
+                };
+                out.push(Line::from(Span::styled(
+                    format!(
+                        "    {effect_str} {} in {} ({})",
+                        rule.caps.short(),
+                        rule.path,
+                        format!("{:?}", rule.path_match).to_lowercase()
+                    ),
+                    t.sandbox_effect(rule.effect),
+                )));
+            }
+        }
+
+        Some(out)
+    }
+
+    /// Return the section name for a field, if this form uses sections.
+    /// Returns None for forms that don't need section headers.
+    fn field_section(&self, field_idx: usize) -> Option<&'static str> {
+        match &self.kind {
+            FormKind::AddRule | FormKind::EditRule { .. } => {
+                match field_idx {
+                    // Field 4 = "When matched", field 5 = "Sandbox"
+                    4 | 5 => Some("Decide"),
+                    // Field 6 = Expression (starlark mode, no sections)
+                    6 => None,
+                    _ => Some("Match"),
+                }
+            }
+            FormKind::AddChild { .. } => {
+                // Field 0 = "Add type" (no section), 1-4 = match, 5-6 = decide
+                match field_idx {
+                    0 => None,
+                    5 | 6 => Some("Decide"),
+                    _ => Some("Match"),
+                }
+            }
+            FormKind::EditDecision { .. } => {
+                // All fields are decide (effect + sandbox), no section header needed
+                None
+            }
+            _ => None,
+        }
     }
 
     pub fn view(&self, frame: &mut Frame, area: Rect, clicks: &mut ClickRegions, t: &Theme) {
@@ -2108,17 +2239,38 @@ impl FormState {
         }
 
         let mut lines: Vec<Line> = Vec::new();
-        lines.push(Line::from(""));
 
         // Track current_y for click region placement.
-        // Starts after the blank line at the top of inner.area.
-        let mut current_y = inner.area.y + 1; // +1 for the blank line
+        let mut current_y = inner.area.y;
         let inner_width = inner.area.width;
         let inner_x = inner.area.x;
+        let mut current_section: Option<&str> = None;
 
         for (vi, &fi) in self.visible.iter().enumerate() {
             let is_active = vi == self.active;
             let field = &self.fields[fi];
+
+            // Insert section header when the section changes
+            if let Some(section) = self.field_section(fi) {
+                if current_section != Some(section) {
+                    // Pad between sections
+                    if current_section.is_some() {
+                        lines.push(Line::from(""));
+                        current_y += 1;
+                    }
+                    // ── Section ────────
+                    let label = format!(" {section} ");
+                    let rule_len = (inner_width as usize).saturating_sub(2 + label.len());
+                    let rule = "─".repeat(rule_len);
+                    lines.push(Line::from(vec![
+                        Span::styled("  ──", t.text_disabled),
+                        Span::styled(label, t.text_emphasis),
+                        Span::styled(rule, t.text_disabled),
+                    ]));
+                    current_y += 1;
+                    current_section = Some(section);
+                }
+            }
 
             // Push a click region for the entire field row (less specific).
             clicks.push(
@@ -2303,13 +2455,19 @@ impl FormState {
 
             current_y += 1; // the field value line
 
-            // Context hint for active field
-            if is_active && let Some(hint) = self.field_hint(fi) {
-                lines.push(Line::from(Span::styled(
-                    format!("    {hint}"),
-                    t.text_disabled,
-                )));
-                current_y += 1;
+            // Context hint for active field — use rich sandbox summary if available
+            if is_active {
+                if let Some(sb_lines) = self.sandbox_hint_lines(fi, t) {
+                    let count = sb_lines.len();
+                    lines.extend(sb_lines);
+                    current_y += count as u16;
+                } else if let Some(hint) = self.field_hint(fi) {
+                    lines.push(Line::from(Span::styled(
+                        format!("    {hint}"),
+                        t.text_disabled,
+                    )));
+                    current_y += 1;
+                }
             }
 
             // Spacing between fields
@@ -2375,8 +2533,8 @@ macro_rules! observable_registry {
         }
 
         /// Per-option hint strings, parallel to `observable_options()`.
-        fn observable_option_hints() -> Vec<&'static str> {
-            vec![ $( $hint ),* ]
+        fn observable_option_hints() -> Vec<String> {
+            vec![ $( String::from($hint) ),* ]
         }
 
         fn observable_to_index(obs: &Observable) -> usize {
@@ -2579,8 +2737,8 @@ macro_rules! pattern_registry {
 
         /// Per-option hint strings, parallel to `pattern_options()`.
         #[allow(dead_code)]
-        fn pattern_option_hints() -> Vec<&'static str> {
-            vec![ $( $hint ),* ]
+        fn pattern_option_hints() -> Vec<String> {
+            vec![ $( String::from($hint) ),* ]
         }
 
         #[allow(dead_code)]

@@ -253,19 +253,21 @@ fn run_onboard() -> Result<()> {
             if offer_fix(OnboardFix::CreatePolicy)? {
                 ui::progress("Launching policy editor...");
                 match crate::cmd::init::ensure_starter_policy() {
-                    Ok((path, created_new)) => match crate::tui::run_with_options(&path, false, true) {
-                        Ok(crate::tui::TuiOutcome::Completed) => fixed += 1,
-                        Ok(crate::tui::TuiOutcome::Aborted) => {
-                            if created_new {
-                                let _ = std::fs::remove_file(&path);
+                    Ok((path, created_new)) => {
+                        match crate::tui::run_with_options(&path, false, true) {
+                            Ok(crate::tui::TuiOutcome::Completed) => fixed += 1,
+                            Ok(crate::tui::TuiOutcome::Aborted) => {
+                                if created_new {
+                                    let _ = std::fs::remove_file(&path);
+                                }
+                                ui::warn("Policy setup cancelled.");
                             }
-                            ui::warn("Policy setup cancelled.");
+                            Err(e) => {
+                                warn!(error = %e, "Policy editor failed during onboard");
+                                ui::fail(&format!("Policy creation failed: {e}"));
+                            }
                         }
-                        Err(e) => {
-                            warn!(error = %e, "Policy editor failed during onboard");
-                            ui::fail(&format!("Policy creation failed: {e}"));
-                        }
-                    },
+                    }
                     Err(e) => {
                         warn!(error = %e, "Could not write starter policy");
                         ui::fail(&format!("Policy creation failed: {e}"));

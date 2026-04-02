@@ -7,8 +7,8 @@ use crossterm::event::KeyEvent;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::policy::match_tree::PolicyManifest;
 use super::theme::ViewContext;
+use crate::policy::match_tree::PolicyManifest;
 
 /// An action returned from [`Component::update`] to signal the parent.
 pub enum Action {
