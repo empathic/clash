@@ -9,6 +9,7 @@ pub mod document;
 pub mod from_manifest;
 #[macro_use]
 pub mod macros;
+mod canonicalize;
 pub mod mutate;
 pub mod parser;
 pub mod serialize;

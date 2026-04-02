@@ -897,6 +897,7 @@ dependencies = [
  "allocative",
  "anyhow",
  "include_dir",
+ "pretty_assertions",
  "regex",
  "serde",
  "serde_json",

@@ -42,6 +42,12 @@ impl StarDocument {
         })
     }
 
+    /// Returns a "canonical" version of the document. This is an idempotent set of transforms
+    /// that put the document in a form we want.
+    pub(crate) fn canonicalize(&mut self) -> Result<()> {
+        crate::codegen::canonicalize::canonicalize(&mut self.stmts)
+    }
+
     /// Serialize the current AST to Starlark source text.
     pub fn to_source(&self) -> String {
         serialize(&self.stmts)
@@ -94,7 +100,8 @@ policy("test", default = ask(), rules = [tool(["Read"]).allow()])
         let doc = doc_from_str(src);
         let reserialized = doc.to_source();
         // Should parse back to the same AST
-        let doc2 = StarDocument::from_source(reserialized.clone(), PathBuf::from("test.star")).unwrap();
+        let doc2 =
+            StarDocument::from_source(reserialized.clone(), PathBuf::from("test.star")).unwrap();
         assert_eq!(doc.stmts, doc2.stmts);
     }
 
