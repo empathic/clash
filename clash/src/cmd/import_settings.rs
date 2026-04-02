@@ -180,6 +180,201 @@ fn classify_permission(perm: &Permission, effect: &str, analysis: &mut ImportAna
 }
 
 // ---------------------------------------------------------------------------
+// Starlark code generation
+// ---------------------------------------------------------------------------
+
+use std::collections::BTreeSet;
+
+use clash_starlark::codegen::ast::{DictEntry, Expr, Stmt};
+use clash_starlark::codegen::builder::*;
+
+/// Generate a minimal Starlark policy from a posture choice.
+pub(crate) fn generate_starlark_from_posture(posture: Posture) -> String {
+    let effect_name = posture.default_effect();
+    let preset = posture.sandbox_preset();
+
+    let stmts = vec![
+        load_builtin(),
+        load_std(&["policy", "settings", "allow", "ask", "deny"]),
+        load_sandboxes(&[preset]),
+        Stmt::Blank,
+        Stmt::Expr(settings(
+            Expr::call(effect_name, vec![]),
+            Some(Expr::ident(preset)),
+        )),
+        Stmt::Blank,
+        Stmt::Expr(policy(
+            "default",
+            Expr::call(effect_name, vec![]),
+            vec![],
+            None,
+        )),
+    ];
+
+    clash_starlark::codegen::serialize(&stmts)
+}
+
+/// Build a `when({"Bash": {("git","cargo"): {glob("**"): effect}}})` rule
+/// from a list of command segments. Multi-segment commands are flattened to
+/// the first segment — `glob("**")` handles subcommand matching.
+fn build_bash_rules(commands: &[Vec<String>], effect: Expr) -> Expr {
+    let mut bins: BTreeSet<&str> = BTreeSet::new();
+    for cmd in commands {
+        if let Some(first) = cmd.first() {
+            bins.insert(first.as_str());
+        }
+    }
+    let sorted: Vec<&str> = bins.into_iter().collect();
+
+    let key: MatchKey = if sorted.len() == 1 {
+        sorted[0].into()
+    } else {
+        sorted.as_slice().into()
+    };
+
+    let glob_entry = DictEntry::new(
+        Expr::call("glob", vec![Expr::string("**")]),
+        effect,
+    );
+    let glob_dict = Expr::dict(vec![glob_entry]);
+
+    match_rule(vec![(
+        "Bash".into(),
+        MatchValue::Nested(vec![(key, MatchValue::Effect(glob_dict))]),
+    )])
+}
+
+/// Generate a full Starlark policy from analyzed settings.
+pub(crate) fn generate_starlark_from_analysis(analysis: &ImportAnalysis) -> String {
+    let mut stmts = vec![
+        Stmt::comment("Imported from Claude Code settings"),
+        load_builtin(),
+        load_std(&[
+            "when", "policy", "settings", "sandbox", "cwd", "home", "allow", "ask", "deny",
+        ]),
+        load_sandboxes(&["project"]),
+        Stmt::Blank,
+    ];
+
+    // Sandbox for file-access tools
+    let rw = clash_starlark::kwargs!(read = true, write = true);
+    let fs_box = sandbox(
+        "cwd",
+        vec![(
+            "fs",
+            Expr::list(vec![
+                cwd(clash_starlark::kwargs!(follow_worktrees = true))
+                    .recurse()
+                    .allow_kwargs(rw.clone()),
+                home().child(".claude").recurse().allow_kwargs(rw),
+            ]),
+        )],
+    );
+    stmts.push(Stmt::comment(
+        "Sandbox for file-access tools (scoped to project + ~/.claude)",
+    ));
+    stmts.push(Stmt::assign("project_files", fs_box));
+    stmts.push(Stmt::Blank);
+
+    stmts.push(Stmt::Expr(settings(
+        Expr::ident("ask"),
+        Some(Expr::ident("project")),
+    )));
+    stmts.push(Stmt::Blank);
+
+    // Build rules list
+    let mut rules: Vec<Expr> = vec![];
+
+    // 1. File denies first
+    for (tool, path) in &analysis.file_denies {
+        let expr = match_rule(vec![(
+            tool.as_str().into(),
+            MatchValue::Nested(vec![(
+                path.as_str().into(),
+                MatchValue::Effect(deny()),
+            )]),
+        )]);
+        rules.push(Expr::commented(&format!("deny {} on {}", tool, path), expr));
+    }
+
+    // 2. Bash denies
+    if !analysis.bash_denies.is_empty() {
+        let expr = build_bash_rules(&analysis.bash_denies, deny());
+        rules.push(Expr::commented("denied bash commands", expr));
+    }
+
+    // 3. Bash allows
+    if !analysis.bash_allows.is_empty() {
+        let expr = build_bash_rules(&analysis.bash_allows, allow_with_sandbox(Expr::ident("project")));
+        rules.push(Expr::commented("allowed bash commands (sandboxed)", expr));
+    }
+
+    // 4. Bash asks
+    if !analysis.bash_asks.is_empty() {
+        let expr = build_bash_rules(&analysis.bash_asks, ask());
+        rules.push(Expr::commented("bash commands requiring confirmation", expr));
+    }
+
+    // 5. Tool denies
+    if !analysis.tool_denies.is_empty() {
+        let names: Vec<&str> = analysis.tool_denies.iter().map(|s| s.as_str()).collect();
+        let expr = tool_match(&names, deny());
+        rules.push(Expr::commented("denied tools", expr));
+    }
+
+    // 6. Read tools with project_files sandbox
+    let read_tools: Vec<&str> = ["Read", "Glob", "Grep"]
+        .iter()
+        .filter(|t| analysis.tool_allows.contains(&t.to_string()))
+        .copied()
+        .collect();
+    if !read_tools.is_empty() {
+        let expr = tool_match(&read_tools, allow_with_sandbox(Expr::ident("project_files")));
+        rules.push(Expr::commented("read-only fs tools", expr));
+    }
+
+    // 7. Write tools with project_files sandbox
+    let write_tools: Vec<&str> = ["Write", "Edit", "NotebookEdit"]
+        .iter()
+        .filter(|t| analysis.tool_allows.contains(&t.to_string()))
+        .copied()
+        .collect();
+    if !write_tools.is_empty() {
+        let expr = tool_match(&write_tools, allow_with_sandbox(Expr::ident("project_files")));
+        rules.push(Expr::commented("write fs tools", expr));
+    }
+
+    // 8. Other tool allows
+    let fs_tools: &[&str] = &["Read", "Glob", "Grep", "Write", "Edit", "NotebookEdit"];
+    let other_allows: Vec<&str> = analysis
+        .tool_allows
+        .iter()
+        .filter(|t| !fs_tools.contains(&t.as_str()))
+        .map(|s| s.as_str())
+        .collect();
+    if !other_allows.is_empty() {
+        let expr = tool_match(&other_allows, allow());
+        rules.push(Expr::commented("other allowed tools", expr));
+    }
+
+    // 9. Tool asks
+    if !analysis.tool_asks.is_empty() {
+        let names: Vec<&str> = analysis.tool_asks.iter().map(|s| s.as_str()).collect();
+        let expr = tool_match(&names, ask());
+        rules.push(Expr::commented("tools requiring confirmation", expr));
+    }
+
+    stmts.push(Stmt::Expr(policy(
+        "imported",
+        Expr::ident("ask"),
+        rules,
+        None,
+    )));
+
+    clash_starlark::codegen::serialize(&stmts)
+}
+
+// ---------------------------------------------------------------------------
 // Entry point (stub — implemented in Task 9)
 // ---------------------------------------------------------------------------
 
@@ -200,6 +395,7 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialog::SelectItem;
 
     #[test]
     fn test_analyze_empty_settings() {
@@ -273,5 +469,74 @@ mod tests {
 
         assert_eq!(analysis.tool_allows, vec!["Edit".to_string()]);
         assert_eq!(analysis.skipped.len(), 1);
+    }
+
+    #[test]
+    fn test_generate_compiles() {
+        use claude_settings::permission::PermissionSet;
+        let perms = PermissionSet::new()
+            .allow("Bash(git:*)")
+            .allow("Bash(cargo:*)")
+            .allow("Bash(npm:*)")
+            .allow("Read")
+            .allow("Glob")
+            .allow("Grep")
+            .allow("Write")
+            .allow("Edit")
+            .deny("Read(.env)");
+        let settings = claude_settings::Settings::default().with_permissions(perms);
+        let analysis = analyze_settings(&settings);
+        let starlark = generate_starlark_from_analysis(&analysis);
+
+        let output = clash_starlark::evaluate(&starlark, "<test>", std::path::Path::new("."))
+            .expect("starlark evaluation failed");
+        crate::policy::compile::compile_to_tree(&output.json)
+            .expect("generated policy must compile");
+    }
+
+    #[test]
+    fn test_generate_posture_compiles() {
+        for posture in Posture::variants() {
+            let starlark = generate_starlark_from_posture(*posture);
+            let output = clash_starlark::evaluate(&starlark, "<test>", std::path::Path::new("."))
+                .unwrap_or_else(|e| panic!("posture {:?} failed to evaluate: {e}", posture));
+            crate::policy::compile::compile_to_tree(&output.json)
+                .unwrap_or_else(|e| panic!("posture {:?} failed to compile: {e}", posture));
+        }
+    }
+
+    #[test]
+    fn test_generate_groups_bash_prefixes() {
+        use claude_settings::permission::PermissionSet;
+        let perms = PermissionSet::new()
+            .allow("Bash(git:*)")
+            .allow("Bash(cargo:*)")
+            .allow("Bash(npm:*)");
+        let settings = claude_settings::Settings::default().with_permissions(perms);
+        let analysis = analyze_settings(&settings);
+        let starlark = generate_starlark_from_analysis(&analysis);
+
+        assert!(
+            starlark.contains("(\"cargo\", \"git\", \"npm\")"),
+            "expected grouped tuple key, got:\n{starlark}"
+        );
+    }
+
+    #[test]
+    fn test_generate_denies_first() {
+        use claude_settings::permission::PermissionSet;
+        let perms = PermissionSet::new()
+            .allow("Read")
+            .deny("Read(.env)");
+        let settings = claude_settings::Settings::default().with_permissions(perms);
+        let analysis = analyze_settings(&settings);
+        let starlark = generate_starlark_from_analysis(&analysis);
+
+        let deny_pos = starlark.find("deny()").expect("should contain deny");
+        let allow_pos = starlark.find("allow(").expect("should contain allow");
+        assert!(
+            deny_pos < allow_pos,
+            "deny rules should come before allow rules"
+        );
     }
 }
