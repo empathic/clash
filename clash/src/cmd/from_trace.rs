@@ -103,7 +103,7 @@ pub fn run(trace_path: &Path) -> Result<std::path::PathBuf> {
 
     // Print a summary of what was generated
     for bin in &analysis.binaries {
-        ui::info(&format!("  match({{\"Bash\": {{\"{}\": allow()}}}})", bin));
+        ui::info(&format!("  when({{\"Bash\": {{\"{}\": allow()}}}})", bin));
     }
     if !analysis.tools.is_empty() {
         let tool_names: Vec<String> = analysis
@@ -112,10 +112,10 @@ pub fn run(trace_path: &Path) -> Result<std::path::PathBuf> {
             .map(|t| format!("\"{}\"", t))
             .collect();
         if tool_names.len() == 1 {
-            ui::info(&format!("  match({{{}: allow()}})", tool_names[0]));
+            ui::info(&format!("  when({{{}: allow()}})", tool_names[0]));
         } else {
             ui::info(&format!(
-                "  match({{({}): allow()}})",
+                "  when({{({}): allow()}})",
                 tool_names.join(", ")
             ));
         }
@@ -292,7 +292,7 @@ fn analyze(invocations: &[ToolInvocation]) -> TraceAnalysis {
     let saw_bash = invocations.iter().any(|i| i.tool_name == "Bash");
     if saw_bash && binaries.is_empty() {
         // We know Bash was used but don't know which binaries. Still list it.
-        // We'll generate match({"Bash": allow()}) to cover all commands.
+        // We'll generate when({"Bash": allow()}) to cover all commands.
     }
 
     TraceAnalysis {
@@ -313,7 +313,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     let mut stmts = vec![
         load_builtin(),
         load_std(&[
-            "match", "policy", "settings", "sandbox", "cwd", "home", "allow", "ask", "deny",
+            "when", "policy", "settings", "sandbox", "cwd", "home", "allow", "ask", "deny",
         ]),
         load_sandboxes(&["dev"]),
         Stmt::Blank,
@@ -628,8 +628,8 @@ mod tests {
         assert!(policy.contains("(\"Read\", \"Grep\"): allow(sandbox = _fs_box)"));
         assert!(policy.contains("\"Write\": allow(sandbox = _fs_box)"));
 
-        // Should contain match rules for binaries
-        assert!(policy.contains("match({\"Bash\":"));
+        // Should contain when rules for binaries
+        assert!(policy.contains("\"Bash\":"));
         assert!(policy.contains("allow(sandbox = dev)"));
 
         // Should contain git safety rules
@@ -669,9 +669,9 @@ mod tests {
         };
 
         let policy = generate_starlark(&analysis);
-        // Should generate a generic Bash match rule since we know bash was used
+        // Should generate a generic Bash when rule since we know bash was used
         // but total_invocations > tools count
-        assert!(policy.contains("match({\"Bash\": allow(sandbox = dev)})"));
+        assert!(policy.contains("when({\"Bash\": allow(sandbox = dev)})"));
     }
 
     #[test]

@@ -121,6 +121,7 @@ fn set_children(node: &MatchTreeNode, children: Vec<JsonValue>) -> anyhow::Resul
 }
 
 /// Recursively find the deepest condition node with empty children and set its children.
+/// (Also available as `set_children_on_deepest_leaf_pub` for external callers.)
 fn set_children_on_deepest_leaf(json: &mut JsonValue, children: Vec<JsonValue>) {
     if let Some(obj) = json.as_object_mut()
         && let Some(cond) = obj.get_mut("condition").and_then(|c| c.as_object_mut())
@@ -140,6 +141,11 @@ fn set_children_on_deepest_leaf(json: &mut JsonValue, children: Vec<JsonValue>) 
         // Fallback: set children directly
         cond.insert("children".into(), serde_json::json!(children));
     }
+}
+
+/// Public wrapper for `set_children_on_deepest_leaf`.
+pub fn set_children_on_deepest_leaf_pub(json: &mut JsonValue, children: Vec<JsonValue>) {
+    set_children_on_deepest_leaf(json, children);
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +203,10 @@ pub fn pattern_to_json<'v>(value: Value<'v>, heap: &'v Heap) -> anyhow::Result<J
         let items: Result<Vec<_>, _> = list.iter().map(|v| pattern_to_json(v, heap)).collect();
         return Ok(json!({"any_of": items?}));
     }
+    if let Some(tuple) = starlark::values::tuple::TupleRef::from_value(value) {
+        let items: Result<Vec<_>, _> = tuple.iter().map(|v| pattern_to_json(v, heap)).collect();
+        return Ok(json!({"any_of": items?}));
+    }
     // Check for regex struct
     if value.get_type() == "struct"
         && let Ok(Some(regex_val)) = value.get_attr("_regex", heap)
@@ -222,8 +232,9 @@ pub fn pattern_to_json<'v>(value: Value<'v>, heap: &'v Heap) -> anyhow::Result<J
         };
     }
     anyhow::bail!(
-        "cannot convert {} to a match tree pattern",
-        value.get_type()
+        "cannot convert {} to a match tree pattern: {}",
+        value.get_type(),
+        value.to_repr()
     )
 }
 

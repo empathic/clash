@@ -15,13 +15,13 @@ settings(default = ask())
 
 policy("node-dev",
     rules = [
-        match({"Bash": {
+        when({"Bash": {
             "git": {"push": {"--force": deny()}},
         }}),
-        match({"Bash": {
+        when({"Bash": {
             ("npm", "npx", "node", "bun"): allow(sandbox = "node"),
             "git": allow(),
         }}),
-        match({("Read", "Glob", "Grep"): allow()}),
+        when({("Read", "Glob", "Grep"): allow()}),
     ],
 )

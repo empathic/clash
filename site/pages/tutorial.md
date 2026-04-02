@@ -44,15 +44,15 @@ Save this file and try running your agent. Every tool call will be blocked. That
 Your agent needs to read files to be useful. Let's allow that.
 
 ```python
-load("@clash//std.star", "allow", "deny", "match", "policy")
+load("@clash//std.star", "allow", "deny", "when", "policy")
 
 def main():
     return policy(default = deny(), rules = [
-        match({("Read", "Glob", "Grep"): allow()}),
+        when({("Read", "Glob", "Grep"): allow()}),
     ])
 ```
 
-One new concept: `match()` matches Claude Code tools by name. `Read`, `Glob`, and `Grep` are the read-only file tools — allowing all three lets the agent browse and read files without being able to write or edit them.
+One new concept: `when()` matches Claude Code tools by name. `Read`, `Glob`, and `Grep` are the read-only file tools — allowing all three lets the agent browse and read files without being able to write or edit them.
 
 Test it:
 
@@ -69,7 +69,7 @@ You should see an <span class="badge badge--allow">allow</span> decision.
 Read-only is safe but not very productive. Let's allow writes too.
 
 ```python
-load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "subpath")
+load("@clash//std.star", "allow", "deny", "when", "policy", "sandbox", "subpath")
 
 def main():
     project_sandbox = sandbox(
@@ -78,7 +78,7 @@ def main():
     )
 
     return policy(default = deny(), rules = [
-        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
+        when({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
     ])
 ```
 
@@ -86,12 +86,12 @@ The sandbox restricts file tool access to your project directory. Files outside 
 
 ---
 
-## Step 4: Allow commands with `match()`
+## Step 4: Allow commands with `when()`
 
-Your agent needs to run build tools and git. The `match()` builder lets you define rules as a tree of tool names and subcommands:
+Your agent needs to run build tools and git. The `when()` builder lets you define rules as a tree of tool names and subcommands:
 
 ```python
-load("@clash//std.star", "allow", "deny", "match", "policy", "sandbox", "subpath")
+load("@clash//std.star", "allow", "deny", "when", "policy", "sandbox", "subpath")
 
 def main():
     project_sandbox = sandbox(
@@ -100,22 +100,22 @@ def main():
     )
 
     return policy(default = deny(), rules = [
-        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
+        when({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
 
-        match({"Bash": {"git": {
+        when({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
         }}}),
 
-        match({"Bash": {"cargo": {
+        when({"Bash": {"cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(),
             "publish": deny(),
         }}}),
     ])
 ```
 
-`match()` takes a dict where roots are tool names and values are trees of subcommands. Each key maps to an effect:
+`when()` takes a dict where roots are tool names and values are trees of subcommands. Each key maps to an effect:
 
 - Tuples like `("add", "commit", "diff")` match any of those subcommands
 - Nested dicts like `"reset": {"--hard": deny()}` match deeper argument patterns
@@ -136,7 +136,7 @@ clash explain bash "git stash"     # → deny (no rule, falls to default)
 Denying everything unmatched is safe but noisy when you're actively working. Switch the default to `ask` so your agent can request approval for things you haven't written rules for yet:
 
 ```python
-load("@clash//std.star", "allow", "ask", "deny", "match", "policy", "sandbox", "subpath")
+load("@clash//std.star", "allow", "ask", "deny", "when", "policy", "sandbox", "subpath")
 
 def main():
     project_sandbox = sandbox(
@@ -145,15 +145,15 @@ def main():
     )
 
     return policy(default = ask(), rules = [
-        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
+        when({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
 
-        match({"Bash": {"git": {
+        when({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
         }}}),
 
-        match({"Bash": {"cargo": {
+        when({"Bash": {"cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(),
             "publish": deny(),
         }}}),
@@ -169,7 +169,7 @@ Now unmatched commands prompt you instead of silently failing. As you work, you'
 Rules control whether a command runs. Sandboxes control what it can access *while* it runs — filesystem paths and network access, enforced at the OS level.
 
 ```python
-load("@clash//std.star", "allow", "ask", "deny", "match", "policy", "sandbox", "subpath")
+load("@clash//std.star", "allow", "ask", "deny", "when", "policy", "sandbox", "subpath")
 
 def main():
     dev_sandbox = sandbox(
@@ -185,15 +185,15 @@ def main():
     )
 
     return policy(default = ask(), rules = [
-        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox)}),
+        when({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox)}),
 
-        match({"Bash": {"git": {
+        when({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
         }}}),
 
-        match({"Bash": {"cargo": {
+        when({"Bash": {"cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(sandbox = dev_sandbox),
             "publish": deny(),
         }}}),
@@ -215,7 +215,7 @@ Attach a sandbox to an effect with `allow(sandbox = dev_sandbox)`. When cargo ru
 Instead of allowing all network access in your sandbox, restrict it to specific domains:
 
 ```python
-load("@clash//std.star", "allow", "ask", "deny", "domains", "match", "policy", "sandbox", "subpath")
+load("@clash//std.star", "allow", "ask", "deny", "domains", "when", "policy", "sandbox", "subpath")
 
 def main():
     dev_sandbox = sandbox(
@@ -237,15 +237,15 @@ def main():
     )
 
     return policy(default = ask(), rules = [
-        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox)}),
+        when({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox)}),
 
-        match({"Bash": {"git": {
+        when({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
         }}}),
 
-        match({"Bash": {"cargo": {
+        when({"Bash": {"cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(sandbox = dev_sandbox),
             "publish": deny(),
         }}}),
@@ -262,7 +262,7 @@ Clash ships with built-in rules for its own CLI and common Claude Code tools. In
 
 ```python
 load("@clash//builtin.star", "builtins")
-load("@clash//std.star", "allow", "ask", "deny", "domains", "match", "policy", "sandbox", "subpath")
+load("@clash//std.star", "allow", "ask", "deny", "domains", "when", "policy", "sandbox", "subpath")
 
 def main():
     dev_sandbox = sandbox(
@@ -284,15 +284,15 @@ def main():
     )
 
     return policy(default = ask(), rules = builtins + [
-        match({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox)}),
+        when({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox)}),
 
-        match({"Bash": {"git": {
+        when({"Bash": {"git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
         }}}),
 
-        match({"Bash": {"cargo": {
+        when({"Bash": {"cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(sandbox = dev_sandbox),
             "publish": deny(),
         }}}),

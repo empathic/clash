@@ -31,6 +31,8 @@ pub struct PolicyRegistration {
 pub struct EvalContext {
     pub policy: RefCell<Option<PolicyRegistration>>,
     pub settings: RefCell<Option<SettingsValue>>,
+    /// Sandboxes collected by when() calls, drained by policy().
+    pub pending_sandboxes: RefCell<Vec<JsonValue>>,
 }
 
 impl EvalContext {
@@ -38,6 +40,7 @@ impl EvalContext {
         EvalContext {
             policy: RefCell::new(None),
             settings: RefCell::new(None),
+            pending_sandboxes: RefCell::new(Vec::new()),
         }
     }
 

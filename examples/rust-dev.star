@@ -20,14 +20,14 @@ settings(default = ask())
 
 policy("rust-dev",
     rules = [
-        match({"Bash": {
+        when({"Bash": {
             "git": {"push": {"--force": deny()}},
         }}),
-        match({"Bash": {
+        when({"Bash": {
             ("cargo", "rustc", "rustfmt"): allow(sandbox = "rust"),
             "rustup": allow(),
             "git": allow(),
         }}),
-        match({("Read", "Glob", "Grep"): allow()}),
+        when({("Read", "Glob", "Grep"): allow()}),
     ],
 )

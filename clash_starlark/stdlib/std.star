@@ -220,166 +220,58 @@ def mode(name=None, doc=None):
 
 
 # ---------------------------------------------------------------------------
-# Typed match keys — used in match() dicts to distinguish observables
+# Typed match keys — used in when() dicts to distinguish observables
 # ---------------------------------------------------------------------------
 
 
 def Mode(name):
-    """Typed key for match() dicts — matches Claude Code's permission mode.
+    """Typed key for when() dicts — matches Claude Code's permission mode.
 
     Usage:
-        match({Mode("plan"): {Tool("Read"): allow()}})
+        when({Mode("plan"): {Tool("Read"): allow()}})
     """
     return struct(_match_key="mode", _match_value=name)
 
 
 def Tool(name):
-    """Typed key for match() dicts — matches tool name (explicit alternative to raw strings).
+    """Typed key for when() dicts — matches tool name (explicit alternative to raw strings).
 
     Usage:
-        match({Tool("Bash"): {"git": allow()}})
+        when({Tool("Bash"): {"git": allow()}})
     """
     return struct(_match_key="tool", _match_value=name)
 
 
 # ---------------------------------------------------------------------------
-# Dict-based match tree builder
+# when() and policy() — thin wrappers around Rust-native implementations
 # ---------------------------------------------------------------------------
 
 
-def _collect_effect_sandbox(eff, sandboxes, seen):
-    """Collect sandbox from an effect descriptor if present."""
-    if eff._sandbox != None:
-        sb = eff._sandbox
-        if hasattr(sb, "_name"):
-            # Sandbox struct — collect its JSON
-            if sb._name not in seen:
-                seen[sb._name] = True
-                sandboxes.append(_sandbox_to_json(sb))
-        # String sandbox names are resolved at document assembly time — no collection needed
-
-
-def _match_build_tree(tree, arg_index, sandboxes, seen):
-    """Recursively build match tree nodes from a dict tree."""
-    nodes = []
-    for key, value in tree.items():
-        keys = key if type(key) == "tuple" else (key,)
-        for k in keys:
-            pat = _pattern(k)
-            cond = _mt_arg(arg_index, pat)
-
-            if type(value) == "dict":
-                children = _match_build_tree(value, arg_index + 1, sandboxes, seen)
-                nodes.append(cond.on(children))
-            elif hasattr(value, "_is_effect"):
-                decision = _effect_to_decision(value)
-                nodes.append(cond.on([decision]))
-                _collect_effect_sandbox(value, sandboxes, seen)
-            else:
-                fail("match() values must be effect descriptors or dicts")
-    return nodes
-
-
-def _match_tool_key(name, value, result, sandboxes, seen):
-    """Process a tool-level key (string or Tool() value) in match()."""
-    pat = _pattern(name)
-    tool_cond = _mt_tool(pat)
-
-    if type(value) == "dict":
-        children = _match_build_tree(value, 0, sandboxes, seen)
-        node = tool_cond.on(children)
-    elif hasattr(value, "_is_effect"):
-        decision = _effect_to_decision(value)
-        node = tool_cond.on([decision])
-        _collect_effect_sandbox(value, sandboxes, seen)
-    else:
-        fail("match() values must be effect descriptors or dicts")
-
-    result.append(struct(_node=node, _sandbox=None))
-
-
-def _match_build_tool_level(tree, sandboxes, seen):
-    """Build tool-level nodes from a dict inside a Mode() key."""
-    nodes = []
-    for key, value in tree.items():
-        keys = key if type(key) == "tuple" else (key,)
-        for k in keys:
-            if hasattr(k, "_match_key") and k._match_key == "tool":
-                name = k._match_value
-            else:
-                name = k  # raw string = tool name
-            pat = _pattern(name)
-            tool_cond = _mt_tool(pat)
-
-            if type(value) == "dict":
-                children = _match_build_tree(value, 0, sandboxes, seen)
-                nodes.append(tool_cond.on(children))
-            elif hasattr(value, "_is_effect"):
-                decision = _effect_to_decision(value)
-                nodes.append(tool_cond.on([decision]))
-                _collect_effect_sandbox(value, sandboxes, seen)
-            else:
-                fail("match() values inside Mode() must be effect descriptors or dicts")
-    return nodes
-
-
-def _match_dispatch_key(key, value, result, sandboxes, seen):
-    """Dispatch a single match() key based on its type."""
-    if hasattr(key, "_match_key"):
-        if key._match_key == "mode":
-            cond = _mt_mode(_pattern(key._match_value))
-            if type(value) == "dict":
-                children = _match_build_tool_level(value, sandboxes, seen)
-                node = cond.on(children)
-            elif hasattr(value, "_is_effect"):
-                node = cond.on([_effect_to_decision(value)])
-                _collect_effect_sandbox(value, sandboxes, seen)
-            else:
-                fail("Mode() value must be a dict of tools or an effect")
-            result.append(struct(_node=node, _sandbox=None))
-        elif key._match_key == "tool":
-            _match_tool_key(key._match_value, value, result, sandboxes, seen)
-    else:
-        # Raw string = tool name (backwards compat)
-        _match_tool_key(key, value, result, sandboxes, seen)
-
-
-def match(tree):
+def when(tree):
     """Build rules from a nested dict tree.
 
-    Keys can be:
-      - Raw strings: tool names (backwards compatible)
-      - Tool("Bash"): explicit tool matcher
-      - Mode("plan"): mode matcher (children are tool-level)
-      - Tuples of the above: match multiple
-
-    Returns a list of rule nodes for use in policy(rules=[...]).
-
-    Usage:
-        match({
-            Mode("plan"): {
-                Tool("Read"): allow(),
-                Tool("ExitPlanMode"): allow(),
-            },
-            Tool("Bash"): {"git": allow()},
-            "WebSearch": deny(),
-        })
+    Keys can be raw strings (tool names), Tool("Bash"), Mode("plan"),
+    or tuples thereof. Values are effects (allow/deny/ask) or nested dicts.
     """
-    sandboxes = []
-    seen = {}
-    result = []
+    return _when_impl(tree)
 
-    for key, value in tree.items():
-        keys = key if type(key) == "tuple" else (key,)
-        for k in keys:
-            _match_dispatch_key(k, value, result, sandboxes, seen)
 
-    # Attach collected sandboxes to the first node for policy() to extract
-    if result and sandboxes:
-        first = result[0]
-        result[0] = struct(_node=first._node, _sandbox=None, _cmd_sandboxes=sandboxes)
+def policy(name, rules_or_dict=None, default="deny", rules=None, default_sandbox=None):
+    """Register a named policy.
 
-    return result
+    Usage (dict form):
+        policy("default", {
+            mode("plan"): allow(sandbox=plan_box),
+            mode("edit"): allow(sandbox=edit_box),
+        })
+
+    Usage (rules form):
+        policy("default", rules=[
+            when({"Bash": {"git": {"push": deny()}}}),
+            when({("Read", "Glob", "Grep"): allow()}),
+        ])
+    """
+    _policy_impl(name, rules_or_dict, default=_unwrap_effect(default), rules=rules, default_sandbox=default_sandbox)
 
 
 # ---------------------------------------------------------------------------
@@ -441,21 +333,6 @@ def _effect_decision(effect):
     else:
         fail("unknown effect: " + str(e))
 
-
-def _effect_to_decision(eff):
-    """Convert an effect descriptor struct to a match tree decision node."""
-    if eff._sandbox != None:
-        sandbox_name = eff._sandbox._name if hasattr(eff._sandbox, "_name") else str(eff._sandbox)
-    else:
-        sandbox_name = None
-    if eff._effect == _ALLOW:
-        return _mt_allow(sandbox_name)
-    elif eff._effect == _DENY:
-        return _mt_deny()
-    elif eff._effect == _ASK:
-        return _mt_ask(sandbox_name)
-    else:
-        fail("unknown effect: " + str(eff._effect))
 
 
 def _caps_from_bools(read, write, execute, all_ops):
@@ -932,125 +809,6 @@ def settings(default="deny", default_sandbox=None):
             fail("default_sandbox must be a sandbox name string or sandbox() value")
     _register_settings(default=default, default_sandbox=ds)
 
-
-def policy(name, rules_or_dict=None, default="deny", rules=None, default_sandbox=None):
-    """Register a named policy.
-
-    Usage (dict form):
-        policy("default", {
-            mode("plan"): allow(sandbox=plan_box),
-            mode("edit"): allow(sandbox=edit_box),
-        })
-
-    Usage (rules form):
-        policy("default", rules=[
-            match({"Bash": {"git": {"push": deny()}}}),
-            match({("Read", "Glob", "Grep"): allow()}),
-        ])
-    """
-    default = _unwrap_effect(default)
-
-    flat_nodes = []
-    sandbox_list = []
-    _seen_sandboxes = {}
-
-    # Dict form: policy("name", {mode("x"): allow(sandbox=box), ...})
-    if rules_or_dict != None and type(rules_or_dict) == "dict":
-        for key, value in rules_or_dict.items():
-            # Tuples of keys share the same value
-            keys = key if type(key) == "tuple" else (key,)
-            for k in keys:
-                # Build condition from key
-                if hasattr(k, "_match_key"):
-                    # Typed key from mode(), Mode(), Tool(), etc.
-                    mk = k._match_key
-                    doc_val = k._doc if hasattr(k, "_doc") else None
-                    if mk == "mode":
-                        cond = _mt_mode(_pattern(k._match_value), doc=doc_val)
-                    elif mk == "tool":
-                        cond = _mt_tool(_pattern(k._match_value), doc=doc_val)
-                    else:
-                        fail("unknown match key type: " + mk)
-                elif type(k) == "string":
-                    # Raw string = tool name
-                    cond = _mt_tool(_pattern(k))
-                else:
-                    fail("policy dict keys must be mode(), Tool(), or tool name strings, got " + type(k))
-
-                # Build children from value
-                if hasattr(value, "_is_effect"):
-                    decision = _effect_to_decision(value)
-                    flat_nodes.append(cond.on([decision]))
-                    _collect_effect_sandbox(value, sandbox_list, _seen_sandboxes)
-                elif type(value) == "dict":
-                    # Nested dict — e.g. mode("edit"): {"Bash": allow()}
-                    inner_nodes = []
-                    for inner_key, inner_value in value.items():
-                        if hasattr(inner_key, "_match_key") and inner_key._match_key == "tool":
-                            inner_cond = _mt_tool(_pattern(inner_key._match_value))
-                        elif hasattr(inner_key, "_node"):
-                            inner_cond = inner_key._node
-                        else:
-                            inner_cond = _mt_tool(_pattern(inner_key))
-                        if hasattr(inner_value, "_is_effect"):
-                            inner_decision = _effect_to_decision(inner_value)
-                            inner_nodes.append(inner_cond.on([inner_decision]))
-                            _collect_effect_sandbox(inner_value, sandbox_list, _seen_sandboxes)
-                        else:
-                            fail("nested policy dict values must be effects")
-                    flat_nodes.append(cond.on(inner_nodes))
-                else:
-                    fail("policy dict values must be effects (allow/deny/ask) or dicts")
-
-    # List/rules form
-    if rules_or_dict != None and type(rules_or_dict) == "list":
-        rules = rules_or_dict
-    if rules == None:
-        rules = []
-
-    for item in rules:
-        if hasattr(item, "_is_path"):
-            flat_nodes.extend(item._nodes)
-        elif type(item) == "list":
-            for sub in item:
-                if hasattr(sub, "_node"):
-                    _collect_node(sub, flat_nodes, sandbox_list, _seen_sandboxes)
-                else:
-                    flat_nodes.append(sub)
-        elif hasattr(item, "_node"):
-            _collect_node(item, flat_nodes, sandbox_list, _seen_sandboxes)
-        else:
-            flat_nodes.append(item)
-
-    if default_sandbox != None:
-        if hasattr(default_sandbox, "_is_sandbox"):
-            default_sandbox_json = _sandbox_to_json(default_sandbox)
-            if default_sandbox._name not in _seen_sandboxes:
-                _seen_sandboxes[default_sandbox._name] = True
-                sandbox_list.append(default_sandbox_json)
-
-    _register_policy(
-        name=name,
-        rules=flat_nodes,
-        sandboxes=sandbox_list,
-    )
-
-
-def _collect_node(item, flat_nodes, sandbox_list, seen):
-    """Extract a node and its sandbox from a rule builder."""
-    flat_nodes.append(item._node if hasattr(item, "_node") else item)
-    if hasattr(item, "_sandbox") and item._sandbox != None:
-        sb = item._sandbox
-        if sb._name not in seen:
-            seen[sb._name] = True
-            sandbox_list.append(_sandbox_to_json(sb))
-    # match() attaches pre-built sandbox JSON via _cmd_sandboxes
-    if hasattr(item, "_cmd_sandboxes"):
-        for sb_json in item._cmd_sandboxes:
-            name = sb_json.get("name", "")
-            if name not in seen:
-                seen[name] = True
-                sandbox_list.append(sb_json)
 
 
 def _sandbox_to_json(sb):

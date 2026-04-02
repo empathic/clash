@@ -80,7 +80,7 @@ pub fn node_json_to_expr(node: &serde_json::Value) -> Expr {
 /// Convert a condition node to a Starlark expression.
 ///
 /// Tries to reconstruct the most natural Starlark form:
-/// - ToolName conditions → `match({"Name": effect()})` or `match({...})`
+/// - ToolName conditions → `when({"Name": effect()})` or `when({...})`
 /// - PositionalArg chains → nested match dicts
 fn condition_to_expr(cond: &serde_json::Value) -> Expr {
     let observe = cond
@@ -95,11 +95,11 @@ fn condition_to_expr(cond: &serde_json::Value) -> Expr {
 
     match observe {
         "tool_name" => {
-            // Always use match({...}) dict syntax for tool rules
+            // Always use when({...}) dict syntax for tool rules
             let pattern = &cond["pattern"];
             let key = pattern_to_expr(pattern);
             let value = children_to_expr(&children);
-            Expr::call("match", vec![Expr::dict(vec![DictEntry::new(key, value)])])
+            Expr::call("when", vec![Expr::dict(vec![DictEntry::new(key, value)])])
         }
         "positional_arg" => {
             let pattern = &cond["pattern"];
@@ -265,12 +265,12 @@ mod tests {
 
     #[test]
     fn sync_updates_rules() {
-        let src = r#"load("@clash//std.star", "match", "policy", "settings", "allow", "deny")
+        let src = r#"load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
 
 # My policy comment
 settings(default = deny())
 
-policy("test", default = deny(), rules = [match({"Read": allow()})])
+policy("test", default = deny(), rules = [when({"Read": allow()})])
 "#;
         let mut stmts = parse(src).unwrap();
 
@@ -296,12 +296,12 @@ policy("test", default = deny(), rules = [match({"Read": allow()})])
 
     #[test]
     fn sync_preserves_load_statements() {
-        let src = r#"load("@clash//std.star", "match", "policy", "settings", "allow", "deny")
+        let src = r#"load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
 load("./custom.star", "my_rules")
 
 settings(default = deny())
 
-policy("test", default = deny(), rules = [match({"Read": allow()})])
+policy("test", default = deny(), rules = [when({"Read": allow()})])
 "#;
         let mut stmts = parse(src).unwrap();
         let tree_json: Vec<serde_json::Value> = vec![];
@@ -360,7 +360,7 @@ policy("test", default = deny(), rules = [])
         sync_manifest_to_ast(&mut stmts, &tree_json, &sandboxes, "deny", None);
 
         let result = serialize(&stmts);
-        assert!(result.contains("match("), "got:\n{result}");
+        assert!(result.contains("when("), "got:\n{result}");
         assert!(result.contains("\"Bash\""), "got:\n{result}");
         assert!(result.contains("\"git\""), "got:\n{result}");
     }

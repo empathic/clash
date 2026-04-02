@@ -1,6 +1,6 @@
 //! Convenience macros for building Starlark AST nodes.
 
-/// Build a `match({...})` expression from a nested tree literal.
+/// Build a `when({...})` expression from a nested tree literal.
 ///
 /// Eliminates the `MatchKey`/`MatchValue`/`.into()` ceremony.
 ///
@@ -151,7 +151,7 @@ mod tests {
             "Bash" => allow(),
         };
         let src = serialize(&[Stmt::Expr(expr)]);
-        assert_eq!(src, "match({\"Bash\": allow()})\n");
+        assert_eq!(src, "when({\"Bash\": allow()})\n");
     }
 
     #[test]
@@ -237,7 +237,7 @@ mod tests {
     fn full_example_with_macros() {
         let stmts = vec![
             load_std(&[
-                "match", "tool", "policy", "settings", "allow", "deny", "ask",
+                "when", "tool", "policy", "settings", "allow", "deny", "ask",
             ]),
             Stmt::Blank,
             Stmt::Expr(settings(ask(), None)),

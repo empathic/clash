@@ -14,44 +14,228 @@ pub enum TransformOp<T> {
     Remove,
 }
 
-pub trait Transform {
-    fn visit_stmt(&mut self, stmt: &Stmt) -> TransformOp<Stmt> {
-        match stmt {
-            Stmt::Return(expr) => match self.visit_expr(expr) {
-                TransformOp::Keep => TransformOp::Keep,
-                TransformOp::Replace(expr) => TransformOp::Replace(Stmt::Return(expr)),
-                TransformOp::Expand(items) => {
-                    unreachable!("replace not supported for returned expressions {:?}", items)
-                }
-                TransformOp::Remove => TransformOp::Remove,
-            },
-            Stmt::Expr(expr) => match self.visit_expr(expr) {
-                TransformOp::Keep => TransformOp::Keep,
-                TransformOp::Replace(expr) => TransformOp::Replace(Stmt::Expr(expr)),
-                TransformOp::Expand(items) => {
-                    TransformOp::Expand(items.into_iter().map(Stmt::Expr).collect())
-                }
-                TransformOp::Remove => TransformOp::Remove,
-            },
-            _ => TransformOp::Keep,
-        }
+/// Describes where an expression sits relative to its parent node.
+#[derive(Clone, Debug)]
+pub enum Ancestor {
+    /// Inside a function/method call. `func_name` is best-effort
+    /// (`Some` for `Ident` and `Attr` func exprs, `None` otherwise).
+    Call { func_name: Option<String> },
+    List,
+    Tuple,
+    DictKey,
+    DictValue,
+    Attr { name: String },
+    Commented,
+    Assign { target: String },
+    FuncDef { name: String },
+    FuncParam { name: String },
+    Return,
+    ExprStmt,
+}
+
+/// Accumulated context passed through the tree walk.
+/// Tracks the chain of ancestors so visitors can make decisions
+/// based on where an expression sits in the tree.
+#[derive(Default)]
+pub struct WalkCtx {
+    ancestors: Vec<Ancestor>,
+}
+
+impl WalkCtx {
+    pub fn parent(&self) -> Option<&Ancestor> {
+        self.ancestors.last()
     }
 
-    fn visit_expr(&mut self, _: &Expr) -> TransformOp<Expr> {
+    pub fn ancestors(&self) -> &[Ancestor] {
+        &self.ancestors
+    }
+
+    /// True if the immediate parent is a call to `name`.
+    pub fn parent_is_call(&self, name: &str) -> bool {
+        matches!(
+            self.parent(),
+            Some(Ancestor::Call { func_name: Some(n) }) if n == name
+        )
+    }
+
+    /// True if any ancestor is a call to `name`.
+    pub fn inside_call(&self, name: &str) -> bool {
+        self.ancestors
+            .iter()
+            .any(|a| matches!(a, Ancestor::Call { func_name: Some(n) } if n == name))
+    }
+
+    fn push(&mut self, ancestor: Ancestor) {
+        self.ancestors.push(ancestor);
+    }
+
+    fn pop(&mut self) {
+        self.ancestors.pop();
+    }
+}
+
+pub trait Transform {
+    fn visit_stmt(&mut self, _stmt: &Stmt, _ctx: &WalkCtx) -> TransformOp<Stmt> {
         TransformOp::Keep
     }
 
-    fn apply(&mut self, stmts: Vec<Stmt>) -> Vec<Stmt> {
+    fn visit_expr(&mut self, _expr: &Expr, _ctx: &WalkCtx) -> TransformOp<Expr> {
+        TransformOp::Keep
+    }
+
+    /// Visit an expression, then recurse into its children.
+    fn walk_expr(&mut self, expr: &Expr, ctx: &mut WalkCtx) -> Expr {
+        let expr = match self.visit_expr(expr, ctx) {
+            TransformOp::Keep => expr.clone(),
+            TransformOp::Replace(e) => e,
+            _ => expr.clone(),
+        };
+        self.recurse_expr(expr, ctx)
+    }
+
+    /// Recurse into an expression's children, calling `walk_expr` on each.
+    fn recurse_expr(&mut self, expr: Expr, ctx: &mut WalkCtx) -> Expr {
+        match expr {
+            Expr::List(items) => {
+                ctx.push(Ancestor::List);
+                let out = Expr::List(items.iter().map(|e| self.walk_expr(e, ctx)).collect());
+                ctx.pop();
+                out
+            }
+            Expr::Tuple(items) => {
+                ctx.push(Ancestor::Tuple);
+                let out =
+                    Expr::Tuple(items.iter().map(|e| self.walk_expr(e, ctx)).collect());
+                ctx.pop();
+                out
+            }
+            Expr::Dict(entries) => {
+                let out = Expr::Dict(
+                    entries
+                        .iter()
+                        .map(|e| {
+                            ctx.push(Ancestor::DictKey);
+                            let key = self.walk_expr(&e.key, ctx);
+                            ctx.pop();
+                            ctx.push(Ancestor::DictValue);
+                            let value = self.walk_expr(&e.value, ctx);
+                            ctx.pop();
+                            DictEntry { key, value }
+                        })
+                        .collect(),
+                );
+                out
+            }
+            Expr::Call { func, args, kwargs } => {
+                let func_name = match func.as_ref() {
+                    Expr::Ident(name) => Some(name.clone()),
+                    Expr::Attr { attr, .. } => Some(attr.clone()),
+                    _ => None,
+                };
+                let new_func = Box::new(self.walk_expr(&func, ctx));
+                ctx.push(Ancestor::Call { func_name });
+                let new_args =
+                    args.iter().map(|e| self.walk_expr(e, ctx)).collect();
+                let new_kwargs = kwargs
+                    .iter()
+                    .map(|(k, v)| (k.clone(), self.walk_expr(v, ctx)))
+                    .collect();
+                ctx.pop();
+                Expr::Call {
+                    func: new_func,
+                    args: new_args,
+                    kwargs: new_kwargs,
+                }
+            }
+            Expr::Attr { value, attr } => {
+                ctx.push(Ancestor::Attr { name: attr.clone() });
+                let new_value = Box::new(self.walk_expr(&value, ctx));
+                ctx.pop();
+                Expr::Attr {
+                    value: new_value,
+                    attr,
+                }
+            }
+            Expr::Commented { comment, expr } => {
+                ctx.push(Ancestor::Commented);
+                let new_expr = Box::new(self.walk_expr(&expr, ctx));
+                ctx.pop();
+                Expr::Commented {
+                    comment,
+                    expr: new_expr,
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// Recurse into a statement's child expressions and sub-statements.
+    fn recurse_stmt(&mut self, stmt: Stmt, ctx: &mut WalkCtx) -> Stmt {
+        match stmt {
+            Stmt::Assign { target, value } => {
+                ctx.push(Ancestor::Assign {
+                    target: target.clone(),
+                });
+                let value = self.walk_expr(&value, ctx);
+                ctx.pop();
+                Stmt::Assign { target, value }
+            }
+            Stmt::FuncDef { name, params, body } => {
+                ctx.push(Ancestor::FuncDef { name: name.clone() });
+                let params = params
+                    .into_iter()
+                    .map(|p| {
+                        let default = p.default.map(|e| {
+                            ctx.push(Ancestor::FuncParam {
+                                name: p.name.clone(),
+                            });
+                            let out = self.walk_expr(&e, ctx);
+                            ctx.pop();
+                            out
+                        });
+                        Param {
+                            name: p.name,
+                            default,
+                        }
+                    })
+                    .collect();
+                let body = self.walk_stmts(body, ctx);
+                ctx.pop();
+                Stmt::FuncDef { name, params, body }
+            }
+            Stmt::Return(expr) => {
+                ctx.push(Ancestor::Return);
+                let expr = self.walk_expr(&expr, ctx);
+                ctx.pop();
+                Stmt::Return(expr)
+            }
+            Stmt::Expr(expr) => {
+                ctx.push(Ancestor::ExprStmt);
+                let expr = self.walk_expr(&expr, ctx);
+                ctx.pop();
+                Stmt::Expr(expr)
+            }
+            other => other,
+        }
+    }
+
+    fn walk_stmts(&mut self, stmts: Vec<Stmt>, ctx: &mut WalkCtx) -> Vec<Stmt> {
         let mut out = Vec::with_capacity(stmts.len());
         for stmt in stmts {
-            match self.visit_stmt(&stmt) {
-                TransformOp::Keep => out.push(stmt),
-                TransformOp::Replace(s) => out.push(s),
-                TransformOp::Expand(items) => out.extend_from_slice(&items),
+            match self.visit_stmt(&stmt, ctx) {
+                TransformOp::Keep => out.push(self.recurse_stmt(stmt, ctx)),
+                TransformOp::Replace(s) => out.push(self.recurse_stmt(s, ctx)),
+                TransformOp::Expand(items) => {
+                    out.extend(items.into_iter().map(|s| self.recurse_stmt(s, ctx)));
+                }
                 TransformOp::Remove => {}
             }
         }
         out
+    }
+
+    fn apply(&mut self, stmts: Vec<Stmt>) -> Vec<Stmt> {
+        self.walk_stmts(stmts, &mut WalkCtx::default())
     }
 }
 

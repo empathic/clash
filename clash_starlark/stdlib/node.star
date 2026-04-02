@@ -19,4 +19,4 @@ node_sandbox = sandbox(
     doc = "Node.js development: project + npm cache, npm registry network",
 )
 
-node = match({"Bash": {("node", "bun", "deno"): allow(sandbox = node_sandbox)}})
+node = when({"Bash": {("node", "bun", "deno"): allow(sandbox = node_sandbox)}})

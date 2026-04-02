@@ -19,4 +19,4 @@ python_sandbox = sandbox(
     doc = "Python development: project + pip cache, PyPI/GitHub network",
 )
 
-python = match({"Bash": {regex("python3?"): allow(sandbox = python_sandbox)}})
+python = when({"Bash": {regex("python3?"): allow(sandbox = python_sandbox)}})

@@ -92,13 +92,13 @@ pub enum MatchValue {
     Nested(Vec<(MatchKey, MatchValue)>),
 }
 
-/// Build a `match({...})` expression from a nested key-value structure.
+/// Build a `when({...})` expression from a nested key-value structure.
 pub fn match_rule(entries: Vec<(MatchKey, MatchValue)>) -> Expr {
-    Expr::call("match", vec![match_dict(entries)])
+    Expr::call("when", vec![match_dict(entries)])
 }
 
-/// Build a simple tool match rule: `match({"Name": effect()})` or
-/// `match({("A", "B"): effect()})` for multiple tool names.
+/// Build a simple tool match rule: `when({"Name": effect()})` or
+/// `when({("A", "B"): effect()})` for multiple tool names.
 pub fn tool_match(names: &[&str], effect: Expr) -> Expr {
     let key: MatchKey = if names.len() == 1 {
         MatchKey::Single(names[0].to_owned())
@@ -199,7 +199,7 @@ mod tests {
         let expr = tool_match(&["Read"], allow());
         let stmts = vec![Stmt::Expr(expr)];
         let src = serialize(&stmts);
-        assert_eq!(src, "match({\"Read\": allow()})\n");
+        assert_eq!(src, "when({\"Read\": allow()})\n");
     }
 
     #[test]
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn full_policy() {
         let stmts = vec![
-            load_std(&["match", "policy", "settings", "allow", "deny"]),
+            load_std(&["when", "policy", "settings", "allow", "deny"]),
             Stmt::Blank,
             Stmt::Expr(settings(deny(), None)),
             Stmt::Blank,
@@ -252,6 +252,6 @@ mod tests {
         assert!(src.contains("load(\"@clash//std.star\""));
         assert!(src.contains("settings("));
         assert!(src.contains("policy(\"default\""));
-        assert!(src.contains("match({\"Read\": allow()})"));
+        assert!(src.contains("when({\"Read\": allow()})"));
     }
 }

@@ -37,7 +37,7 @@ fn caller_source_location(eval: &Evaluator) -> Option<String> {
     None
 }
 
-fn starlark_to_json(value: Value) -> anyhow::Result<serde_json::Value> {
+pub(crate) fn starlark_to_json(value: Value) -> anyhow::Result<serde_json::Value> {
     let json_str = value.to_json()?;
     serde_json::from_str(&json_str).map_err(Into::into)
 }
@@ -235,7 +235,7 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
-    /// Register a policy into the evaluation context.
+    /// Register a policy into the evaluation context (legacy — used by match_tree.star).
     fn _register_policy<'v>(
         #[starlark(require = named)] name: &str,
         #[starlark(require = named)] rules: Option<Value<'v>>,
@@ -251,7 +251,6 @@ fn register_globals(builder: &mut GlobalsBuilder) {
                 )
             })?;
 
-        // Collect rule nodes
         let mut tree_nodes = Vec::new();
         if let Some(rules_val) = rules
             && let Some(list) = starlark::values::list::ListRef::from_value(rules_val)
@@ -268,7 +267,6 @@ fn register_globals(builder: &mut GlobalsBuilder) {
             }
         }
 
-        // Collect sandbox JSON from rules
         let mut sandbox_list = Vec::new();
         if let Some(sb_val) = sandboxes
             && let Some(list) = starlark::values::list::ListRef::from_value(sb_val)
@@ -283,6 +281,95 @@ fn register_globals(builder: &mut GlobalsBuilder) {
             name: name.to_string(),
             tree_nodes,
             sandboxes: sandbox_list,
+        })?;
+        Ok(NoneType)
+    }
+
+    // -- Rust-native when() and policy() --
+
+    /// Build rules from a nested dict tree.
+    ///
+    /// Keys can be raw strings (tool names), Tool("Bash"), Mode("plan"),
+    /// or tuples of the above. Values are effects (allow/deny/ask) or nested dicts.
+    fn _when_impl<'v>(
+        #[starlark(require = pos)] tree: Value<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        let source = caller_source_location(eval);
+        let heap = eval.heap();
+        let (nodes, sandboxes) = crate::when::when_impl(tree, heap, source)?;
+
+        // Stash collected sandboxes in EvalContext for policy() to drain.
+        if !sandboxes.is_empty() {
+            if let Some(ctx) = eval
+                .extra
+                .and_then(|e| e.downcast_ref::<EvalContext>())
+            {
+                ctx.pending_sandboxes.borrow_mut().extend(sandboxes);
+            }
+        }
+
+        // Return plain list of MatchTreeNode values.
+        let result: Vec<Value<'v>> = nodes
+            .into_iter()
+            .map(|node| heap.alloc(node))
+            .collect();
+        Ok(heap.alloc(starlark::values::list::AllocList(result)))
+    }
+
+    /// Register a named policy.
+    ///
+    /// Accepts dict form: `policy("name", {mode("plan"): allow(), ...})`
+    /// or rules form: `policy("name", rules=[when({...}), ...])`
+    fn _policy_impl<'v>(
+        #[starlark(require = pos)] name: &str,
+        #[starlark(require = pos, default = starlark::values::none::NoneType)]
+        rules_or_dict: Value<'v>,
+        #[starlark(require = named, default = starlark::values::none::NoneType)]
+        default: Value<'v>,
+        #[starlark(require = named)] rules: Option<Value<'v>>,
+        #[starlark(require = named, default = starlark::values::none::NoneType)]
+        default_sandbox: Value<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<NoneType> {
+        let heap = eval.heap();
+        let ctx = eval
+            .extra
+            .and_then(|e| e.downcast_ref::<EvalContext>())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "policy() can only be called in a policy file, not in loaded modules"
+                )
+            })?;
+
+        // Unwrap default effect
+        let default_effect = if default.is_none() {
+            "deny".to_string()
+        } else if let Some(s) = default.unpack_str() {
+            s.to_string()
+        } else if default.get_type() == "struct" {
+            // Effect struct — extract _effect
+            default
+                .get_attr("_effect", heap)
+                .ok()
+                .flatten()
+                .and_then(|v| v.unpack_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "deny".to_string())
+        } else {
+            "deny".to_string()
+        };
+
+        let source = caller_source_location(eval);
+        let (flat_nodes, mut sandboxes) =
+            crate::when::policy_impl(name, rules_or_dict, rules, default_sandbox, heap, source)?;
+
+        // Drain pending sandboxes from when() calls
+        sandboxes.extend(ctx.pending_sandboxes.borrow_mut().drain(..));
+
+        ctx.register_policy(PolicyRegistration {
+            name: name.to_string(),
+            tree_nodes: flat_nodes,
+            sandboxes,
         })?;
         Ok(NoneType)
     }

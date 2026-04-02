@@ -92,7 +92,7 @@ pub fn policy_rules_mut(stmts: &mut [Stmt]) -> Option<&mut Vec<Expr>> {
 // Rule mutations
 // ---------------------------------------------------------------------------
 
-/// Add a tool rule: `match({"Name": allow()})` or `match({("A", "B"): allow()})`.
+/// Add a tool rule: `when({"Name": allow()})` or `when({("A", "B"): allow()})`.
 pub fn add_tool_rule(
     stmts: &mut Vec<Stmt>,
     tool_names: &[&str],
@@ -101,11 +101,11 @@ pub fn add_tool_rule(
 ) -> Result<(), String> {
     let effect_expr = build_effect_expr(effect, sandbox);
     let rule = builder::tool_match(tool_names, effect_expr);
-    ensure_loaded(stmts, "match");
+    ensure_loaded(stmts, "when");
     append_rule(stmts, rule)
 }
 
-/// Add an exec/shell command rule: `match({"Bash": {"cmd": allow()}})`.
+/// Add an exec/shell command rule: `when({"Bash": {"cmd": allow()}})`.
 ///
 /// If `args` is non-empty, nests them as further dict levels.
 pub fn add_exec_rule(
@@ -126,8 +126,8 @@ pub fn add_exec_rule(
         Expr::string("Bash"),
         Expr::dict(vec![DictEntry::new(Expr::string(binary), value)]),
     )]);
-    let rule = Expr::call("match", vec![dict]);
-    ensure_loaded(stmts, "match");
+    let rule = Expr::call("when", vec![dict]);
+    ensure_loaded(stmts, "when");
     append_rule(stmts, rule)
 }
 
@@ -356,11 +356,11 @@ mod tests {
 
     fn policy_stmts() -> Vec<Stmt> {
         parse(
-            r#"load("@clash//std.star", "match", "policy", "settings", "allow", "deny")
+            r#"load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
 
 settings(default = deny())
 
-policy("test", default = deny(), rules = [match({"Read": allow()})])
+policy("test", default = deny(), rules = [when({"Read": allow()})])
 "#,
         )
         .unwrap()
@@ -392,7 +392,7 @@ policy("test", default = deny(), rules = [match({"Read": allow()})])
         let mut stmts = policy_stmts();
         add_exec_rule(&mut stmts, "git", &[], Effect::Allow, None).unwrap();
         let src = serialize(&stmts);
-        assert!(src.contains("match({\"Bash\": {\"git\": allow()}}"), "got:\n{src}");
+        assert!(src.contains("\"Bash\": {\"git\": allow()}"), "got:\n{src}");
     }
 
     #[test]
@@ -503,10 +503,10 @@ policy("test", default = deny(), rules = [match({"Read": allow()})])
     #[test]
     fn ensure_loaded_adds_missing_name() {
         let mut stmts = policy_stmts();
-        ensure_loaded(&mut stmts, "match");
+        ensure_loaded(&mut stmts, "when");
         match &stmts[0] {
             Stmt::Load { names, .. } => {
-                assert!(names.contains(&"match".to_string()));
+                assert!(names.contains(&"when".to_string()));
             }
             other => panic!("expected Load, got {other:?}"),
         }
@@ -527,9 +527,9 @@ policy("test", default = deny(), rules = [match({"Read": allow()})])
     #[test]
     fn add_raw_rule_appends() {
         let mut stmts = policy_stmts();
-        add_raw_rule(&mut stmts, "match({\"Grep\": allow()})").unwrap();
+        add_raw_rule(&mut stmts, "when({\"Grep\": allow()})").unwrap();
         let src = serialize(&stmts);
-        assert!(src.contains("match({\"Grep\": allow()})"), "got:\n{src}");
+        assert!(src.contains("when({\"Grep\": allow()})"), "got:\n{src}");
     }
 
     #[test]

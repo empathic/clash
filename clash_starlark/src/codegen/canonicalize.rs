@@ -1,20 +1,18 @@
 use std::cmp::Ordering;
 
 use anyhow::Result;
-use itertools::Itertools;
 use std::collections::HashMap;
-use tree_sitter::PARSER_HEADER;
 
 use crate::codegen::{
     DictEntry, Expr, Stmt,
-    ast::{self, Transform, TransformOp},
+    ast::{self, Transform, TransformOp, WalkCtx},
 };
 
 pub(crate) fn canonicalize(stmts: &mut Vec<Stmt>) -> Result<()> {
     let mut tmp = std::mem::take(stmts);
     tmp = SortLoads {}.apply(tmp);
     tmp = SeparateInternalExternalLoads::default().apply(tmp);
-    tmp = CollapseDictSiblingsSameResult {}.apply(tmp);
+    tmp = CollapseDictSiblingsSameResult.apply(tmp);
     tmp = NoDoubleBlanks::default().apply(tmp);
     tmp = NoEndOnBlank {}.apply(tmp);
     *stmts = tmp;
@@ -48,7 +46,7 @@ struct SeparateInternalExternalLoads {
 }
 
 impl ast::Transform for SeparateInternalExternalLoads {
-    fn visit_stmt(&mut self, current: &Stmt) -> TransformOp<Stmt> {
+    fn visit_stmt(&mut self, current: &Stmt, _ctx: &WalkCtx) -> TransformOp<Stmt> {
         fn is_internal_load(stmt: &Stmt) -> bool {
             match stmt {
                 Stmt::Load { module, .. } => module.starts_with("@clash//"),
@@ -85,22 +83,27 @@ struct NoDoubleBlanks {
 }
 
 impl ast::Transform for NoDoubleBlanks {
-    fn visit_stmt(&mut self, current: &Stmt) -> TransformOp<Stmt> {
+    fn visit_stmt(&mut self, current: &Stmt, _ctx: &WalkCtx) -> TransformOp<Stmt> {
         let out = match (current, &self.last) {
             (Stmt::Blank, Some(Stmt::Blank)) => TransformOp::Remove,
             _ => TransformOp::Keep,
         };
         self.last = Some(current.clone());
-        eprintln!("{current:?}{out:?}");
         out
     }
 }
 
-#[derive(Default)]
-struct CollapseDictSiblingsSameResult {}
+struct CollapseDictSiblingsSameResult;
 
 impl Transform for CollapseDictSiblingsSameResult {
-    fn visit_expr(&mut self, current: &Expr) -> TransformOp<Expr> {
+    fn visit_expr(&mut self, current: &Expr, ctx: &WalkCtx) -> TransformOp<Expr> {
+        if !["when", "sandbox", "policy"]
+            .iter()
+            .any(|name| ctx.inside_call(name))
+        {
+            return TransformOp::Keep;
+        }
+
         match current {
             Expr::Dict(items) => {
                 let mut m: HashMap<Expr, Vec<Expr>> = HashMap::with_capacity(items.len());
@@ -109,9 +112,16 @@ impl Transform for CollapseDictSiblingsSameResult {
                 }
                 TransformOp::Replace(Expr::Dict(
                     m.iter()
-                        .map(|(value, keys)| DictEntry {
-                            key: Expr::Tuple(keys.clone()),
-                            value: value.clone(),
+                        .map(|(value, keys)| {
+                            let key = if keys.len() == 1 {
+                                keys[0].clone()
+                            } else {
+                                Expr::Tuple(keys.clone())
+                            };
+                            DictEntry {
+                                key,
+                                value: value.clone(),
+                            }
                         })
                         .collect(),
                 ))
@@ -124,67 +134,78 @@ impl Transform for CollapseDictSiblingsSameResult {
 #[cfg(test)]
 mod tests {
     use crate::codegen::StarDocument;
+    use indoc::indoc;
     use pretty_assertions::assert_eq;
 
-    use super::*;
-
-    #[test]
-    fn imports_are_sorted() -> anyhow::Result<()> {
-        let doc = StarDocument::from_source(
-            r#"
-load("@clash//b.star", "x")
-load("c.star", "z")
-load("@clash//a.star", "y")
-
-
-
-
-
-
-
-
-
-load("@clash//d.star", "o")
-load("@clash//e.star", "w")
-
-
-"#
-            .into(),
-            "test.star".into(),
-        )?;
-
-        assert_eq!(
-            &doc.to_source(),
-            r#"load("@clash//a.star", "y")
-load("@clash//b.star", "x")
-load("@clash//d.star", "o")
-load("@clash//e.star", "w")
-
-load("c.star", "z")
-"#
-        );
-
-        Ok(())
-    }
-    #[test]
-    fn dict_collaps() -> anyhow::Result<()> {
-        let doc = StarDocument::from_source(
-            r#"
-                {
-                "a": allow(),
-                "b": allow(),
+    /// Generate table-driven canonicalization tests.
+    ///
+    /// ```ignore
+    /// canon_tests! {
+    ///     test_name: "input starlark" => "expected output",
+    ///     another:   "input"          => "expected",
+    /// }
+    /// ```
+    macro_rules! canon_tests {
+        ($($name:ident : $input:expr => $expected:expr),+ $(,)?) => {
+            $(
+                #[test]
+                fn $name() -> anyhow::Result<()> {
+                    let doc = StarDocument::from_source(
+                        indoc!{$input}.into(),
+                        "test.star".into(),
+                    )?;
+                    assert_eq!(&doc.to_source(), indoc!{$expected});
+                    Ok(())
                 }
-"#
-            .into(),
-            "test.star".into(),
-        )?;
+            )+
+        };
+    }
 
-        assert_eq!(
-            &doc.to_source(),
-            r#"{("a", "b"): allow()}
-"#
-        );
+    canon_tests! {
+        imports_are_sorted:
+            r#"
+                    load("@clash//b.star", "x")
+                    load("c.star", "z")
+                    load("@clash//a.star", "y")
 
-        Ok(())
+
+
+
+                    load("@clash//d.star", "o")
+                    load("@clash//e.star", "w")
+
+
+                    "# => r#"load("@clash//a.star", "y")
+                    load("@clash//b.star", "x")
+                    load("@clash//d.star", "o")
+                    load("@clash//e.star", "w")
+
+                    load("c.star", "z")
+                    "#,
+            dict_collaps_inside_policy:
+            r#"
+                    load("@clash//std.star", "policy", "allow")
+
+                    policy("test", {
+                        "a": allow(),
+                        "b": allow(),
+                    })"# => r#"
+                    load("@clash//std.star", "policy", "allow")
+
+                    policy("test", {("a", "b"): allow()})
+                    "#,
+
+        dict_outside_call_unchanged:
+            r#"
+                    load("@clash//std.star", "allow")
+
+                    x = {
+                        "a": allow(),
+                        "b": allow(),
+                    }"# => r#"
+                    load("@clash//std.star", "allow")
+
+                    x = {"a": allow(), "b": allow()}
+                    "#,
     }
 }

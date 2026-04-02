@@ -47,7 +47,7 @@ Policies can be managed via `policy.json` (machine-readable, CLI-friendly) or wr
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "allow", "ask", "deny", "match", "policy", "sandbox", "subpath", "domains")
+load("@clash//std.star", "allow", "ask", "deny", "when", "policy", "sandbox", "subpath", "domains")
 
 def main():
     fs_access = sandbox(fs={
@@ -56,13 +56,13 @@ def main():
     })
 
     return policy(default = deny(), rules = [
-        match({"Read": allow(sandbox = fs_access)}),
-        match({"Glob": allow(sandbox = fs_access)}),
-        match({"Grep": allow(sandbox = fs_access)}),
-        match({"Write": allow(sandbox = fs_access)}),
-        match({"Edit": allow(sandbox = fs_access)}),
-        match({"Bash": {"git": {"push": deny()}}}),
-        match({"Bash": {"git": allow()}}),
+        when({"Read": allow(sandbox = fs_access)}),
+        when({"Glob": allow(sandbox = fs_access)}),
+        when({"Grep": allow(sandbox = fs_access)}),
+        when({"Write": allow(sandbox = fs_access)}),
+        when({"Edit": allow(sandbox = fs_access)}),
+        when({"Bash": {"git": {"push": deny()}}}),
+        when({"Bash": {"git": allow()}}),
         domains({"github.com": allow()}),
     ])
 ```
@@ -71,15 +71,15 @@ def main():
 
 | Pattern | Starlark |
 |---------|----------|
-| Allow a binary | `match({"Bash": {"git": allow()}})` |
-| Deny a subcommand | `match({"Bash": {"git": {"push": deny()}}})` |
-| Ask for confirmation | `match({"Bash": {"git": {"commit": ask()}}})` |
-| Multiple binaries | `match({"Bash": {("cargo", "rustc"): allow()}})` |
-| Filesystem (via sandbox) | `match({"Read": allow(sandbox=sandbox(fs={"$PWD": allow("r")}))})` |
-| Home subdir (via sandbox) | `match({"Bash": {"ssh": allow(sandbox=sandbox(fs={"$HOME/.ssh": allow("r")}))}})` |
+| Allow a binary | `when({"Bash": {"git": allow()}})` |
+| Deny a subcommand | `when({"Bash": {"git": {"push": deny()}}})` |
+| Ask for confirmation | `when({"Bash": {"git": {"commit": ask()}}})` |
+| Multiple binaries | `when({"Bash": {("cargo", "rustc"): allow()}})` |
+| Filesystem (via sandbox) | `when({"Read": allow(sandbox=sandbox(fs={"$PWD": allow("r")}))})` |
+| Home subdir (via sandbox) | `when({"Bash": {"ssh": allow(sandbox=sandbox(fs={"$HOME/.ssh": allow("r")}))}})` |
 | Network domains | `domains({"github.com": allow()})` |
-| Tool access | `match({"Read": allow()})` |
-| Sandbox on exec | `match({"Bash": {"cargo": allow(sandbox=sb)}})` |
+| Tool access | `when({"Read": allow()})` |
+| Sandbox on exec | `when({"Bash": {"cargo": allow(sandbox=sb)}})` |
 
 ### Sandbox Definition
 
@@ -91,7 +91,7 @@ sb = sandbox(
     },
     net = allow(),
 )
-match({"Bash": {"cargo": allow(sandbox = sb)}})
+when({"Bash": {"cargo": allow(sandbox = sb)}})
 ```
 
 ### Policy File Paths
@@ -114,7 +114,7 @@ cargo_env = sandbox(
     },
     net = allow(),
 )
-match({"Bash": {"cargo": allow(sandbox = cargo_env)}})
+when({"Bash": {"cargo": allow(sandbox = cargo_env)}})
 ```
 
 See the [Policy Writing Guide](../docs/policy-guide.md) for full syntax.

@@ -68,12 +68,12 @@ This means **order matters**. Put more specific rules before broader ones:
 
 ```python
 # Correct: deny matches git push first, allow catches everything else
-match({"Bash": {"git": {"push": deny()}}})
-match({"Bash": {"git": allow()}})
+when({"Bash": {"git": {"push": deny()}}})
+when({"Bash": {"git": allow()}})
 
 # Wrong: allow matches git push first, deny never fires
-match({"Bash": {"git": allow()}})
-match({"Bash": {"git": {"push": deny()}}})
+when({"Bash": {"git": allow()}})
+when({"Bash": {"git": {"push": deny()}}})
 ```
 
 Children at the same level are automatically sorted by specificity (literals before regexes before wildcards), but top-level rule order from the policy source is preserved. Put more specific rules before broader ones to ensure the desired evaluation order.
@@ -139,7 +139,7 @@ Sandbox definitions are declared at the top level of the policy and referenced b
 ```python
 policy(
     rules = [
-        match({"Bash": {"cargo": allow(sandbox = cwd_sb)}}),
+        when({"Bash": {"cargo": allow(sandbox = cwd_sb)}}),
     ],
 )
 ```
@@ -184,7 +184,7 @@ Within a single domain, **first-match wins** — the policy author controls prec
 
 ```python
 # Allow reads, deny everything else
-match({("Read", "Glob", "Grep"): allow()})
+when({("Read", "Glob", "Grep"): allow()})
 # The default=deny handles everything not matched above
 ```
 

@@ -14,4 +14,4 @@ rust_sandbox = sandbox(
 )
 
 
-rust = match({"Bash": {("rustc", "cargo"): allow(sandbox = rust_sandbox)}})
+rust = when({"Bash": {("rustc", "cargo"): allow(sandbox = rust_sandbox)}})

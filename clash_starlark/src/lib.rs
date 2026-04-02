@@ -11,6 +11,7 @@ pub mod eval_context;
 mod globals;
 mod loader;
 pub mod stdlib;
+mod when;
 
 use std::path::Path;
 
@@ -83,10 +84,10 @@ mod tests {
     fn test_simple_policy() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "match", "policy", "settings")
+load("@clash//std.star", "deny", "when", "policy", "settings")
 
 settings(default = deny())
-policy("test", rules = match({None: allow()}))
+policy("test", rules = when({None: allow()}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -103,7 +104,7 @@ policy("test", rules = match({None: allow()}))
         let doc = eval_to_doc(
             r#"
 settings(default = deny())
-policy("test", rules = match({None: allow()}))
+policy("test", rules = when({None: allow()}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -135,9 +136,91 @@ policy("test", {
     }
 
     #[test]
+    fn test_policy_dict_tuple_mode_keys_with_glob() {
+        let doc = eval_to_doc(
+            r#"
+_box = sandbox(name = "dev", fs = {subpath("$PWD"): allow("rwc")})
+
+settings(default = deny())
+policy("test", {
+    mode("plan"): {
+        glob("**"): allow(sandbox = _box),
+    },
+    (mode("edit"), mode("default")): {
+        glob("**"): allow(sandbox = _box),
+    },
+})
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        // 3 mode rules: plan, edit, default
+        assert_eq!(tree.len(), 3, "expected 3 mode rules, got: {tree:?}");
+    }
+
+    #[test]
+    fn test_policy_roundtrip_via_canonicalize() {
+        // Simulates the TUI path: parse .star → canonicalize → serialize → re-evaluate
+        let source = r#"load("@clash//builtin.star", "builtins")
+load("@clash//sandboxes.star", "plan", "edit", "safe_yolo")
+
+policy("default",
+    {
+        mode("plan"): {
+            glob("**"): allow(sandbox=plan),
+        },
+        (mode("edit"), mode("default")): {
+            glob("**"): allow(sandbox=edit),
+        },
+        mode("unrestricted"): {
+            glob("**"): allow(sandbox=safe_yolo),
+        },
+    },
+)
+"#;
+        let doc = crate::codegen::StarDocument::from_source(
+            source.into(),
+            "test.star".into(),
+        )
+        .unwrap();
+        let canonical = doc.to_source();
+        eprintln!("canonical:\n{canonical}");
+        let json = doc.evaluate_to_json().expect("evaluate_to_json should succeed after canonicalize");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["schema_version"], 5);
+    }
+
+    #[test]
+    fn test_policy_with_builtins_and_glob_dict() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//builtin.star", "builtins")
+load("@clash//sandboxes.star", "plan", "edit", "safe_yolo")
+
+policy("default",
+    {
+        mode("plan"): {
+            glob("**"): allow(sandbox=plan),
+        },
+        (mode("edit"), mode("default")): {
+            glob("**"): allow(sandbox=edit),
+        },
+        mode("unrestricted"): {
+            glob("**"): allow(sandbox=safe_yolo),
+        },
+    },
+)
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        assert!(tree.len() >= 4, "expected at least 4 mode rules, got {}", tree.len());
+    }
+
+    #[test]
     fn test_sandbox_policy() {
         let source = r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "cwd")
 
 _box = sandbox(
     name = "test",
@@ -151,8 +234,8 @@ _box = sandbox(
 settings(default = deny())
 
 policy("test",
-    rules = match({"Bash": {"git": allow(sandbox=_box)}}) +
-        match({None: allow()}),
+    rules = when({"Bash": {"git": allow(sandbox=_box)}}) +
+        when({None: allow()}),
 )
 "#;
         let doc = eval_to_doc(source);
@@ -178,12 +261,12 @@ policy("test",
     fn test_tool_bindings() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "match", "policy", "settings")
+load("@clash//std.star", "deny", "when", "policy", "settings")
 
 settings(default = deny())
 policy("test", rules =
-    match({"WebSearch": allow()}) +
-    match({"Bash": deny()}),
+    when({"WebSearch": allow()}) +
+    when({"Bash": deny()}),
 )
 "#,
         );
@@ -205,13 +288,13 @@ policy("test", rules =
     fn test_match_multi_exe() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "cwd")
 
 _box = sandbox(name = "test", default = deny(), fs = [cwd().allow(read = True)])
 
 settings(default = deny())
 policy("test",
-    rules = match({"Bash": {("rustc", "cargo", "cargo-clippy"): allow(sandbox=_box)}}),
+    rules = when({"Bash": {("rustc", "cargo", "cargo-clippy"): allow(sandbox=_box)}}),
 )
 "#,
         );
@@ -231,7 +314,7 @@ policy("test",
     fn test_domains_net() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "domains")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "domains")
 
 _box = sandbox(
     name = "test",
@@ -242,7 +325,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", rules = match({"Bash": {"cargo": allow(sandbox=_box)}}))
+policy("test", rules = when({"Bash": {"cargo": allow(sandbox=_box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -253,7 +336,7 @@ policy("test", rules = match({"Bash": {"cargo": allow(sandbox=_box)}}))
     fn test_home_child() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "home")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "home")
 
 _box = sandbox(
     name = "test",
@@ -264,7 +347,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", rules = match({"Bash": {"git": allow(sandbox=_box)}}))
+policy("test", rules = when({"Bash": {"git": allow(sandbox=_box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -277,7 +360,7 @@ policy("test", rules = match({"Bash": {"git": allow(sandbox=_box)}}))
     fn test_wildcard_domain() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "domains")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "domains")
 
 _box = sandbox(
     name = "test",
@@ -286,7 +369,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", rules = match({"Bash": {"npm": allow(sandbox=_box)}}))
+policy("test", rules = when({"Bash": {"npm": allow(sandbox=_box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -297,7 +380,7 @@ policy("test", rules = match({"Bash": {"npm": allow(sandbox=_box)}}))
     fn test_cwd_worktree() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "cwd")
 
 _box = sandbox(
     name = "test",
@@ -306,7 +389,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", rules = match({"Bash": {"git": allow(sandbox=_box)}}))
+policy("test", rules = when({"Bash": {"git": allow(sandbox=_box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -324,7 +407,7 @@ policy("test", rules = match({"Bash": {"git": allow(sandbox=_box)}}))
     fn test_cwd_without_worktree_omits_field() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "cwd")
 
 _box = sandbox(
     name = "test",
@@ -333,7 +416,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", rules = match({"Bash": {"git": allow(sandbox=_box)}}))
+policy("test", rules = when({"Bash": {"git": allow(sandbox=_box)}}))
 "#,
         );
         let sandboxes = doc["sandboxes"].as_object().unwrap();
@@ -347,12 +430,12 @@ policy("test", rules = match({"Bash": {"git": allow(sandbox=_box)}}))
     fn test_tempdir_path() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "tempdir")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "tempdir")
 
 _box = sandbox(name = "test", default = deny(), fs = [tempdir().allow()])
 
 settings(default = deny())
-policy("test", rules = match({"Bash": {"test": allow(sandbox=_box)}}))
+policy("test", rules = when({"Bash": {"test": allow(sandbox=_box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -363,7 +446,7 @@ policy("test", rules = match({"Bash": {"test": allow(sandbox=_box)}}))
     fn test_path_static() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "path")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "path")
 
 _box = sandbox(
     name = "test",
@@ -372,7 +455,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", rules = match({"Bash": {"test": allow(sandbox=_box)}}))
+policy("test", rules = when({"Bash": {"test": allow(sandbox=_box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -383,7 +466,7 @@ policy("test", rules = match({"Bash": {"test": allow(sandbox=_box)}}))
     fn test_path_env() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "path")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "path")
 
 _box = sandbox(
     name = "test",
@@ -392,7 +475,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", rules = match({"Bash": {"cargo": allow(sandbox=_box)}}))
+policy("test", rules = when({"Bash": {"cargo": allow(sandbox=_box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -402,11 +485,11 @@ policy("test", rules = match({"Bash": {"cargo": allow(sandbox=_box)}}))
     #[test]
     fn test_bare_path_in_sandbox_errors() {
         let source = r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "cwd")
 
 _box = sandbox(name = "test", default = deny(), fs = [cwd()])
 settings(default = deny())
-policy("test", rules = match({"Bash": {"test": allow(sandbox=_box)}}))
+policy("test", rules = when({"Bash": {"test": allow(sandbox=_box)}}))
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from("."));
         assert!(result.is_err());
@@ -417,11 +500,11 @@ policy("test", rules = match({"Bash": {"test": allow(sandbox=_box)}}))
         let doc = eval_to_doc(
             r#"
 load("@clash//rust.star", "rust_sandbox")
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings")
 
 settings(default = deny())
 policy("test",
-    rules = match({"Bash": {("rustc", "cargo"): allow(sandbox=rust_sandbox)}}),
+    rules = when({"Bash": {("rustc", "cargo"): allow(sandbox=rust_sandbox)}}),
 )
 "#,
         );
@@ -442,7 +525,7 @@ policy("test",
                 Stmt::load(&format!("@clash//{module}"), &[&sandbox_name]),
                 Stmt::load(
                     "@clash//std.star",
-                    &["allow", "deny", "match", "policy", "settings"],
+                    &["allow", "deny", "when", "policy", "settings"],
                 ),
                 Stmt::Blank,
                 Stmt::Expr(settings(deny(), None)),
@@ -480,10 +563,10 @@ my_sandbox = sandbox(name = "test", default = deny(), fs = [cwd().allow(read = T
 
         let source = r#"
 load("helpers.star", "my_sandbox")
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings")
 
 settings(default = deny())
-policy("test", rules = match({"Bash": {"test": allow(sandbox=my_sandbox)}}))
+policy("test", rules = when({"Bash": {"test": allow(sandbox=my_sandbox)}}))
 "#;
         let result = evaluate(source, "policy.star", dir.path()).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
@@ -496,7 +579,7 @@ policy("test", rules = match({"Bash": {"test": allow(sandbox=my_sandbox)}}))
         let doc = eval_to_doc(
             r#"
 load("@clash//rust.star", "rust_sandbox")
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "cwd", "home")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "cwd", "home")
 
 _box = sandbox(
     name = "gitbox",
@@ -511,13 +594,13 @@ _box = sandbox(
 
 settings(default = deny())
 
-policy("test", rules = match({
+policy("test", rules = when({
     "Bash": {
         "git": allow(sandbox=_box),
         ("rustc", "cargo"): allow(sandbox=rust_sandbox),
     },
 }) +
-    match({None: allow()}),
+    when({None: allow()}),
 )
 "#,
         );
@@ -535,10 +618,10 @@ policy("test", rules = match({
     fn test_exe_regex_pattern() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "regex", "policy", "settings")
+load("@clash//std.star", "allow", "deny", "when", "regex", "policy", "settings")
 
 settings(default = deny())
-policy("test", rules = match({
+policy("test", rules = when({
     "Bash": {regex("cargo.*"): allow()},
 }))
 "#,
@@ -555,10 +638,10 @@ policy("test", rules = match({
     fn test_exe_any_pattern() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "match", "policy", "settings")
+load("@clash//std.star", "deny", "when", "policy", "settings")
 
 settings(default = deny())
-policy("test", rules = match({
+policy("test", rules = when({
     "Bash": deny(),
 }))
 "#,
@@ -578,10 +661,10 @@ policy("test", rules = match({
     fn test_tool_regex_pattern() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "match", "regex", "policy", "settings")
+load("@clash//std.star", "deny", "when", "regex", "policy", "settings")
 
 settings(default = deny())
-policy("test", rules = match({
+policy("test", rules = when({
     regex("mcp__.*"): ask(),
 }))
 "#,
@@ -602,10 +685,10 @@ policy("test", rules = match({
     fn test_match_exes_with_regex() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "regex", "policy", "settings")
+load("@clash//std.star", "allow", "deny", "when", "regex", "policy", "settings")
 
 settings(default = deny())
-policy("test", rules = match({
+policy("test", rules = when({
     "Bash": {("git", regex("gh.*")): allow()},
 }))
 "#,
@@ -624,13 +707,13 @@ policy("test", rules = match({
     fn test_exe_with_args_deny() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings")
 
 settings(default = deny())
 policy("test", rules =
-    match({"Bash": {"git": {"push": deny()}}}) +
-    match({"Bash": {"git": allow()}}) +
-    match({"Read": allow()}),
+    when({"Bash": {"git": {"push": deny()}}}) +
+    when({"Bash": {"git": allow()}}) +
+    when({"Read": allow()}),
 )
 "#,
         );
@@ -747,7 +830,7 @@ settings(default = deny())
 policy("test", rules = [
     cwd().file(".env").deny(write = True),
     cwd().allow(read = True, write = True),
-] + match({None: allow()}))
+] + when({None: allow()}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -767,7 +850,7 @@ policy("test", rules = [
     fn test_file_sandbox_match_type() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "cwd")
 
 _box = sandbox(
     name = "test",
@@ -779,7 +862,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", rules = match({"Bash": {"test": allow(sandbox=_box)}}))
+policy("test", rules = when({"Bash": {"test": allow(sandbox=_box)}}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -794,10 +877,10 @@ policy("test", rules = match({"Bash": {"test": allow(sandbox=_box)}}))
         // Tool-scoped path rules: a match dict + path rules in the policy
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "match", "policy", "settings", "cwd")
+load("@clash//std.star", "deny", "when", "policy", "settings", "cwd")
 
 settings(default = deny())
-policy("test", rules = match({"Glob": allow()}) + [
+policy("test", rules = when({"Glob": allow()}) + [
     cwd().child("src").allow(read = True),
 ])
 "#,
@@ -817,13 +900,13 @@ policy("test", rules = match({"Glob": allow()}) + [
         // Multiple path rules in the policy (deny .env, allow cwd)
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "match", "policy", "settings", "cwd")
+load("@clash//std.star", "deny", "when", "policy", "settings", "cwd")
 
 settings(default = deny())
 policy("test", rules = [
     cwd().file(".env").deny(read = True),
     cwd().allow(read = True),
-] + match({"Read": allow()}))
+] + when({"Read": allow()}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -841,7 +924,7 @@ load("@clash//std.star", "deny", "policy", "settings", "cwd", "regex")
 settings(default = deny())
 policy("test", rules = [
     cwd().match(regex(".*\\.log")).deny(write = True),
-] + match({None: allow()}))
+] + when({None: allow()}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -859,7 +942,7 @@ policy("test", rules = [
     fn test_docstrings_persist_in_ir() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "deny", "match", "policy", "settings", "sandbox", "cwd")
+load("@clash//std.star", "deny", "when", "policy", "settings", "sandbox", "cwd")
 
 _box = sandbox(
     name = "dev",
@@ -871,7 +954,7 @@ _box = sandbox(
 )
 
 settings(default = deny(), default_sandbox = _box)
-policy("test", rules = match({
+policy("test", rules = when({
     "WebSearch": deny(),
 }), default_sandbox = _box)
 "#,
@@ -900,7 +983,7 @@ policy("test", rules = match({
     fn test_sandbox_merge_via_varargs() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "cwd", "home", "tempdir", "domains")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "cwd", "home", "tempdir", "domains")
 
 fs_box = sandbox(
     name = "fs",
@@ -931,7 +1014,7 @@ merged = fs_box.update(net_box).update(extra_fs)
 
 settings(default = deny())
 policy("test",
-    rules = match({"Bash": {"cargo": allow(sandbox=merged)}}),
+    rules = when({"Bash": {"cargo": allow(sandbox=merged)}}),
 )
 "#,
         );
@@ -972,7 +1055,7 @@ def _check():
 _check()
 
 settings(default = deny())
-policy("test", rules = match({None: allow()}))
+policy("test", rules = when({None: allow()}))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -982,7 +1065,7 @@ policy("test", rules = match({None: allow()}))
     fn test_os_matches_rust_const() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "cwd", "OS")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "cwd", "OS")
 
 _box = sandbox(
     name = "test",
@@ -992,7 +1075,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", rules = match({"Bash": {"test": allow(sandbox=_box)}}))
+policy("test", rules = when({"Bash": {"test": allow(sandbox=_box)}}))
 "#,
         );
         let sandbox = &doc["sandboxes"]["test"];
@@ -1007,7 +1090,7 @@ policy("test", rules = match({"Bash": {"test": allow(sandbox=_box)}}))
     fn test_sandbox_auto_inject_platform_home_deny() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "match", "policy", "settings", "sandbox", "cwd")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "cwd")
 
 _box = sandbox(
     name = "test",
@@ -1016,7 +1099,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", rules = match({"Bash": {"test": allow(sandbox=_box)}}))
+policy("test", rules = when({"Bash": {"test": allow(sandbox=_box)}}))
 "#,
         );
         let sandbox = &doc["sandboxes"]["test"];

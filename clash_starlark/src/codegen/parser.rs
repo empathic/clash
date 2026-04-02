@@ -692,7 +692,7 @@ policy("default", default = deny(), rules = [tool(["Read"]).sandbox(_box).allow(
     #[test]
     fn parse_example_policy_structure() {
         // Verify we can parse a full policy with match rules
-        let src = r#"load("@clash//std.star", "match", "tool", "policy", "settings", "allow", "ask")
+        let src = r#"load("@clash//std.star", "when", "tool", "policy", "settings", "allow", "ask")
 
 settings(default = ask())
 
@@ -700,7 +700,7 @@ policy(
     "test",
     default = ask(),
     rules = [
-        match({"Bash": {("git", "cargo"): allow()}}),
+        when({"Bash": {("git", "cargo"): allow()}}),
         tool(["Read"]).allow(),
         tool(["Write"]).allow(),
     ],

@@ -21,6 +21,7 @@ thiserror = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-starlark = { workspace = true }
 itertools = {workspace = true}
+indoc = {workspace = true}
 
 [dev-dependencies]
 tempfile = { workspace = true }

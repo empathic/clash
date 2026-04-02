@@ -813,7 +813,7 @@ fn handle_convert(file: Option<PathBuf>, replace: bool) -> Result<()> {
     let source = clash_starlark::codegen::serialize(&stmts);
 
     // Determine which names are actually used and rebuild load
-    for name in ["tool", "match", "sandbox"] {
+    for name in ["tool", "when", "sandbox"] {
         if source.contains(&format!("{name}(")) {
             clash_starlark::codegen::mutate::ensure_loaded(&mut stmts, name);
         }
