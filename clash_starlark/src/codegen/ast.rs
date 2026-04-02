@@ -3,9 +3,60 @@
 //! These types mirror tree-sitter-starlark's node kinds but are mutable and
 //! constructable, enabling both programmatic generation and (future) round-trip
 //! editing of `.star` files.
+//!
+//!
+
+#[derive(Clone, Debug)]
+pub enum TransformOp<T> {
+    Keep,
+    Replace(T),
+    Expand(Vec<T>),
+    Remove,
+}
+
+pub trait Transform {
+    fn visit_stmt(&mut self, stmt: &Stmt) -> TransformOp<Stmt> {
+        match stmt {
+            Stmt::Return(expr) => match self.visit_expr(expr) {
+                TransformOp::Keep => TransformOp::Keep,
+                TransformOp::Replace(expr) => TransformOp::Replace(Stmt::Return(expr)),
+                TransformOp::Expand(items) => {
+                    unreachable!("replace not supported for returned expressions {:?}", items)
+                }
+                TransformOp::Remove => TransformOp::Remove,
+            },
+            Stmt::Expr(expr) => match self.visit_expr(expr) {
+                TransformOp::Keep => TransformOp::Keep,
+                TransformOp::Replace(expr) => TransformOp::Replace(Stmt::Expr(expr)),
+                TransformOp::Expand(items) => {
+                    TransformOp::Expand(items.into_iter().map(Stmt::Expr).collect())
+                }
+                TransformOp::Remove => TransformOp::Remove,
+            },
+            _ => TransformOp::Keep,
+        }
+    }
+
+    fn visit_expr(&mut self, _: &Expr) -> TransformOp<Expr> {
+        TransformOp::Keep
+    }
+
+    fn apply(&mut self, stmts: Vec<Stmt>) -> Vec<Stmt> {
+        let mut out = Vec::with_capacity(stmts.len());
+        for stmt in stmts {
+            match self.visit_stmt(&stmt) {
+                TransformOp::Keep => out.push(stmt),
+                TransformOp::Replace(s) => out.push(s),
+                TransformOp::Expand(items) => out.extend_from_slice(&items),
+                TransformOp::Remove => {}
+            }
+        }
+        out
+    }
+}
 
 /// A top-level statement in a Starlark module.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum Stmt {
     /// `load("module", "name1", "name2", ...)`
     Load { module: String, names: Vec<String> },
@@ -24,18 +75,19 @@ pub enum Stmt {
     /// `# text`
     Comment(String),
     /// A blank line.
+    #[default]
     Blank,
 }
 
 /// A function parameter.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Param {
     pub name: String,
     pub default: Option<Expr>,
 }
 
 /// A Starlark expression.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub enum Expr {
     /// A string literal: `"foo"`
     String(String),
@@ -69,7 +121,7 @@ pub enum Expr {
 }
 
 /// A single key-value entry in a dict literal.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub struct DictEntry {
     pub key: Expr,
     pub value: Expr,
@@ -207,6 +259,9 @@ impl DictEntry {
 }
 
 impl Stmt {
+    pub fn is_load(&self) -> bool {
+        matches!(self, Self::Load { .. })
+    }
     pub fn load(module: impl Into<String>, names: &[&str]) -> Self {
         Stmt::Load {
             module: module.into(),

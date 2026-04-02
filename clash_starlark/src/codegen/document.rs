@@ -8,12 +8,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::codegen::ast::Transform;
+
 use super::ast::Stmt;
 use super::parser;
 use super::serialize::serialize;
 
 /// A parsed `.star` policy file, holding the mutable AST.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StarDocument {
     /// The mutable Starlark AST — source of truth.
     pub stmts: Vec<Stmt>,
@@ -42,15 +44,13 @@ impl StarDocument {
         })
     }
 
-    /// Returns a "canonical" version of the document. This is an idempotent set of transforms
-    /// that put the document in a form we want.
-    pub(crate) fn canonicalize(&mut self) -> Result<()> {
-        crate::codegen::canonicalize::canonicalize(&mut self.stmts)
-    }
-
     /// Serialize the current AST to Starlark source text.
     pub fn to_source(&self) -> String {
-        serialize(&self.stmts)
+        let mut cpy = self.stmts.clone();
+        crate::codegen::canonicalize::canonicalize(&mut cpy)
+            .expect("unable to canonicalize starlark code");
+
+        serialize(&cpy)
     }
 
     /// Evaluate the current AST through the Starlark evaluator,
@@ -78,11 +78,18 @@ impl StarDocument {
     pub fn is_dirty(&self) -> bool {
         self.to_source() != self.original_source
     }
+
+    pub fn transform(&self, mut t: impl Transform) -> Self {
+        let mut x = self.clone();
+        x.stmts = t.apply(x.stmts);
+        x
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
     fn doc_from_str(src: &str) -> StarDocument {

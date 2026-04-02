@@ -20,6 +20,7 @@ include_dir = { workspace = true }
 thiserror = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-starlark = { workspace = true }
+itertools = {workspace = true}
 
 [dev-dependencies]
 tempfile = { workspace = true }
