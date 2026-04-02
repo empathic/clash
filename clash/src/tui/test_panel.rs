@@ -7,10 +7,11 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use super::theme::Theme;
 use crate::policy::Effect;
 use crate::policy::match_tree::CompiledPolicy;
 use crate::policy::test_eval;
@@ -344,20 +345,20 @@ impl TestPanel {
     }
 
     /// Render the test panel into the given area.
-    pub fn view(&self, frame: &mut Frame, area: Rect) {
-        self.view_with_focus(frame, area, true)
+    pub fn view(&self, frame: &mut Frame, area: Rect, t: &Theme) {
+        self.view_with_focus(frame, area, true, t)
     }
 
     /// Render the test panel, with focus indicator.
-    pub fn view_with_focus(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        let border_color = if focused {
-            Color::Blue
+    pub fn view_with_focus(&self, frame: &mut Frame, area: Rect, focused: bool, t: &Theme) {
+        let border_style = if focused {
+            t.border_active
         } else {
-            Color::DarkGray
+            t.border_unfocused
         };
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color))
+            .border_style(border_style)
             .title(" Test Console ");
 
         let inner = block.inner(area);
@@ -374,15 +375,15 @@ impl TestPanel {
         ])
         .split(inner);
 
-        self.render_history(frame, chunks[0]);
-        self.render_input(frame, chunks[1]);
+        self.render_history(frame, chunks[0], t);
+        self.render_input(frame, chunks[1], t);
     }
 
-    fn render_history(&self, frame: &mut Frame, area: Rect) {
+    fn render_history(&self, frame: &mut Frame, area: Rect, t: &Theme) {
         if self.cases.is_empty() {
             let empty = Paragraph::new(Line::from(Span::styled(
                 " Type a test below...",
-                Style::default().fg(Color::DarkGray),
+                t.text_disabled,
             )));
             frame.render_widget(empty, area);
             return;
@@ -415,7 +416,7 @@ impl TestPanel {
             if case.pinned && has_pinned {
                 continue; // Render pinned separately below
             }
-            lines.push(self.render_case(i, case));
+            lines.push(self.render_case(i, case, t));
         }
 
         // Pinned divider + pinned cases
@@ -428,15 +429,12 @@ impl TestPanel {
                 .collect();
 
             if !pinned_cases.is_empty() && lines.len() + 1 < visible_height {
-                lines.push(Line::from(Span::styled(
-                    " ┄┄ pinned ┄┄",
-                    Style::default().fg(Color::DarkGray),
-                )));
+                lines.push(Line::from(Span::styled(" ┄┄ pinned ┄┄", t.text_disabled)));
                 for (i, case) in pinned_cases {
                     if lines.len() >= visible_height {
                         break;
                     }
-                    lines.push(self.render_case(i, case));
+                    lines.push(self.render_case(i, case, t));
                 }
             }
         }
@@ -445,7 +443,7 @@ impl TestPanel {
         frame.render_widget(para, area);
     }
 
-    fn render_case(&self, index: usize, case: &TestCase) -> Line<'static> {
+    fn render_case(&self, index: usize, case: &TestCase, t: &Theme) -> Line<'static> {
         let is_selected = index == self.selected && !self.input_active;
         let pin_marker = if case.pinned { "* " } else { "  " };
         let changed_badge = if case.changed { " [CHG]" } else { "" };
@@ -456,64 +454,40 @@ impl TestPanel {
             Effect::Ask => "?",
         };
 
-        let effect_color = match case.effect {
-            Effect::Allow => Color::Green,
-            Effect::Deny => Color::Red,
-            Effect::Ask => Color::Yellow,
-        };
+        let effect_style = t.policy_effect(case.effect);
 
-        let style = if is_selected {
-            Style::default()
-                .bg(Color::DarkGray)
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
+        let style = if is_selected { t.selection } else { Style::default() };
 
         let mut spans = vec![
             Span::styled(pin_marker.to_string(), style),
             Span::styled(
                 format!("{effect_icon} "),
-                if is_selected {
-                    style
-                } else {
-                    Style::default().fg(effect_color)
-                },
+                if is_selected { style } else { effect_style },
             ),
-            Span::styled(truncate_input(&case.input, 20), style.fg(Color::White)),
+            Span::styled(truncate_input(&case.input, 20), style.patch(t.text_primary)),
             Span::styled(
                 format!(" {}", case.summary),
-                if is_selected {
-                    style
-                } else {
-                    Style::default().fg(effect_color)
-                },
+                if is_selected { style } else { effect_style },
             ),
         ];
 
         if !changed_badge.is_empty() {
-            spans.push(Span::styled(
-                changed_badge.to_string(),
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ));
+            spans.push(Span::styled(changed_badge.to_string(), t.test_changed_badge));
         }
 
         Line::from(spans)
     }
 
-    fn render_input(&self, frame: &mut Frame, area: Rect) {
+    fn render_input(&self, frame: &mut Frame, area: Rect, t: &Theme) {
         if area.height < 1 {
             return;
         }
 
         // Input line
         let prompt_style = if self.input_active {
-            Style::default().fg(Color::Cyan)
+            t.test_input_active
         } else {
-            Style::default().fg(Color::DarkGray)
+            t.test_input_inactive
         };
 
         let input_display = if self.input_line.is_empty() && self.input_active {
@@ -523,11 +497,11 @@ impl TestPanel {
         };
 
         let input_style = if self.input_line.is_empty() && self.input_active {
-            Style::default().fg(Color::DarkGray)
+            t.text_disabled
         } else if self.input_active {
-            Style::default().fg(Color::White)
+            t.text_primary
         } else {
-            Style::default().fg(Color::DarkGray)
+            t.text_disabled
         };
 
         let input_line = Line::from(vec![
@@ -542,17 +516,14 @@ impl TestPanel {
             if let Some(ref flash) = self.flash {
                 lines.push(Line::from(Span::styled(
                     format!("   {flash}"),
-                    Style::default().fg(Color::Red),
+                    t.test_error,
                 )));
             } else {
                 let hint = match &self.mode {
                     Some(m) => format!("   mode: {m}  |  Tab: history  p: pin"),
                     None => "   mode <name> to set  |  Tab: history  p: pin".to_string(),
                 };
-                lines.push(Line::from(Span::styled(
-                    hint,
-                    Style::default().fg(Color::DarkGray),
-                )));
+                lines.push(Line::from(Span::styled(hint, t.text_disabled)));
             }
         }
 

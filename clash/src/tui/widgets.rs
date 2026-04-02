@@ -10,6 +10,7 @@ use ratatui::widgets::{
 };
 
 use super::app::Tab;
+use super::theme::Theme;
 
 // ---------------------------------------------------------------------------
 // Click regions — mouse click targets populated each frame during render
@@ -72,7 +73,7 @@ fn parse_hint_key(s: &str) -> Option<KeyCode> {
 }
 
 /// Render the tab bar at the top of the screen.
-pub fn render_tab_bar(frame: &mut Frame, area: Rect, active_tab: &Tab, dirty: bool) {
+pub fn render_tab_bar(frame: &mut Frame, area: Rect, active_tab: &Tab, dirty: bool, t: &Theme) {
     let tabs = [
         (Tab::Tree, "Tree"),
         (Tab::Sandboxes, "Sandboxes"),
@@ -84,31 +85,22 @@ pub fn render_tab_bar(frame: &mut Frame, area: Rect, active_tab: &Tab, dirty: bo
     spans.push(Span::raw("  "));
     for (i, (tab, label)) in tabs.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled("  ", t.tab_separator));
         }
         if tab == active_tab {
-            spans.push(Span::styled(
-                format!(" {label} "),
-                Style::default()
-                    .fg(Color::White)
-                    .bg(Color::Blue)
-                    .add_modifier(Modifier::BOLD),
-            ));
+            spans.push(Span::styled(format!(" {label} "), t.tab_active));
         } else {
-            spans.push(Span::styled(
-                format!(" {label} "),
-                Style::default().fg(Color::Gray),
-            ));
+            spans.push(Span::styled(format!(" {label} "), t.tab_inactive));
         }
     }
 
     let dirty_indicator = if dirty { " [modified]" } else { "" };
     spans.push(Span::styled(
         format!("    ? help{dirty_indicator}"),
-        Style::default().fg(Color::DarkGray),
+        t.text_disabled,
     ));
 
-    let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Black));
+    let bar = Paragraph::new(Line::from(spans)).style(t.bar_bg);
     frame.render_widget(bar, area);
 }
 
@@ -118,14 +110,10 @@ pub fn render_status_bar(
     area: Rect,
     hints: &[(&str, &str)],
     flash: Option<&str>,
+    t: &Theme,
 ) {
     let line = if let Some(msg) = flash {
-        Line::from(Span::styled(
-            format!("  {msg}"),
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ))
+        Line::from(Span::styled(format!("  {msg}"), t.flash_message))
     } else {
         let spans: Vec<Span> = hints
             .iter()
@@ -133,107 +121,101 @@ pub fn render_status_bar(
             .flat_map(|(i, (key, desc))| {
                 let mut s = Vec::new();
                 if i > 0 {
-                    s.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                    s.push(Span::styled("  ", t.text_disabled));
                 }
-                s.push(Span::styled(
-                    key.to_string(),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ));
-                s.push(Span::styled(
-                    format!(" {desc}"),
-                    Style::default().fg(Color::Gray),
-                ));
+                s.push(Span::styled(key.to_string(), t.hint_key));
+                s.push(Span::styled(format!(" {desc}"), t.hint_desc));
                 s
             })
             .collect();
         Line::from(spans)
     };
 
-    let bar = Paragraph::new(line).style(Style::default().bg(Color::Black));
+    let bar = Paragraph::new(line).style(t.bar_bg);
     frame.render_widget(bar, area);
 }
 
 /// Build the help content lines.  Used both for rendering and for deriving
 /// the content length when constructing `ScrollState`.
-pub fn help_content() -> Vec<Line<'static>> {
+pub fn help_content(t: &Theme) -> Vec<Line<'static>> {
+    let key = t.hint_key;
     vec![
-        Line::from(Span::styled(
-            "Keybindings",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled("Keybindings", t.text_emphasis)),
         Line::from(""),
         Line::from(vec![
-            Span::styled("1-5    ", Style::default().fg(Color::Yellow)),
+            Span::styled("1-5    ", key),
             Span::raw("Switch tabs"),
         ]),
         Line::from(vec![
-            Span::styled("j/k    ", Style::default().fg(Color::Yellow)),
+            Span::styled("j/k    ", key),
             Span::raw("Move down/up"),
         ]),
         Line::from(vec![
-            Span::styled("h/l    ", Style::default().fg(Color::Yellow)),
+            Span::styled("h/l    ", key),
             Span::raw("Collapse/expand (tree) or focus (sandboxes)"),
         ]),
         Line::from(vec![
-            Span::styled("g/G    ", Style::default().fg(Color::Yellow)),
+            Span::styled("g/G    ", key),
             Span::raw("Jump to top/bottom"),
         ]),
         Line::from(vec![
-            Span::styled("Space  ", Style::default().fg(Color::Yellow)),
+            Span::styled("Space  ", key),
             Span::raw("Toggle expand/collapse"),
         ]),
         Line::from(vec![
-            Span::styled("e/Tab  ", Style::default().fg(Color::Yellow)),
+            Span::styled("e/Tab  ", key),
             Span::raw("Cycle effect on selected rule"),
         ]),
         Line::from(vec![
-            Span::styled("a      ", Style::default().fg(Color::Yellow)),
+            Span::styled("a      ", key),
             Span::raw("Add new item"),
         ]),
         Line::from(vec![
-            Span::styled("d      ", Style::default().fg(Color::Yellow)),
+            Span::styled("d      ", key),
             Span::raw("Delete selected item"),
         ]),
         Line::from(vec![
-            Span::styled("J/K    ", Style::default().fg(Color::Yellow)),
+            Span::styled("J/K    ", key),
             Span::raw("Move item up/down (includes)"),
         ]),
         Line::from(vec![
-            Span::styled("t      ", Style::default().fg(Color::Yellow)),
+            Span::styled("t      ", key),
             Span::raw("Toggle test console panel"),
         ]),
         Line::from(vec![
-            Span::styled("s      ", Style::default().fg(Color::Yellow)),
+            Span::styled("s      ", key),
             Span::raw("Save (review diff first)"),
         ]),
         Line::from(vec![
-            Span::styled("q/Esc  ", Style::default().fg(Color::Yellow)),
+            Span::styled("q/Esc  ", key),
             Span::raw("Quit (confirms if unsaved)"),
         ]),
         Line::from(vec![
-            Span::styled("?      ", Style::default().fg(Color::Yellow)),
+            Span::styled("?      ", key),
             Span::raw("Toggle this help"),
         ]),
     ]
 }
 
 /// Render a centered help popup listing all keybindings.
-pub fn render_help_overlay(frame: &mut Frame, area: Rect, scroll: &mut ScrollState) -> ModalInner {
-    let help_lines = help_content();
+pub fn render_help_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    scroll: &mut ScrollState,
+    t: &Theme,
+) -> ModalInner {
+    let help_lines = help_content(t);
 
     let modal = ModalOverlay {
         width_pct: 60,
         height: ModalHeight::Percent(70),
-        border_color: Color::Cyan,
+        border_style: t.border_focused,
         title: "Help",
         footer: &[("j/k", "scroll"), ("any key", "close")],
         footer_left: &[],
         footer_right: None,
         scroll: Some(scroll.to_modal_scroll()),
+        theme: Some(t),
     };
     let inner = modal.render_chrome(frame, area);
     scroll.update_viewport(inner.area.height as usize);
@@ -250,16 +232,22 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect, scroll: &mut ScrollSta
 }
 
 /// Render a confirmation dialog.
-pub fn render_confirm_overlay(frame: &mut Frame, area: Rect, prompt: &str) -> ModalInner {
+pub fn render_confirm_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    prompt: &str,
+    t: &Theme,
+) -> ModalInner {
     let modal = ModalOverlay {
         width_pct: 50,
         height: ModalHeight::Percent(20),
-        border_color: Color::Yellow,
+        border_style: t.modal_confirm_border,
         title: "Confirm",
         footer: &[("y", "yes"), ("n", "no")],
         footer_left: &[],
         footer_right: None,
         scroll: None,
+        theme: Some(t),
     };
     let inner = modal.render_chrome(frame, area);
 
@@ -276,11 +264,9 @@ pub fn render_diff_overlay(
     area: Rect,
     diff_lines: &[DiffLine],
     scroll: &mut ScrollState,
+    t: &Theme,
 ) -> ModalInner {
     let total = diff_lines.len();
-    // Use the previous frame's real viewport for scroll_info (avoids estimate).
-    // On the very first frame viewport is 0, so scroll_info won't show — that's
-    // a single-frame cosmetic gap, far better than a permanent estimate error.
     let viewport = scroll.viewport();
     let scroll_info = if total > viewport && viewport > 0 {
         Some(format!(
@@ -296,12 +282,13 @@ pub fn render_diff_overlay(
     let modal = ModalOverlay {
         width_pct: 80,
         height: ModalHeight::Percent(80),
-        border_color: Color::Cyan,
+        border_style: t.border_focused,
         title: "Save Review",
         footer: &[("y", "confirm"), ("n", "cancel"), ("j/k", "scroll")],
         footer_left: &[],
         footer_right: scroll_info,
         scroll: Some(scroll.to_modal_scroll()),
+        theme: Some(t),
     };
     let inner = modal.render_chrome(frame, area);
     scroll.update_viewport(inner.area.height as usize);
@@ -312,21 +299,10 @@ pub fn render_diff_overlay(
         .skip(scroll.offset)
         .take(visible_height)
         .map(|dl| match dl {
-            DiffLine::Context(s) => {
-                Line::from(Span::styled(s.as_str(), Style::default().fg(Color::Gray)))
-            }
-            DiffLine::Add(s) => {
-                Line::from(Span::styled(s.as_str(), Style::default().fg(Color::Green)))
-            }
-            DiffLine::Remove(s) => {
-                Line::from(Span::styled(s.as_str(), Style::default().fg(Color::Red)))
-            }
-            DiffLine::Header(s) => Line::from(Span::styled(
-                s.as_str(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )),
+            DiffLine::Context(s) => Line::from(Span::styled(s.as_str(), t.diff_context)),
+            DiffLine::Add(s) => Line::from(Span::styled(s.as_str(), t.diff_add)),
+            DiffLine::Remove(s) => Line::from(Span::styled(s.as_str(), t.diff_remove)),
+            DiffLine::Header(s) => Line::from(Span::styled(s.as_str(), t.diff_header)),
         })
         .collect();
 
@@ -374,7 +350,7 @@ pub struct ModalScroll {
 pub struct ModalOverlay<'a> {
     pub width_pct: u16,
     pub height: ModalHeight,
-    pub border_color: Color,
+    pub border_style: Style,
     pub title: &'a str,
     /// Key-hint pairs rendered right-aligned in the bottom border; empty = no footer.
     pub footer: &'a [(&'a str, &'a str)],
@@ -384,6 +360,8 @@ pub struct ModalOverlay<'a> {
     pub footer_left: &'a [(&'a str, &'a str)],
     /// When set, a vertical scrollbar is rendered on the right edge if content overflows.
     pub scroll: Option<ModalScroll>,
+    /// Optional theme for styling footer hints and scrollbar.
+    pub theme: Option<&'a Theme>,
 }
 
 /// The inner area returned by [`ModalOverlay::render_chrome`].
@@ -499,13 +477,24 @@ impl ModalOverlay<'_> {
         // Build footer line from key-hint pairs
         let mut block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.border_color))
+            .border_style(self.border_style)
             .title(format!(" {} ", self.title));
 
         // Track button char offsets (from the start of the footer text) so we
         // can compute screen rects after we know the right-aligned x origin.
         // Each entry: (offset_in_footer, width, KeyCode).
         let mut button_offsets: Vec<(u16, u16, KeyCode)> = Vec::new();
+
+        // Resolve theme-aware styles (fall back to hardcoded defaults when no theme is provided,
+        // keeping the test suite working without requiring a Theme everywhere).
+        let hint_key_style = self
+            .theme
+            .map(|t| t.hint_key)
+            .unwrap_or_else(|| Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        let hint_desc_style = self
+            .theme
+            .map(|t| t.text_disabled)
+            .unwrap_or_else(|| Style::default().fg(Color::DarkGray));
 
         if !self.footer.is_empty() || self.footer_right.is_some() {
             let mut spans: Vec<Span> = Vec::new();
@@ -516,7 +505,7 @@ impl ModalOverlay<'_> {
 
             for (i, (key, desc)) in self.footer.iter().enumerate() {
                 if i > 0 {
-                    spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                    spans.push(Span::styled("  ", hint_desc_style));
                     char_offset += 2;
                 }
                 let button_text = format!("{key} {desc}");
@@ -524,25 +513,14 @@ impl ModalOverlay<'_> {
                 if let Some(kc) = parse_hint_key(key) {
                     button_offsets.push((char_offset, button_width, kc));
                 }
-                spans.push(Span::styled(
-                    *key,
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ));
+                spans.push(Span::styled(*key, hint_key_style));
                 char_offset += key.len() as u16;
-                spans.push(Span::styled(
-                    format!(" {desc}"),
-                    Style::default().fg(Color::DarkGray),
-                ));
+                spans.push(Span::styled(format!(" {desc}"), hint_desc_style));
                 char_offset += 1 + desc.len() as u16;
             }
             if let Some(ref right) = self.footer_right {
                 let right_text = format!(" {right}");
-                spans.push(Span::styled(
-                    right_text.clone(),
-                    Style::default().fg(Color::DarkGray),
-                ));
+                spans.push(Span::styled(right_text.clone(), hint_desc_style));
                 char_offset += right_text.len() as u16;
             }
             spans.push(Span::raw(" "));
@@ -575,7 +553,7 @@ impl ModalOverlay<'_> {
 
             for (i, (key, desc)) in self.footer_left.iter().enumerate() {
                 if i > 0 {
-                    spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                    spans.push(Span::styled("  ", hint_desc_style));
                     char_offset += 2;
                 }
                 let button_text = format!("{key} {desc}");
@@ -586,17 +564,9 @@ impl ModalOverlay<'_> {
                     let btn_y = popup.y + popup.height.saturating_sub(1);
                     footer_buttons.push((Rect::new(btn_x, btn_y, button_width, 1), kc));
                 }
-                spans.push(Span::styled(
-                    *key,
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ));
+                spans.push(Span::styled(*key, hint_key_style));
                 char_offset += key.len() as u16;
-                spans.push(Span::styled(
-                    format!(" {desc}"),
-                    Style::default().fg(Color::DarkGray),
-                ));
+                spans.push(Span::styled(format!(" {desc}"), hint_desc_style));
                 char_offset += 1 + desc.len() as u16;
             }
             spans.push(Span::raw(" "));
@@ -611,9 +581,17 @@ impl ModalOverlay<'_> {
         let content_area = if let Some(ref sc) = self.scroll {
             let viewport = inner.height as usize;
             if sc.total > viewport && inner.width > 1 {
+                let thumb_style = self
+                    .theme
+                    .map(|t| t.scrollbar_thumb)
+                    .unwrap_or(self.border_style);
+                let track_style = self
+                    .theme
+                    .map(|t| t.scrollbar_track)
+                    .unwrap_or_else(|| Style::default().fg(Color::DarkGray));
                 let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                    .thumb_style(Style::default().fg(self.border_color))
-                    .track_style(Style::default().fg(Color::DarkGray))
+                    .thumb_style(thumb_style)
+                    .track_style(track_style)
                     .begin_symbol(None)
                     .end_symbol(None);
                 // Ratatui positions the thumb at the bottom only when
@@ -773,12 +751,13 @@ mod tests {
                 let modal = ModalOverlay {
                     width_pct: 50,
                     height: ModalHeight::Percent(20),
-                    border_color: Color::Yellow,
+                    border_style: Style::default().fg(Color::Yellow),
                     title: "Test",
                     footer: &[("y", "yes"), ("n", "no")],
                     footer_left: &[],
                     footer_right: None,
                     scroll: None,
+                    theme: None,
                 };
                 let inner = modal.render_chrome(frame, area);
 
@@ -821,12 +800,13 @@ mod tests {
                 let modal = ModalOverlay {
                     width_pct: 60,
                     height: ModalHeight::Percent(70),
-                    border_color: Color::Cyan,
+                    border_style: Style::default().fg(Color::Cyan),
                     title: "Help",
                     footer: &[("j/k", "scroll"), ("any key", "close")],
                     footer_left: &[],
                     footer_right: None,
                     scroll: None,
+                    theme: None,
                 };
                 let inner = modal.render_chrome(frame, area);
 
@@ -847,12 +827,13 @@ mod tests {
                 let modal = ModalOverlay {
                     width_pct: 80,
                     height: ModalHeight::Percent(80),
-                    border_color: Color::Cyan,
+                    border_style: Style::default().fg(Color::Cyan),
                     title: "Save Review",
                     footer: &[("y", "confirm"), ("n", "cancel"), ("j/k", "scroll")],
                     footer_left: &[],
                     footer_right: None,
                     scroll: None,
+                    theme: None,
                 };
                 let inner = modal.render_chrome(frame, area);
 
@@ -875,12 +856,13 @@ mod tests {
                 let modal = ModalOverlay {
                     width_pct: 50,
                     height: ModalHeight::Percent(20),
-                    border_color: Color::Yellow,
+                    border_style: Style::default().fg(Color::Yellow),
                     title: "Confirm",
                     footer: &[("y", "yes"), ("n", "no")],
                     footer_left: &[],
                     footer_right: None,
                     scroll: None,
+                    theme: None,
                 };
                 let inner = modal.render_chrome(frame, area);
 

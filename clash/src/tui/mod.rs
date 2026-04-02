@@ -10,6 +10,7 @@ pub mod sandbox_view;
 pub mod settings_view;
 pub mod tea;
 pub mod test_panel;
+pub mod theme;
 pub mod tool_registry;
 pub mod tree_view;
 pub mod walkthrough;

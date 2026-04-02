@@ -9,7 +9,6 @@ use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use similar::TextDiff;
@@ -24,6 +23,7 @@ use super::sandbox_view::SandboxView;
 use super::settings_view::SettingsView;
 use super::tea::{Action, Component};
 use super::test_panel::{self, TestPanel, TestPanelAction};
+use super::theme::{Theme, ViewContext};
 use super::tree_view::TreeView;
 use super::walkthrough::{self, WalkthroughState, WalkthroughStep};
 use super::widgets::{self, ClickAction, ClickRegions, DiffLine, ScrollState};
@@ -105,6 +105,8 @@ pub struct App {
     walkthrough: Option<WalkthroughState>,
     /// Mouse click targets populated each frame during `view()`.
     click_regions: ClickRegions,
+    /// Visual theme for all TUI rendering.
+    theme: Theme,
 }
 
 impl App {
@@ -159,6 +161,7 @@ impl App {
             flash,
             walkthrough: None,
             click_regions: ClickRegions::default(),
+            theme: Theme::from_env(),
         })
     }
 
@@ -612,7 +615,7 @@ impl App {
             Msg::ToggleHelp => {
                 self.mode = match self.mode {
                     Mode::Help(_) => Mode::Normal,
-                    _ => Mode::Help(ScrollState::new(widgets::help_content().len())),
+                    _ => Mode::Help(ScrollState::new(widgets::help_content(&self.theme).len())),
                 };
                 Action::None
             }
@@ -767,6 +770,12 @@ impl App {
     }
 
     fn view(&mut self, frame: &mut Frame, area: Rect, manifest: &PolicyManifest) {
+        let t = &self.theme;
+        let ctx = ViewContext {
+            manifest,
+            theme: t,
+        };
+
         let chunks = Layout::vertical([
             Constraint::Length(2), // title + tab bar
             Constraint::Min(3),    // content
@@ -776,15 +785,10 @@ impl App {
 
         // Title bar
         let title = Line::from(vec![
-            Span::styled(
-                " clash policy editor ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(" clash policy editor ", t.text_emphasis),
             Span::styled(
                 format!("-- {} ", self.path.display()),
-                Style::default().fg(Color::DarkGray),
+                t.text_disabled,
             ),
         ]);
         frame.render_widget(
@@ -798,6 +802,7 @@ impl App {
             Rect::new(chunks[0].x, chunks[0].y + 1, chunks[0].width, 1),
             &self.active_tab,
             self.dirty,
+            t,
         );
 
         // Content area — split horizontally if test panel is visible
@@ -812,16 +817,16 @@ impl App {
 
         // Active tab content
         match self.active_tab {
-            Tab::Tree => self.tree_view.view(frame, content_area, manifest),
-            Tab::Sandboxes => self.sandbox_view.view(frame, content_area, manifest),
-            Tab::Includes => self.includes_view.view(frame, content_area, manifest),
-            Tab::Settings => self.settings_view.view(frame, content_area, manifest),
+            Tab::Tree => self.tree_view.view(frame, content_area, &ctx),
+            Tab::Sandboxes => self.sandbox_view.view(frame, content_area, &ctx),
+            Tab::Includes => self.includes_view.view(frame, content_area, &ctx),
+            Tab::Settings => self.settings_view.view(frame, content_area, &ctx),
         }
 
         // Test panel (side panel)
         if let Some(area) = test_area {
             self.test_panel
-                .view_with_focus(frame, area, self.test_focused);
+                .view_with_focus(frame, area, self.test_focused, t);
         }
 
         // Status bar
@@ -883,7 +888,7 @@ impl App {
             }
         };
 
-        widgets::render_status_bar(frame, chunks[2], hints, flash_msg);
+        widgets::render_status_bar(frame, chunks[2], hints, flash_msg, t);
 
         // Overlays — take click_regions out to avoid double-borrow with &mut self.mode
         let mut clicks = std::mem::take(&mut self.click_regions);
@@ -891,7 +896,7 @@ impl App {
 
         match &mut self.mode {
             Mode::Help(scroll) => {
-                let inner = widgets::render_help_overlay(frame, area, scroll);
+                let inner = widgets::render_help_overlay(frame, area, scroll, t);
                 for (rect, kc) in &inner.footer_buttons {
                     clicks.push(*rect, ClickAction::Key(*kc));
                 }
@@ -904,20 +909,20 @@ impl App {
                         "Quit without saving? Your policy will remain unchanged."
                     }
                 };
-                let inner = widgets::render_confirm_overlay(frame, area, prompt);
+                let inner = widgets::render_confirm_overlay(frame, area, prompt, t);
                 for (rect, kc) in &inner.footer_buttons {
                     clicks.push(*rect, ClickAction::Key(*kc));
                 }
             }
             Mode::SaveReview(state) => {
                 let inner =
-                    widgets::render_diff_overlay(frame, area, &state.lines, &mut state.scroll);
+                    widgets::render_diff_overlay(frame, area, &state.lines, &mut state.scroll, t);
                 for (rect, kc) in &inner.footer_buttons {
                     clicks.push(*rect, ClickAction::Key(*kc));
                 }
             }
             Mode::Form(form) => {
-                form.view(frame, area, &mut clicks);
+                form.view(frame, area, &mut clicks, t);
             }
             Mode::Walkthrough => {
                 if let Some(wt) = &mut self.walkthrough {
@@ -927,6 +932,7 @@ impl App {
                         wt.step,
                         &mut wt.scroll,
                         &mut clicks,
+                        t,
                     );
                 }
             }

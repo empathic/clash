@@ -5,11 +5,11 @@ use std::collections::HashSet;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::tea::{Action, Component, FormRequest};
+use super::theme::ViewContext;
 use crate::policy::format::{format_condition, format_decision};
 use crate::policy::match_tree::{CompiledPolicy, Decision, Node, PolicyManifest};
 
@@ -518,10 +518,11 @@ impl Component for TreeView {
         }
     }
 
-    fn view(&self, frame: &mut Frame, area: Rect, _manifest: &PolicyManifest) {
+    fn view(&self, frame: &mut Frame, area: Rect, ctx: &ViewContext) {
+        let t = ctx.theme;
         let block = Block::default()
             .borders(Borders::LEFT | Borders::RIGHT)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(t.border_unfocused);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -569,19 +570,13 @@ impl Component for TreeView {
                 };
 
                 let style = if i == self.selected {
-                    Style::default()
-                        .bg(Color::DarkGray)
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD)
+                    t.selection
                 } else if node.is_root {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
+                    t.text_emphasis
                 } else if node.read_only {
-                    // Included rules are dimmed
-                    decision_style(node.decision.as_ref()).add_modifier(Modifier::DIM)
+                    t.effect_read_only(node.decision.as_ref())
                 } else {
-                    decision_style(node.decision.as_ref())
+                    t.effect(node.decision.as_ref())
                 };
 
                 let mut spans = vec![Span::styled(
@@ -589,10 +584,7 @@ impl Component for TreeView {
                     style,
                 )];
                 if let Some(ref src) = node.source {
-                    spans.push(Span::styled(
-                        format!("  ({src})"),
-                        Style::default().fg(Color::DarkGray),
-                    ));
+                    spans.push(Span::styled(format!("  ({src})"), t.provenance));
                 }
                 Line::from(spans)
             })
@@ -619,14 +611,6 @@ impl TreeView {
     }
 }
 
-fn decision_style(decision: Option<&Decision>) -> Style {
-    match decision {
-        Some(Decision::Allow(_)) => Style::default().fg(Color::Green),
-        Some(Decision::Deny) => Style::default().fg(Color::Red),
-        Some(Decision::Ask(_)) => Style::default().fg(Color::Yellow),
-        None => Style::default().fg(Color::White),
-    }
-}
 
 #[cfg(test)]
 mod tests {
