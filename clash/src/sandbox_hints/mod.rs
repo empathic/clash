@@ -75,13 +75,17 @@ pub fn check_for_sandbox_fs_hint(
     // is the original command). Fall back to extracting the policy from the
     // rewritten command string (PostToolUse may receive the rewritten command
     // like "clash sandbox exec --sandbox '{...}' ...").
-    let sandbox = match resolve_sandbox_policy(input, settings) {
+    let (sandbox, sandbox_name) = match resolve_sandbox_policy(input, settings) {
         Some(s) => s,
         None => {
             info!("check_for_sandbox_fs_hint: no sandbox policy resolved, skipping");
             return None;
         }
     };
+
+    let action = settings.policy_tree()
+        .map(|t| t.on_sandbox_violation)
+        .unwrap_or_default();
 
     // Source 1: Read violations from the audit log (written by clash sandbox exec).
     // This is the primary, high-confidence source — kernel-verified denials.
@@ -153,7 +157,7 @@ pub fn check_for_sandbox_fs_hint(
         "Detected filesystem sandbox violations in command output"
     );
 
-    Some(build_fs_hint(&blocked_paths))
+    Some(build_fs_hint(&sandbox_name, &blocked_paths, action))
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────
@@ -166,69 +170,49 @@ pub fn check_for_sandbox_fs_hint(
 fn resolve_sandbox_policy(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
-) -> Option<SandboxPolicy> {
+) -> Option<(SandboxPolicy, String)> {
     // Path 1: re-evaluate against the decision tree.
     if let Some(tree) = settings.policy_tree() {
         let decision = tree.evaluate(&input.tool_name, &input.tool_input);
         if let Some(sandbox) = decision.sandbox {
+            let name = decision.sandbox_name
+                .map(|r| r.0)
+                .unwrap_or_else(|| "unnamed".to_string());
             info!("resolve_sandbox_policy: found sandbox via decision tree re-evaluation");
-            return Some(sandbox);
+            return Some((sandbox, name));
         }
         info!("resolve_sandbox_policy: decision tree returned no sandbox");
     } else {
         info!("resolve_sandbox_policy: no decision tree available");
     }
 
-    // Path 2: extract --sandbox JSON from the rewritten command string.
+    // Path 2: extract --sandbox name from the rewritten `clash shell` command
+    // and look up the sandbox in the compiled policy.
     let command = input.tool_input.get("command")?.as_str()?;
-    if !command.contains("sandbox exec") || !command.contains("--sandbox") {
+    if !command.contains(" shell ") || !command.contains("--sandbox") {
         info!(
             command_prefix = &command[..command.len().min(80)],
-            "resolve_sandbox_policy: command does not contain sandbox exec + --sandbox"
+            "resolve_sandbox_policy: command does not contain shell + --sandbox"
         );
         return None;
     }
 
-    let result = extract_policy_json(command);
+    let name = extract_sandbox_name(command)?;
+    let tree = settings.policy_tree()?;
+    let sandbox = tree.sandboxes.get(&name)?.clone();
     info!(
-        found = result.is_some(),
-        "resolve_sandbox_policy: extracted policy JSON from rewritten command"
+        sandbox_name = %name,
+        "resolve_sandbox_policy: found sandbox via rewritten command --sandbox flag"
     );
-    result
+    Some((sandbox, name))
 }
 
-/// Extract the sandbox policy JSON from a rewritten `clash sandbox exec` command.
-fn extract_policy_json(command: &str) -> Option<SandboxPolicy> {
-    let policy_idx = command.find("--sandbox ")?;
-    let after_flag = &command[policy_idx + "--sandbox ".len()..];
-
-    // The policy JSON is shell-escaped in single quotes: '--sandbox '{...}''
-    // We need to find the JSON object boundaries.
-    let json_start = after_flag.find('{')?;
-    let json_str = &after_flag[json_start..];
-
-    // Find the matching closing brace (handling nesting).
-    let mut depth = 0;
-    let mut end = 0;
-    for (i, ch) in json_str.char_indices() {
-        match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = i + 1;
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if end == 0 {
-        return None;
-    }
-
-    serde_json::from_str(&json_str[..end]).ok()
+/// Extract the sandbox name from a rewritten `clash shell --sandbox <name>` command.
+fn extract_sandbox_name(command: &str) -> Option<String> {
+    let idx = command.find("--sandbox ")?;
+    let after = &command[idx + "--sandbox ".len()..];
+    let name = after.split_whitespace().next()?;
+    Some(name.trim_matches('\'').trim_matches('"').to_string())
 }
 
 /// Filter out sandbox noise paths that aren't user-visible errors.
@@ -284,7 +268,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    use crate::policy::sandbox_types::{NetworkPolicy, PathMatch, RuleEffect, SandboxRule};
+    use crate::policy::sandbox_types::{NetworkPolicy, PathMatch, RuleEffect, SandboxRule, ViolationAction};
 
     use formatter::BlockedPath;
     use stderr_source::{
@@ -473,8 +457,9 @@ mod tests {
             suggested_dir: "/Users/user/.fly".into(),
             current_caps: Cap::READ | Cap::EXECUTE,
         }];
-        let hint = build_fs_hint(&blocked);
-        assert!(hint.contains("SANDBOX_FS_HINT"));
+        let hint = build_fs_hint("restricted", &blocked, ViolationAction::Stop);
+        assert!(hint.contains("SANDBOX VIOLATION"));
+        assert!(hint.contains("\"restricted\""));
         assert!(hint.contains("/Users/user/.fly"));
         assert!(hint.contains("clash sandbox add-rule"));
         assert!(hint.contains("Do NOT retry"));
@@ -487,10 +472,47 @@ mod tests {
             suggested_dir: "/secret".into(),
             current_caps: Cap::empty(),
         }];
-        let hint = build_fs_hint(&blocked);
-        assert!(hint.contains("SANDBOX_FS_HINT"));
+        let hint = build_fs_hint("mybox", &blocked, ViolationAction::Stop);
+        assert!(hint.contains("SANDBOX VIOLATION"));
+        assert!(hint.contains("\"mybox\""));
         assert!(hint.contains("/secret"));
         assert!(hint.contains("clash sandbox add-rule"));
+    }
+
+    #[test]
+    fn test_build_hint_workaround_directive() {
+        let blocked = vec![BlockedPath {
+            path: "/foo/bar".into(),
+            suggested_dir: "/foo".into(),
+            current_caps: Cap::READ,
+        }];
+        let hint = build_fs_hint("box", &blocked, ViolationAction::Workaround);
+        assert!(hint.contains("Try an alternative approach"));
+        assert!(hint.contains("If no workaround is possible"));
+        assert!(!hint.contains("Do NOT retry"));
+    }
+
+    #[test]
+    fn test_build_hint_smart_directive() {
+        let blocked = vec![BlockedPath {
+            path: "/foo/bar".into(),
+            suggested_dir: "/foo".into(),
+            current_caps: Cap::READ,
+        }];
+        let hint = build_fs_hint("box", &blocked, ViolationAction::Smart);
+        assert!(hint.contains("Assess"));
+        assert!(!hint.contains("Do NOT retry"));
+    }
+
+    #[test]
+    fn test_build_hint_shows_current_grants() {
+        let blocked = vec![BlockedPath {
+            path: "/foo/bar".into(),
+            suggested_dir: "/foo".into(),
+            current_caps: Cap::READ | Cap::EXECUTE,
+        }];
+        let hint = build_fs_hint("box", &blocked, ViolationAction::Stop);
+        assert!(hint.contains("read+execute"));
     }
 
     // --- paths_from_audit ---
@@ -721,7 +743,7 @@ mod tests {
             "should return hint for sandboxed filesystem error"
         );
         let hint = result.unwrap();
-        assert!(hint.contains("SANDBOX_FS_HINT"));
+        assert!(hint.contains("SANDBOX VIOLATION"));
         assert!(hint.contains(".fly"));
     }
 
