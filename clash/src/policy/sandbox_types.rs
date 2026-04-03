@@ -29,51 +29,6 @@ bitflags::bitflags! {
 }
 
 impl Cap {
-    /// Parse a capability expression.
-    ///
-    /// Additive: `read + write + create`
-    /// Shorthand: `all` or `full` (all capabilities)
-    /// Subtractive: `all - write`, `full - delete - create`
-    /// Mixed: `all - write + execute` (exclusions win)
-    pub fn parse(s: &str) -> Result<Cap, String> {
-        let s = s.trim();
-        if s.is_empty() {
-            return Err("empty capability expression".into());
-        }
-
-        let mut add = Cap::empty();
-        let mut sub = Cap::empty();
-        let mut op = '+'; // first term is implicitly additive
-
-        let mut start = 0;
-        let bytes = s.as_bytes();
-
-        for i in 0..=bytes.len() {
-            let at_op = i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-');
-            if at_op || i == bytes.len() {
-                let part = s[start..i].trim();
-                if !part.is_empty() {
-                    let cap = Self::parse_single(part)?;
-                    match op {
-                        '+' => add |= cap,
-                        '-' => sub |= cap,
-                        _ => unreachable!(),
-                    }
-                }
-                if at_op {
-                    op = bytes[i] as char;
-                    start = i + 1;
-                }
-            }
-        }
-
-        let result = add & !sub;
-        if result.is_empty() {
-            return Err("capability expression resolves to empty set".into());
-        }
-        Ok(result)
-    }
-
     /// Return capabilities as a list of name strings.
     pub fn to_list(&self) -> Vec<&'static str> {
         let mut names = Vec::new();
@@ -614,108 +569,9 @@ impl SandboxPolicy {
     }
 }
 
-/// Parse a sandbox rule from a string like "allow read + write in $PWD".
-///
-/// Format: `<effect> <caps> in <path>`
-pub fn parse_sandbox_rule(s: &str) -> Result<SandboxRule, String> {
-    // Split on " in " to separate caps from path
-    let parts: Vec<&str> = s.splitn(2, " in ").collect();
-    if parts.len() != 2 {
-        return Err(format!(
-            "expected '<effect> <caps> in <path>', got: '{}'",
-            s
-        ));
-    }
-
-    let caps_part = parts[0].trim();
-    let path = parts[1].trim().to_string();
-
-    // First word is the effect
-    let (effect_str, caps_str) = caps_part.split_once(char::is_whitespace).ok_or_else(|| {
-        format!(
-            "expected 'allow <caps>' or 'deny <caps>', got: '{}'",
-            caps_part
-        )
-    })?;
-
-    let effect = match effect_str.trim() {
-        "allow" => RuleEffect::Allow,
-        "deny" => RuleEffect::Deny,
-        other => return Err(format!("expected 'allow' or 'deny', got: '{}'", other)),
-    };
-
-    let caps = Cap::parse(caps_str.trim())?;
-
-    Ok(SandboxRule {
-        effect,
-        caps,
-        path,
-        path_match: PathMatch::Subpath,
-        follow_worktrees: false,
-        doc: None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_cap_parse() {
-        assert_eq!(Cap::parse("read").unwrap(), Cap::READ);
-        assert_eq!(Cap::parse("read + write").unwrap(), Cap::READ | Cap::WRITE);
-        assert_eq!(
-            Cap::parse("read + write + create + delete + execute").unwrap(),
-            Cap::all()
-        );
-        assert_eq!(Cap::parse("full").unwrap(), Cap::all());
-        assert_eq!(Cap::parse("full + read").unwrap(), Cap::all()); // redundant but valid
-        assert!(Cap::parse("unknown").is_err());
-        assert!(Cap::parse("").is_err());
-    }
-
-    #[test]
-    fn test_cap_parse_all_keyword() {
-        assert_eq!(Cap::parse("all").unwrap(), Cap::all());
-        assert_eq!(Cap::parse("all + read").unwrap(), Cap::all()); // redundant but valid
-    }
-
-    #[test]
-    fn test_cap_parse_subtraction() {
-        // all - write = read + create + delete + execute
-        assert_eq!(
-            Cap::parse("all - write").unwrap(),
-            Cap::READ | Cap::CREATE | Cap::DELETE | Cap::EXECUTE
-        );
-
-        // full - write also works
-        assert_eq!(
-            Cap::parse("full - write").unwrap(),
-            Cap::READ | Cap::CREATE | Cap::DELETE | Cap::EXECUTE
-        );
-
-        // multiple subtractions
-        assert_eq!(
-            Cap::parse("all - write - delete").unwrap(),
-            Cap::READ | Cap::CREATE | Cap::EXECUTE
-        );
-
-        // subtract everything → error (empty result)
-        assert!(Cap::parse("all - all").is_err());
-        assert!(Cap::parse("read - read").is_err());
-
-        // no-op subtraction (removing something not present)
-        assert_eq!(
-            Cap::parse("read + write - execute").unwrap(),
-            Cap::READ | Cap::WRITE
-        );
-
-        // without spaces
-        assert_eq!(
-            Cap::parse("all-write").unwrap(),
-            Cap::READ | Cap::CREATE | Cap::DELETE | Cap::EXECUTE
-        );
-    }
 
     #[test]
     fn test_cap_short() {
@@ -750,23 +606,6 @@ mod tests {
         // Legacy string format is no longer accepted
         let result: Result<Cap, _> = serde_json::from_str(r#""read + write""#);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_sandbox_rule() {
-        let rule = parse_sandbox_rule("allow read + write in $PWD").unwrap();
-        assert_eq!(rule.effect, RuleEffect::Allow);
-        assert_eq!(rule.caps, Cap::READ | Cap::WRITE);
-        assert_eq!(rule.path, "$PWD");
-        assert_eq!(rule.path_match, PathMatch::Subpath);
-    }
-
-    #[test]
-    fn test_parse_sandbox_rule_deny() {
-        let rule = parse_sandbox_rule("deny delete in $PWD/.git").unwrap();
-        assert_eq!(rule.effect, RuleEffect::Deny);
-        assert_eq!(rule.caps, Cap::DELETE);
-        assert_eq!(rule.path, "$PWD/.git");
     }
 
     #[test]

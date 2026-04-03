@@ -86,10 +86,6 @@ pub fn read_all_session_logs() -> Result<Vec<AuditLogEntry>> {
         scan_session_dirs(&sessions_dir, &mut all_entries);
     }
 
-    // Also scan the legacy temp-dir location for backwards compatibility.
-    let tmp = std::env::temp_dir();
-    scan_legacy_session_dirs(&tmp, &mut all_entries);
-
     // Sort by timestamp so entries from different sessions interleave correctly.
     all_entries.sort_by(|a, b| {
         a.timestamp_secs()
@@ -119,34 +115,6 @@ fn scan_session_dirs(sessions_dir: &Path, all_entries: &mut Vec<AuditLogEntry>) 
                             error = %e,
                             "skipping unreadable session log"
                         );
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Scan legacy temp-dir location (`/tmp/clash-<session_id>/audit.jsonl`).
-fn scan_legacy_session_dirs(tmp: &Path, all_entries: &mut Vec<AuditLogEntry>) {
-    if let Ok(readdir) = std::fs::read_dir(tmp) {
-        for entry in readdir.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if let Some(session_id) = name.strip_prefix("clash-") {
-                let log_path = entry.path().join("audit.jsonl");
-                if log_path.exists() {
-                    match read_log_file(&log_path) {
-                        Ok(mut entries) => {
-                            backfill_session_id(&mut entries, session_id);
-                            all_entries.extend(entries);
-                        }
-                        Err(e) => {
-                            tracing::debug!(
-                                path = %log_path.display(),
-                                error = %e,
-                                "skipping unreadable session log"
-                            );
-                        }
                     }
                 }
             }

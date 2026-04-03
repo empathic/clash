@@ -2,8 +2,8 @@
 #
 # Emits v5 match tree nodes using minimal Rust primitives.
 # Rust globals available: _mt_node, _mt_condition, _mt_pattern, _mt_prefix,
-# _mt_literal, _mt_policy, _ALLOW, _DENY, _ASK, _OS, _ARCH,
-# _register_policy, _register_settings
+# _mt_literal, _ALLOW, _DENY, _ASK, _OS, _ARCH,
+# _register_settings
 
 # ---------------------------------------------------------------------------
 # Platform constants — re-export from Rust for use in policy files
@@ -812,7 +812,7 @@ def settings(default="deny", default_sandbox=None):
 
 
 def _sandbox_to_json(sb):
-    """Convert a sandbox struct to JSON-compatible dict for _mt_policy."""
+    """Convert a sandbox struct to a JSON-compatible dict."""
     rules = []
     for r in sb._fs_rules:
         pv = r["path_value"]

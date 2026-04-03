@@ -90,7 +90,6 @@ fn run_diagnose() -> Result<()> {
         ("Passthrough", check_passthrough()),
         ("Policy files", check_policy_files()),
         ("Policy parsing", check_policy_parsing()),
-        ("Deprecated match()", check_deprecated_match()),
         ("Plugin installed", check_plugin_installed()),
         ("Binary on PATH", check_binary_on_path()),
         ("File permissions", check_file_permissions()),
@@ -477,38 +476,6 @@ fn check_policy_parsing() -> CheckResult {
     }
 }
 
-/// Check: Do any policy files use the deprecated `match()` function (renamed to `when()`)?
-fn check_deprecated_match() -> CheckResult {
-    let levels = ClashSettings::available_policy_levels();
-    let mut files_with_match = Vec::new();
-
-    for (level, path) in &levels {
-        if let Ok(source) = std::fs::read_to_string(path) {
-            // Look for match( as a function call, but not .match( (path method)
-            for line in source.lines() {
-                let trimmed = line.trim();
-                if trimmed.contains("match(") && !trimmed.contains(".match(") {
-                    files_with_match.push(format!("{} ({})", level, path.display()));
-                    break;
-                }
-            }
-        }
-    }
-
-    if files_with_match.is_empty() {
-        CheckResult::Pass("No deprecated match() usage found.".into())
-    } else {
-        CheckResult::Warn(format!(
-            "Deprecated match() found — rename to when():\n{}",
-            files_with_match
-                .iter()
-                .map(|f| format!("      {}", f))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ))
-    }
-}
-
 /// Check 3: Is clash registered as a Claude Code plugin?
 ///
 /// Looks for hook commands referencing "clash" in the Claude Code user settings
@@ -705,21 +672,6 @@ fn check_sandbox_support() -> CheckResult {
              Sandbox enforcement will be skipped.",
             reason
         )),
-    }
-}
-
-/// Check that the user-level settings dir (~/.clash/) exists.
-///
-/// Not used as a top-level check but available as a helper.
-#[allow(dead_code)]
-fn check_settings_dir() -> CheckResult {
-    match ClashSettings::settings_dir() {
-        Ok(dir) if dir.exists() => CheckResult::Pass(format!("Found at {}", dir.display())),
-        Ok(dir) => CheckResult::Fail(format!(
-            "{} does not exist. Run `clash init` to create it.",
-            dir.display()
-        )),
-        Err(e) => CheckResult::Fail(format!("Cannot determine settings directory: {}", e)),
     }
 }
 

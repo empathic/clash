@@ -1,8 +1,8 @@
 //! Evaluation context — accumulates registrations from top-level calls.
 //!
 //! Attached to `evaluator.extra` during module evaluation. Native functions
-//! (`_register_policy`, `_register_settings`) write into this context;
-//! `evaluate()` reads it after module eval completes.
+//! (`_register_settings`) write into this context; `evaluate()` reads it
+//! after module eval completes.
 
 use std::cell::RefCell;
 
