@@ -41,6 +41,7 @@ pub mod ecosystem;
 pub mod errors;
 pub mod git;
 pub mod handlers;
+pub mod harness;
 pub mod hooks;
 pub mod network_hints;
 pub mod notifications;
