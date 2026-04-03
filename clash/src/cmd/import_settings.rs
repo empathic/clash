@@ -209,13 +209,16 @@ fn dedup_stable(v: &mut Vec<String>) {
 }
 
 /// Generate a minimal Starlark policy from a posture choice.
-fn generate_starlark_from_posture(posture: Posture) -> String {
+fn generate_starlark_from_posture(posture: Posture, extra_loads: &[Stmt]) -> String {
     let effect_name = posture.default_effect();
     let preset = posture.sandbox_preset();
 
-    let stmts = vec![
+    let mut stmts = vec![
         load_builtin(),
         load_sandboxes(&[preset]),
+    ];
+    stmts.extend(extra_loads.iter().cloned());
+    stmts.extend([
         Stmt::Blank,
         Stmt::Expr(settings(
             Expr::call(effect_name, vec![]),
@@ -228,7 +231,7 @@ fn generate_starlark_from_posture(posture: Posture) -> String {
             vec![],
             None,
         )),
-    ];
+    ]);
 
     clash_starlark::codegen::serialize(&stmts)
 }
@@ -271,7 +274,7 @@ fn tool_entry(names: &[&str], effect: Expr) -> (MatchKey, MatchValue) {
 }
 
 /// Generate a full Starlark policy from analyzed settings.
-fn generate_starlark_from_analysis(analysis: &mut ImportAnalysis) -> String {
+fn generate_starlark_from_analysis(analysis: &mut ImportAnalysis, extra_loads: &[Stmt]) -> String {
     // Deduplicate tool lists — the same tool name can appear multiple times
     // when a tool has both bare and patterned permissions (e.g. "Bash" +
     // "Bash(exact_path)").
@@ -281,8 +284,9 @@ fn generate_starlark_from_analysis(analysis: &mut ImportAnalysis) -> String {
     let mut stmts = vec![
         Stmt::comment("Imported from Claude Code settings"),
         load_builtin(),
-        Stmt::Blank,
     ];
+    stmts.extend(extra_loads.iter().cloned());
+    stmts.push(Stmt::Blank);
 
     // Sandbox for file-access tools (dict-based fs)
     let fs_dict = Expr::dict(vec![
@@ -299,20 +303,17 @@ fn generate_starlark_from_analysis(analysis: &mut ImportAnalysis) -> String {
             Expr::call("allow", vec![Expr::string("rwc")]),
         ),
     ]);
-    let fs_box = sandbox(
-        "project_files",
-        vec![
-            ("default", ask()),
-            ("fs", fs_dict),
-        ],
-    );
+    let fs_box = sandbox("project_files", vec![("default", ask()), ("fs", fs_dict)]);
     stmts.push(Stmt::comment(
         "Sandbox for file-access tools (scoped to project + ~/.claude)",
     ));
     stmts.push(Stmt::assign("project_files", fs_box));
     stmts.push(Stmt::Blank);
 
-    stmts.push(Stmt::Expr(settings(ask(), Some(Expr::ident("project_files")))));
+    stmts.push(Stmt::Expr(settings(
+        ask(),
+        Some(Expr::ident("project_files")),
+    )));
     stmts.push(Stmt::Blank);
 
     // Build rules list — one when() per concern. Canonicalization merges
@@ -351,12 +352,11 @@ fn generate_starlark_from_analysis(analysis: &mut ImportAnalysis) -> String {
         )]));
     }
 
-    let fs_tool_names: Vec<&str> =
-        ["Read", "Glob", "Grep", "Write", "Edit", "NotebookEdit"]
-            .iter()
-            .filter(|t| analysis.tool_allows.contains(&t.to_string()))
-            .copied()
-            .collect();
+    let fs_tool_names: Vec<&str> = ["Read", "Glob", "Grep", "Write", "Edit", "NotebookEdit"]
+        .iter()
+        .filter(|t| analysis.tool_allows.contains(&t.to_string()))
+        .copied()
+        .collect();
     if !fs_tool_names.is_empty() {
         allow_rules.push(match_rule(vec![tool_entry(
             &fs_tool_names,
@@ -364,8 +364,15 @@ fn generate_starlark_from_analysis(analysis: &mut ImportAnalysis) -> String {
         )]));
     }
 
-    let excluded: &[&str] =
-        &["Read", "Glob", "Grep", "Write", "Edit", "NotebookEdit", "Bash"];
+    let excluded: &[&str] = &[
+        "Read",
+        "Glob",
+        "Grep",
+        "Write",
+        "Edit",
+        "NotebookEdit",
+        "Bash",
+    ];
     let other_allows: Vec<&str> = analysis
         .tool_allows
         .iter()
@@ -411,6 +418,77 @@ fn generate_starlark_from_analysis(analysis: &mut ImportAnalysis) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Ecosystem detection
+// ---------------------------------------------------------------------------
+
+/// Detect ecosystems and return extra load statements, or empty vec if declined.
+fn detect_ecosystem_loads() -> Result<Vec<Stmt>> {
+    println!();
+    let scan = crate::dialog::confirm(
+        "Scan your project and command history to recommend sandboxes?",
+        false,
+    )?;
+    if !scan {
+        return Ok(vec![]);
+    }
+
+    let cwd = std::env::current_dir().context("getting current directory")?;
+    let observed = crate::cmd::from_trace::mine_binaries_from_history();
+    let observed_refs: Vec<&str> = observed.iter().map(|s| s.as_str()).collect();
+    let detected = crate::ecosystem::detect_ecosystems(&cwd, &observed_refs);
+
+    if detected.is_empty() {
+        ui::info("No ecosystems detected.");
+        return Ok(vec![]);
+    }
+
+    println!();
+    ui::info("Detected ecosystems:");
+    println!();
+    for eco in &detected {
+        ui::success(&format!("  {}", eco.name));
+    }
+    println!();
+
+    let include = crate::dialog::confirm("Include these sandboxes in your policy?", false)?;
+    if !include {
+        return Ok(vec![]);
+    }
+
+    // Build load statements for each detected ecosystem
+    let mut loads = Vec::new();
+    let mut sandbox_imports: Vec<&str> = Vec::new();
+    for eco in &detected {
+        if eco.star_file == "sandboxes.star" {
+            if let Some(safe) = eco.safe_sandbox {
+                if !sandbox_imports.contains(&safe) {
+                    sandbox_imports.push(safe);
+                }
+            }
+            if !sandbox_imports.contains(&eco.full_sandbox) {
+                sandbox_imports.push(eco.full_sandbox);
+            }
+        }
+    }
+    if !sandbox_imports.is_empty() {
+        loads.push(load_sandboxes(&sandbox_imports));
+    }
+    for eco in &detected {
+        if eco.star_file == "sandboxes.star" {
+            continue;
+        }
+        let mut names: Vec<&str> = Vec::new();
+        if let Some(safe) = eco.safe_sandbox {
+            names.push(safe);
+        }
+        names.push(eco.full_sandbox);
+        loads.push(load_ecosystem(eco.star_file, &names));
+    }
+
+    Ok(loads)
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -426,6 +504,9 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
     let settings = claude.effective().unwrap_or_default();
     let mut analysis = analyze_settings(&settings);
 
+    // Detect ecosystems
+    let ecosystem_loads = detect_ecosystem_loads()?;
+
     // Generate policy
     let policy_content = if analysis.needs_posture_prompt() {
         if analysis.bypass_permissions {
@@ -435,10 +516,10 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
         }
         println!();
         let posture = crate::dialog::select::<Posture>("Pick a starting posture")?;
-        generate_starlark_from_posture(*posture)
+        generate_starlark_from_posture(*posture, &ecosystem_loads)
     } else {
         print_import_summary(&analysis);
-        generate_starlark_from_analysis(&mut analysis)
+        generate_starlark_from_analysis(&mut analysis, &ecosystem_loads)
     };
 
     // Write policy file
@@ -631,7 +712,7 @@ mod tests {
             .deny("Read(.env)");
         let settings = claude_settings::Settings::default().with_permissions(perms);
         let mut analysis = analyze_settings(&settings);
-        let starlark = generate_starlark_from_analysis(&mut analysis);
+        let starlark = generate_starlark_from_analysis(&mut analysis, &[]);
 
         let output = clash_starlark::evaluate(&starlark, "<test>", std::path::Path::new("."))
             .expect("starlark evaluation failed");
@@ -642,7 +723,7 @@ mod tests {
     #[test]
     fn test_generate_posture_compiles() {
         for posture in Posture::variants() {
-            let starlark = generate_starlark_from_posture(*posture);
+            let starlark = generate_starlark_from_posture(*posture, &[]);
             let output = clash_starlark::evaluate(&starlark, "<test>", std::path::Path::new("."))
                 .unwrap_or_else(|e| panic!("posture {:?} failed to evaluate: {e}", posture));
             crate::policy::compile::compile_to_tree(&output.json)
@@ -659,7 +740,7 @@ mod tests {
             .allow("Bash(npm:*)");
         let settings = claude_settings::Settings::default().with_permissions(perms);
         let mut analysis = analyze_settings(&settings);
-        let starlark = generate_starlark_from_analysis(&mut analysis);
+        let starlark = generate_starlark_from_analysis(&mut analysis, &[]);
 
         assert!(
             starlark.contains("(\"cargo\", \"git\", \"npm\")"),
@@ -673,7 +754,7 @@ mod tests {
         let perms = PermissionSet::new().allow("Read").deny("Read(.env)");
         let settings = claude_settings::Settings::default().with_permissions(perms);
         let mut analysis = analyze_settings(&settings);
-        let starlark = generate_starlark_from_analysis(&mut analysis);
+        let starlark = generate_starlark_from_analysis(&mut analysis, &[]);
 
         // Find deny() and allow(sandbox = ...) within the rules list, not in
         // the settings/sandbox definitions above it.
@@ -703,7 +784,7 @@ mod tests {
             .allow("WebFetch");
         let settings = claude_settings::Settings::default().with_permissions(perms);
         let mut analysis = analyze_settings(&settings);
-        let starlark = generate_starlark_from_analysis(&mut analysis);
+        let starlark = generate_starlark_from_analysis(&mut analysis, &[]);
 
         // "Bash" should not appear in the other-tools rule at all —
         // it's handled by the bash-commands rule.
@@ -736,7 +817,7 @@ mod tests {
             .allow("Edit");
         let settings = claude_settings::Settings::default().with_permissions(perms);
         let mut analysis = analyze_settings(&settings);
-        let starlark = generate_starlark_from_analysis(&mut analysis);
+        let starlark = generate_starlark_from_analysis(&mut analysis, &[]);
 
         // settings and tool rules should reference project_files, not project
         assert!(
@@ -757,5 +838,31 @@ mod tests {
             !starlark.contains("std.star"),
             "should not import from std.star (symbols are pre-injected globals):\n{starlark}"
         );
+    }
+
+    #[test]
+    fn test_generate_with_ecosystems_compiles() {
+        use claude_settings::permission::PermissionSet;
+        let perms = PermissionSet::new()
+            .allow("Bash(git:*)")
+            .allow("Bash(cargo:*)")
+            .allow("Read");
+        let settings = claude_settings::Settings::default().with_permissions(perms);
+        let mut analysis = analyze_settings(&settings);
+
+        let ecosystem_loads = {
+            use clash_starlark::codegen::builder::*;
+            vec![
+                load_sandboxes(&["git_safe", "git_full"]),
+                load_ecosystem("rust.star", &["rust_safe", "rust_full"]),
+            ]
+        };
+
+        let starlark = generate_starlark_from_analysis(&mut analysis, &ecosystem_loads);
+
+        let output = clash_starlark::evaluate(&starlark, "<test>", std::path::Path::new("."))
+            .expect("starlark evaluation failed");
+        crate::policy::compile::compile_to_tree(&output.json)
+            .expect("generated policy with ecosystems must compile");
     }
 }
