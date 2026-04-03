@@ -1043,4 +1043,48 @@ policy("test", rules = when({"Bash": {"test": allow(sandbox=_box)}}))
             std::env::consts::OS,
         );
     }
+
+    #[test]
+    fn settings_on_sandbox_violation() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox")
+
+_box = sandbox(name="box", default=deny())
+settings(default=deny(), on_sandbox_violation="workaround")
+policy("test", when({"Bash": allow(sandbox=_box)}))
+"#,
+        );
+        assert_eq!(doc["on_sandbox_violation"], "workaround");
+    }
+
+    #[test]
+    fn settings_on_sandbox_violation_defaults_to_absent() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "deny", "when", "policy", "settings")
+
+settings(default=deny())
+policy("test", when({"Bash": deny()}))
+"#,
+        );
+        assert!(doc.get("on_sandbox_violation").is_none());
+    }
+
+    #[test]
+    fn settings_on_sandbox_violation_invalid_value() {
+        let source = r#"
+load("@clash//std.star", "deny", "when", "policy", "settings")
+
+settings(default=deny(), on_sandbox_violation="invalid")
+policy("test", when({"Bash": deny()}))
+"#;
+        let result = evaluate(source, "test.star", &PathBuf::from("."));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("on_sandbox_violation"),
+            "expected error about on_sandbox_violation, got: {err}"
+        );
+    }
 }
