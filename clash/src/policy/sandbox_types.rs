@@ -1243,7 +1243,8 @@ mod tests {
 
     #[test]
     fn resolve_symlinks_follows_real_symlink() {
-        let tmp = tempfile::tempdir().unwrap();
+        // Use /tmp explicitly to avoid interference from tests that mutate $TMPDIR.
+        let tmp = tempfile::tempdir_in("/tmp").unwrap();
         let target = tmp.path().join("target_dir");
         std::fs::create_dir(&target).unwrap();
         let link = tmp.path().join("link");
