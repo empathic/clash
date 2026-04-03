@@ -588,48 +588,6 @@ impl ViolationAction {
     }
 }
 
-/// Parse a sandbox rule from a string like "allow read + write in $PWD".
-///
-/// Format: `<effect> <caps> in <path>`
-pub fn parse_sandbox_rule(s: &str) -> Result<SandboxRule, String> {
-    // Split on " in " to separate caps from path
-    let parts: Vec<&str> = s.splitn(2, " in ").collect();
-    if parts.len() != 2 {
-        return Err(format!(
-            "expected '<effect> <caps> in <path>', got: '{}'",
-            s
-        ));
-    }
-
-    let caps_part = parts[0].trim();
-    let path = parts[1].trim().to_string();
-
-    // First word is the effect
-    let (effect_str, caps_str) = caps_part.split_once(char::is_whitespace).ok_or_else(|| {
-        format!(
-            "expected 'allow <caps>' or 'deny <caps>', got: '{}'",
-            caps_part
-        )
-    })?;
-
-    let effect = match effect_str.trim() {
-        "allow" => RuleEffect::Allow,
-        "deny" => RuleEffect::Deny,
-        other => return Err(format!("expected 'allow' or 'deny', got: '{}'", other)),
-    };
-
-    let caps = Cap::parse(caps_str.trim())?;
-
-    Ok(SandboxRule {
-        effect,
-        caps,
-        path,
-        path_match: PathMatch::Subpath,
-        follow_worktrees: false,
-        doc: None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
