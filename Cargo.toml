@@ -80,6 +80,7 @@ peg = "0.8.5"
 pest = "2"
 pest_derive = "2"
 pretty_assertions = { version = "1.4.1", features = ["unstable"] }
+indoc = "2"
 procfs = "0.18.0"
 proptest = "1"
 mockito = "1"

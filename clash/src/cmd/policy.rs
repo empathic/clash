@@ -21,6 +21,7 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
             args,
         } => super::explain::run(json, trace, tool.unwrap_or_default(), args.join(" ")),
         PolicyCmd::Check { json } => handle_check_portable(json),
+        PolicyCmd::Convert { file, replace } => handle_convert(file, replace),
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Validate { file, json } => handle_validate(file, json),
         PolicyCmd::Show { json } => handle_show(json),
@@ -558,6 +559,11 @@ fn apply_mutation(
     mutation: PolicyMutation,
 ) -> Result<()> {
     let path = resolve_manifest_path(scope)?;
+    if path.extension().is_some_and(|ext| ext == "star") {
+        anyhow::bail!(
+            "CLI rule mutations are not yet supported for .star files — use `clash policy edit` instead"
+        );
+    }
     let mut manifest = crate::policy_loader::read_manifest(&path)?;
 
     // For Remove we only need the observable chain — Decision::Deny is a dummy.
@@ -616,38 +622,27 @@ pub(crate) fn resolve_manifest_path(scope: Option<String>) -> Result<PathBuf> {
         PolicyLevel::Session => anyhow::bail!("session scope not supported for policy mutation"),
     };
 
+    // Prefer .star over .json — .star is the primary format when both exist.
+    let star_path = dir.join("policy.star");
+    if star_path.exists() {
+        return Ok(star_path);
+    }
+
     let json_path = dir.join("policy.json");
     if json_path.exists() {
         return Ok(json_path);
     }
 
-    // If policy.star exists but no policy.json, create a manifest that includes it.
-    let star_path = dir.join("policy.star");
-    let manifest = if star_path.exists() {
-        PolicyManifest {
-            includes: vec![crate::policy::match_tree::IncludeEntry {
-                path: "policy.star".into(),
-            }],
-            policy: crate::policy::match_tree::CompiledPolicy {
-                sandboxes: std::collections::HashMap::new(),
-                tree: vec![],
-                default_effect: crate::policy::Effect::Deny,
-                default_sandbox: None,
-            },
-        }
-    } else {
-        // No policy at all — create a bare manifest.
-        std::fs::create_dir_all(&dir)
-            .with_context(|| format!("failed to create {}", dir.display()))?;
-        PolicyManifest {
-            includes: vec![],
-            policy: crate::policy::match_tree::CompiledPolicy {
-                sandboxes: std::collections::HashMap::new(),
-                tree: vec![],
-                default_effect: crate::policy::Effect::Deny,
-                default_sandbox: None,
-            },
-        }
+    // No policy at all — create a bare manifest.
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    let manifest = PolicyManifest {
+        includes: vec![],
+        policy: crate::policy::match_tree::CompiledPolicy {
+            sandboxes: std::collections::HashMap::new(),
+            tree: vec![],
+            default_effect: crate::policy::Effect::Deny,
+            default_sandbox: None,
+        },
     };
 
     crate::policy_loader::write_manifest(&json_path, &manifest)?;
@@ -726,6 +721,130 @@ fn handle_remove(
     scope: Option<String>,
 ) -> Result<()> {
     apply_mutation(command, tool, bin, scope, PolicyMutation::Remove)
+}
+
+/// Handle `clash policy convert` — convert policy.json to policy.star.
+fn handle_convert(file: Option<PathBuf>, replace: bool) -> Result<()> {
+    let json_path = match file {
+        Some(p) => p,
+        None => resolve_manifest_path(None)?,
+    };
+
+    if !json_path.exists() {
+        anyhow::bail!("policy file not found: {}", json_path.display());
+    }
+
+    if json_path.extension().is_some_and(|ext| ext == "star") {
+        anyhow::bail!("file is already a .star file: {}", json_path.display());
+    }
+
+    // Read and parse the JSON manifest
+    let raw = std::fs::read_to_string(&json_path)
+        .with_context(|| format!("failed to read {}", json_path.display()))?;
+    let manifest: PolicyManifest = serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse {}", json_path.display()))?;
+
+    // Convert manifest to Starlark AST
+    let manifest_json =
+        serde_json::to_value(&manifest.policy).context("failed to serialize manifest")?;
+    let tree = manifest_json
+        .get("tree")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let sandboxes = manifest_json
+        .get("sandboxes")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let default_effect = manifest_json
+        .get("default_effect")
+        .and_then(|v| v.as_str())
+        .unwrap_or("ask");
+    let default_sandbox = manifest_json
+        .get("default_sandbox")
+        .and_then(|v| v.as_str());
+
+    // Build a fresh .star AST
+    use clash_starlark::codegen::ast::{Expr, Stmt};
+    use clash_starlark::codegen::builder;
+
+    let effect_expr = match default_effect {
+        "allow" => builder::allow(),
+        "deny" => builder::deny(),
+        _ => builder::ask(),
+    };
+
+    let mut stmts = vec![
+        Stmt::load(
+            "@clash//std.star",
+            &["policy", "settings", "allow", "deny", "ask"],
+        ),
+        Stmt::Blank,
+    ];
+
+    // Add sandbox definitions
+    for (name, sb_value) in &sandboxes {
+        let expr = clash_starlark::codegen::from_manifest::sandbox_json_to_expr(name, sb_value);
+        stmts.push(Stmt::Expr(expr));
+        stmts.push(Stmt::Blank);
+        clash_starlark::codegen::mutate::ensure_loaded(&mut stmts, "sandbox");
+    }
+
+    // Settings
+    let settings = if let Some(sb) = default_sandbox {
+        builder::settings(effect_expr.clone(), Some(Expr::string(sb)))
+    } else {
+        builder::settings(effect_expr.clone(), None)
+    };
+    stmts.push(Stmt::Expr(settings));
+    stmts.push(Stmt::Blank);
+
+    // Policy with rules
+    let rule_exprs: Vec<Expr> = tree
+        .iter()
+        .map(clash_starlark::codegen::from_manifest::node_json_to_expr)
+        .collect();
+    let policy_expr = builder::policy("default", effect_expr, rule_exprs, None);
+    stmts.push(Stmt::Expr(policy_expr));
+
+    // Ensure we have all needed names in the load statement
+    let source = clash_starlark::codegen::serialize(&stmts);
+
+    // Determine which names are actually used and rebuild load
+    for name in ["tool", "when", "sandbox"] {
+        if source.contains(&format!("{name}(")) {
+            clash_starlark::codegen::mutate::ensure_loaded(&mut stmts, name);
+        }
+    }
+
+    let source = clash_starlark::codegen::serialize(&stmts);
+
+    // Validate: evaluate the generated source to make sure it works
+    let star_path = json_path.with_extension("star");
+    let base_dir = json_path.parent().unwrap_or(Path::new("."));
+    clash_starlark::evaluate(&source, &star_path.display().to_string(), base_dir)
+        .context("generated .star file failed validation")?;
+
+    // Write the .star file
+    std::fs::write(&star_path, &source)
+        .with_context(|| format!("failed to write {}", star_path.display()))?;
+
+    info!(path = %star_path.display(), "wrote .star policy");
+    eprintln!(
+        "{} Converted {} → {}",
+        style::green_bold("✓"),
+        json_path.display(),
+        star_path.display()
+    );
+
+    if replace {
+        std::fs::remove_file(&json_path)
+            .with_context(|| format!("failed to remove {}", json_path.display()))?;
+        eprintln!("{} Removed {}", style::green_bold("✓"), json_path.display());
+    }
+
+    Ok(())
 }
 
 /// Extract a help hint from an anyhow error chain.

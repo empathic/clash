@@ -1,0 +1,38 @@
+meta:
+  name: starlark policy — renamed sandbox presets
+  description: Test that readonly, project, workspace, unrestricted sandbox presets work
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "when", "policy", "settings", "allow", "deny", "ask")
+    load("@clash//sandboxes.star", "readonly", "project", "workspace", "unrestricted")
+    settings(default=ask(), default_sandbox=project)
+    policy("test", rules=[
+        when({"Bash": {"git": {glob("**"): allow(sandbox=project)}}}),
+        when({("Read", "Glob", "Grep"): allow()}),
+    ])
+
+steps:
+  - name: git status allowed with project sandbox
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: read tool allowed
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/test.txt
+    expect:
+      decision: allow
+
+  - name: curl asks by default
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: "curl https://example.com"
+    expect:
+      decision: ask

@@ -232,13 +232,13 @@ fn audit_section() -> SchemaSection {
 
 fn rule_syntax() -> RuleSyntax {
     RuleSyntax {
-        format: "match({\"Bash\": {\"bin\": allow()}}) / cwd().allow(read=True) / domains({...})",
+        format: "when({\"Bash\": {\"bin\": allow()}}) / cwd().allow(read=True) / domains({...})",
         effects: vec!["allow", "deny", "ask"],
         domains: vec![
             SchemaField {
                 key: "exec",
                 type_name: "capability",
-                description: "Command execution: match({\"Bash\": {\"binary\": ...}}). Matches Bash tool invocations.",
+                description: "Command execution: when({\"Bash\": {\"binary\": ...}}). Matches Bash tool invocations.",
                 default: None,
                 values: None,
                 required: false,
@@ -265,7 +265,7 @@ fn rule_syntax() -> RuleSyntax {
             SchemaField {
                 key: "tool",
                 type_name: "capability",
-                description: "Agent tool access: tool([\"Name\"]). Matches tools not covered by exec/fs/net (e.g. Skill, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode).",
+                description: "Agent tool access: when({\"Name\": allow()}). Matches tools not covered by exec/fs/net (e.g. Skill, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode).",
                 default: None,
                 values: None,
                 required: false,

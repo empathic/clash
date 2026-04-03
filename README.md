@@ -51,7 +51,7 @@ This downloads the latest release binary to `~/.local/bin/` (Apple Silicon Mac, 
 cargo install clash
 ```
 
-`clash init` writes a default `.star` policy (or `.json`), installs the Claude Code plugin from GitHub, installs the status line, and walks you through initial configuration. After init, every `claude` session automatically loads clash.
+`clash init` imports permissions from your coding agent's existing configuration and generates a matching Clash policy. It also installs the agent plugin, the status line, and prints next steps. Use `clash init --no-import` to skip policy generation and just install hooks. After init, every `claude` session automatically loads clash.
 
 If you have the repo checked out, you can also use `just install` which registers the plugin from the local source tree instead of GitHub.
 
@@ -89,7 +89,7 @@ Clash supports three policy levels, each automatically included and evaluated in
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "match", "policy", "sandbox", "subpath", "allow", "deny", "ask")
+load("@clash//std.star", "when", "policy", "sandbox", "subpath", "allow", "deny", "ask")
 
 def main():
     cwd_access = sandbox(
@@ -102,7 +102,7 @@ def main():
     return policy(
         default = ask(),
         rules = [
-            match({"Bash": {
+            when({"Bash": {
                 ("cargo", "git"): allow(sandbox = cwd_access),
             }}),
         ],
@@ -144,7 +144,7 @@ Starlark replaces JSON's named policy blocks and `include` with standard `load()
 
 ```python
 load("@clash//rust.star", "rust_sandbox")
-load("@clash//std.star", "match", "policy", "sandbox", "allow", "deny")
+load("@clash//std.star", "when", "policy", "sandbox", "allow", "deny")
 
 def main():
     git_sandbox = sandbox(
@@ -157,7 +157,7 @@ def main():
     return policy(
         default = deny(),
         rules = [
-            match({"Bash": {
+            when({"Bash": {
                 ("rustc", "cargo"): allow(sandbox = rust_sandbox),
                 "git": allow(sandbox = git_sandbox),
             }}),
@@ -172,7 +172,7 @@ The `@clash//` prefix loads from the built-in standard library, which includes s
 Exec rules can carry sandbox constraints that clash compiles into OS-enforced sandboxes (Landlock on Linux, Seatbelt on macOS):
 
 ```python
-load("@clash//std.star", "match", "policy", "sandbox", "allow", "deny")
+load("@clash//std.star", "when", "policy", "sandbox", "allow", "deny")
 
 def main():
     cargo_box = sandbox(
@@ -186,7 +186,7 @@ def main():
         net = allow(),
     )
     return policy(default = deny(), rules = [
-        match({"Bash": {"cargo": allow(sandbox = cargo_box)}}),
+        when({"Bash": {"cargo": allow(sandbox = cargo_box)}}),
     ])
 ```
 

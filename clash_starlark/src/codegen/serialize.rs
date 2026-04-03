@@ -187,7 +187,7 @@ fn format_dict(entries: &[DictEntry], depth: usize) -> String {
     let inner = INDENT.repeat(inner_depth);
     let outer = INDENT.repeat(depth);
 
-    // Try single-line first
+    // Try single-line first (unless forced multi-line)
     let parts: Vec<String> = entries
         .iter()
         .map(|e| {
@@ -283,27 +283,29 @@ fn format_arg_list(args: &[Expr], kwargs: &[(String, Expr)], depth: usize) -> St
 mod tests {
     use super::*;
     use crate::codegen::ast::*;
+    use indoc::indoc;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn load_single_line() {
-        let stmts = vec![Stmt::load("@clash//std.star", &["match", "tool", "policy"])];
+        let stmts = vec![Stmt::load("@clash//std.star", &["when", "tool", "policy"])];
         let src = serialize(&stmts);
         assert_eq!(
             src,
-            "load(\"@clash//std.star\", \"match\", \"tool\", \"policy\")\n"
+            "load(\"@clash//std.star\", \"when\", \"tool\", \"policy\")\n"
         );
     }
 
     #[test]
     fn load_wraps_when_long() {
         let names: Vec<&str> = vec![
-            "match", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex",
+            "when", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex",
             "domains", "domain", "allow", "deny", "ask",
         ];
         let stmts = vec![Stmt::load("@clash//std.star", &names)];
         let src = serialize(&stmts);
         assert!(src.starts_with("load(\"@clash//std.star\",\n"));
-        assert!(src.contains("    \"match\",\n"));
+        assert!(src.contains("    \"when\",\n"));
     }
 
     #[test]
@@ -340,7 +342,7 @@ mod tests {
         )]);
         let outer = Expr::dict(vec![DictEntry::new(Expr::string("git"), inner)]);
         let s = format_expr(&outer, 0);
-        assert_eq!(s, "{\"git\": {\"push\": deny()}}");
+        assert_eq!(s, r#"{"git": {"push": deny()}}"#);
     }
 
     #[test]
@@ -435,7 +437,7 @@ mod tests {
     #[test]
     fn load_multi_line_exact() {
         let names: Vec<&str> = vec![
-            "match", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex",
+            "when", "tool", "policy", "sandbox", "cwd", "home", "tempdir", "path", "regex",
             "domains", "domain", "allow", "deny", "ask",
         ];
         let stmts = vec![Stmt::load("@clash//std.star", &names)];
@@ -444,7 +446,7 @@ mod tests {
             src,
             "\
 load(\"@clash//std.star\",
-    \"match\",
+    \"when\",
     \"tool\",
     \"policy\",
     \"sandbox\",
@@ -470,7 +472,7 @@ load(\"@clash//std.star\",
         let stmts = vec![
             Stmt::load(
                 "@clash//std.star",
-                &["match", "tool", "policy", "settings", "allow", "ask"],
+                &["when", "policy", "settings", "allow", "ask"],
             ),
             Stmt::Blank,
             Stmt::Expr(settings(ask(), None)),
@@ -484,8 +486,8 @@ load(\"@clash//std.star\",
                             ("git", "cargo") => allow(),
                         },
                     },
-                    tool(&["Read"]).allow(),
-                    tool(&["Write"]).allow(),
+                    tool_match(&["Read"], allow()),
+                    tool_match(&["Write"], allow()),
                 ],
                 None,
             )),
@@ -493,21 +495,21 @@ load(\"@clash//std.star\",
         let src = serialize(&stmts);
         assert_eq!(
             src,
-            "\
-load(\"@clash//std.star\", \"match\", \"tool\", \"policy\", \"settings\", \"allow\", \"ask\")
+            indoc! {r#"
+                load("@clash//std.star", "when", "policy", "settings", "allow", "ask")
 
-settings(default = ask())
+                settings(default = ask())
 
-policy(
-    \"test\",
-    default = ask(),
-    rules = [
-        match({\"Bash\": {(\"git\", \"cargo\"): allow()}}),
-        tool([\"Read\"]).allow(),
-        tool([\"Write\"]).allow(),
-    ],
-)
-"
+                policy(
+                    "test",
+                    default = ask(),
+                    rules = [
+                        when({"Bash": {("git", "cargo"): allow()}}),
+                        when({"Read": allow()}),
+                        when({"Write": allow()}),
+                    ],
+                )
+            "#}
         );
     }
 

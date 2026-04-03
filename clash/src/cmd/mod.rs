@@ -6,6 +6,7 @@ pub mod explain;
 pub mod fmt;
 pub mod from_trace;
 pub mod hooks;
+pub mod import_settings;
 pub mod init;
 pub mod launch;
 pub mod playground;

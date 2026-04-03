@@ -103,7 +103,7 @@ pub fn run(trace_path: &Path) -> Result<std::path::PathBuf> {
 
     // Print a summary of what was generated
     for bin in &analysis.binaries {
-        ui::info(&format!("  match({{\"Bash\": {{\"{}\": allow()}}}})", bin));
+        ui::info(&format!("  when({{\"Bash\": {{\"{}\": allow()}}}})", bin));
     }
     if !analysis.tools.is_empty() {
         let tool_names: Vec<String> = analysis
@@ -111,7 +111,11 @@ pub fn run(trace_path: &Path) -> Result<std::path::PathBuf> {
             .iter()
             .map(|t| format!("\"{}\"", t))
             .collect();
-        ui::info(&format!("  tool([{}]).allow()", tool_names.join(", ")));
+        if tool_names.len() == 1 {
+            ui::info(&format!("  when({{{}: allow()}})", tool_names[0]));
+        } else {
+            ui::info(&format!("  when({{({}): allow()}})", tool_names.join(", ")));
+        }
     }
     ui::info("  default = ask");
 
@@ -285,7 +289,7 @@ fn analyze(invocations: &[ToolInvocation]) -> TraceAnalysis {
     let saw_bash = invocations.iter().any(|i| i.tool_name == "Bash");
     if saw_bash && binaries.is_empty() {
         // We know Bash was used but don't know which binaries. Still list it.
-        // We'll generate match({"Bash": allow()}) to cover all commands.
+        // We'll generate when({"Bash": allow()}) to cover all commands.
     }
 
     TraceAnalysis {
@@ -306,9 +310,9 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     let mut stmts = vec![
         load_builtin(),
         load_std(&[
-            "match", "tool", "policy", "settings", "sandbox", "cwd", "home", "allow", "ask", "deny",
+            "when", "policy", "settings", "sandbox", "cwd", "home", "allow", "ask", "deny",
         ]),
-        load_sandboxes(&["dev"]),
+        load_sandboxes(&["project"]),
         Stmt::Blank,
     ];
 
@@ -327,9 +331,9 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
         )],
     );
     stmts.push(Stmt::comment(
-        "Tighter sandbox for Claude fs tools (scoped to cwd + ~/.claude)",
+        "Sandbox for file-access tools (scoped to project + ~/.claude)",
     ));
-    stmts.push(Stmt::assign("_fs_box", fs_box));
+    stmts.push(Stmt::assign("project_files", fs_box));
     stmts.push(Stmt::Blank);
 
     // Categorize tools
@@ -370,7 +374,10 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Read-only fs tools
     if !read_tools.is_empty() {
-        let expr = tool(&read_tools).sandbox(Expr::ident("_fs_box")).allow();
+        let expr = tool_match(
+            &read_tools,
+            allow_with_sandbox(Expr::ident("project_files")),
+        );
         rules.push(Expr::commented(
             "Read-only fs tools — observed in session",
             expr,
@@ -379,7 +386,10 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Write fs tools
     if !write_tools.is_empty() {
-        let expr = tool(&write_tools).sandbox(Expr::ident("_fs_box")).allow();
+        let expr = tool_match(
+            &write_tools,
+            allow_with_sandbox(Expr::ident("project_files")),
+        );
         rules.push(Expr::commented(
             "Write fs tools — observed in session",
             expr,
@@ -388,7 +398,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Network tools — prompt user (safer default)
     if !net_tools.is_empty() {
-        let expr = tool(&net_tools).ask();
+        let expr = tool_match(&net_tools, ask());
         rules.push(Expr::commented(
             "Network tools — prompt before allowing",
             expr,
@@ -397,7 +407,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Other tools (e.g., Agent)
     for t in &other_tools {
-        rules.push(tool(&[t.as_str()]).allow());
+        rules.push(tool_match(&[t.as_str()], allow()));
     }
 
     // Deny destructive git ops if git was observed
@@ -428,7 +438,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
         };
         let expr = clash_starlark::match_tree! {
             "Bash" => {
-                key => allow_with_sandbox(Expr::ident("dev")),
+                key => allow_with_sandbox(Expr::ident("project")),
             },
         };
         rules.push(Expr::commented("Observed binaries — sandboxed", expr));
@@ -440,7 +450,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
         && analysis.tools.len() < analysis.total_invocations;
     if saw_bash {
         let expr = clash_starlark::match_tree! {
-            "Bash" => allow_with_sandbox(Expr::ident("dev")),
+            "Bash" => allow_with_sandbox(Expr::ident("project")),
         };
         rules.push(Expr::commented(
             "Bash commands observed (binaries unknown) — sandboxed",
@@ -450,7 +460,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     stmts.push(Stmt::Expr(settings(
         Expr::ident("ask"),
-        Some(Expr::ident("dev")),
+        Some(Expr::ident("project")),
     )));
     stmts.push(Stmt::Blank);
     stmts.push(Stmt::Expr(policy(
@@ -618,12 +628,12 @@ mod tests {
         assert!(policy.contains("load(\"@clash//std.star\""));
 
         // Should contain tool rules
-        assert!(policy.contains("tool([\"Read\", \"Grep\"]).sandbox(_fs_box).allow()"));
-        assert!(policy.contains("tool([\"Write\"]).sandbox(_fs_box).allow()"));
+        assert!(policy.contains("(\"Read\", \"Grep\"): allow(sandbox = project_files)"));
+        assert!(policy.contains("\"Write\": allow(sandbox = project_files)"));
 
-        // Should contain match rules for binaries
-        assert!(policy.contains("match({\"Bash\":"));
-        assert!(policy.contains("allow(sandbox = dev)"));
+        // Should contain when rules for binaries
+        assert!(policy.contains("\"Bash\":"));
+        assert!(policy.contains("allow(sandbox = project)"));
 
         // Should contain git safety rules
         assert!(policy.contains("\"--force\": deny()"));
@@ -646,8 +656,8 @@ mod tests {
         };
 
         let policy = generate_starlark(&analysis);
-        assert!(policy.contains("tool([\"Read\"]).sandbox(_fs_box).allow()"));
-        assert!(policy.contains("tool([\"Edit\"]).sandbox(_fs_box).allow()"));
+        assert!(policy.contains("\"Read\": allow(sandbox = project_files)"));
+        assert!(policy.contains("\"Edit\": allow(sandbox = project_files)"));
         // No binary-specific rules (no "git", "cargo" etc.)
         assert!(!policy.contains("# Observed binaries"));
     }
@@ -662,9 +672,9 @@ mod tests {
         };
 
         let policy = generate_starlark(&analysis);
-        // Should generate a generic Bash match rule since we know bash was used
+        // Should generate a generic Bash when rule since we know bash was used
         // but total_invocations > tools count
-        assert!(policy.contains("match({\"Bash\": allow(sandbox = dev)})"));
+        assert!(policy.contains("when({\"Bash\": allow(sandbox = project)})"));
     }
 
     #[test]
@@ -698,6 +708,6 @@ mod tests {
 
         let policy = generate_starlark(&analysis);
         // Network tools should use ask(), not allow()
-        assert!(policy.contains("tool([\"WebFetch\", \"WebSearch\"]).ask()"));
+        assert!(policy.contains("(\"WebFetch\", \"WebSearch\"): ask()"));
     }
 }

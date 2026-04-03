@@ -54,6 +54,36 @@ pub fn run_install(agent: Option<AgentKind>) -> Result<()> {
     Ok(())
 }
 
+/// Minimal init: install hooks/plugin only, no policy generation.
+pub fn run_no_import(agent: Option<AgentKind>) -> Result<()> {
+    let agent = match agent {
+        Some(a) => a,
+        None => *crate::dialog::select::<AgentKind>("Which coding agent are you using?")?,
+    };
+
+    install_agent_plugin(agent)?;
+
+    if agent == AgentKind::Claude {
+        if let Err(e) = super::statusline::install() {
+            warn!(error = %e, "Could not install status line");
+        }
+    }
+
+    println!();
+    ui::success("Clash hooks installed.");
+    println!();
+    println!(
+        "  Run {} to configure your policy.",
+        style::bold("clash policy edit")
+    );
+    println!(
+        "  Run {} to verify the setup.",
+        style::bold(&format!("clash doctor --agent {agent}"))
+    );
+
+    Ok(())
+}
+
 #[instrument(level = Level::TRACE)]
 pub fn run(agent: Option<AgentKind>) -> Result<()> {
     let agent = match agent {
@@ -89,31 +119,34 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
     Ok(())
 }
 
-/// Ensure a compiled policy file exists, writing the starter template only if
-/// one doesn't already exist.
-///
-/// Returns `(path, created_new)` — callers use `created_new` to decide whether
-/// cleanup is safe on abort (only delete what we created).
+/// Ensure a policy file exists, writing the starter template only if one
+/// doesn't already exist. Returns `(path, created_new)`.
 pub fn ensure_starter_policy() -> Result<(std::path::PathBuf, bool)> {
-    use crate::settings::compile_default_policy_to_json;
-
     let policy_path = ClashSettings::policy_file()?;
-    let json_path = policy_path.with_extension("json");
-
-    if json_path.exists() {
-        return Ok((json_path, false));
+    let star_path = policy_path.with_extension("star");
+    if star_path.exists() {
+        return Ok((star_path, false));
     }
+    let path = write_starter_policy()?;
+    Ok((path, true))
+}
 
-    let dir = json_path
+/// Write the starter policy.star for onboarding.
+///
+/// Copies the embedded default policy template to `~/.clash/policy.star`.
+pub fn write_starter_policy() -> Result<std::path::PathBuf> {
+    let policy_path = ClashSettings::policy_file()?;
+    let star_path = policy_path.with_extension("star");
+    let dir = star_path
         .parent()
         .context("policy file path has no parent directory")?;
     std::fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
-    let json = compile_default_policy_to_json().context("compiling default policy")?;
-    std::fs::write(&json_path, &json)
-        .with_context(|| format!("failed to write {}", json_path.display()))?;
+    let source = include_str!("../default_policy.star");
+    std::fs::write(&star_path, source)
+        .with_context(|| format!("failed to write {}", star_path.display()))?;
 
-    Ok((json_path, true))
+    Ok(star_path)
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +154,7 @@ pub fn ensure_starter_policy() -> Result<(std::path::PathBuf, bool)> {
 // ---------------------------------------------------------------------------
 
 /// Install the agent-specific plugin/hooks. Returns true if installation succeeded.
-fn install_agent_plugin(agent: AgentKind) -> Result<bool> {
+pub(crate) fn install_agent_plugin(agent: AgentKind) -> Result<bool> {
     println!();
     style::header(&format!("Installing {agent} plugin"));
     println!();

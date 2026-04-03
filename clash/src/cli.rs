@@ -163,6 +163,19 @@ pub enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Convert policy.json to policy.star (Starlark format)
+    ///
+    /// Reads the JSON policy, converts it to idiomatic Starlark, and writes
+    /// a .star file alongside it. The original .json is preserved unless
+    /// --replace is passed.
+    Convert {
+        /// Path to the policy.json file (default: auto-detect active policy)
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+        /// Delete the .json file after successful conversion
+        #[arg(long)]
+        replace: bool,
+    },
     /// Explain which policy rule would match a given tool invocation
     #[command(hide = true)]
     Explain {
@@ -185,14 +198,17 @@ pub enum PolicyCmd {
 pub enum Commands {
     /// Initialize a new clash policy with a safe default configuration
     ///
-    /// Pass "user" to create a global policy (~/.clash/policy.star) or
-    /// "project" to create a repo-scoped policy (.clash/policy.star).
-    /// When no scope is given, an interactive prompt lets you choose.
+    /// By default, imports permissions from your coding agent's existing
+    /// configuration and generates a matching Clash policy. Use --no-import
+    /// to skip policy generation and just install hooks.
     Init {
         /// Generate policy from an observed session trace file.
         /// Pass a path to trace.jsonl or audit.jsonl, or "latest" to auto-detect.
-        #[arg(long = "from-trace", value_name = "PATH")]
+        #[arg(long = "from-trace", value_name = "PATH", conflicts_with = "no_import")]
         from_trace: Option<std::path::PathBuf>,
+        /// Skip policy import — just install hooks and print setup instructions
+        #[arg(long = "no-import", conflicts_with = "from_trace")]
+        no_import: bool,
         /// Which coding agent to set up (prompts if omitted)
         #[arg(long)]
         agent: Option<crate::agents::AgentKind>,

@@ -15,13 +15,13 @@ settings(default = ask())
 
 policy("python-dev",
     rules = [
-        match({"Bash": {
+        when({"Bash": {
             "git": {"push": {"--force": deny()}},
         }}),
-        match({"Bash": {
+        when({"Bash": {
             ("python", "python3", "pip", "uv", "pytest"): allow(sandbox = "python"),
             "git": allow(),
         }}),
-        match({("Read", "Glob", "Grep"): allow()}),
+        when({("Read", "Glob", "Grep"): allow()}),
     ],
 )

@@ -25,8 +25,8 @@ use crate::tui::tool_registry;
 use super::tea::FormRequest;
 
 const PRELOADED_FUNCS: &[&str] = &[
-    "match", "tool", "policy", "settings", "sandbox", "cwd", "home", "tempdir", "path", "regex",
-    "domains", "domain", "allow", "deny", "ask",
+    "when", "policy", "settings", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains",
+    "domain", "allow", "deny", "ask",
 ];
 
 // ---------------------------------------------------------------------------
@@ -234,7 +234,7 @@ impl FormState {
                 label: "Expression".into(),
                 value: String::new(),
                 cursor: 0,
-                placeholder: r#"e.g. match({"Bash": {"git": allow()}}), tool("Read").deny()"#
+                placeholder: r#"e.g. when({"Bash": {"git": allow()}}), when({"Read": deny()})"#
                     .into(),
                 hint: Some("Starlark DSL expression — compiled and added to the policy tree"),
             },
@@ -317,7 +317,7 @@ impl FormState {
                 label: "Expression".into(),
                 value: String::new(),
                 cursor: 0,
-                placeholder: r#"e.g. match({"Bash": {"git": allow()}}), tool("Read").deny()"#
+                placeholder: r#"e.g. when({"Bash": {"git": allow()}}), when({"Read": deny()})"#
                     .into(),
                 hint: Some("Starlark DSL expression — compiled and added to the policy tree"),
             },
@@ -763,7 +763,7 @@ impl FormState {
                 label: "Expression".into(),
                 value: String::new(),
                 cursor: 0,
-                placeholder: r#"e.g. exe("git").allow(), tool("Read").deny()"#.into(),
+                placeholder: r#"e.g. exe("git").allow(), when({"Read": deny()})"#.into(),
                 hint: Some("Starlark DSL expression — compiled and added to the policy tree"),
             },
         ];

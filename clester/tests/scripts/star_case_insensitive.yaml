@@ -4,12 +4,11 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "tool", "policy", "settings", "deny")
     settings(default=deny())
     policy("test", rules=[
-        tool("bash").allow(),
-        tool("READ").allow(),
-        tool("Shell").deny(),
+        when({"bash": allow()}),
+        when({"READ": allow()}),
+        when({"Shell": deny()}),
     ])
 
 steps:

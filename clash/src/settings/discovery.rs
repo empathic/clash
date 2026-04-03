@@ -311,8 +311,8 @@ mod test {
     fn default_policy_sandbox_uses_subpath() -> anyhow::Result<()> {
         let json_str = compile_default_policy_to_json()?;
         let policy: serde_json::Value = serde_json::from_str(&json_str)?;
-        // The "edit" sandbox should have a $PWD subpath rule
-        let edit_sandbox = &policy["sandboxes"]["edit"];
+        // The "project" sandbox should have a $PWD subpath rule
+        let edit_sandbox = &policy["sandboxes"]["project"];
         let rules = edit_sandbox["rules"].as_array().unwrap();
         let pwd_rule = rules
             .iter()

@@ -1,0 +1,10 @@
+meta:
+  name: clash init --no-import
+  description: Test that --no-import installs hooks without generating a policy
+
+steps:
+  - name: init with --no-import succeeds
+    command: init --no-import --agent claude
+    expect:
+      exit_code: 0
+      stdout_contains: "clash policy edit"

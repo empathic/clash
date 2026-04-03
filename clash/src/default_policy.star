@@ -1,17 +1,20 @@
 load("@clash//builtin.star", "builtins")
-load("@clash//sandboxes.star", "plan", "edit", "safe_yolo")
-
+load("@clash//sandboxes.star", "readonly", "project", "workspace")
 
 policy("default",
     {
         mode("plan"): {
-            glob("**"): allow(sandbox=plan),
+            glob("**"): allow(sandbox=readonly),
         },
         (mode("edit"), mode("default")): {
-            glob("**"): allow(sandbox=edit),
+            Tool("Bash"): {
+                "git": {
+                    glob("**"): allow(sandbox=project)
+                }
+            }
         },
         mode("unrestricted"): {
-            glob("**"): allow(sandbox=safe_yolo),
+            glob("**"): allow(sandbox=workspace),
         },
     },
 )

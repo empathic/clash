@@ -130,13 +130,13 @@ pub fn suggest_rule_description(
                 .or_else(|| tool_input.get("path"))
                 .and_then(|v| v.as_str())?;
             let parent = PathBuf::from(path).parent()?.to_string_lossy().to_string();
-            let expr = tool(&[tool_name]);
+            let expr = tool_match(&[tool_name], allow());
             Some(format!("{} # path: {}", expr_to_string(&expr), parent))
         }
         "Write" | "Edit" | "NotebookEdit" => {
             let path = tool_input.get("file_path")?.as_str()?;
             let parent = PathBuf::from(path).parent()?.to_string_lossy().to_string();
-            let expr = tool(&[tool_name]);
+            let expr = tool_match(&[tool_name], allow());
             Some(format!("{} # path: {}", expr_to_string(&expr), parent))
         }
         "WebFetch" => {
@@ -152,7 +152,7 @@ pub fn suggest_rule_description(
             }
             Some(expr_to_string(&net(domain)))
         }
-        _ => Some(expr_to_string(&tool(&[tool_name]))),
+        _ => Some(expr_to_string(&tool_match(&[tool_name], allow()))),
     }
 }
 
@@ -249,8 +249,8 @@ mod tests {
         let advice = ApprovalAdvice {
             noun: "git status".to_string(),
             tool_name: "Bash".to_string(),
-            suggested_rule: "match({\"Bash\": {\"git\"}})".to_string(),
-            cli_command: "clash policy allow 'match({\"Bash\": {\"git\"}})' --scope session"
+            suggested_rule: "when({\"Bash\": {\"git\"}})".to_string(),
+            cli_command: "clash policy allow 'when({\"Bash\": {\"git\"}})' --scope session"
                 .to_string(),
         };
         let ctx = advice.as_context();

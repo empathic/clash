@@ -9,7 +9,7 @@ clashbox = sandbox(
     net=allow(),
 )
 
-clash = match({
+clash = when({
     "Bash": {
         "clash": {
             ("bug", "status"): allow(sandbox=clashbox),
@@ -30,7 +30,7 @@ _claude_fs = sandbox(
     },
 )
 
-claude = match({
+claude = when({
     (
         "Agent",
         "AskUserQuestion",
