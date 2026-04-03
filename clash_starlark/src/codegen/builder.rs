@@ -21,6 +21,11 @@ pub fn load_sandboxes(names: &[&str]) -> Stmt {
     Stmt::load("@clash//sandboxes.star", names)
 }
 
+/// Load symbols from an ecosystem `.star` file (e.g., `rust.star`, `go.star`).
+pub fn load_ecosystem(filename: &str, names: &[&str]) -> Stmt {
+    Stmt::load(format!("@clash//{filename}"), names)
+}
+
 // ---------------------------------------------------------------------------
 // Effects
 // ---------------------------------------------------------------------------
@@ -253,5 +258,15 @@ mod tests {
         assert!(src.contains("settings("));
         assert!(src.contains("policy(\"default\""));
         assert!(src.contains("when({\"Read\": allow()})"));
+    }
+
+    #[test]
+    fn load_ecosystem_file() {
+        let stmt = load_ecosystem("rust.star", &["rust_safe", "rust_full"]);
+        let src = serialize(&[stmt]);
+        assert_eq!(
+            src,
+            "load(\"@clash//rust.star\", \"rust_safe\", \"rust_full\")\n"
+        );
     }
 }
