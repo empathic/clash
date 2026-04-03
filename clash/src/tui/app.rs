@@ -127,6 +127,7 @@ impl App {
                         tree: vec![],
                         default_effect: manifest.policy.default_effect,
                         default_sandbox: None,
+                        on_sandbox_violation: Default::default(),
                     },
                     vec![format!("{e}")],
                 ),
@@ -1068,6 +1069,7 @@ mod tests {
                 tree: vec![],
                 default_effect: Effect::Deny,
                 default_sandbox: None,
+                on_sandbox_violation: Default::default(),
             },
         }
     }

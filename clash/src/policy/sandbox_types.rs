@@ -569,6 +569,67 @@ impl SandboxPolicy {
     }
 }
 
+/// What the model should do when a sandbox violation occurs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViolationAction {
+    /// Stop and suggest a policy fix. Don't retry.
+    #[default]
+    Stop,
+    /// Try an alternative approach. If no workaround is possible, suggest the policy fix.
+    Workaround,
+    /// Let the model assess context to decide between stop and workaround.
+    Smart,
+}
+
+impl ViolationAction {
+    pub fn is_default(&self) -> bool {
+        matches!(self, ViolationAction::Stop)
+    }
+}
+
+/// Parse a sandbox rule from a string like "allow read + write in $PWD".
+///
+/// Format: `<effect> <caps> in <path>`
+pub fn parse_sandbox_rule(s: &str) -> Result<SandboxRule, String> {
+    // Split on " in " to separate caps from path
+    let parts: Vec<&str> = s.splitn(2, " in ").collect();
+    if parts.len() != 2 {
+        return Err(format!(
+            "expected '<effect> <caps> in <path>', got: '{}'",
+            s
+        ));
+    }
+
+    let caps_part = parts[0].trim();
+    let path = parts[1].trim().to_string();
+
+    // First word is the effect
+    let (effect_str, caps_str) = caps_part.split_once(char::is_whitespace).ok_or_else(|| {
+        format!(
+            "expected 'allow <caps>' or 'deny <caps>', got: '{}'",
+            caps_part
+        )
+    })?;
+
+    let effect = match effect_str.trim() {
+        "allow" => RuleEffect::Allow,
+        "deny" => RuleEffect::Deny,
+        other => return Err(format!("expected 'allow' or 'deny', got: '{}'", other)),
+    };
+
+    let caps = Cap::parse(caps_str.trim())?;
+
+    Ok(SandboxRule {
+        effect,
+        caps,
+        path,
+        path_match: PathMatch::Subpath,
+        follow_worktrees: false,
+        doc: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1318,5 +1379,43 @@ mod tests {
             caps.contains(Cap::WRITE),
             "rule on /private/tmp should match query for /tmp/scratch"
         );
+    }
+}
+
+#[cfg(test)]
+mod violation_action_tests {
+    use super::*;
+
+    #[test]
+    fn test_violation_action_default_is_stop() {
+        let action: ViolationAction = Default::default();
+        assert!(matches!(action, ViolationAction::Stop));
+    }
+
+    #[test]
+    fn test_violation_action_deserialize_stop() {
+        let action: ViolationAction = serde_json::from_str("\"stop\"").unwrap();
+        assert!(matches!(action, ViolationAction::Stop));
+    }
+
+    #[test]
+    fn test_violation_action_deserialize_workaround() {
+        let action: ViolationAction = serde_json::from_str("\"workaround\"").unwrap();
+        assert!(matches!(action, ViolationAction::Workaround));
+    }
+
+    #[test]
+    fn test_violation_action_deserialize_smart() {
+        let action: ViolationAction = serde_json::from_str("\"smart\"").unwrap();
+        assert!(matches!(action, ViolationAction::Smart));
+    }
+
+    #[test]
+    fn test_violation_action_serialize_roundtrip() {
+        for action in [ViolationAction::Stop, ViolationAction::Workaround, ViolationAction::Smart] {
+            let json = serde_json::to_string(&action).unwrap();
+            let back: ViolationAction = serde_json::from_str(&json).unwrap();
+            assert_eq!(action, back);
+        }
     }
 }

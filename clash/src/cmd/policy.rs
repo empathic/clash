@@ -642,6 +642,7 @@ pub(crate) fn resolve_manifest_path(scope: Option<String>) -> Result<PathBuf> {
             tree: vec![],
             default_effect: crate::policy::Effect::Deny,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         },
     };
 

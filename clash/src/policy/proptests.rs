@@ -99,6 +99,7 @@ fn arb_multi_rule_policy() -> impl Strategy<Value = CompiledPolicy> {
             tree,
             default_effect,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         })
 }
 
@@ -135,6 +136,7 @@ proptest! {
             }],
             default_effect,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         };
         // Query with a tool name that won't match any rule
         let input = serde_json::json!({});
@@ -177,6 +179,7 @@ proptest! {
             tree: compacted,
             default_effect: Effect::Ask,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         };
 
         let input = serde_json::json!({});
@@ -232,6 +235,7 @@ proptest! {
             tree: compacted,
             default_effect: Effect::Ask,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         };
         let result = policy.evaluate_ctx(&ctx);
         prop_assert_eq!(result.effect, first_decision.effect());
@@ -269,6 +273,7 @@ proptest! {
             tree: vec![],
             default_effect,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         };
         let input = serde_json::json!({"command": "anything"});
         let ctx = QueryContext::from_tool("Bash", &input);

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::policy::Effect;
 use crate::policy::ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
-use crate::policy::sandbox_types::SandboxPolicy;
+use crate::policy::sandbox_types::{SandboxPolicy, ViolationAction};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -307,6 +307,9 @@ pub struct CompiledPolicy {
     /// Name of the default sandbox (used by `clash shell` when no rule-specific sandbox matches).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_sandbox: Option<String>,
+    /// What the model should do when a sandbox blocks an operation.
+    #[serde(default, skip_serializing_if = "ViolationAction::is_default")]
+    pub on_sandbox_violation: ViolationAction,
 }
 
 fn default_effect() -> Effect {
@@ -1467,6 +1470,7 @@ mod tests {
             ))))],
             default_effect: Effect::Deny,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         };
         let errors = policy.validate();
         assert_eq!(errors.len(), 1);
@@ -1492,6 +1496,7 @@ mod tests {
             ))))],
             default_effect: Effect::Deny,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         };
         assert!(policy.validate().is_empty());
     }
@@ -1537,6 +1542,7 @@ mod tests {
             ],
             default_effect: Effect::Deny,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         };
 
         // git push → allow
@@ -1676,6 +1682,7 @@ mod tests {
             }],
             default_effect: Effect::Deny,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         };
 
         // Plain command should match
@@ -1717,6 +1724,7 @@ mod tests {
             }],
             default_effect: Effect::Deny,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         };
         let json = serde_json::to_string_pretty(&policy).unwrap();
         let deserialized: CompiledPolicy = serde_json::from_str(&json).unwrap();
@@ -2021,6 +2029,7 @@ mod tests {
             tree: vec![],
             default_effect: Effect::Deny,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         };
         let warnings = policy.platform_warnings();
         assert_eq!(warnings.len(), 1);
@@ -2045,6 +2054,7 @@ mod tests {
             tree: vec![],
             default_effect: Effect::Deny,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         };
         let warnings = policy.platform_warnings();
         assert_eq!(warnings.len(), 1);
@@ -2076,6 +2086,7 @@ mod tests {
             tree: vec![],
             default_effect: Effect::Deny,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         };
         assert!(policy.platform_warnings().is_empty());
     }

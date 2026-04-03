@@ -71,6 +71,7 @@ pub fn compile_multi_level_to_tree(
     let mut merged = CompiledPolicy {
         sandboxes: first.sandboxes,
         default_sandbox: first.default_sandbox,
+        on_sandbox_violation: first.on_sandbox_violation,
         tree: first.tree,
         default_effect: first.default_effect,
     };
