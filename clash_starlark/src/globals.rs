@@ -6,8 +6,8 @@
 use starlark::environment::{GlobalsBuilder, LibraryExtension};
 use starlark::eval::Evaluator;
 use starlark::starlark_module;
-use starlark::values::none::NoneType;
 use starlark::values::Value;
+use starlark::values::none::NoneType;
 
 use crate::builders::match_tree::{self as mt, MatchTreeNode, path_value_to_json, pattern_to_json};
 use crate::eval_context::{EvalContext, PolicyRegistration, SettingsValue};

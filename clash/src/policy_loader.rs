@@ -534,5 +534,4 @@ policy("include", rules = when({"Read": allow()}))
         assert_eq!(loaded.includes.len(), 1);
         assert_eq!(loaded.includes[0].path, "@clash//builtin.star");
     }
-
 }
