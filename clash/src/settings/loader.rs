@@ -356,10 +356,10 @@ impl ClashSettings {
     ///
     /// Pass `hook_ctx` to inject session-specific internal policies (e.g., the
     /// transcript directory). Pass `None` for CLI commands.
-    #[instrument(level = Level::TRACE, skip(session_id, _hook_ctx))]
+    #[instrument(level = Level::TRACE, skip(session_id, hook_ctx))]
     pub fn load_or_create_with_session(
         session_id: Option<&str>,
-        _hook_ctx: Option<&HookContext>,
+        hook_ctx: Option<&HookContext>,
     ) -> Result<Self> {
         let mut this = Self::default();
 
@@ -418,7 +418,7 @@ impl ClashSettings {
         }
 
         // Inject agent-specific harness default rules (lowest priority, after user rules).
-        let agent = _hook_ctx.and_then(|ctx| ctx.agent);
+        let agent = hook_ctx.and_then(|ctx| ctx.agent);
         this.inject_harness_rules(agent);
 
         Ok(this)
