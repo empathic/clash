@@ -1,0 +1,23 @@
+meta:
+  name: harness defaults — explicit user deny overrides harness allow
+  description: >
+    An explicit deny rule in the policy for $HOME/.claude/ takes precedence
+    over harness default allows, because user policy rules are evaluated before
+    the lowest-priority harness rules.
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "allow", "deny", "policy", "settings", "home")
+    settings(default=deny())
+    policy("test", rules=[
+        home().child(".claude").recurse().deny(),
+    ])
+
+steps:
+  - name: read from $HOME/.claude/ is denied by explicit user rule
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: $HOME/.claude/settings.json
+    expect:
+      decision: deny
