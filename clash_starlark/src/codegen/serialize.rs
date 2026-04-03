@@ -283,6 +283,8 @@ fn format_arg_list(args: &[Expr], kwargs: &[(String, Expr)], depth: usize) -> St
 mod tests {
     use super::*;
     use crate::codegen::ast::*;
+    use indoc::indoc;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn load_single_line() {
@@ -340,7 +342,7 @@ mod tests {
         )]);
         let outer = Expr::dict(vec![DictEntry::new(Expr::string("git"), inner)]);
         let s = format_expr(&outer, 0);
-        assert_eq!(s, "{\n    \"git\": {\"push\": deny()},\n}");
+        assert_eq!(s, r#"{"git": {"push": deny()}}"#);
     }
 
     #[test]
@@ -493,25 +495,21 @@ load(\"@clash//std.star\",
         let src = serialize(&stmts);
         assert_eq!(
             src,
-            "\
-load(\"@clash//std.star\", \"when\", \"policy\", \"settings\", \"allow\", \"ask\")
+            indoc! {r#"
+                load("@clash//std.star", "when", "policy", "settings", "allow", "ask")
 
-settings(default = ask())
+                settings(default = ask())
 
-policy(
-    \"test\",
-    default = ask(),
-    rules = [
-        when(
-            {
-                \"Bash\": {(\"git\", \"cargo\"): allow()},
-            },
-        ),
-        when({\"Read\": allow()}),
-        when({\"Write\": allow()}),
-    ],
-)
-"
+                policy(
+                    "test",
+                    default = ask(),
+                    rules = [
+                        when({"Bash": {("git", "cargo"): allow()}}),
+                        when({"Read": allow()}),
+                        when({"Write": allow()}),
+                    ],
+                )
+            "#}
         );
     }
 
