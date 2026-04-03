@@ -99,7 +99,10 @@ fn find_sandbox_fs_mut<'a>(stmts: &'a mut [Stmt], name: &str) -> Option<&'a mut 
 }
 
 /// Get a mutable reference to the kwargs of a sandbox() call by name.
-fn find_sandbox_kwargs_mut<'a>(stmts: &'a mut [Stmt], name: &str) -> Option<&'a mut Vec<(String, Expr)>> {
+fn find_sandbox_kwargs_mut<'a>(
+    stmts: &'a mut [Stmt],
+    name: &str,
+) -> Option<&'a mut Vec<(String, Expr)>> {
     let sandboxes = find_sandboxes(stmts);
     let (idx, _) = sandboxes.iter().find(|(_, n)| n == name)?;
     let idx = *idx;
@@ -678,7 +681,10 @@ policy("test", default = deny(), rules = [])
         .unwrap();
         add_sandbox_rule(&mut stmts, "net", "$HOME/.cache/**", "read + write").unwrap();
         let src = serialize(&stmts);
-        assert!(src.contains("fs ="), "should have added fs kwarg, got:\n{src}");
+        assert!(
+            src.contains("fs ="),
+            "should have added fs kwarg, got:\n{src}"
+        );
         assert!(src.contains(".cache"), "got:\n{src}");
     }
 
