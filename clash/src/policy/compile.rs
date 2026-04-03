@@ -74,6 +74,7 @@ pub fn compile_multi_level_to_tree(
         on_sandbox_violation: first.on_sandbox_violation,
         tree: first.tree,
         default_effect: first.default_effect,
+        harness_defaults: first.harness_defaults,
     };
 
     // Annotate root-level nodes from the first level with source provenance.

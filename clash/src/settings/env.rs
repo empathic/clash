@@ -35,6 +35,22 @@ pub fn is_passthrough() -> bool {
         .is_some_and(|v| is_truthy_disable_value(&v))
 }
 
+/// Environment variable to disable harness default permissions.
+///
+/// When set to any non-empty value (except `"0"` or `"false"`), harness default
+/// rules are not injected into the evaluated policy.
+pub const CLASH_NO_HARNESS_DEFAULTS_ENV: &str = "CLASH_NO_HARNESS_DEFAULTS";
+
+/// Check whether harness defaults are disabled via the
+/// [`CLASH_NO_HARNESS_DEFAULTS`](CLASH_NO_HARNESS_DEFAULTS_ENV) environment variable.
+///
+/// Returns `true` when the variable is set to any non-empty value except `"0"` or `"false"`.
+pub fn is_harness_defaults_disabled() -> bool {
+    std::env::var(CLASH_NO_HARNESS_DEFAULTS_ENV)
+        .ok()
+        .is_some_and(|v| is_truthy_disable_value(&v))
+}
+
 /// Returns `true` when `value` should be interpreted as "disabled".
 ///
 /// A non-empty string that is not `"0"` or `"false"` means disabled.

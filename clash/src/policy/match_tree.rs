@@ -310,6 +310,10 @@ pub struct CompiledPolicy {
     /// What the model should do when a sandbox blocks an operation.
     #[serde(default, skip_serializing_if = "ViolationAction::is_default")]
     pub on_sandbox_violation: ViolationAction,
+    /// When explicitly set to `false`, harness default rules are not injected.
+    /// `None` means enabled (default behavior).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_defaults: Option<bool>,
 }
 
 fn default_effect() -> Effect {
@@ -1471,6 +1475,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
         let errors = policy.validate();
         assert_eq!(errors.len(), 1);
@@ -1497,6 +1502,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
         assert!(policy.validate().is_empty());
     }
@@ -1543,6 +1549,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
 
         // git push → allow
@@ -1683,6 +1690,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
 
         // Plain command should match
@@ -1725,6 +1733,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
         let json = serde_json::to_string_pretty(&policy).unwrap();
         let deserialized: CompiledPolicy = serde_json::from_str(&json).unwrap();
@@ -2030,6 +2039,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
         let warnings = policy.platform_warnings();
         assert_eq!(warnings.len(), 1);
@@ -2055,6 +2065,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
         let warnings = policy.platform_warnings();
         assert_eq!(warnings.len(), 1);
@@ -2087,6 +2098,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
         assert!(policy.platform_warnings().is_empty());
     }
@@ -2169,5 +2181,34 @@ mod tests {
             false,
             &ctx
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // CompiledPolicy harness_defaults field tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compiled_policy_harness_defaults_field() {
+        let json = r#"{
+            "schema_version": 5,
+            "default_effect": "ask",
+            "sandboxes": {},
+            "tree": [],
+            "harness_defaults": false
+        }"#;
+        let policy: CompiledPolicy = serde_json::from_str(json).unwrap();
+        assert_eq!(policy.harness_defaults, Some(false));
+    }
+
+    #[test]
+    fn compiled_policy_harness_defaults_absent() {
+        let json = r#"{
+            "schema_version": 5,
+            "default_effect": "ask",
+            "sandboxes": {},
+            "tree": []
+        }"#;
+        let policy: CompiledPolicy = serde_json::from_str(json).unwrap();
+        assert_eq!(policy.harness_defaults, None);
     }
 }

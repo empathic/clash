@@ -128,6 +128,7 @@ impl App {
                         default_effect: manifest.policy.default_effect,
                         default_sandbox: None,
                         on_sandbox_violation: Default::default(),
+                        harness_defaults: None,
                     },
                     vec![format!("{e}")],
                 ),
@@ -1070,6 +1071,7 @@ mod tests {
                 default_effect: Effect::Deny,
                 default_sandbox: None,
                 on_sandbox_violation: Default::default(),
+                harness_defaults: None,
             },
         }
     }

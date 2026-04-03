@@ -2866,6 +2866,7 @@ mod tests {
                 default_effect: crate::policy::Effect::Deny,
                 default_sandbox: None,
                 on_sandbox_violation: Default::default(),
+                harness_defaults: None,
             },
         }
     }

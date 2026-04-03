@@ -24,7 +24,10 @@ pub use discovery::{
     evaluate_policy_file, evaluate_star_policy, parse_notification_config, policy_file,
     project_policy_file, session_policy_file, settings_dir,
 };
-pub use env::{CLASH_DISABLE_ENV, CLASH_PASSTHROUGH_ENV, is_disabled, is_passthrough};
+pub use env::{
+    CLASH_DISABLE_ENV, CLASH_NO_HARNESS_DEFAULTS_ENV, CLASH_PASSTHROUGH_ENV, is_disabled,
+    is_harness_defaults_disabled, is_passthrough,
+};
 
 /// Session-level context from Claude Code hook input.
 ///
