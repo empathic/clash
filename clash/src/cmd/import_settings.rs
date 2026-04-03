@@ -319,6 +319,22 @@ fn generate_starlark_from_analysis(
     )));
     stmts.push(Stmt::Blank);
 
+    // Collect ecosystem binary names so we can filter them from import rules.
+    // Ecosystem sandboxes have proper toolchain access (execute on ~/.cargo etc.)
+    // while the generic project_files sandbox does not.
+    let eco_binaries: BTreeSet<&str> = detection
+        .ecosystems
+        .iter()
+        .flat_map(|e| e.binaries.iter().copied())
+        .collect();
+
+    // Remove ecosystem-covered binaries from the import analysis so they
+    // don't get a generic project_files rule that lacks execute permissions.
+    analysis.bash_allows.retain(|segs| {
+        segs.first()
+            .map_or(true, |bin| !eco_binaries.contains(bin.as_str()))
+    });
+
     // Build rules list — one when() per concern. Canonicalization merges
     // consecutive uncommented when() calls automatically.
     let mut rules: Vec<Expr> = vec![];
@@ -344,7 +360,12 @@ fn generate_starlark_from_analysis(
         rules.push(match_rule(vec![tool_entry(&names, deny())]));
     }
 
-    // 4–6. Allow rules — comment only the first, leave the rest uncommented
+    // 4. Ecosystem sandbox routing — BEFORE generic import allows so that
+    //    binaries like cargo/git get proper toolchain sandboxes instead of
+    //    the generic project_files sandbox.
+    rules.extend(build_ecosystem_rules(&detection.ecosystems));
+
+    // 5–7. Allow rules — comment only the first, leave the rest uncommented
     //       so MergeConsecutiveWhens collapses them.
     let mut allow_rules: Vec<Expr> = vec![];
 
@@ -392,7 +413,7 @@ fn generate_starlark_from_analysis(
     }
     rules.extend(allow_rules);
 
-    // 7–8. Ask rules — same pattern: comment the first only.
+    // 8–9. Ask rules — same pattern: comment the first only.
     let mut ask_rules: Vec<Expr> = vec![];
 
     if !analysis.bash_asks.is_empty() {
@@ -410,9 +431,6 @@ fn generate_starlark_from_analysis(
         *first = Expr::commented("requires confirmation", first.clone());
     }
     rules.extend(ask_rules);
-
-    // Ecosystem sandbox routing rules
-    rules.extend(build_ecosystem_rules(&detection.ecosystems));
 
     stmts.push(Stmt::Expr(policy("imported", ask(), rules, None)));
 
