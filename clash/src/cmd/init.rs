@@ -119,8 +119,19 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
     Ok(())
 }
 
-/// Ensure a compiled policy file exists, writing the starter template only if
-/// one doesn't already exist.
+/// Ensure a policy file exists, writing the starter template only if one
+/// doesn't already exist. Returns `(path, created_new)`.
+pub fn ensure_starter_policy() -> Result<(std::path::PathBuf, bool)> {
+    let policy_path = ClashSettings::policy_file()?;
+    let star_path = policy_path.with_extension("star");
+    if star_path.exists() {
+        return Ok((star_path, false));
+    }
+    let path = write_starter_policy()?;
+    Ok((path, true))
+}
+
+/// Write the starter policy.star for onboarding.
 ///
 /// Copies the embedded default policy template to `~/.clash/policy.star`.
 pub fn write_starter_policy() -> Result<std::path::PathBuf> {
