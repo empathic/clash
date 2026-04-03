@@ -4,12 +4,12 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "match", "policy", "settings", "allow", "deny", "ask")
+    load("@clash//std.star", "when", "policy", "settings", "allow", "deny", "ask")
     load("@clash//sandboxes.star", "readonly", "project", "workspace", "unrestricted")
     settings(default=ask(), default_sandbox=project)
     policy("test", rules=[
-        match({"Bash": {"git": {glob("**"): allow(sandbox=project)}}}),
-        match({("Read", "Glob", "Grep"): allow()}),
+        when({"Bash": {"git": {glob("**"): allow(sandbox=project)}}}),
+        when({("Read", "Glob", "Grep"): allow()}),
     ])
 
 steps:
