@@ -1927,6 +1927,14 @@ mod tests {
     }
 
     #[test]
+    fn pattern_prefix_empty_matches_nothing() {
+        // An unresolved env var produces an empty prefix — must not match anything.
+        let pat = Pattern::Prefix(Value::Env("CLASH_SURELY_UNSET_VAR_XYZ".into()));
+        assert!(!pat.matches("/any/path"));
+        assert!(!pat.matches(""));
+    }
+
+    #[test]
     fn pattern_literal_with_env() {
         unsafe { std::env::set_var("CLASH_TEST_TOOL", "Bash") };
         let pat = Pattern::Literal(Value::Env("CLASH_TEST_TOOL".into()));
