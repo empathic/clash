@@ -325,49 +325,61 @@ fn handle_delete(name: &str, scope: Option<String>) -> Result<()> {
 }
 
 fn handle_list_sandboxes(json: bool) -> Result<()> {
+    // Try compiled policy first (has full sandbox details for referenced sandboxes).
     let settings = crate::settings::ClashSettings::load_or_create()?;
-    let policy = match settings.policy_tree() {
-        Some(t) => t,
-        None => {
-            if let Some(err) = settings.policy_error() {
-                anyhow::bail!("{}", err);
-            }
-            anyhow::bail!("no policy configured — run `clash init`");
-        }
-    };
+    let policy = settings.policy_tree();
 
-    if json {
-        let output = serde_json::to_string_pretty(&policy.sandboxes)?;
-        println!("{output}");
-    } else if policy.sandboxes.is_empty() {
-        println!("No sandboxes defined.");
-    } else {
-        for (name, sb) in &policy.sandboxes {
-            println!(
-                "{} default={}, network={:?}, {} rules",
-                style::cyan(name),
-                sb.default.display(),
-                sb.network,
-                sb.rules.len(),
-            );
-            if let Some(ref doc) = sb.doc {
-                println!("  {}", style::dim(doc));
+    if let Some(policy) = policy {
+        if !policy.sandboxes.is_empty() {
+            if json {
+                let output = serde_json::to_string_pretty(&policy.sandboxes)?;
+                println!("{output}");
+            } else {
+                for (name, sb) in &policy.sandboxes {
+                    println!(
+                        "{} default={}, network={:?}, {} rules",
+                        style::cyan(name),
+                        sb.default.display(),
+                        sb.network,
+                        sb.rules.len(),
+                    );
+                    if let Some(ref doc) = sb.doc {
+                        println!("  {}", style::dim(doc));
+                    }
+                    for rule in &sb.rules {
+                        println!(
+                            "    {:?} {} in {}{}",
+                            rule.effect,
+                            rule.caps.short(),
+                            rule.path,
+                            match rule.path_match {
+                                PathMatch::Subpath => "",
+                                PathMatch::Literal => " (literal)",
+                                PathMatch::ChildOf => " (child_of)",
+                                PathMatch::Regex => " (regex)",
+                            },
+                        );
+                    }
+                }
             }
-            for rule in &sb.rules {
-                println!(
-                    "    {:?} {} in {}{}",
-                    rule.effect,
-                    rule.caps.short(),
-                    rule.path,
-                    match rule.path_match {
-                        PathMatch::Subpath => "",
-                        PathMatch::Literal => " (literal)",
-                        PathMatch::ChildOf => " (child_of)",
-                        PathMatch::Regex => " (regex)",
-                    },
-                );
+            return Ok(());
+        }
+    }
+
+    // Fall back to AST scan — picks up sandboxes not yet referenced by any rule.
+    let path = crate::cmd::policy::resolve_manifest_path(None)?;
+    if path.extension().is_some_and(|e| e == "star") {
+        let doc = clash_starlark::codegen::StarDocument::open(&path)?;
+        let sandboxes = clash_starlark::codegen::mutate::find_sandboxes(&doc.stmts);
+        if sandboxes.is_empty() {
+            println!("No sandboxes defined.");
+        } else {
+            for (_, name) in &sandboxes {
+                println!("{}", style::cyan(name));
             }
         }
+    } else {
+        println!("No sandboxes defined.");
     }
     Ok(())
 }
@@ -384,7 +396,9 @@ fn handle_add_rule(
     let caps_str = match (allow, deny) {
         (Some(caps), None) => caps,
         (None, Some(_)) => {
-            anyhow::bail!("deny rules in sandbox fs are not yet supported via CLI — use `clash policy edit`")
+            anyhow::bail!(
+                "deny rules in sandbox fs are not yet supported via CLI — use `clash policy edit`"
+            )
         }
         _ => anyhow::bail!("provide exactly one of --allow or --deny with capabilities"),
     };
