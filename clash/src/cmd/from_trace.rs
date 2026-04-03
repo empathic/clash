@@ -122,6 +122,59 @@ pub fn run(trace_path: &Path) -> Result<std::path::PathBuf> {
     Ok(policy_path)
 }
 
+/// Mine unique binary names from audit/trace JSONL content.
+pub fn mine_binaries_from_content(content: &str) -> std::collections::BTreeSet<String> {
+    let mut binaries = std::collections::BTreeSet::new();
+    let invocations = if content
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .is_some_and(|l| {
+            l.contains("\"tool_name\"") && l.contains("\"decision\"") && !l.contains("\"step\"")
+        }) {
+        parse_audit_jsonl(content).unwrap_or_default()
+    } else {
+        parse_trace_jsonl(content).unwrap_or_default()
+    };
+    for inv in &invocations {
+        if inv.tool_name == "Bash" {
+            if let Some(ref bin) = inv.binary {
+                binaries.insert(bin.clone());
+            }
+        }
+    }
+    binaries
+}
+
+/// Mine binaries from all available session traces.
+pub fn mine_binaries_from_history() -> std::collections::BTreeSet<String> {
+    let mut all_binaries = std::collections::BTreeSet::new();
+    let tmp = std::env::temp_dir();
+    let readdir = match std::fs::read_dir(&tmp) {
+        Ok(r) => r,
+        Err(_) => return all_binaries,
+    };
+    for entry in readdir.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("clash-") {
+            continue;
+        }
+        let audit_path = entry.path().join("audit.jsonl");
+        let trace_path = entry.path().join("trace.jsonl");
+        let candidate = if audit_path.exists() {
+            audit_path
+        } else if trace_path.exists() {
+            trace_path
+        } else {
+            continue;
+        };
+        if let Ok(content) = std::fs::read_to_string(&candidate) {
+            all_binaries.extend(mine_binaries_from_content(&content));
+        }
+    }
+    all_binaries
+}
+
 // ---------------------------------------------------------------------------
 // Parsing
 // ---------------------------------------------------------------------------
@@ -696,6 +749,17 @@ mod tests {
         let invocations = parse_audit_jsonl(audit).unwrap();
         assert_eq!(invocations.len(), 1);
         assert_eq!(invocations[0].binary.as_deref(), Some("git"));
+    }
+
+    #[test]
+    fn test_mine_observed_binaries() {
+        let audit = r#"{"timestamp":"1.0","session_id":"s1","tool_name":"Bash","tool_input_summary":"git status","decision":"allow","matched_rules":1,"skipped_rules":0,"resolution":"allow"}
+{"timestamp":"2.0","session_id":"s1","tool_name":"Bash","tool_input_summary":"cargo test","decision":"allow","matched_rules":1,"skipped_rules":0,"resolution":"allow"}
+{"timestamp":"3.0","session_id":"s1","tool_name":"Read","tool_input_summary":"/tmp/file","decision":"allow","matched_rules":1,"skipped_rules":0,"resolution":"allow"}"#;
+        let binaries = mine_binaries_from_content(audit);
+        assert!(binaries.contains("git"));
+        assert!(binaries.contains("cargo"));
+        assert!(!binaries.contains("Read"));
     }
 
     #[test]
