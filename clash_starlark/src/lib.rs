@@ -502,12 +502,12 @@ policy("test", rules = when({"Bash": {"test": allow(sandbox=_box)}}))
     fn test_stdlib_load() {
         let doc = eval_to_doc(
             r#"
-load("@clash//rust.star", "rust_sandbox")
+load("@clash//rust.star", "rust_full")
 load("@clash//std.star", "allow", "deny", "when", "policy", "settings")
 
 settings(default = deny())
 policy("test",
-    rules = when({"Bash": {("rustc", "cargo"): allow(sandbox=rust_sandbox)}}),
+    rules = when({"Bash": {("rustc", "cargo"): allow(sandbox=rust_full)}}),
 )
 "#,
         );
@@ -523,7 +523,7 @@ policy("test",
         use crate::codegen::builder::*;
 
         for module in &["rust.star", "node.star", "python.star"] {
-            let sandbox_name = module.strip_suffix(".star").unwrap().to_string() + "_sandbox";
+            let sandbox_name = module.strip_suffix(".star").unwrap().to_string() + "_full";
             let source = crate::codegen::serialize(&[
                 Stmt::load(&format!("@clash//{module}"), &[&sandbox_name]),
                 Stmt::load(
@@ -581,7 +581,7 @@ policy("test", rules = when({"Bash": {"test": allow(sandbox=my_sandbox)}}))
     fn test_full_example() {
         let doc = eval_to_doc(
             r#"
-load("@clash//rust.star", "rust_sandbox")
+load("@clash//rust.star", "rust_full")
 load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "cwd", "home")
 
 _box = sandbox(
@@ -600,7 +600,7 @@ settings(default = deny())
 policy("test", rules = when({
     "Bash": {
         "git": allow(sandbox=_box),
-        ("rustc", "cargo"): allow(sandbox=rust_sandbox),
+        ("rustc", "cargo"): allow(sandbox=rust_full),
     },
 }) +
     when({None: allow()}),

@@ -1,22 +1,19 @@
-node_sandbox = sandbox(
-    name = "node_dev",
-    default = deny(),
+node_full = sandbox(
+    name = "node_full",
+    default = ask(),
     fs = {
-        glob("$PWD/**"): allow("rwcx"),
+        subpath("$PWD"): allow(FULL),
         "$HOME": {
             glob(".npm/**"): allow(),
             glob(".config/npm/**"): allow("r"),
+            glob(".bun/**"): allow(),
+            glob(".cache/yarn/**"): allow(),
+            glob(".pnpm-store/**"): allow(),
         },
         glob("$TMPDIR/**"): allow(),
     },
-    net = [
-        domains({
-            "registry.npmjs.org": allow(),
-            "*.npmjs.org": allow(),
-            "github.com": allow(),
-        }),
-    ],
-    doc = "Node.js development: project + npm cache, npm registry network",
+    net = allow(),
+    doc = "Node full: npm/bun/yarn/pnpm install, run scripts. Full project + package access.",
 )
 
-node = when({"Bash": {("node", "bun", "deno"): allow(sandbox = node_sandbox)}})
+node = when({"Bash": {("node", "npm", "npx", "bun", "deno", "yarn", "pnpm"): allow(sandbox = node_full)}})

@@ -1,0 +1,69 @@
+meta:
+  name: ecosystem sandbox presets
+  description: Verify ecosystem sandboxes compile and route correctly
+
+clash:
+  policy_star: |
+    load("@clash//builtin.star", "builtins")
+    load("@clash//sandboxes.star", "readonly", "workspace", "git_safe", "git_full")
+    load("@clash//rust.star", "rust_safe", "rust_full")
+    load("@clash//go.star", "go_safe", "go_full")
+    load("@clash//node.star", "node_full")
+    load("@clash//python.star", "python_full")
+    load("@clash//ruby.star", "ruby_full")
+    load("@clash//java.star", "java_full")
+    load("@clash//docker.star", "docker_safe", "docker_full")
+    load("@clash//swift.star", "swift_full")
+    load("@clash//dotnet.star", "dotnet_full")
+    load("@clash//make.star", "make_full")
+
+    policy("test",
+        {
+            Tool("Bash"): {
+                "git": { glob("**"): allow(sandbox=git_safe) },
+                ("cargo", "rustc"): { glob("**"): allow(sandbox=rust_safe) },
+                "go": { glob("**"): allow(sandbox=go_safe) },
+                ("node", "npm"): { glob("**"): allow(sandbox=node_full) },
+                ("python", "python3"): { glob("**"): allow(sandbox=python_full) },
+                ("ruby", "gem", "bundle"): { glob("**"): allow(sandbox=ruby_full) },
+                ("gradle", "mvn"): { glob("**"): allow(sandbox=java_full) },
+                ("docker", "podman"): { glob("**"): allow(sandbox=docker_safe) },
+                ("swift", "xcodebuild"): { glob("**"): allow(sandbox=swift_full) },
+                ("dotnet", "msbuild"): { glob("**"): allow(sandbox=dotnet_full) },
+                ("make", "cmake", "just"): { glob("**"): allow(sandbox=make_full) },
+            },
+        },
+    )
+
+steps:
+  - name: git routed to git_safe
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+
+  - name: cargo routed to rust_safe
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: cargo check
+    expect:
+      decision: allow
+
+  - name: npm routed to node_full
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: npm install
+    expect:
+      decision: allow
+
+  - name: make routed to make_full
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: make build
+    expect:
+      decision: allow

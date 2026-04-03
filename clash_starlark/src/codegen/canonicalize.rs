@@ -229,10 +229,7 @@ impl Transform for CollapseDictSiblingsSameResult {
     fn visit_expr(&mut self, current: &Expr, ctx: &WalkCtx) -> TransformOp<Expr> {
         // Only collapse inside when() and policy() match dicts, not sandbox()
         // fs dicts where path matchers as keys must stay separate.
-        if !["when", "policy"]
-            .iter()
-            .any(|name| ctx.inside_call(name))
-        {
+        if !["when", "policy"].iter().any(|name| ctx.inside_call(name)) {
             return TransformOp::Keep;
         }
 

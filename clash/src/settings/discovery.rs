@@ -311,8 +311,8 @@ mod test {
     fn default_policy_git_sandbox_uses_worktrees() -> anyhow::Result<()> {
         let json_str = compile_default_policy_to_json()?;
         let policy: serde_json::Value = serde_json::from_str(&json_str)?;
-        // The "git_rw" sandbox should have a $PWD subpath rule with follow_worktrees
-        let git_sandbox = &policy["sandboxes"]["git_rw"];
+        // The "git_full" sandbox should have a $PWD subpath rule with follow_worktrees
+        let git_sandbox = &policy["sandboxes"]["git_full"];
         let rules = git_sandbox["rules"].as_array().unwrap();
         let pwd_rule = rules
             .iter()
@@ -326,7 +326,7 @@ mod test {
         assert_eq!(
             pwd_rule["follow_worktrees"].as_bool(),
             Some(true),
-            "git_rw sandbox should have follow_worktrees enabled"
+            "git_full sandbox should have follow_worktrees enabled"
         );
         Ok(())
     }
