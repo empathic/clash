@@ -217,7 +217,7 @@ pub fn generate_policy(ecosystems: &[&EcosystemDef]) -> String {
     stmts.push(load_builtin());
 
     // Collect sandbox names needed from sandboxes.star
-    let mut sandbox_imports: Vec<&str> = vec!["readonly", "workspace"];
+    let mut sandbox_imports: Vec<&str> = vec!["readonly", "project", "workspace"];
     for eco in ecosystems {
         if eco.star_file == "sandboxes.star" {
             if let Some(safe) = eco.safe_sandbox {
@@ -269,18 +269,23 @@ pub fn generate_policy(ecosystems: &[&EcosystemDef]) -> String {
 
     // Edit/default mode
     let edit_bash = build_bash_routing(ecosystems, false);
+    let mut edit_inner = vec![DictEntry::new(
+        Expr::call("glob", vec![Expr::string("**")]),
+        allow_with_sandbox(Expr::ident("project")),
+    )];
     if !edit_bash.is_empty() {
-        mode_entries.push(DictEntry::new(
-            Expr::tuple(vec![
-                Expr::call("mode", vec![Expr::string("edit")]),
-                Expr::call("mode", vec![Expr::string("default")]),
-            ]),
-            Expr::dict(vec![DictEntry::new(
-                Expr::call("Tool", vec![Expr::string("Bash")]),
-                Expr::dict(edit_bash),
-            )]),
+        edit_inner.push(DictEntry::new(
+            Expr::call("Tool", vec![Expr::string("Bash")]),
+            Expr::dict(edit_bash),
         ));
     }
+    mode_entries.push(DictEntry::new(
+        Expr::tuple(vec![
+            Expr::call("mode", vec![Expr::string("edit")]),
+            Expr::call("mode", vec![Expr::string("default")]),
+        ]),
+        Expr::dict(edit_inner),
+    ));
 
     // Unrestricted mode
     mode_entries.push(DictEntry::new(
