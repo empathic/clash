@@ -83,7 +83,8 @@ pub fn check_for_sandbox_fs_hint(
         }
     };
 
-    let action = settings.policy_tree()
+    let action = settings
+        .policy_tree()
         .map(|t| t.on_sandbox_violation)
         .unwrap_or_default();
 
@@ -175,7 +176,8 @@ fn resolve_sandbox_policy(
     if let Some(tree) = settings.policy_tree() {
         let decision = tree.evaluate(&input.tool_name, &input.tool_input);
         if let Some(sandbox) = decision.sandbox {
-            let name = decision.sandbox_name
+            let name = decision
+                .sandbox_name
                 .map(|r| r.0)
                 .unwrap_or_else(|| "unnamed".to_string());
             info!("resolve_sandbox_policy: found sandbox via decision tree re-evaluation");
@@ -268,7 +270,9 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    use crate::policy::sandbox_types::{NetworkPolicy, PathMatch, RuleEffect, SandboxRule, ViolationAction};
+    use crate::policy::sandbox_types::{
+        NetworkPolicy, PathMatch, RuleEffect, SandboxRule, ViolationAction,
+    };
 
     use formatter::BlockedPath;
     use stderr_source::{
@@ -743,8 +747,48 @@ mod tests {
             "should return hint for sandboxed filesystem error"
         );
         let hint = result.unwrap();
-        assert!(hint.contains("SANDBOX VIOLATION"));
-        assert!(hint.contains(".fly"));
+        assert!(hint.contains("SANDBOX VIOLATION"), "hint: {hint}");
+        assert!(
+            hint.contains("\"restricted\""),
+            "should include sandbox name, hint: {hint}"
+        );
+        assert!(hint.contains(".fly"), "hint: {hint}");
+        assert!(
+            hint.contains("Do NOT retry"),
+            "default action is stop, hint: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_check_returns_hint_with_workaround_action() {
+        let mut settings = ClashSettings::default();
+        settings.set_policy_source(
+            r#"{"schema_version":5,"default_effect":"deny",
+  "on_sandbox_violation":"workaround",
+  "sandboxes":{"restricted":{"default":["read","execute"],"rules":[],"network":"deny"}},
+  "tree":[
+    {"condition":{"observe":"tool_name","pattern":{"literal":{"literal":"Bash"}},"children":[
+      {"decision":{"allow":"restricted"}}
+    ]}}
+  ]}"#,
+        );
+        let input = ToolUseHookInput {
+            tool_name: "Bash".into(),
+            tool_input: json!({"command": "fly logs"}),
+            tool_response: Some(json!(
+                "open /Users/user/.fly/perms.123: operation not permitted"
+            )),
+            cwd: "/tmp".into(),
+            ..Default::default()
+        };
+        let result = check_for_sandbox_fs_hint(&input, &settings);
+        assert!(result.is_some());
+        let hint = result.unwrap();
+        assert!(hint.contains("Try an alternative approach"), "hint: {hint}");
+        assert!(
+            hint.contains("If no workaround is possible"),
+            "hint: {hint}"
+        );
     }
 
     #[test]
