@@ -191,8 +191,7 @@ fn write_detected_policy(content: &str) -> Result<std::path::PathBuf> {
     let dir = star_path
         .parent()
         .context("policy file path has no parent directory")?;
-    std::fs::create_dir_all(dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
     std::fs::write(&star_path, content)
         .with_context(|| format!("failed to write {}", star_path.display()))?;
     Ok(star_path)

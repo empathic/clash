@@ -213,10 +213,7 @@ fn generate_starlark_from_posture(posture: Posture, extra_loads: &[Stmt]) -> Str
     let effect_name = posture.default_effect();
     let preset = posture.sandbox_preset();
 
-    let mut stmts = vec![
-        load_builtin(),
-        load_sandboxes(&[preset]),
-    ];
+    let mut stmts = vec![load_builtin(), load_sandboxes(&[preset])];
     stmts.extend(extra_loads.iter().cloned());
     stmts.extend([
         Stmt::Blank,

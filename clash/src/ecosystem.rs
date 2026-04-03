@@ -170,10 +170,7 @@ pub fn detect_ecosystems(
         let matched = eco.markers.iter().any(|m| project_dir.join(m).exists())
             || eco.dir_markers.iter().any(|m| project_dir.join(m).is_dir())
             || has_glob_match(project_dir, eco.glob_markers)
-            || eco
-                .binaries
-                .iter()
-                .any(|b| observed_binaries.contains(b));
+            || eco.binaries.iter().any(|b| observed_binaries.contains(b));
 
         if matched {
             seen.insert(eco.name);
@@ -400,12 +397,30 @@ mod tests {
             .collect();
         let starlark = generate_policy(&ecosystems);
 
-        assert!(starlark.contains("@clash//sandboxes.star"), "missing sandboxes load:\n{starlark}");
-        assert!(starlark.contains("@clash//rust.star"), "missing rust load:\n{starlark}");
-        assert!(starlark.contains("git_safe"), "missing git_safe:\n{starlark}");
-        assert!(starlark.contains("git_full"), "missing git_full:\n{starlark}");
-        assert!(starlark.contains("rust_safe"), "missing rust_safe:\n{starlark}");
-        assert!(starlark.contains("rust_full"), "missing rust_full:\n{starlark}");
+        assert!(
+            starlark.contains("@clash//sandboxes.star"),
+            "missing sandboxes load:\n{starlark}"
+        );
+        assert!(
+            starlark.contains("@clash//rust.star"),
+            "missing rust load:\n{starlark}"
+        );
+        assert!(
+            starlark.contains("git_safe"),
+            "missing git_safe:\n{starlark}"
+        );
+        assert!(
+            starlark.contains("git_full"),
+            "missing git_full:\n{starlark}"
+        );
+        assert!(
+            starlark.contains("rust_safe"),
+            "missing rust_safe:\n{starlark}"
+        );
+        assert!(
+            starlark.contains("rust_full"),
+            "missing rust_full:\n{starlark}"
+        );
 
         let output = clash_starlark::evaluate(&starlark, "<test>", std::path::Path::new("."))
             .expect("generated policy must evaluate");
@@ -415,14 +430,18 @@ mod tests {
 
     #[test]
     fn generate_policy_single_variant_ecosystem() {
-        let ecosystems: Vec<&EcosystemDef> = ECOSYSTEMS
-            .iter()
-            .filter(|e| e.name == "node")
-            .collect();
+        let ecosystems: Vec<&EcosystemDef> =
+            ECOSYSTEMS.iter().filter(|e| e.name == "node").collect();
         let starlark = generate_policy(&ecosystems);
 
-        assert!(starlark.contains("node_full"), "missing node_full:\n{starlark}");
-        assert!(!starlark.contains("node_safe"), "node_safe should not exist:\n{starlark}");
+        assert!(
+            starlark.contains("node_full"),
+            "missing node_full:\n{starlark}"
+        );
+        assert!(
+            !starlark.contains("node_safe"),
+            "node_safe should not exist:\n{starlark}"
+        );
 
         let output = clash_starlark::evaluate(&starlark, "<test>", std::path::Path::new("."))
             .expect("generated policy must evaluate");
@@ -437,7 +456,6 @@ mod tests {
 
         let output = clash_starlark::evaluate(&starlark, "<test>", std::path::Path::new("."))
             .expect("empty policy must evaluate");
-        crate::policy::compile::compile_to_tree(&output.json)
-            .expect("empty policy must compile");
+        crate::policy::compile::compile_to_tree(&output.json).expect("empty policy must compile");
     }
 }
