@@ -360,6 +360,38 @@ impl CompiledPolicy {
     pub fn format_tree(&self) -> Vec<String> {
         super::format::format_tree(self)
     }
+
+    /// Count root-level nodes stamped with source "harness".
+    pub fn harness_node_count(&self) -> usize {
+        self.tree
+            .iter()
+            .filter(|n| match n {
+                Node::Condition { source, .. } => source.as_deref() == Some("harness"),
+                _ => false,
+            })
+            .count()
+    }
+
+    /// Return a view of the tree with harness nodes filtered out.
+    pub fn tree_without_harness(&self) -> Vec<&Node> {
+        self.tree
+            .iter()
+            .filter(|n| match n {
+                Node::Condition { source, .. } => source.as_deref() != Some("harness"),
+                _ => true,
+            })
+            .collect()
+    }
+
+    /// Format rules as a tree, optionally excluding harness nodes.
+    pub fn format_tree_filtered(&self, include_harness: bool) -> Vec<String> {
+        if include_harness {
+            super::format::format_tree(self)
+        } else {
+            let nodes = self.tree_without_harness();
+            super::format::format_tree_nodes(&nodes)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2199,6 +2231,37 @@ mod tests {
         }"#;
         let policy: CompiledPolicy = serde_json::from_str(json).unwrap();
         assert_eq!(policy.harness_defaults, Some(false));
+    }
+
+    #[test]
+    fn count_harness_nodes() {
+        let policy = CompiledPolicy {
+            sandboxes: HashMap::new(),
+            tree: vec![
+                Node::Condition {
+                    observe: Observable::FsOp,
+                    pattern: Pattern::Literal(Value::Literal("read".to_string())),
+                    children: vec![Node::Decision(Decision::Allow(None))],
+                    doc: None,
+                    source: Some("harness".to_string()),
+                    terminal: false,
+                },
+                Node::Condition {
+                    observe: Observable::ToolName,
+                    pattern: Pattern::Literal(Value::Literal("Bash".to_string())),
+                    children: vec![Node::Decision(Decision::Allow(None))],
+                    doc: None,
+                    source: Some("~/.clash/policy.star".to_string()),
+                    terminal: false,
+                },
+            ],
+            default_effect: Effect::Ask,
+            default_sandbox: None,
+            on_sandbox_violation: ViolationAction::default(),
+            harness_defaults: None,
+        };
+        assert_eq!(policy.harness_node_count(), 1);
+        assert_eq!(policy.tree_without_harness().len(), 1);
     }
 
     #[test]

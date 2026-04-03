@@ -30,6 +30,17 @@ pub fn format_tree(policy: &CompiledPolicy) -> Vec<String> {
     lines
 }
 
+/// Format selected rules as a tree with box-drawing characters.
+pub fn format_tree_nodes(nodes: &[&Node]) -> Vec<String> {
+    let mut lines = Vec::new();
+    let len = nodes.len();
+    for (i, node) in nodes.iter().enumerate() {
+        let is_last = i == len - 1;
+        format_tree_node(node, "", is_last, true, &mut lines);
+    }
+    lines
+}
+
 // ---------------------------------------------------------------------------
 // Node-level rendering
 // ---------------------------------------------------------------------------
