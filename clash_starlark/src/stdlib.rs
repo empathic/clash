@@ -1,6 +1,6 @@
 //! Embedded prebuilt Starlark sandbox files.
 //!
-//! These are loaded via `load("@clash//rust.star", "rust_sandbox")` etc.
+//! These are loaded via `load("@clash//rust.star", "rust_safe", "rust_full")` etc.
 
 use include_dir::Dir;
 use include_dir::include_dir;
