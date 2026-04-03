@@ -216,7 +216,7 @@ fn generate_starlark_from_posture(posture: Posture, detection: &EcosystemDetecti
     let mut stmts = vec![load_builtin(), load_sandboxes(&[preset])];
     stmts.extend(detection.loads.iter().cloned());
 
-    let eco_rules = build_ecosystem_rules(&detection.ecosystems);
+    let eco_rules = build_ecosystem_rules(&detection.ecosystems, preset);
 
     stmts.extend([
         Stmt::Blank,
@@ -363,7 +363,10 @@ fn generate_starlark_from_analysis(
     // 4. Ecosystem sandbox routing — BEFORE generic import allows so that
     //    binaries like cargo/git get proper toolchain sandboxes instead of
     //    the generic project_files sandbox.
-    rules.extend(build_ecosystem_rules(&detection.ecosystems));
+    rules.extend(build_ecosystem_rules(
+        &detection.ecosystems,
+        "project_files",
+    ));
 
     // 5–7. Allow rules — comment only the first, leave the rest uncommented
     //       so MergeConsecutiveWhens collapses them.
@@ -533,21 +536,24 @@ fn detect_ecosystem_loads() -> Result<EcosystemDetection> {
 /// Build `when()` routing rules for detected ecosystems.
 ///
 /// Generates two kinds of rules:
-/// 1. File-access tools (Read, Glob, Grep, Write, Edit) → `project_files` sandbox
+/// 1. File-access tools (Read, Glob, Grep, Write, Edit) → `fs_sandbox` sandbox
 /// 2. Bash binary routing → ecosystem-specific sandboxes
-fn build_ecosystem_rules(ecosystems: &[&crate::ecosystem::EcosystemDef]) -> Vec<Expr> {
+fn build_ecosystem_rules(
+    ecosystems: &[&crate::ecosystem::EcosystemDef],
+    fs_sandbox: &str,
+) -> Vec<Expr> {
     if ecosystems.is_empty() {
         return vec![];
     }
 
     let mut rules = Vec::new();
 
-    // File-access tools — always allow within the project_files sandbox
+    // File-access tools — always allow within the given sandbox
     // when ecosystems are detected, since the user is clearly doing development.
     let fs_tools = &["Read", "Glob", "Grep", "Write", "Edit", "NotebookEdit"];
     rules.push(Expr::commented(
         "file-access tools — sandboxed to project",
-        tool_match(fs_tools, allow_with_sandbox(Expr::ident("project_files"))),
+        tool_match(fs_tools, allow_with_sandbox(Expr::ident(fs_sandbox))),
     ));
 
     // Bash binary routing
