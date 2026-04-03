@@ -1,5 +1,4 @@
-use crate::policy::sandbox_edit;
-use crate::policy::sandbox_types::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy};
+use crate::policy::sandbox_types::{NetworkPolicy, PathMatch, SandboxPolicy};
 use crate::sandbox;
 use crate::style;
 use anyhow::{Context, Result};
@@ -272,29 +271,54 @@ pub fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
 // Sandbox CRUD handlers
 // ---------------------------------------------------------------------------
 
+/// Check policy file type and return the path.
+/// Errors if JSON (with conversion hint) or if no policy exists.
+fn require_star_policy(scope: Option<String>) -> Result<std::path::PathBuf> {
+    let path = crate::cmd::policy::resolve_manifest_path(scope)?;
+    if path.extension().is_some_and(|e| e == "json") {
+        anyhow::bail!(
+            "sandbox commands require a .star policy file.\n\
+             Convert your policy with: clash policy convert --file {} --replace",
+            path.display()
+        );
+    }
+    Ok(path)
+}
+
 fn handle_create(
     name: &str,
     default: &str,
     network: &str,
-    doc: Option<String>,
+    _doc: Option<String>,
     scope: Option<String>,
 ) -> Result<()> {
-    let path = crate::cmd::policy::resolve_manifest_path(scope)?;
-    let mut manifest = crate::policy_loader::read_manifest(&path)?;
-    let caps = Cap::parse(default).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let net = parse_network_policy(network)?;
-    sandbox_edit::create_sandbox(&mut manifest, name, caps, net, doc)?;
-    crate::policy_loader::write_manifest(&path, &manifest)?;
+    let path = require_star_policy(scope)?;
+    let mut doc = clash_starlark::codegen::StarDocument::open(&path)?;
+
+    let default_effect = match default.trim().to_lowercase().as_str() {
+        s if s.contains("deny") => clash_starlark::codegen::mutate::Effect::Deny,
+        s if s.contains("allow") => clash_starlark::codegen::mutate::Effect::Allow,
+        _ => clash_starlark::codegen::mutate::Effect::Ask,
+    };
+    let net_allow = network == "allow";
+
+    clash_starlark::codegen::mutate::add_sandbox(&mut doc.stmts, name, default_effect, net_allow)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    doc.save()?;
+
     println!("{} Sandbox '{}' created", style::green_bold("✓"), name);
     println!("  {}", style::dim(&path.display().to_string()));
     Ok(())
 }
 
 fn handle_delete(name: &str, scope: Option<String>) -> Result<()> {
-    let path = crate::cmd::policy::resolve_manifest_path(scope)?;
-    let mut manifest = crate::policy_loader::read_manifest(&path)?;
-    sandbox_edit::delete_sandbox(&mut manifest, name)?;
-    crate::policy_loader::write_manifest(&path, &manifest)?;
+    let path = require_star_policy(scope)?;
+    let mut doc = clash_starlark::codegen::StarDocument::open(&path)?;
+
+    clash_starlark::codegen::mutate::remove_sandbox(&mut doc.stmts, name)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    doc.save()?;
+
     println!("{} Sandbox '{}' deleted", style::green_bold("✓"), name);
     println!("  {}", style::dim(&path.display().to_string()));
     Ok(())
@@ -353,79 +377,53 @@ fn handle_add_rule(
     allow: Option<String>,
     deny: Option<String>,
     path: &str,
-    path_match: &str,
-    doc: Option<String>,
+    _path_match: &str,
+    _doc: Option<String>,
     scope: Option<String>,
 ) -> Result<()> {
-    let (effect, caps_str) = match (allow, deny) {
-        (Some(caps), None) => (RuleEffect::Allow, caps),
-        (None, Some(caps)) => (RuleEffect::Deny, caps),
+    let caps_str = match (allow, deny) {
+        (Some(caps), None) => caps,
+        (None, Some(_)) => {
+            anyhow::bail!("deny rules in sandbox fs are not yet supported via CLI — use `clash policy edit`")
+        }
         _ => anyhow::bail!("provide exactly one of --allow or --deny with capabilities"),
     };
-    let caps = Cap::parse(&caps_str).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let pm = parse_path_match(path_match)?;
 
-    let manifest_path = crate::cmd::policy::resolve_manifest_path(scope)?;
-    let mut manifest = crate::policy_loader::read_manifest(&manifest_path)?;
-    let result = sandbox_edit::add_rule(&mut manifest, name, effect, caps, path.into(), pm, doc)?;
-    crate::policy_loader::write_manifest(&manifest_path, &manifest)?;
+    let policy_path = require_star_policy(scope)?;
+    let mut doc = clash_starlark::codegen::StarDocument::open(&policy_path)?;
 
-    match result {
-        sandbox_edit::UpsertResult::Inserted => {
-            println!(
-                "{} Rule added to sandbox '{}'",
-                style::green_bold("✓"),
-                name
-            )
-        }
-        sandbox_edit::UpsertResult::Replaced => println!(
-            "{} Rule updated in sandbox '{}'",
-            style::green_bold("✓"),
-            name
-        ),
-    }
-    println!("  {}", style::dim(&manifest_path.display().to_string()));
+    clash_starlark::codegen::mutate::add_sandbox_rule(&mut doc.stmts, name, path, &caps_str)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    doc.save()?;
+
+    println!(
+        "{} Rule added to sandbox '{}'",
+        style::green_bold("✓"),
+        name
+    );
+    println!("  {}", style::dim(&policy_path.display().to_string()));
     Ok(())
 }
 
 fn handle_remove_rule(name: &str, path: &str, scope: Option<String>) -> Result<()> {
-    let manifest_path = crate::cmd::policy::resolve_manifest_path(scope)?;
-    let mut manifest = crate::policy_loader::read_manifest(&manifest_path)?;
-    if sandbox_edit::remove_rule(&mut manifest, name, path)? {
-        crate::policy_loader::write_manifest(&manifest_path, &manifest)?;
+    let policy_path = require_star_policy(scope)?;
+    let mut doc = clash_starlark::codegen::StarDocument::open(&policy_path)?;
+
+    let removed = clash_starlark::codegen::mutate::remove_sandbox_rule(&mut doc.stmts, name, path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if removed {
+        doc.save()?;
         println!(
             "{} Rule removed from sandbox '{}'",
             style::green_bold("✓"),
             name
         );
-        println!("  {}", style::dim(&manifest_path.display().to_string()));
+        println!("  {}", style::dim(&policy_path.display().to_string()));
     } else {
         println!("No rule matching path '{}' in sandbox '{}'", path, name);
     }
     Ok(())
-}
-
-fn parse_network_policy(s: &str) -> Result<NetworkPolicy> {
-    match s {
-        "deny" => Ok(NetworkPolicy::Deny),
-        "allow" => Ok(NetworkPolicy::Allow),
-        "localhost" => Ok(NetworkPolicy::Localhost),
-        other => {
-            anyhow::bail!("unknown network policy '{other}' (expected: deny, allow, localhost)")
-        }
-    }
-}
-
-fn parse_path_match(s: &str) -> Result<PathMatch> {
-    match s {
-        "subpath" => Ok(PathMatch::Subpath),
-        "literal" => Ok(PathMatch::Literal),
-        "child_of" => Ok(PathMatch::ChildOf),
-        "regex" => Ok(PathMatch::Regex),
-        other => anyhow::bail!(
-            "unknown path_match '{other}' (expected: subpath, literal, child_of, regex)"
-        ),
-    }
 }
 
 /// Run a command under sandbox enforcement.
