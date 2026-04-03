@@ -72,9 +72,9 @@ pub fn check_for_sandbox_fs_hint(
     }
 
     // Get the sandbox policy. Try re-evaluation first (works if tool_input
-    // is the original command). Fall back to extracting the policy from the
-    // rewritten command string (PostToolUse may receive the rewritten command
-    // like "clash sandbox exec --sandbox '{...}' ...").
+    // is the original command). Fall back to extracting the sandbox name from
+    // the rewritten command string (PostToolUse may receive the rewritten
+    // command like "clash shell --sandbox <name> ...").
     let (sandbox, sandbox_name) = match resolve_sandbox_policy(input, settings) {
         Some(s) => s,
         None => {
@@ -165,8 +165,8 @@ pub fn check_for_sandbox_fs_hint(
 /// Try to recover the sandbox policy for this tool invocation.
 ///
 /// 1. Re-evaluate the policy (works when PostToolUse gets the original command).
-/// 2. Fall back to extracting the `--sandbox` JSON from the rewritten command
-///    string (works when PostToolUse gets the `clash sandbox exec ...` wrapper).
+/// 2. Fall back to extracting the `--sandbox` name from the rewritten
+///    `clash shell --sandbox <name>` command and looking it up in the policy.
 fn resolve_sandbox_policy(
     input: &ToolUseHookInput,
     settings: &ClashSettings,
