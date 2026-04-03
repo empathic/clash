@@ -8,7 +8,7 @@
 use tracing::{Level, info, instrument};
 
 use crate::hooks::ToolUseHookInput;
-use crate::policy::sandbox_types::NetworkPolicy;
+use crate::policy::sandbox_types::{NetworkPolicy, ViolationAction};
 use crate::settings::ClashSettings;
 
 /// Network error patterns that indicate a sandboxed process tried to access the network.
@@ -88,7 +88,13 @@ pub fn check_for_sandbox_network_hint(
         "Detected network error in sandboxed command output"
     );
 
-    Some(build_network_hint())
+    let sandbox_name = decision.sandbox_name
+        .map(|r| r.0)
+        .unwrap_or_else(|| "unnamed".to_string());
+
+    let action = tree.on_sandbox_violation;
+
+    Some(build_network_hint(&sandbox_name, action))
 }
 
 /// Extract readable text from a tool_response JSON value.
@@ -133,11 +139,15 @@ fn contains_network_error(text: &str) -> bool {
 }
 
 /// Build advisory context for Claude when a sandbox blocks network access.
-fn build_network_hint() -> String {
+fn build_network_hint(sandbox_name: &str, action: ViolationAction) -> String {
+    let directive = crate::sandbox_hints::formatter::directive_text(action);
     [
-        "SANDBOX_NETWORK_HINT: Command failed — sandbox is blocking network access.",
-        "To fix: add `net = allow` to the sandbox in the policy, or run `clash sandbox add-rule`.",
-        "Do NOT retry — it will fail again until the policy is updated.",
+        &format!("SANDBOX VIOLATION: sandbox \"{sandbox_name}\" blocked network access (policy: deny)."),
+        "",
+        "To fix:",
+        &format!("  clash sandbox add-rule --name {sandbox_name} --net allow"),
+        "",
+        directive,
     ]
     .join("\n")
 }
@@ -145,6 +155,7 @@ fn build_network_hint() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::sandbox_types::ViolationAction;
     use serde_json::json;
 
     #[test]
@@ -217,10 +228,24 @@ mod tests {
 
     #[test]
     fn test_build_network_hint_contains_key_info() {
-        let hint = build_network_hint();
-        assert!(hint.contains("SANDBOX_NETWORK_HINT"));
-        assert!(hint.contains("net = allow"));
+        let hint = build_network_hint("restricted", ViolationAction::Stop);
+        assert!(hint.contains("SANDBOX VIOLATION"));
+        assert!(hint.contains("\"restricted\""));
+        assert!(hint.contains("net allow"));
         assert!(hint.contains("Do NOT retry"));
+    }
+
+    #[test]
+    fn test_build_network_hint_workaround() {
+        let hint = build_network_hint("mybox", ViolationAction::Workaround);
+        assert!(hint.contains("\"mybox\""));
+        assert!(hint.contains("Try an alternative approach"));
+    }
+
+    #[test]
+    fn test_build_network_hint_smart() {
+        let hint = build_network_hint("mybox", ViolationAction::Smart);
+        assert!(hint.contains("Assess"));
     }
 
     #[test]
@@ -296,7 +321,7 @@ mod tests {
             "should return hint for sandboxed network error"
         );
         let hint = result.unwrap();
-        assert!(hint.contains("SANDBOX_NETWORK_HINT"));
+        assert!(hint.contains("SANDBOX VIOLATION"));
     }
 
     #[test]
@@ -327,7 +352,7 @@ mod tests {
             "should return hint for sandboxed network error"
         );
         let hint = result.unwrap();
-        assert!(hint.contains("SANDBOX_NETWORK_HINT"));
+        assert!(hint.contains("SANDBOX VIOLATION"));
     }
 
     #[test]
