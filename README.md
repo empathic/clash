@@ -80,10 +80,11 @@ Clash supports three policy levels, each automatically included and evaluated in
 | **User** | `~/.clash/policy.json` (or `.star`) | Your personal defaults across all projects |
 | **Project** | `<project>/.clash/policy.json` (or `.star`) | Shared rules for a specific repository |
 | **Session** | Created via `--scope session` | Temporary overrides for the current session |
+| **Harness** | Injected automatically | Agent infrastructure access (memories, settings, transcripts) |
 
 > **Note:** Both `.json` and `.star` are supported. When both exist at the same level, `.json` takes precedence. CLI commands (`clash policy allow/deny/remove`) operate on `policy.json`.
 
-**Layer precedence:** Session > Project > User. Higher layers can shadow rules from lower layers — for example, a project-level deny overrides a user-level allow for the same capability. Use `clash status` to see all active layers and which rules are shadowed.
+**Layer precedence:** Session > Project > User > Harness. Harness default rules are injected at the lowest priority — your rules always take precedence. They allow the agent to access its own infrastructure directories (`~/.claude/`, `<project>/.claude/`, transcript dir). Disable with `CLASH_NO_HARNESS_DEFAULTS=1` or `settings(harness_defaults=False)`. Use `clash status --verbose` to see harness rules tagged `[harness]`.
 
 ### Example
 

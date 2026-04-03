@@ -506,6 +506,30 @@ Values:
 settings(default=deny(), on_sandbox_violation="workaround")
 ```
 
+#### `harness_defaults`
+
+Controls whether clash automatically injects rules that allow the agent to access its own infrastructure directories. Defaults to `True`.
+
+When enabled, clash injects the following rules at the lowest priority (after all user-defined rules), so your rules always take precedence:
+
+| Path | Permissions | Purpose |
+|------|-------------|---------|
+| `~/.claude/` | read, write, create, delete | Memories, settings, plugin cache, skills |
+| `<project>/.claude/` | read only | Project config |
+| `<transcript_dir>/` | read, write, create, delete | Session transcripts |
+
+To disable:
+
+```python
+settings(harness_defaults=False)
+```
+
+Or via environment variable for a single session:
+
+```bash
+CLASH_NO_HARNESS_DEFAULTS=1 claude
+```
+
 ---
 
 ## JSON IR Reference (Advanced)
