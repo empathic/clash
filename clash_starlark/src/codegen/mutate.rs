@@ -36,7 +36,9 @@ pub fn find_settings_call(stmts: &[Stmt]) -> Option<usize> {
 
 /// Find the index of the `load("@clash//std.star", ...)` statement.
 pub fn find_std_load(stmts: &[Stmt]) -> Option<usize> {
-    stmts.iter().position(|s| matches!(s, Stmt::Load { module, .. } if module.contains("@clash//std.star")))
+    stmts
+        .iter()
+        .position(|s| matches!(s, Stmt::Load { module, .. } if module.contains("@clash//std.star")))
 }
 
 /// Find all `sandbox(...)` calls — either top-level expressions or assignments.
@@ -188,10 +190,7 @@ pub fn set_default_effect(stmts: &mut Vec<Stmt>, effect: Effect) -> Result<(), S
 }
 
 /// Set or remove the default sandbox in the `settings()` call.
-pub fn set_default_sandbox(
-    stmts: &mut Vec<Stmt>,
-    sandbox: Option<&str>,
-) -> Result<(), String> {
+pub fn set_default_sandbox(stmts: &mut Vec<Stmt>, sandbox: Option<&str>) -> Result<(), String> {
     if let Some(idx) = find_settings_call(stmts) {
         if let Stmt::Expr(Expr::Call { kwargs, .. }) = &mut stmts[idx] {
             // Remove existing default_sandbox kwarg
@@ -221,10 +220,7 @@ pub fn add_sandbox(
     net_allow: bool,
 ) -> Result<(), String> {
     // Check for duplicates
-    if find_sandboxes(stmts)
-        .iter()
-        .any(|(_, n)| n == name)
-    {
+    if find_sandboxes(stmts).iter().any(|(_, n)| n == name) {
         return Err(format!("sandbox '{name}' already exists"));
     }
 
@@ -284,9 +280,7 @@ pub fn remove_sandbox(stmts: &mut Vec<Stmt>, name: &str) -> Result<(), String> {
 /// Add a `load("path", ...)` statement at the top of the file.
 pub fn add_load(stmts: &mut Vec<Stmt>, module: &str, names: &[&str]) {
     // Find the last existing load statement to insert after it
-    let last_load = stmts
-        .iter()
-        .rposition(|s| matches!(s, Stmt::Load { .. }));
+    let last_load = stmts.iter().rposition(|s| matches!(s, Stmt::Load { .. }));
 
     let stmt = Stmt::load(module, names);
     match last_load {
@@ -463,7 +457,10 @@ policy("test", default = deny(), rules = [when({"Read": allow()})])
         // sandbox should appear before settings
         let sb_pos = src.find("sandbox(name").unwrap();
         let settings_pos = src.find("settings(").unwrap();
-        assert!(sb_pos < settings_pos, "sandbox should be before settings:\n{src}");
+        assert!(
+            sb_pos < settings_pos,
+            "sandbox should be before settings:\n{src}"
+        );
     }
 
     #[test]
@@ -488,7 +485,10 @@ policy("test", default = deny(), rules = [when({"Read": allow()})])
         let mut stmts = policy_stmts();
         add_load(&mut stmts, "./my_rules.star", &["custom_rules"]);
         let src = serialize(&stmts);
-        assert!(src.contains("load(\"./my_rules.star\", \"custom_rules\")"), "got:\n{src}");
+        assert!(
+            src.contains("load(\"./my_rules.star\", \"custom_rules\")"),
+            "got:\n{src}"
+        );
     }
 
     #[test]
@@ -542,6 +542,10 @@ policy("test", default = deny(), rules = [when({"Read": allow()})])
         // The result should evaluate without error
         let src = serialize(&stmts);
         let result = crate::evaluate(&src, "test.star", &std::path::PathBuf::from("."));
-        assert!(result.is_ok(), "eval failed: {:?}\nsource:\n{src}", result.err());
+        assert!(
+            result.is_ok(),
+            "eval failed: {:?}\nsource:\n{src}",
+            result.err()
+        );
     }
 }

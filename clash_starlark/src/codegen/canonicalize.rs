@@ -170,7 +170,9 @@ impl Transform for MergeConsecutiveWhens {
             if let Expr::Commented { .. } = item {
                 // Flush any pending when-merge
                 if !pending_entries.is_empty() {
-                    result.push(Self::merge_when_entries(std::mem::take(&mut pending_entries)));
+                    result.push(Self::merge_when_entries(std::mem::take(
+                        &mut pending_entries,
+                    )));
                 }
                 result.push(item.clone());
                 continue;
@@ -181,7 +183,9 @@ impl Transform for MergeConsecutiveWhens {
             } else {
                 // Non-when item: flush pending, then add the item
                 if !pending_entries.is_empty() {
-                    result.push(Self::merge_when_entries(std::mem::take(&mut pending_entries)));
+                    result.push(Self::merge_when_entries(std::mem::take(
+                        &mut pending_entries,
+                    )));
                 }
                 result.push(item.clone());
             }

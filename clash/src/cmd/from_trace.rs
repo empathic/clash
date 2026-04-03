@@ -114,10 +114,7 @@ pub fn run(trace_path: &Path) -> Result<std::path::PathBuf> {
         if tool_names.len() == 1 {
             ui::info(&format!("  when({{{}: allow()}})", tool_names[0]));
         } else {
-            ui::info(&format!(
-                "  when({{({}): allow()}})",
-                tool_names.join(", ")
-            ));
+            ui::info(&format!("  when({{({}): allow()}})", tool_names.join(", ")));
         }
     }
     ui::info("  default = ask");
@@ -377,7 +374,10 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Read-only fs tools
     if !read_tools.is_empty() {
-        let expr = tool_match(&read_tools, allow_with_sandbox(Expr::ident("project_files")));
+        let expr = tool_match(
+            &read_tools,
+            allow_with_sandbox(Expr::ident("project_files")),
+        );
         rules.push(Expr::commented(
             "Read-only fs tools — observed in session",
             expr,
@@ -386,7 +386,10 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
 
     // Write fs tools
     if !write_tools.is_empty() {
-        let expr = tool_match(&write_tools, allow_with_sandbox(Expr::ident("project_files")));
+        let expr = tool_match(
+            &write_tools,
+            allow_with_sandbox(Expr::ident("project_files")),
+        );
         rules.push(Expr::commented(
             "Write fs tools — observed in session",
             expr,

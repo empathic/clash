@@ -110,10 +110,7 @@ fn convert_assignment(source: &str, node: &tree_sitter::Node) -> Option<Stmt> {
 
     let target = node_text(source, &left);
     let value = convert_expr(source, &right);
-    Some(Stmt::Assign {
-        target,
-        value,
-    })
+    Some(Stmt::Assign { target, value })
 }
 
 /// Convert a function_definition CST node.
@@ -252,12 +249,21 @@ fn convert_expr(source: &str, node: &tree_sitter::Node) -> Expr {
                 Expr::Tuple(exprs.iter().map(|e| convert_expr(source, e)).collect())
             }
         }
-        "unary_operator" | "binary_operator" | "boolean_operator" | "comparison_operator"
-        | "not_operator" | "conditional_expression" | "lambda" | "list_comprehension"
-        | "dictionary_comprehension" | "set_comprehension" | "set" | "subscript"
-        | "list_splat" | "dictionary_splat" | "named_expression" => {
-            Expr::Raw(node_text(source, node))
-        }
+        "unary_operator"
+        | "binary_operator"
+        | "boolean_operator"
+        | "comparison_operator"
+        | "not_operator"
+        | "conditional_expression"
+        | "lambda"
+        | "list_comprehension"
+        | "dictionary_comprehension"
+        | "set_comprehension"
+        | "set"
+        | "subscript"
+        | "list_splat"
+        | "dictionary_splat"
+        | "named_expression" => Expr::Raw(node_text(source, node)),
         // Catch-all for unknown expression types
         _ => Expr::Raw(node_text(source, node)),
     }
@@ -609,8 +615,12 @@ mod tests {
         match &stmts[0] {
             Stmt::Expr(Expr::List(items)) => {
                 assert_eq!(items.len(), 2);
-                assert!(matches!(&items[0], Expr::Commented { comment, .. } if comment == "first group"));
-                assert!(matches!(&items[1], Expr::Commented { comment, .. } if comment == "second group"));
+                assert!(
+                    matches!(&items[0], Expr::Commented { comment, .. } if comment == "first group")
+                );
+                assert!(
+                    matches!(&items[1], Expr::Commented { comment, .. } if comment == "second group")
+                );
             }
             other => panic!("expected Expr(List), got {other:?}"),
         }
@@ -634,9 +644,27 @@ mod tests {
         let src = "x = True\ny = False\nz = None\n";
         let stmts = parse(src).unwrap();
         assert_eq!(stmts.len(), 3);
-        assert!(matches!(&stmts[0], Stmt::Assign { value: Expr::Bool(true), .. }));
-        assert!(matches!(&stmts[1], Stmt::Assign { value: Expr::Bool(false), .. }));
-        assert!(matches!(&stmts[2], Stmt::Assign { value: Expr::None, .. }));
+        assert!(matches!(
+            &stmts[0],
+            Stmt::Assign {
+                value: Expr::Bool(true),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &stmts[1],
+            Stmt::Assign {
+                value: Expr::Bool(false),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &stmts[2],
+            Stmt::Assign {
+                value: Expr::None,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -644,7 +672,10 @@ mod tests {
         let src = r#"x = "hello \"world\"\nnewline""#;
         let stmts = parse(src).unwrap();
         match &stmts[0] {
-            Stmt::Assign { value: Expr::String(s), .. } => {
+            Stmt::Assign {
+                value: Expr::String(s),
+                ..
+            } => {
                 assert_eq!(s, "hello \"world\"\nnewline");
             }
             other => panic!("expected string, got {other:?}"),
@@ -670,7 +701,10 @@ policy(
         let reserialized = serialize(&stmts);
         // Parse again and compare ASTs
         let stmts2 = parse(&reserialized).unwrap();
-        assert_eq!(stmts, stmts2, "AST round-trip mismatch:\noriginal:\n{src}\nreserialized:\n{reserialized}");
+        assert_eq!(
+            stmts, stmts2,
+            "AST round-trip mismatch:\noriginal:\n{src}\nreserialized:\n{reserialized}"
+        );
     }
 
     #[test]
@@ -686,7 +720,10 @@ policy("default", default = deny(), rules = [tool(["Read"]).sandbox(_box).allow(
         let stmts = parse(src).unwrap();
         let reserialized = serialize(&stmts);
         let stmts2 = parse(&reserialized).unwrap();
-        assert_eq!(stmts, stmts2, "AST round-trip mismatch:\nreserialized:\n{reserialized}");
+        assert_eq!(
+            stmts, stmts2,
+            "AST round-trip mismatch:\nreserialized:\n{reserialized}"
+        );
     }
 
     #[test]
@@ -720,9 +757,13 @@ policy(
     fn assert_round_trip(name: &str, src: &str) {
         let stmts = parse(src).unwrap_or_else(|e| panic!("{name}: parse failed: {e}"));
         let reserialized = serialize(&stmts);
-        let stmts2 = parse(&reserialized)
-            .unwrap_or_else(|e| panic!("{name}: re-parse failed: {e}\nreserialized:\n{reserialized}"));
-        assert_eq!(stmts, stmts2, "{name}: AST round-trip mismatch.\nreserialized:\n{reserialized}");
+        let stmts2 = parse(&reserialized).unwrap_or_else(|e| {
+            panic!("{name}: re-parse failed: {e}\nreserialized:\n{reserialized}")
+        });
+        assert_eq!(
+            stmts, stmts2,
+            "{name}: AST round-trip mismatch.\nreserialized:\n{reserialized}"
+        );
     }
 
     #[test]
@@ -732,7 +773,10 @@ policy(
 
     #[test]
     fn round_trip_permissive() {
-        assert_round_trip("permissive", include_str!("../../../examples/permissive.star"));
+        assert_round_trip(
+            "permissive",
+            include_str!("../../../examples/permissive.star"),
+        );
     }
 
     #[test]
@@ -747,7 +791,10 @@ policy(
 
     #[test]
     fn round_trip_python_dev() {
-        assert_round_trip("python-dev", include_str!("../../../examples/python-dev.star"));
+        assert_round_trip(
+            "python-dev",
+            include_str!("../../../examples/python-dev.star"),
+        );
     }
 
     #[test]
@@ -759,9 +806,13 @@ policy(
             Stmt::Expr(Expr::Dict(entries)) => {
                 assert_eq!(entries.len(), 2);
                 // First key should be a Call (subpath)
-                assert!(matches!(&entries[0].key, Expr::Call { func, .. } if matches!(func.as_ref(), Expr::Ident(n) if n == "subpath")));
+                assert!(
+                    matches!(&entries[0].key, Expr::Call { func, .. } if matches!(func.as_ref(), Expr::Ident(n) if n == "subpath"))
+                );
                 // Second key should be a Call (glob)
-                assert!(matches!(&entries[1].key, Expr::Call { func, .. } if matches!(func.as_ref(), Expr::Ident(n) if n == "glob")));
+                assert!(
+                    matches!(&entries[1].key, Expr::Call { func, .. } if matches!(func.as_ref(), Expr::Ident(n) if n == "glob"))
+                );
             }
             other => panic!("expected Dict, got {other:?}"),
         }

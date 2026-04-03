@@ -25,8 +25,8 @@ use crate::tui::tool_registry;
 use super::tea::FormRequest;
 
 const PRELOADED_FUNCS: &[&str] = &[
-    "when", "policy", "settings", "sandbox", "cwd", "home", "tempdir", "path", "regex",
-    "domains", "domain", "allow", "deny", "ask",
+    "when", "policy", "settings", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains",
+    "domain", "allow", "deny", "ask",
 ];
 
 // ---------------------------------------------------------------------------

@@ -301,19 +301,13 @@ fn register_globals(builder: &mut GlobalsBuilder) {
 
         // Stash collected sandboxes in EvalContext for policy() to drain.
         if !sandboxes.is_empty() {
-            if let Some(ctx) = eval
-                .extra
-                .and_then(|e| e.downcast_ref::<EvalContext>())
-            {
+            if let Some(ctx) = eval.extra.and_then(|e| e.downcast_ref::<EvalContext>()) {
                 ctx.pending_sandboxes.borrow_mut().extend(sandboxes);
             }
         }
 
         // Return plain list of MatchTreeNode values.
-        let result: Vec<Value<'v>> = nodes
-            .into_iter()
-            .map(|node| heap.alloc(node))
-            .collect();
+        let result: Vec<Value<'v>> = nodes.into_iter().map(|node| heap.alloc(node)).collect();
         Ok(heap.alloc(starlark::values::list::AllocList(result)))
     }
 
@@ -323,10 +317,10 @@ fn register_globals(builder: &mut GlobalsBuilder) {
     /// or rules form: `policy("name", rules=[when({...}), ...])`
     fn _policy_impl<'v>(
         #[starlark(require = pos)] name: &str,
-        #[starlark(require = pos, default = starlark::values::none::NoneType)]
-        rules_or_dict: Value<'v>,
-        #[starlark(require = named, default = starlark::values::none::NoneType)]
-        default: Value<'v>,
+        #[starlark(require = pos, default = starlark::values::none::NoneType)] rules_or_dict: Value<
+            'v,
+        >,
+        #[starlark(require = named, default = starlark::values::none::NoneType)] default: Value<'v>,
         #[starlark(require = named)] rules: Option<Value<'v>>,
         #[starlark(require = named, default = starlark::values::none::NoneType)]
         default_sandbox: Value<'v>,

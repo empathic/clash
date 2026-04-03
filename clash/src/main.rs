@@ -14,7 +14,11 @@ fn main() -> Result<()> {
 
     debug_span!("main", cmd = ?cli.command).in_scope(|| {
         let resp = match cli.command {
-            Commands::Init { from_trace, no_import, agent } => {
+            Commands::Init {
+                from_trace,
+                no_import,
+                agent,
+            } => {
                 if let Some(trace_path) = from_trace {
                     cmd::from_trace::run(&trace_path).map(|_| ())
                 } else if no_import {

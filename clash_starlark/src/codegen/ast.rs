@@ -19,16 +19,26 @@ pub enum TransformOp<T> {
 pub enum Ancestor {
     /// Inside a function/method call. `func_name` is best-effort
     /// (`Some` for `Ident` and `Attr` func exprs, `None` otherwise).
-    Call { func_name: Option<String> },
+    Call {
+        func_name: Option<String>,
+    },
     List,
     Tuple,
     DictKey,
     DictValue,
-    Attr { name: String },
+    Attr {
+        name: String,
+    },
     Commented,
-    Assign { target: String },
-    FuncDef { name: String },
-    FuncParam { name: String },
+    Assign {
+        target: String,
+    },
+    FuncDef {
+        name: String,
+    },
+    FuncParam {
+        name: String,
+    },
     Return,
     ExprStmt,
 }
@@ -104,8 +114,7 @@ pub trait Transform {
             }
             Expr::Tuple(items) => {
                 ctx.push(Ancestor::Tuple);
-                let out =
-                    Expr::Tuple(items.iter().map(|e| self.walk_expr(e, ctx)).collect());
+                let out = Expr::Tuple(items.iter().map(|e| self.walk_expr(e, ctx)).collect());
                 ctx.pop();
                 out
             }
@@ -134,8 +143,7 @@ pub trait Transform {
                 };
                 let new_func = Box::new(self.walk_expr(&func, ctx));
                 ctx.push(Ancestor::Call { func_name });
-                let new_args =
-                    args.iter().map(|e| self.walk_expr(e, ctx)).collect();
+                let new_args = args.iter().map(|e| self.walk_expr(e, ctx)).collect();
                 let new_kwargs = kwargs
                     .iter()
                     .map(|(k, v)| (k.clone(), self.walk_expr(v, ctx)))

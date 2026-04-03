@@ -634,8 +634,7 @@ pub(crate) fn resolve_manifest_path(scope: Option<String>) -> Result<PathBuf> {
     }
 
     // No policy at all — create a bare manifest.
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     let manifest = PolicyManifest {
         includes: vec![],
         policy: crate::policy::match_tree::CompiledPolicy {
@@ -735,10 +734,7 @@ fn handle_convert(file: Option<PathBuf>, replace: bool) -> Result<()> {
         anyhow::bail!("policy file not found: {}", json_path.display());
     }
 
-    if json_path
-        .extension()
-        .is_some_and(|ext| ext == "star")
-    {
+    if json_path.extension().is_some_and(|ext| ext == "star") {
         anyhow::bail!("file is already a .star file: {}", json_path.display());
     }
 
@@ -749,8 +745,8 @@ fn handle_convert(file: Option<PathBuf>, replace: bool) -> Result<()> {
         .with_context(|| format!("failed to parse {}", json_path.display()))?;
 
     // Convert manifest to Starlark AST
-    let manifest_json = serde_json::to_value(&manifest.policy)
-        .context("failed to serialize manifest")?;
+    let manifest_json =
+        serde_json::to_value(&manifest.policy).context("failed to serialize manifest")?;
     let tree = manifest_json
         .get("tree")
         .and_then(|v| v.as_array())
@@ -780,7 +776,10 @@ fn handle_convert(file: Option<PathBuf>, replace: bool) -> Result<()> {
     };
 
     let mut stmts = vec![
-        Stmt::load("@clash//std.star", &["policy", "settings", "allow", "deny", "ask"]),
+        Stmt::load(
+            "@clash//std.star",
+            &["policy", "settings", "allow", "deny", "ask"],
+        ),
         Stmt::Blank,
     ];
 
@@ -842,11 +841,7 @@ fn handle_convert(file: Option<PathBuf>, replace: bool) -> Result<()> {
     if replace {
         std::fs::remove_file(&json_path)
             .with_context(|| format!("failed to remove {}", json_path.display()))?;
-        eprintln!(
-            "{} Removed {}",
-            style::green_bold("✓"),
-            json_path.display()
-        );
+        eprintln!("{} Removed {}", style::green_bold("✓"), json_path.display());
     }
 
     Ok(())

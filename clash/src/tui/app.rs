@@ -13,9 +13,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use similar::TextDiff;
 
-use clash_starlark::codegen::StarDocument;
 use crate::policy::match_tree::{CompiledPolicy, Node, PolicyManifest};
 use crate::policy_loader;
+use clash_starlark::codegen::StarDocument;
 
 use super::TuiOutcome;
 use super::includes_view::IncludesView;
@@ -177,8 +177,8 @@ impl App {
         let json = doc
             .evaluate_to_json()
             .context("failed to evaluate .star policy")?;
-        let manifest: PolicyManifest = serde_json::from_str(&json)
-            .context("failed to parse evaluated policy JSON")?;
+        let manifest: PolicyManifest =
+            serde_json::from_str(&json).context("failed to parse evaluated policy JSON")?;
         let path = doc.path.clone();
         let mut app = Self::new(path, manifest)?;
         app.star_doc = Some(doc);
@@ -337,16 +337,14 @@ impl App {
                             // Trigger the save flow
                             if self.dirty {
                                 self.sync_manifest_to_star();
-                                let diff_lines =
-                                    if let Some(ref doc) = self.star_doc {
-                                        let new_source = doc.to_source();
-                                        compute_diff(&doc.original_source, &new_source)
-                                    } else {
-                                        let new_json =
-                                            serde_json::to_string_pretty(&self.manifest)
-                                                .unwrap_or_default();
-                                        compute_diff(&self.original_json, &new_json)
-                                    };
+                                let diff_lines = if let Some(ref doc) = self.star_doc {
+                                    let new_source = doc.to_source();
+                                    compute_diff(&doc.original_source, &new_source)
+                                } else {
+                                    let new_json = serde_json::to_string_pretty(&self.manifest)
+                                        .unwrap_or_default();
+                                    compute_diff(&self.original_json, &new_json)
+                                };
                                 let len = diff_lines.len();
                                 self.mode = Mode::SaveReview(DiffState {
                                     lines: diff_lines,
@@ -629,8 +627,7 @@ impl App {
                     let new_source = doc.to_source();
                     compute_diff(&doc.original_source, &new_source)
                 } else {
-                    let new_json =
-                        serde_json::to_string_pretty(&self.manifest).unwrap_or_default();
+                    let new_json = serde_json::to_string_pretty(&self.manifest).unwrap_or_default();
                     compute_diff(&self.original_json, &new_json)
                 };
                 let len = diff_lines.len();

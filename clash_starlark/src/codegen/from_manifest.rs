@@ -83,10 +83,7 @@ pub fn node_json_to_expr(node: &serde_json::Value) -> Expr {
 /// - ToolName conditions → `when({"Name": effect()})` or `when({...})`
 /// - PositionalArg chains → nested match dicts
 fn condition_to_expr(cond: &serde_json::Value) -> Expr {
-    let observe = cond
-        .get("observe")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let observe = cond.get("observe").and_then(|v| v.as_str()).unwrap_or("");
     let children = cond
         .get("children")
         .and_then(|v| v.as_array())
@@ -115,9 +112,7 @@ fn condition_to_expr(cond: &serde_json::Value) -> Expr {
         }
         _ => {
             // For other observables, emit as raw JSON comment
-            Expr::raw(format!(
-                "# {observe} rule (imported from JSON)",
-            ))
+            Expr::raw(format!("# {observe} rule (imported from JSON)",))
         }
     }
 }
@@ -211,7 +206,11 @@ fn value_to_expr(value: &serde_json::Value) -> Expr {
 /// Convert a Decision JSON to an effect expression (for use as dict values).
 fn decision_to_effect_expr(decision: &serde_json::Value) -> Expr {
     if let Some(allow) = decision.get("allow") {
-        if let Some(sb) = allow.as_object().and_then(|o| o.get("0")).and_then(|v| v.as_str()) {
+        if let Some(sb) = allow
+            .as_object()
+            .and_then(|o| o.get("0"))
+            .and_then(|v| v.as_str())
+        {
             return builder::allow_with_sandbox(Expr::string(sb));
         }
         return builder::allow();
@@ -220,7 +219,11 @@ fn decision_to_effect_expr(decision: &serde_json::Value) -> Expr {
         return builder::deny();
     }
     if let Some(ask) = decision.get("ask") {
-        if let Some(sb) = ask.as_object().and_then(|o| o.get("0")).and_then(|v| v.as_str()) {
+        if let Some(sb) = ask
+            .as_object()
+            .and_then(|o| o.get("0"))
+            .and_then(|v| v.as_str())
+        {
             return builder::ask_with_sandbox(Expr::string(sb));
         }
         return builder::ask();
@@ -291,7 +294,10 @@ policy("test", default = deny(), rules = [when({"Read": allow()})])
         assert!(result.contains("Write"), "got:\n{result}");
         assert!(!result.contains("Read"), "got:\n{result}");
         // Default should be updated
-        assert!(result.contains("settings(default = ask())"), "got:\n{result}");
+        assert!(
+            result.contains("settings(default = ask())"),
+            "got:\n{result}"
+        );
     }
 
     #[test]
@@ -310,7 +316,10 @@ policy("test", default = deny(), rules = [when({"Read": allow()})])
         sync_manifest_to_ast(&mut stmts, &tree_json, &sandboxes, "deny", None);
 
         let result = serialize(&stmts);
-        assert!(result.contains("custom.star"), "custom load preserved:\n{result}");
+        assert!(
+            result.contains("custom.star"),
+            "custom load preserved:\n{result}"
+        );
     }
 
     #[test]
@@ -333,7 +342,10 @@ policy("test", default = deny(), rules = [])
         sync_manifest_to_ast(&mut stmts, &tree_json, &sandboxes, "deny", None);
 
         let result = serialize(&stmts);
-        assert!(result.contains("\"Bash\": allow(sandbox = \"dev\")"), "got:\n{result}");
+        assert!(
+            result.contains("\"Bash\": allow(sandbox = \"dev\")"),
+            "got:\n{result}"
+        );
     }
 
     #[test]

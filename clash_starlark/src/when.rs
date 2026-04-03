@@ -3,8 +3,8 @@
 //! These replace the complex dict-processing logic that was previously in std.star,
 //! moving tree building into typed Rust code for better error handling and safety.
 
-use anyhow::{bail, Context};
-use serde_json::{json, Value as JsonValue};
+use anyhow::{Context, bail};
+use serde_json::{Value as JsonValue, json};
 use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 use starlark::values::tuple::TupleRef;
@@ -291,8 +291,9 @@ pub fn when_impl<'v>(
     heap: &'v Heap,
     source: Option<String>,
 ) -> anyhow::Result<(Vec<MatchTreeNode>, Vec<JsonValue>)> {
-    let dict = DictRef::from_value(tree)
-        .ok_or_else(|| anyhow::anyhow!("when() requires a dict argument, got {}", tree.get_type()))?;
+    let dict = DictRef::from_value(tree).ok_or_else(|| {
+        anyhow::anyhow!("when() requires a dict argument, got {}", tree.get_type())
+    })?;
 
     let mut collector = SandboxCollector::new();
     let mut result = Vec::new();
@@ -317,8 +318,7 @@ pub fn when_impl<'v>(
                 }
                 MatchKeyKind::Tool { pattern, doc } => {
                     let cond = build_tool_condition(pattern, doc, source.clone());
-                    let node =
-                        build_value_children(cond, value, heap, &source, &mut collector)?;
+                    let node = build_value_children(cond, value, heap, &source, &mut collector)?;
                     result.push(node);
                 }
             }
@@ -395,8 +395,7 @@ fn process_policy_dict<'v>(
                 MatchKeyKind::Mode { pattern, doc } => {
                     let cond = build_mode_condition(pattern, doc, source.clone());
                     let node = if let Some(inner_dict) = DictRef::from_value(value) {
-                        let children =
-                            build_tool_level(&inner_dict, heap, source, collector)?;
+                        let children = build_tool_level(&inner_dict, heap, source, collector)?;
                         set_children_on_node(&cond, children)?
                     } else if is_effect(value, heap) {
                         let decision = effect_to_decision(value, heap)?;
@@ -579,8 +578,8 @@ pub fn sandbox_to_json<'v>(sb: Value<'v>, heap: &'v Heap) -> anyhow::Result<Json
 
 fn convert_fs_rule<'v>(rule: Value<'v>, heap: &'v Heap) -> anyhow::Result<JsonValue> {
     // rule is a Starlark dict with keys: path_value, caps, effect, match_type, follow_worktrees, doc
-    let rule_dict = DictRef::from_value(rule)
-        .ok_or_else(|| anyhow::anyhow!("fs rule must be a dict"))?;
+    let rule_dict =
+        DictRef::from_value(rule).ok_or_else(|| anyhow::anyhow!("fs rule must be a dict"))?;
 
     let dict_get = |key: &str| -> Option<Value<'v>> {
         let key_val = heap.alloc_str(key);
@@ -591,8 +590,8 @@ fn convert_fs_rule<'v>(rule: Value<'v>, heap: &'v Heap) -> anyhow::Result<JsonVa
         dict_get(key).and_then(|v| v.unpack_str().map(|s| s.to_string()))
     };
 
-    let path_value = dict_get("path_value")
-        .ok_or_else(|| anyhow::anyhow!("fs rule missing path_value"))?;
+    let path_value =
+        dict_get("path_value").ok_or_else(|| anyhow::anyhow!("fs rule missing path_value"))?;
     let path_str = resolve_path_value(path_value, heap)?;
     let effect = get_str("effect").unwrap_or_else(|| "allow".to_string());
     let match_type = get_str("match_type").unwrap_or_else(|| "literal".to_string());

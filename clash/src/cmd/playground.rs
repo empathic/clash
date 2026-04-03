@@ -379,8 +379,8 @@ struct PlaygroundState {
 }
 
 const STARLARK_LOAD_NAMES: &[&str] = &[
-    "when", "policy", "settings", "sandbox", "cwd", "home", "tempdir", "path", "regex",
-    "domains", "domain", "allow", "deny", "ask",
+    "when", "policy", "settings", "sandbox", "cwd", "home", "tempdir", "path", "regex", "domains",
+    "domain", "allow", "deny", "ask",
 ];
 
 impl PlaygroundState {
@@ -1194,9 +1194,7 @@ mod tests {
         state
             .rules
             .push(r#"when({"Bash": {"git": allow()}})"#.to_string());
-        state
-            .rules
-            .push(r#"when({"Read": allow()})"#.to_string());
+        state.rules.push(r#"when({"Read": allow()})"#.to_string());
 
         let source = state.build_starlark_source();
         assert!(source.contains("settings("));
@@ -1335,10 +1333,7 @@ mod tests {
     #[test]
     fn test_when_mixes_with_rules() {
         let mut state = PlaygroundState::default();
-        dispatch(
-            r#"add rule when({"Bash": {"cargo": allow()}})"#,
-            &mut state,
-        );
+        dispatch(r#"add rule when({"Bash": {"cargo": allow()}})"#, &mut state);
 
         // Multiple when() calls should mix fine
         match dispatch(

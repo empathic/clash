@@ -655,7 +655,9 @@ mod tests {
         // the settings/sandbox definitions above it.
         let rules_start = starlark.find("rules = [").expect("should contain rules");
         let rules_section = &starlark[rules_start..];
-        let deny_pos = rules_section.find("deny()").expect("should contain deny in rules");
+        let deny_pos = rules_section
+            .find("deny()")
+            .expect("should contain deny in rules");
         let allow_pos = rules_section
             .find("allow(sandbox")
             .expect("should contain allow in rules");
