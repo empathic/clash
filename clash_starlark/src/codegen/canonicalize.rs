@@ -12,6 +12,7 @@ pub(crate) fn canonicalize(stmts: &mut Vec<Stmt>) -> Result<()> {
     let mut tmp = std::mem::take(stmts);
     tmp = SortLoads {}.apply(tmp);
     tmp = SeparateInternalExternalLoads::default().apply(tmp);
+    tmp = MergeConsecutiveWhens.apply(tmp);
     tmp = CollapseDictSiblingsSameResult.apply(tmp);
     tmp = NoDoubleBlanks::default().apply(tmp);
     tmp = NoEndOnBlank {}.apply(tmp);
@@ -90,6 +91,113 @@ impl ast::Transform for NoDoubleBlanks {
         };
         self.last = Some(current.clone());
         out
+    }
+}
+
+/// Merge consecutive `when()` calls in a `policy()` rules list into a single
+/// `when()` with a combined dict.
+///
+/// Before:
+/// ```starlark
+/// rules = [
+///     when({"Bash": {("git", "cargo"): allow()}}),
+///     when({"Read": allow()}),
+///     when({"Write": allow()}),
+/// ]
+/// ```
+///
+/// After:
+/// ```starlark
+/// rules = [
+///     when({
+///         "Bash": {("git", "cargo"): allow()},
+///         "Read": allow(),
+///         "Write": allow(),
+///     }),
+/// ]
+/// ```
+///
+/// `Commented` when-calls act as group separators — a comment breaks the run
+/// and starts a new group.
+struct MergeConsecutiveWhens;
+
+impl MergeConsecutiveWhens {
+    /// Extract the dict entries from a `when({...})` call expression.
+    /// Returns `None` if the expression is not a simple `when(dict)`.
+    fn when_dict_entries(expr: &Expr) -> Option<&Vec<DictEntry>> {
+        match expr {
+            Expr::Call { func, args, kwargs }
+                if matches!(func.as_ref(), Expr::Ident(n) if n == "when")
+                    && args.len() == 1
+                    && kwargs.is_empty() =>
+            {
+                match &args[0] {
+                    Expr::Dict(entries) => Some(entries),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Merge a run of when-dict expressions into a single when call.
+    fn merge_when_entries(entries: Vec<DictEntry>) -> Expr {
+        Expr::Call {
+            func: Box::new(Expr::Ident("when".into())),
+            args: vec![Expr::Dict(entries)],
+            kwargs: vec![],
+        }
+    }
+}
+
+impl Transform for MergeConsecutiveWhens {
+    fn visit_expr(&mut self, expr: &Expr, ctx: &WalkCtx) -> TransformOp<Expr> {
+        // Only operate on lists inside a policy() call (the rules list).
+        if !ctx.inside_call("policy") {
+            return TransformOp::Keep;
+        }
+
+        let Expr::List(items) = expr else {
+            return TransformOp::Keep;
+        };
+
+        // Scan for consecutive when() calls and merge them.
+        let mut result: Vec<Expr> = Vec::with_capacity(items.len());
+        let mut pending_entries: Vec<DictEntry> = Vec::new();
+
+        for item in items {
+            // Unwrap Commented nodes — a comment breaks the group.
+            if let Expr::Commented { .. } = item {
+                // Flush any pending when-merge
+                if !pending_entries.is_empty() {
+                    result.push(Self::merge_when_entries(std::mem::take(&mut pending_entries)));
+                }
+                result.push(item.clone());
+                continue;
+            }
+
+            if let Some(entries) = Self::when_dict_entries(item) {
+                pending_entries.extend(entries.iter().cloned());
+            } else {
+                // Non-when item: flush pending, then add the item
+                if !pending_entries.is_empty() {
+                    result.push(Self::merge_when_entries(std::mem::take(&mut pending_entries)));
+                }
+                result.push(item.clone());
+            }
+        }
+
+        // Flush final group
+        if !pending_entries.is_empty() {
+            result.push(Self::merge_when_entries(pending_entries));
+        }
+
+        // Only replace if we actually merged something (fewer items)
+        if result.len() < items.len() {
+            TransformOp::Replace(Expr::List(result))
+        } else {
+            TransformOp::Keep
+        }
     }
 }
 
@@ -206,6 +314,62 @@ mod tests {
                     load("@clash//std.star", "allow")
 
                     x = {"a": allow(), "b": allow()}
+                    "#,
+
+        merge_consecutive_whens_single_key:
+            r#"
+                    load("@clash//std.star", "when", "policy", "settings", "allow", "ask")
+
+                    settings(default = ask())
+
+                    policy(
+                        "test",
+                        default = ask(),
+                        rules = [
+                            when({"Read": allow()}),
+                            when({"Write": allow()}),
+                        ],
+                    )"# => r#"
+                    load("@clash//std.star", "when", "policy", "settings", "allow", "ask")
+
+                    settings(default = ask())
+
+                    policy("test", default = ask(), rules = [when({("Read", "Write"): allow()})])
+                    "#,
+
+        merge_whens_preserves_comments_as_separators:
+            r#"
+                    load("@clash//std.star", "when", "policy", "settings", "allow", "deny", "ask")
+
+                    settings(default = ask())
+
+                    policy(
+                        "test",
+                        default = ask(),
+                        rules = [
+                            # denied
+                            when({"Read": {".env": deny()}}),
+                            # allowed
+                            when({"Bash": {"git": allow()}}),
+                            when({"Read": allow()}),
+                            when({"Write": allow()}),
+                        ],
+                    )"# => r#"
+                    load("@clash//std.star", "when", "policy", "settings", "allow", "deny", "ask")
+
+                    settings(default = ask())
+
+                    policy(
+                        "test",
+                        default = ask(),
+                        rules = [
+                            # denied
+                            when({"Read": {".env": deny()}}),
+                            # allowed
+                            when({"Bash": {"git": allow()}}),
+                            when({("Read", "Write"): allow()}),
+                        ],
+                    )
                     "#,
     }
 }
