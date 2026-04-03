@@ -1087,4 +1087,29 @@ policy("test", when({"Bash": deny()}))
             "expected error about on_sandbox_violation, got: {err}"
         );
     }
+
+    #[test]
+    fn settings_harness_defaults_false() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "allow", "policy", "settings")
+settings(default=allow(), harness_defaults=False)
+policy("test", rules=[])
+"#,
+        );
+        assert_eq!(doc["harness_defaults"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn settings_harness_defaults_default_is_true() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "allow", "policy", "settings")
+settings(default=allow())
+policy("test", rules=[])
+"#,
+        );
+        // When not specified, harness_defaults should not appear (defaults to true at runtime)
+        assert!(doc.get("harness_defaults").is_none());
+    }
 }

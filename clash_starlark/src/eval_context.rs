@@ -15,6 +15,7 @@ pub struct SettingsValue {
     pub default_effect: String,
     pub default_sandbox: Option<String>,
     pub on_sandbox_violation: Option<String>,
+    pub harness_defaults: Option<bool>,
 }
 
 /// A registered policy — name + match tree nodes + associated sandboxes.
@@ -108,6 +109,15 @@ impl EvalContext {
             doc.as_object_mut()
                 .unwrap()
                 .insert("on_sandbox_violation".to_string(), serde_json::json!(action));
+        }
+
+        // Add harness_defaults only when explicitly set to false (true is the default)
+        if let Some(hd) = settings.as_ref().and_then(|s| s.harness_defaults) {
+            if !hd {
+                doc.as_object_mut()
+                    .unwrap()
+                    .insert("harness_defaults".to_string(), serde_json::json!(false));
+            }
         }
 
         Ok(doc)
