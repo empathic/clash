@@ -8,7 +8,7 @@ use crate::codegen::{
     ast::{self, Transform, TransformOp, WalkCtx},
 };
 
-pub(crate) fn canonicalize(stmts: &mut Vec<Stmt>) -> Result<()> {
+pub fn canonicalize(stmts: &mut Vec<Stmt>) -> Result<()> {
     let mut tmp = std::mem::take(stmts);
     tmp = SortLoads {}.apply(tmp);
     tmp = SeparateInternalExternalLoads::default().apply(tmp);
@@ -140,6 +140,23 @@ impl MergeConsecutiveWhens {
         }
     }
 
+    /// Flush the pending group into the result list.
+    fn flush(
+        result: &mut Vec<Expr>,
+        pending_entries: &mut Vec<DictEntry>,
+        pending_comment: &mut Option<String>,
+    ) {
+        if pending_entries.is_empty() {
+            return;
+        }
+        let merged = Self::merge_when_entries(std::mem::take(pending_entries));
+        if let Some(comment) = pending_comment.take() {
+            result.push(Expr::commented(comment, merged));
+        } else {
+            result.push(merged);
+        }
+    }
+
     /// Merge a run of when-dict expressions into a single when call.
     fn merge_when_entries(entries: Vec<DictEntry>) -> Expr {
         Expr::Call {
@@ -162,18 +179,25 @@ impl Transform for MergeConsecutiveWhens {
         };
 
         // Scan for consecutive when() calls and merge them.
+        // A commented when() starts a new group (flushing any prior group)
+        // and subsequent uncommented when() calls merge into it.
         let mut result: Vec<Expr> = Vec::with_capacity(items.len());
         let mut pending_entries: Vec<DictEntry> = Vec::new();
+        let mut pending_comment: Option<String> = None;
 
         for item in items {
-            // Unwrap Commented nodes — a comment breaks the group.
-            if let Expr::Commented { .. } = item {
-                // Flush any pending when-merge
-                if !pending_entries.is_empty() {
-                    result.push(Self::merge_when_entries(std::mem::take(
-                        &mut pending_entries,
-                    )));
+            // Commented when() — starts a new group with this comment.
+            if let Expr::Commented { comment, expr } = item {
+                if let Some(entries) = Self::when_dict_entries(expr) {
+                    // Flush any prior group.
+                    Self::flush(&mut result, &mut pending_entries, &mut pending_comment);
+                    // Start a new group with this comment.
+                    pending_comment = Some(comment.clone());
+                    pending_entries.extend(entries.iter().cloned());
+                    continue;
                 }
+                // Non-when commented item: flush and pass through.
+                Self::flush(&mut result, &mut pending_entries, &mut pending_comment);
                 result.push(item.clone());
                 continue;
             }
@@ -182,19 +206,13 @@ impl Transform for MergeConsecutiveWhens {
                 pending_entries.extend(entries.iter().cloned());
             } else {
                 // Non-when item: flush pending, then add the item
-                if !pending_entries.is_empty() {
-                    result.push(Self::merge_when_entries(std::mem::take(
-                        &mut pending_entries,
-                    )));
-                }
+                Self::flush(&mut result, &mut pending_entries, &mut pending_comment);
                 result.push(item.clone());
             }
         }
 
         // Flush final group
-        if !pending_entries.is_empty() {
-            result.push(Self::merge_when_entries(pending_entries));
-        }
+        Self::flush(&mut result, &mut pending_entries, &mut pending_comment);
 
         // Only replace if we actually merged something (fewer items)
         if result.len() < items.len() {
@@ -209,7 +227,9 @@ struct CollapseDictSiblingsSameResult;
 
 impl Transform for CollapseDictSiblingsSameResult {
     fn visit_expr(&mut self, current: &Expr, ctx: &WalkCtx) -> TransformOp<Expr> {
-        if !["when", "sandbox", "policy"]
+        // Only collapse inside when() and policy() match dicts, not sandbox()
+        // fs dicts where path matchers as keys must stay separate.
+        if !["when", "policy"]
             .iter()
             .any(|name| ctx.inside_call(name))
         {
@@ -218,22 +238,28 @@ impl Transform for CollapseDictSiblingsSameResult {
 
         match current {
             Expr::Dict(items) => {
-                let mut m: HashMap<Expr, Vec<Expr>> = HashMap::with_capacity(items.len());
+                // Group entries with the same value, preserving insertion order
+                // of the first occurrence of each value.
+                let mut groups: Vec<(Expr, Vec<Expr>)> = Vec::new();
+                let mut index: HashMap<Expr, usize> = HashMap::new();
                 for i in items {
-                    m.entry(i.value.clone()).or_default().push(i.key.clone());
+                    if let Some(&idx) = index.get(&i.value) {
+                        groups[idx].1.push(i.key.clone());
+                    } else {
+                        index.insert(i.value.clone(), groups.len());
+                        groups.push((i.value.clone(), vec![i.key.clone()]));
+                    }
                 }
                 TransformOp::Replace(Expr::Dict(
-                    m.iter()
+                    groups
+                        .into_iter()
                         .map(|(value, keys)| {
                             let key = if keys.len() == 1 {
                                 keys[0].clone()
                             } else {
-                                Expr::Tuple(keys.clone())
+                                Expr::Tuple(keys)
                             };
-                            DictEntry {
-                                key,
-                                value: value.clone(),
-                            }
+                            DictEntry { key, value }
                         })
                         .collect(),
                 ))
@@ -370,8 +396,7 @@ mod tests {
                             # denied
                             when({"Read": {".env": deny()}}),
                             # allowed
-                            when({"Bash": {"git": allow()}}),
-                            when({("Read", "Write"): allow()}),
+                            when({"Bash": {"git": allow()}, ("Read", "Write"): allow()}),
                         ],
                     )
                     "#,
