@@ -74,6 +74,49 @@ pub fn find_sandboxes(stmts: &[Stmt]) -> Vec<(usize, String)> {
         .collect()
 }
 
+/// Find the `fs = {...}` kwarg dict in a sandbox() call by name.
+fn find_sandbox_fs_mut<'a>(stmts: &'a mut [Stmt], name: &str) -> Option<&'a mut Vec<DictEntry>> {
+    let sandboxes = find_sandboxes(stmts);
+    let (idx, _) = sandboxes.iter().find(|(_, n)| n == name)?;
+    let idx = *idx;
+
+    let call = match &mut stmts[idx] {
+        Stmt::Expr(expr) => expr,
+        Stmt::Assign { value, .. } => value,
+        _ => return None,
+    };
+
+    if let Expr::Call { kwargs, .. } = call {
+        for (key, value) in kwargs.iter_mut() {
+            if key == "fs" {
+                if let Expr::Dict(entries) = value {
+                    return Some(entries);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Get a mutable reference to the kwargs of a sandbox() call by name.
+fn find_sandbox_kwargs_mut<'a>(stmts: &'a mut [Stmt], name: &str) -> Option<&'a mut Vec<(String, Expr)>> {
+    let sandboxes = find_sandboxes(stmts);
+    let (idx, _) = sandboxes.iter().find(|(_, n)| n == name)?;
+    let idx = *idx;
+
+    let call = match &mut stmts[idx] {
+        Stmt::Expr(expr) => expr,
+        Stmt::Assign { value, .. } => value,
+        _ => return None,
+    };
+
+    if let Expr::Call { kwargs, .. } = call {
+        Some(kwargs)
+    } else {
+        None
+    }
+}
+
 /// Find the `rules = [...]` kwarg in a `policy()` call and return a mutable
 /// reference to the list's items.
 pub fn policy_rules_mut(stmts: &mut [Stmt]) -> Option<&mut Vec<Expr>> {
@@ -271,6 +314,70 @@ pub fn remove_sandbox(stmts: &mut Vec<Stmt>, name: &str) -> Result<(), String> {
         stmts.remove(*idx);
     }
     Ok(())
+}
+
+/// Add a filesystem rule to a sandbox's `fs = {...}` dict.
+///
+/// The path should be a glob pattern like `$HOME/.cache/**`.
+/// Caps is a shorthand string like `"read"`, `"read + write"`, or `"rwc"`.
+pub fn add_sandbox_rule(
+    stmts: &mut Vec<Stmt>,
+    sandbox_name: &str,
+    path: &str,
+    caps: &str,
+) -> Result<(), String> {
+    if !find_sandboxes(stmts).iter().any(|(_, n)| n == sandbox_name) {
+        return Err(format!("sandbox '{sandbox_name}' not found"));
+    }
+
+    let key = Expr::call("glob", vec![Expr::string(path)]);
+    let value = Expr::call("allow", vec![Expr::string(caps)]);
+    let entry = DictEntry::new(key, value);
+
+    // Try to add to existing fs dict
+    if let Some(entries) = find_sandbox_fs_mut(stmts, sandbox_name) {
+        entries.push(entry);
+        return Ok(());
+    }
+
+    // No fs kwarg — create one
+    let kwargs = find_sandbox_kwargs_mut(stmts, sandbox_name)
+        .ok_or_else(|| format!("sandbox '{sandbox_name}' not found"))?;
+    kwargs.push(("fs".to_string(), Expr::dict(vec![entry])));
+    Ok(())
+}
+
+/// Remove a filesystem rule from a sandbox's `fs = {...}` dict by path.
+///
+/// Returns true if a rule was removed.
+pub fn remove_sandbox_rule(
+    stmts: &mut Vec<Stmt>,
+    sandbox_name: &str,
+    path: &str,
+) -> Result<bool, String> {
+    let entries = find_sandbox_fs_mut(stmts, sandbox_name)
+        .ok_or_else(|| format!("sandbox '{sandbox_name}' not found or has no fs rules"))?;
+
+    let before = entries.len();
+    entries.retain(|e| {
+        // Match glob("path"), subpath("path"), or literal("path") keys
+        if let Expr::Call { func, args, .. } = &e.key {
+            if let Expr::Ident(name) = func.as_ref() {
+                if name == "glob" || name == "subpath" || name == "literal" {
+                    if let Some(Expr::String(p)) = args.first() {
+                        return p != path;
+                    }
+                }
+            }
+        }
+        // Match bare string keys
+        if let Expr::String(p) = &e.key {
+            return p != path;
+        }
+        true
+    });
+
+    Ok(entries.len() < before)
 }
 
 // ---------------------------------------------------------------------------
@@ -530,6 +637,85 @@ policy("test", default = deny(), rules = [when({"Read": allow()})])
         add_raw_rule(&mut stmts, "when({\"Grep\": allow()})").unwrap();
         let src = serialize(&stmts);
         assert!(src.contains("when({\"Grep\": allow()})"), "got:\n{src}");
+    }
+
+    #[test]
+    fn add_sandbox_rule_inserts() {
+        let mut stmts = parse(
+            r#"sandbox(name = "dev", default = deny(), fs = {glob("$PWD/**"): allow("rwc")})
+
+settings(default = deny())
+
+policy("test", default = deny(), rules = [])
+"#,
+        )
+        .unwrap();
+        add_sandbox_rule(&mut stmts, "dev", "$HOME/.cache/**", "read").unwrap();
+        let src = serialize(&stmts);
+        assert!(
+            src.contains(".cache") && src.contains("allow(\"read\")"),
+            "got:\n{src}"
+        );
+    }
+
+    #[test]
+    fn add_sandbox_rule_missing_sandbox_errors() {
+        let mut stmts = policy_stmts();
+        let err = add_sandbox_rule(&mut stmts, "nope", "$HOME/.cache/**", "read").unwrap_err();
+        assert!(err.contains("not found"), "got: {err}");
+    }
+
+    #[test]
+    fn add_sandbox_rule_creates_fs_if_missing() {
+        let mut stmts = parse(
+            r#"sandbox(name = "net", default = deny(), net = allow())
+
+settings(default = deny())
+
+policy("test", default = deny(), rules = [])
+"#,
+        )
+        .unwrap();
+        add_sandbox_rule(&mut stmts, "net", "$HOME/.cache/**", "read + write").unwrap();
+        let src = serialize(&stmts);
+        assert!(src.contains("fs ="), "should have added fs kwarg, got:\n{src}");
+        assert!(src.contains(".cache"), "got:\n{src}");
+    }
+
+    #[test]
+    fn remove_sandbox_rule_removes() {
+        let mut stmts = parse(
+            r#"sandbox(name = "dev", default = deny(), fs = {
+    glob("$PWD/**"): allow("rwc"),
+    glob("$HOME/.cache/**"): allow("read"),
+})
+
+settings(default = deny())
+
+policy("test", default = deny(), rules = [])
+"#,
+        )
+        .unwrap();
+        let removed = remove_sandbox_rule(&mut stmts, "dev", "$HOME/.cache/**").unwrap();
+        assert!(removed);
+        let src = serialize(&stmts);
+        assert!(!src.contains(".cache"), "got:\n{src}");
+        assert!(src.contains("$PWD"), "should keep other rules, got:\n{src}");
+    }
+
+    #[test]
+    fn remove_sandbox_rule_returns_false_when_no_match() {
+        let mut stmts = parse(
+            r#"sandbox(name = "dev", default = deny(), fs = {glob("$PWD/**"): allow("rwc")})
+
+settings(default = deny())
+
+policy("test", default = deny(), rules = [])
+"#,
+        )
+        .unwrap();
+        let removed = remove_sandbox_rule(&mut stmts, "dev", "$HOME/nope/**").unwrap();
+        assert!(!removed);
     }
 
     #[test]
