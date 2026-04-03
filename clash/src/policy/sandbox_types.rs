@@ -864,17 +864,26 @@ mod tests {
     #[test]
     fn resolve_path_tmpdir_replacement() {
         // SAFETY: test-only, single-threaded access
+        let saved = std::env::var("TMPDIR").ok();
         unsafe { std::env::set_var("TMPDIR", "/custom/tmp") };
         let result = SandboxPolicy::resolve_path("$TMPDIR/scratch", "/ignored");
         assert_eq!(result, "/custom/tmp/scratch");
-        unsafe { std::env::remove_var("TMPDIR") };
+        match saved {
+            Some(v) => unsafe { std::env::set_var("TMPDIR", v) },
+            None => unsafe { std::env::remove_var("TMPDIR") },
+        }
     }
 
     #[test]
     fn resolve_path_tmpdir_fallback() {
+        let saved = std::env::var("TMPDIR").ok();
         unsafe { std::env::remove_var("TMPDIR") };
         let result = SandboxPolicy::resolve_path("$TMPDIR/scratch", "/ignored");
         assert_eq!(result, "/tmp/scratch");
+        match saved {
+            Some(v) => unsafe { std::env::set_var("TMPDIR", v) },
+            None => unsafe { std::env::remove_var("TMPDIR") },
+        }
     }
 
     #[test]

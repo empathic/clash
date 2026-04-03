@@ -1737,27 +1737,39 @@ mod tests {
     #[test]
     fn resolve_relative_path_prepends_pwd() {
         // SAFETY: test-only, single-threaded access
+        let saved = std::env::var("PWD").ok();
         unsafe { std::env::set_var("PWD", "/home/user/project") };
         let result = resolve_relative_path("src/main.rs");
         assert_eq!(result, "/home/user/project/src/main.rs");
-        unsafe { std::env::remove_var("PWD") };
+        match saved {
+            Some(v) => unsafe { std::env::set_var("PWD", v) },
+            None => unsafe { std::env::remove_var("PWD") },
+        }
     }
 
     #[test]
     fn resolve_relative_path_empty() {
+        let saved = std::env::var("PWD").ok();
         unsafe { std::env::set_var("PWD", "/home/user") };
         let result = resolve_relative_path("");
         // Empty path has no leading slash, so gets PWD prepended
         assert_eq!(result, "/home/user/");
-        unsafe { std::env::remove_var("PWD") };
+        match saved {
+            Some(v) => unsafe { std::env::set_var("PWD", v) },
+            None => unsafe { std::env::remove_var("PWD") },
+        }
     }
 
     #[test]
     fn resolve_relative_path_no_leading_slash() {
+        let saved = std::env::var("PWD").ok();
         unsafe { std::env::set_var("PWD", "/workspace") };
         let result = resolve_relative_path("foo/bar.txt");
         assert_eq!(result, "/workspace/foo/bar.txt");
-        unsafe { std::env::remove_var("PWD") };
+        match saved {
+            Some(v) => unsafe { std::env::set_var("PWD", v) },
+            None => unsafe { std::env::remove_var("PWD") },
+        }
     }
 
     // -----------------------------------------------------------------------
