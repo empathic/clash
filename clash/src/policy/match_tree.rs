@@ -108,7 +108,8 @@ impl Pattern {
             Pattern::Not(p) => !p.matches(value),
             Pattern::Prefix(v) => {
                 let prefix = v.resolve();
-                value == prefix || value.starts_with(&format!("{prefix}/"))
+                // An empty prefix (e.g. unset env var) matches nothing — not everything.
+                !prefix.is_empty() && (value == prefix || value.starts_with(&format!("{prefix}/")))
             }
             Pattern::ChildOf(v) => {
                 let parent = v.resolve();

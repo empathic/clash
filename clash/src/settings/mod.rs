@@ -38,6 +38,9 @@ pub struct HookContext {
     /// Parent directory of the session transcript file. Agent output files
     /// are stored here and must always be readable.
     pub transcript_dir: Option<String>,
+    /// Which agent is making this hook call. Used to inject agent-specific
+    /// harness default rules into the compiled policy.
+    pub agent: Option<crate::agents::AgentKind>,
 }
 
 impl HookContext {
@@ -51,7 +54,16 @@ impl HookContext {
                 .map(|p| p.to_string_lossy().to_string())
                 .filter(|s| !s.is_empty())
         };
-        Self { transcript_dir }
+        Self {
+            transcript_dir,
+            agent: None,
+        }
+    }
+
+    /// Set the agent kind for harness rule injection.
+    pub fn with_agent(mut self, agent: crate::agents::AgentKind) -> Self {
+        self.agent = Some(agent);
+        self
     }
 }
 
