@@ -93,7 +93,13 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
 
     let mut actions = InitActions::default();
 
-    let (policy_path, created_new) = ensure_starter_policy()?;
+    let (policy_path, created_new) = match detect_and_generate_policy()? {
+        Some(policy_content) => {
+            let path = write_detected_policy(&policy_content)?;
+            (path, true)
+        }
+        None => ensure_starter_policy()?,
+    };
     let outcome = crate::tui::run_with_options(&policy_path, false, true)?;
     if outcome == crate::tui::TuiOutcome::Aborted {
         if created_new {
@@ -117,6 +123,79 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
     print_summary(&actions, agent);
 
     Ok(())
+}
+
+/// Run ecosystem detection and return a generated policy, or None if the user
+/// declines or no ecosystems are detected.
+fn detect_and_generate_policy() -> Result<Option<String>> {
+    println!();
+    let scan = crate::dialog::confirm(
+        "Scan your project and command history to recommend sandboxes?",
+        false,
+    )?;
+    if !scan {
+        return Ok(None);
+    }
+
+    let cwd = std::env::current_dir().context("getting current directory")?;
+    let observed = crate::cmd::from_trace::mine_binaries_from_history();
+    let observed_refs: Vec<&str> = observed.iter().map(|s| s.as_str()).collect();
+    let detected = crate::ecosystem::detect_ecosystems(&cwd, &observed_refs);
+
+    if detected.is_empty() {
+        ui::info("No ecosystems detected.");
+        return Ok(None);
+    }
+
+    println!();
+    ui::info("Detected ecosystems:");
+    println!();
+    for eco in &detected {
+        let mut reasons = Vec::new();
+        for m in eco.markers {
+            if cwd.join(m).exists() {
+                reasons.push(format!("found {m}"));
+            }
+        }
+        for m in eco.dir_markers {
+            if cwd.join(m).is_dir() {
+                reasons.push(format!("found {m}/"));
+            }
+        }
+        for bin in eco.binaries {
+            if observed.contains(*bin) {
+                reasons.push(format!("observed: {bin}"));
+            }
+        }
+        let reason_str = if reasons.is_empty() {
+            String::new()
+        } else {
+            format!("  ({})", reasons.join(", "))
+        };
+        ui::success(&format!("  {:<12}{}", eco.name, reason_str));
+    }
+    println!();
+
+    let include = crate::dialog::confirm("Include these sandboxes in your policy?", false)?;
+    if !include {
+        return Ok(None);
+    }
+
+    Ok(Some(crate::ecosystem::generate_policy(&detected)))
+}
+
+/// Write a detected/generated policy to the policy file location.
+fn write_detected_policy(content: &str) -> Result<std::path::PathBuf> {
+    let policy_path = ClashSettings::policy_file()?;
+    let star_path = policy_path.with_extension("star");
+    let dir = star_path
+        .parent()
+        .context("policy file path has no parent directory")?;
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::write(&star_path, content)
+        .with_context(|| format!("failed to write {}", star_path.display()))?;
+    Ok(star_path)
 }
 
 /// Ensure a policy file exists, writing the starter template only if one
@@ -538,6 +617,19 @@ fn remove_clash_from_vec(opt: &mut Option<Vec<claude_settings::HookMatcher>>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detected_policy_compiles() {
+        let ecosystems: Vec<&crate::ecosystem::EcosystemDef> = crate::ecosystem::ECOSYSTEMS
+            .iter()
+            .filter(|e| e.name == "rust" || e.name == "git")
+            .collect();
+        let starlark = crate::ecosystem::generate_policy(&ecosystems);
+        let output = clash_starlark::evaluate(&starlark, "<test>", std::path::Path::new("."))
+            .expect("detected policy must evaluate");
+        crate::policy::compile::compile_to_tree(&output.json)
+            .expect("detected policy must compile");
+    }
 
     #[test]
     fn starter_policy_compiles() {
