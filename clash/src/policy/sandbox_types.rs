@@ -569,6 +569,25 @@ impl SandboxPolicy {
     }
 }
 
+/// What the model should do when a sandbox violation occurs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViolationAction {
+    /// Stop and suggest a policy fix. Don't retry.
+    #[default]
+    Stop,
+    /// Try an alternative approach. If no workaround is possible, suggest the policy fix.
+    Workaround,
+    /// Let the model assess context to decide between stop and workaround.
+    Smart,
+}
+
+impl ViolationAction {
+    pub fn is_default(&self) -> bool {
+        matches!(self, ViolationAction::Stop)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1318,5 +1337,43 @@ mod tests {
             caps.contains(Cap::WRITE),
             "rule on /private/tmp should match query for /tmp/scratch"
         );
+    }
+}
+
+#[cfg(test)]
+mod violation_action_tests {
+    use super::*;
+
+    #[test]
+    fn test_violation_action_default_is_stop() {
+        let action: ViolationAction = Default::default();
+        assert!(matches!(action, ViolationAction::Stop));
+    }
+
+    #[test]
+    fn test_violation_action_deserialize_stop() {
+        let action: ViolationAction = serde_json::from_str("\"stop\"").unwrap();
+        assert!(matches!(action, ViolationAction::Stop));
+    }
+
+    #[test]
+    fn test_violation_action_deserialize_workaround() {
+        let action: ViolationAction = serde_json::from_str("\"workaround\"").unwrap();
+        assert!(matches!(action, ViolationAction::Workaround));
+    }
+
+    #[test]
+    fn test_violation_action_deserialize_smart() {
+        let action: ViolationAction = serde_json::from_str("\"smart\"").unwrap();
+        assert!(matches!(action, ViolationAction::Smart));
+    }
+
+    #[test]
+    fn test_violation_action_serialize_roundtrip() {
+        for action in [ViolationAction::Stop, ViolationAction::Workaround, ViolationAction::Smart] {
+            let json = serde_json::to_string(&action).unwrap();
+            let back: ViolationAction = serde_json::from_str(&json).unwrap();
+            assert_eq!(action, back);
+        }
     }
 }

@@ -443,6 +443,7 @@ mod tests {
             tree,
             default_effect: Effect::Ask,
             default_sandbox: None,
+            on_sandbox_violation: Default::default(),
         }
     }
 

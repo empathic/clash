@@ -133,6 +133,8 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] default: &str,
         #[starlark(require = named, default = starlark::values::none::NoneType)]
         default_sandbox: Value<'v>,
+        #[starlark(require = named, default = starlark::values::none::NoneType)]
+        on_sandbox_violation: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<NoneType> {
         let ctx = eval
@@ -153,9 +155,25 @@ fn register_globals(builder: &mut GlobalsBuilder) {
                     .to_string(),
             )
         };
+        let osv = if on_sandbox_violation.is_none() {
+            None
+        } else {
+            let s = on_sandbox_violation
+                .unpack_str()
+                .ok_or_else(|| anyhow::anyhow!("on_sandbox_violation must be a string"))?
+                .to_string();
+            match s.as_str() {
+                "stop" | "workaround" | "smart" => {}
+                _ => anyhow::bail!(
+                    "on_sandbox_violation must be \"stop\", \"workaround\", or \"smart\", got \"{s}\""
+                ),
+            }
+            Some(s)
+        };
         ctx.register_settings(SettingsValue {
             default_effect: default.to_string(),
             default_sandbox: ds,
+            on_sandbox_violation: osv,
         })?;
         Ok(NoneType)
     }

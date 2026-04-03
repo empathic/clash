@@ -14,6 +14,7 @@ use starlark::values::ProvidesStaticType;
 pub struct SettingsValue {
     pub default_effect: String,
     pub default_sandbox: Option<String>,
+    pub on_sandbox_violation: Option<String>,
 }
 
 /// A registered policy — name + match tree nodes + associated sandboxes.
@@ -100,6 +101,13 @@ impl EvalContext {
             doc.as_object_mut()
                 .unwrap()
                 .insert("default_sandbox".to_string(), serde_json::json!(ds));
+        }
+
+        // Add on_sandbox_violation if set
+        if let Some(ref action) = settings.as_ref().and_then(|s| s.on_sandbox_violation.clone()) {
+            doc.as_object_mut()
+                .unwrap()
+                .insert("on_sandbox_violation".to_string(), serde_json::json!(action));
         }
 
         Ok(doc)

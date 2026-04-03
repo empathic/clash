@@ -792,11 +792,12 @@ def _merge_sandboxes(*sandboxes):
 # ---------------------------------------------------------------------------
 
 
-def settings(default="deny", default_sandbox=None):
+def settings(default="deny", default_sandbox=None, on_sandbox_violation=None):
     """Register policy settings.
 
     Usage:
         settings(default=ask(), default_sandbox="dev")
+        settings(default=deny(), on_sandbox_violation="workaround")
     """
     default = _unwrap_effect(default)
     ds = None
@@ -807,7 +808,7 @@ def settings(default="deny", default_sandbox=None):
             ds = default_sandbox
         else:
             fail("default_sandbox must be a sandbox name string or sandbox() value")
-    _register_settings(default=default, default_sandbox=ds)
+    _register_settings(default=default, default_sandbox=ds, on_sandbox_violation=on_sandbox_violation)
 
 
 

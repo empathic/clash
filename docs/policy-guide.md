@@ -477,6 +477,35 @@ sandbox(
 )
 ```
 
+### Policy settings
+
+The `settings()` function configures global policy behavior. It is optional; defaults apply when omitted.
+
+```python
+settings(default=deny(), on_sandbox_violation="stop")
+```
+
+#### `default`
+
+The default effect when no rule matches. Accepts `allow()`, `deny()`, or `ask()`. Defaults to `"deny"`.
+
+#### `default_sandbox`
+
+A sandbox to apply by default to all shell command rules that do not specify their own sandbox.
+
+#### `on_sandbox_violation`
+
+Controls model behavior when a sandbox blocks an operation.
+
+Values:
+- `"stop"` (default) — Tell the model to stop and suggest a policy fix. Don't retry.
+- `"workaround"` — Tell the model to try an alternative approach. If no workaround is possible, suggest the policy fix.
+- `"smart"` — Let the model assess context to decide whether to suggest a fix or find an alternative.
+
+```python
+settings(default=deny(), on_sandbox_violation="workaround")
+```
+
 ---
 
 ## JSON IR Reference (Advanced)
