@@ -61,7 +61,11 @@ pub fn run(path: &Path) -> Result<TuiOutcome> {
 }
 
 /// Launch the TUI with options.
-pub fn run_with_options(path: &Path, show_test_panel: bool, onboarding: bool) -> Result<TuiOutcome> {
+pub fn run_with_options(
+    path: &Path,
+    show_test_panel: bool,
+    onboarding: bool,
+) -> Result<TuiOutcome> {
     let is_star = path.extension().is_some_and(|ext| ext == "star");
 
     let mut app = if is_star {
