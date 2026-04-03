@@ -728,7 +728,6 @@ dependencies = [
  "clash-brush-builtins",
  "clash-brush-core",
  "clash-brush-interactive",
- "clash-brush-parser",
  "clash_notify",
  "clash_starlark",
  "claude_settings",
@@ -736,7 +735,6 @@ dependencies = [
  "crossterm",
  "dialoguer",
  "dirs",
- "figment",
  "flate2",
  "fs2",
  "hotln",
@@ -747,16 +745,13 @@ dependencies = [
  "landlock",
  "libc",
  "mockito",
- "nu-ansi-term",
  "proptest",
  "ratatui",
- "reedline",
  "regex",
  "seccompiler",
  "semver",
  "serde",
  "serde_json",
- "serde_regex",
  "serde_yaml",
  "sha2",
  "similar",
@@ -770,7 +765,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq",
- "uuid",
  "which",
 ]
 
@@ -816,7 +810,6 @@ dependencies = [
  "command-fds",
  "fancy-regex 0.17.0",
  "futures",
- "getrandom 0.4.2",
  "hostname",
  "inherent",
  "itertools 0.14.0",
@@ -833,7 +826,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "uuid",
  "uzers",
  "whoami",
 ]
@@ -865,7 +857,6 @@ dependencies = [
  "bon",
  "cached",
  "criterion",
- "getrandom 0.4.2",
  "indenter",
  "insta",
  "miette",
@@ -877,7 +868,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "utf8-chars",
- "uuid",
  "winnow",
 ]
 
@@ -898,7 +888,6 @@ dependencies = [
  "anyhow",
  "include_dir",
  "indoc",
- "itertools 0.14.0",
  "pretty_assertions",
  "regex",
  "serde",
@@ -915,14 +904,12 @@ name = "claude_settings"
 version = "0.6.2"
 dependencies = [
  "anyhow",
- "dirs",
  "figment",
  "regex",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
- "toml",
  "tracing",
 ]
 
@@ -1965,13 +1952,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.0",
  "wasip2",
  "wasip3",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -4144,16 +4129,6 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
-]
-
-[[package]]
-name = "serde_regex"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8136f1a4ea815d7eac4101cfd0b16dc0cb5e1fe1b8609dfd728058656b7badf"
-dependencies = [
- "regex",
- "serde",
 ]
 
 [[package]]
