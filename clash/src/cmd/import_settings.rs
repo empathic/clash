@@ -514,13 +514,25 @@ fn detect_ecosystem_loads() -> Result<EcosystemDetection> {
 
 /// Build `when()` routing rules for detected ecosystems.
 ///
-/// Each ecosystem gets a `when({"Bash": {binaries: allow(sandbox=full)}})` rule
-/// that routes its binaries through the `_full` sandbox.
+/// Generates two kinds of rules:
+/// 1. File-access tools (Read, Glob, Grep, Write, Edit) → `project_files` sandbox
+/// 2. Bash binary routing → ecosystem-specific sandboxes
 fn build_ecosystem_rules(ecosystems: &[&crate::ecosystem::EcosystemDef]) -> Vec<Expr> {
     if ecosystems.is_empty() {
         return vec![];
     }
 
+    let mut rules = Vec::new();
+
+    // File-access tools — always allow within the project_files sandbox
+    // when ecosystems are detected, since the user is clearly doing development.
+    let fs_tools = &["Read", "Glob", "Grep", "Write", "Edit", "NotebookEdit"];
+    rules.push(Expr::commented(
+        "file-access tools — sandboxed to project",
+        tool_match(fs_tools, allow_with_sandbox(Expr::ident("project_files"))),
+    ));
+
+    // Bash binary routing
     let mut bash_entries: Vec<(MatchKey, MatchValue)> = Vec::new();
     for eco in ecosystems {
         let key: MatchKey = if eco.binaries.len() == 1 {
@@ -536,10 +548,12 @@ fn build_ecosystem_rules(ecosystems: &[&crate::ecosystem::EcosystemDef]) -> Vec<
         bash_entries.push((key, MatchValue::Effect(glob_entry)));
     }
 
-    vec![Expr::commented(
+    rules.push(Expr::commented(
         "ecosystem sandboxes (detected)",
         match_rule(vec![("Bash".into(), MatchValue::Nested(bash_entries))]),
-    )]
+    ));
+
+    rules
 }
 
 // ---------------------------------------------------------------------------
