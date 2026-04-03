@@ -93,10 +93,16 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
 
     let mut actions = InitActions::default();
 
-    let (policy_path, created_new) = match detect_and_generate_policy()? {
+    // Check if a policy already exists *before* detection so we can adjust messaging.
+    let existing_policy = {
+        let p = ClashSettings::policy_file()?.with_extension("star");
+        if p.exists() { Some(p) } else { None }
+    };
+
+    let (policy_path, created_new) = match detect_and_generate_policy(existing_policy.is_some())? {
         Some(policy_content) => {
             let path = write_detected_policy(&policy_content)?;
-            (path, true)
+            (path, existing_policy.is_none())
         }
         None => ensure_starter_policy()?,
     };
@@ -127,7 +133,10 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
 
 /// Run ecosystem detection and return a generated policy, or None if the user
 /// declines or no ecosystems are detected.
-fn detect_and_generate_policy() -> Result<Option<String>> {
+///
+/// When `has_existing_policy` is true, adjusts messaging to indicate the policy
+/// will be regenerated rather than created fresh.
+fn detect_and_generate_policy(has_existing_policy: bool) -> Result<Option<String>> {
     println!();
     let scan = crate::dialog::confirm(
         "Scan your project and command history to recommend sandboxes?",
@@ -176,7 +185,12 @@ fn detect_and_generate_policy() -> Result<Option<String>> {
     }
     println!();
 
-    let include = crate::dialog::confirm("Include these sandboxes in your policy?", false)?;
+    let confirm_msg = if has_existing_policy {
+        "Generate a new policy with these sandboxes? (replaces existing policy)"
+    } else {
+        "Include these sandboxes in your policy?"
+    };
+    let include = crate::dialog::confirm(confirm_msg, false)?;
     if !include {
         return Ok(None);
     }
