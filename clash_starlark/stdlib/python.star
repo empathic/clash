@@ -1,22 +1,18 @@
-python_sandbox = sandbox(
-    name = "python_dev",
-    default = deny(),
+python_full = sandbox(
+    name = "python_full",
+    default = ask(),
     fs = {
-        glob("$PWD/**"): allow("rwcx"),
+        subpath("$PWD"): allow(FULL),
         "$HOME": {
-            glob(".local/**"): allow("rwc"),
+            glob(".local/**"): allow(),
             glob(".cache/pip/**"): allow(),
+            glob(".virtualenvs/**"): allow(),
+            glob(".pyenv/**"): allow("rx"),
         },
         glob("$TMPDIR/**"): allow(),
     },
-    net = [
-        domains({
-            "pypi.org": allow(),
-            "files.pythonhosted.org": allow(),
-            "github.com": allow(),
-        }),
-    ],
-    doc = "Python development: project + pip cache, PyPI/GitHub network",
+    net = allow(),
+    doc = "Python full: pip install, run scripts, virtualenvs. Full project + package access.",
 )
 
-python = when({"Bash": {regex("python3?"): allow(sandbox = python_sandbox)}})
+python = when({"Bash": {("python", "python3", "pip", "pip3", "uv", "poetry"): allow(sandbox = python_full)}})
