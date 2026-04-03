@@ -6,7 +6,6 @@
 
 mod builders;
 pub mod codegen;
-mod compile;
 pub mod eval_context;
 mod globals;
 mod loader;
@@ -729,98 +728,6 @@ policy("test", rules =
         let pos1 = &pos0["children"].as_array().unwrap()[0]["condition"];
         assert_eq!(pos1["observe"]["positional_arg"], 1);
         assert_eq!(pos1["pattern"]["literal"]["literal"], "push");
-    }
-
-    // -----------------------------------------------------------------------
-    // Match tree builder tests (using match_tree.star directly)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_match_tree_simple() {
-        let doc = eval_to_doc(
-            r#"
-load("@clash//match_tree.star", "exe", "tool", "allow", "deny", "policy")
-
-policy(rules = [
-    exe("git").allow(),
-    tool().allow(),
-])
-"#,
-        );
-        assert_eq!(doc["schema_version"], 5);
-        assert_eq!(doc["default_effect"], "deny");
-        let tree = doc["tree"].as_array().unwrap();
-        assert_eq!(tree.len(), 2);
-    }
-
-    #[test]
-    fn test_match_tree_nested() {
-        let doc = eval_to_doc(
-            r#"
-load("@clash//match_tree.star", "exe", "has_arg", "allow", "deny", "policy")
-
-policy(rules = [
-    exe("git").on([
-        has_arg("--force").deny(),
-        allow(),
-    ]),
-])
-"#,
-        );
-        assert_eq!(doc["schema_version"], 5);
-        let tree = doc["tree"].as_array().unwrap();
-        assert_eq!(tree.len(), 1);
-        let exe_node = &tree[0]["condition"];
-        assert!(exe_node.is_object());
-    }
-
-    #[test]
-    fn test_match_tree_with_sandbox() {
-        let doc = eval_to_doc(
-            r#"
-load("@clash//match_tree.star", "exe", "tool", "allow", "deny", "policy")
-
-policy(rules = [
-    exe("cargo").allow(sandbox = "cwd_access"),
-    tool().allow(),
-])
-"#,
-        );
-        assert_eq!(doc["schema_version"], 5);
-        let tree = doc["tree"].as_array().unwrap();
-        assert_eq!(tree.len(), 2);
-    }
-
-    #[test]
-    fn test_match_tree_arg_and_named() {
-        let doc = eval_to_doc(
-            r#"
-load("@clash//match_tree.star", "exe", "arg", "named", "allow", "deny", "policy")
-
-policy(rules = [
-    exe("git").on([
-        arg(1, "push").deny(),
-        allow(),
-    ]),
-])
-"#,
-        );
-        assert_eq!(doc["schema_version"], 5);
-    }
-
-    #[test]
-    fn test_match_tree_load_module() {
-        let doc = eval_to_doc(
-            r#"
-load("@clash//match_tree.star", "exe", "tool", "allow", "deny", "policy", "mt_regex")
-
-policy(rules = [
-    exe(mt_regex("cargo.*")).allow(),
-    tool().deny(),
-])
-"#,
-        );
-        assert_eq!(doc["schema_version"], 5);
     }
 
     #[test]
