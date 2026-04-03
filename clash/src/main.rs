@@ -50,11 +50,6 @@ fn main() -> Result<()> {
                 args,
             } => clash::shell_cmd::run_shell(command, args, cwd, sandbox, debug),
             Commands::Sandbox(sandbox_cmd) => run_sandbox(sandbox_cmd),
-            Commands::Playground => {
-                eprintln!("Note: `clash playground` is now `clash policy edit --test`");
-                eprintln!("      The playground REPL has been unified into the policy editor.\n");
-                cmd::playground::run()
-            }
             Commands::Doctor { onboard, agent } => cmd::doctor::run(onboard, agent),
             Commands::Debug(cmd) => cmd::debug::run(cmd),
             Commands::Trace(cmd) => cmd::trace::run(cmd),
