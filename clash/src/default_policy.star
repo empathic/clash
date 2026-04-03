@@ -1,5 +1,5 @@
 load("@clash//builtin.star", "builtins")
-load("@clash//sandboxes.star", "readonly", "workspace", "git_ro", "git_rw")
+load("@clash//sandboxes.star", "readonly", "workspace", "git_safe", "git_full")
 
 policy("default",
     {
@@ -7,14 +7,14 @@ policy("default",
             glob("**"): allow(sandbox=readonly),
             Tool("Bash"): {
                 "git": {
-                    glob("**"): allow(sandbox=git_ro)
+                    glob("**"): allow(sandbox=git_safe)
                 }
             }
         },
         (mode("edit"), mode("default")): {
             Tool("Bash"): {
                 "git": {
-                    glob("**"): allow(sandbox=git_rw)
+                    glob("**"): allow(sandbox=git_full)
                 }
             }
         },

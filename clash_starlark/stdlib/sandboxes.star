@@ -5,8 +5,8 @@
 #
 #   readonly     — read-only project access, network allowed
 #   project      — build tools, git: read+write project, no network
-#   git_ro       — git read-only: worktree-aware, network + SSH
-#   git_rw       — git read-write: worktree-aware, network + SSH
+#   git_safe     — git safe: worktree-aware, network + SSH
+#   git_full     — git full: worktree-aware, network + SSH
 #   workspace    — full home directory access, deny sensitive dirs
 #   unrestricted — fully trusted: all filesystem + network access
 #
@@ -34,8 +34,8 @@ project = sandbox(
     }
 )
 
-git_ro = sandbox(
-    name = "git_ro",
+git_safe = sandbox(
+    name = "git_safe",
     default = ask(),
     fs = {
         subpath("$PWD", follow_worktrees=True): allow("rx"),
@@ -47,11 +47,11 @@ git_ro = sandbox(
         glob("$TMPDIR/**"): allow(),
     },
     net = allow(),
-    doc = "Git read-only: fetch, pull, log, diff. Worktree-aware, network + SSH enabled.",
+    doc = "Git safe: fetch, pull, log, diff. Worktree-aware, network + SSH enabled.",
 )
 
-git_rw = sandbox(
-    name = "git_rw",
+git_full = sandbox(
+    name = "git_full",
     default = ask(),
     fs = {
         subpath("$PWD", follow_worktrees=True): allow(FULL),
@@ -63,7 +63,7 @@ git_rw = sandbox(
         glob("$TMPDIR/**"): allow(),
     },
     net = allow(),
-    doc = "Git read-write: commit, push, checkout, merge. Worktree-aware, network + SSH enabled.",
+    doc = "Git full: commit, push, checkout, merge. Worktree-aware, network + SSH enabled.",
 )
 
 workspace = sandbox(
