@@ -47,6 +47,7 @@ pub mod network_hints;
 pub mod notifications;
 pub mod permissions;
 pub mod policy;
+pub mod policy_gen;
 pub mod policy_loader;
 pub mod sandbox;
 pub mod sandbox_cmd;
