@@ -8,3 +8,6 @@ pub mod ecosystems;
 pub mod loads;
 pub mod sandboxes;
 pub mod tools;
+
+#[cfg(test)]
+mod tests;
