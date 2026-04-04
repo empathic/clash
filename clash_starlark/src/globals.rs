@@ -175,9 +175,11 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         let hd = if harness_defaults.is_none() {
             None
         } else {
-            Some(harness_defaults.unpack_bool().ok_or_else(|| {
-                anyhow::anyhow!("harness_defaults must be True or False")
-            })?)
+            Some(
+                harness_defaults
+                    .unpack_bool()
+                    .ok_or_else(|| anyhow::anyhow!("harness_defaults must be True or False"))?,
+            )
         };
         ctx.register_settings(SettingsValue {
             default_effect: default.to_string(),

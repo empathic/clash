@@ -105,10 +105,14 @@ impl EvalContext {
         }
 
         // Add on_sandbox_violation if set
-        if let Some(ref action) = settings.as_ref().and_then(|s| s.on_sandbox_violation.clone()) {
-            doc.as_object_mut()
-                .unwrap()
-                .insert("on_sandbox_violation".to_string(), serde_json::json!(action));
+        if let Some(ref action) = settings
+            .as_ref()
+            .and_then(|s| s.on_sandbox_violation.clone())
+        {
+            doc.as_object_mut().unwrap().insert(
+                "on_sandbox_violation".to_string(),
+                serde_json::json!(action),
+            );
         }
 
         // Add harness_defaults only when explicitly set to false (true is the default)

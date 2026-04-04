@@ -51,12 +51,26 @@ pub(crate) fn build_fs_hint(
 
 fn format_caps(caps: Cap) -> String {
     let mut parts = Vec::new();
-    if caps.contains(Cap::READ) { parts.push("read"); }
-    if caps.contains(Cap::WRITE) { parts.push("write"); }
-    if caps.contains(Cap::CREATE) { parts.push("create"); }
-    if caps.contains(Cap::DELETE) { parts.push("delete"); }
-    if caps.contains(Cap::EXECUTE) { parts.push("execute"); }
-    if parts.is_empty() { "none".into() } else { parts.join("+") }
+    if caps.contains(Cap::READ) {
+        parts.push("read");
+    }
+    if caps.contains(Cap::WRITE) {
+        parts.push("write");
+    }
+    if caps.contains(Cap::CREATE) {
+        parts.push("create");
+    }
+    if caps.contains(Cap::DELETE) {
+        parts.push("delete");
+    }
+    if caps.contains(Cap::EXECUTE) {
+        parts.push("execute");
+    }
+    if parts.is_empty() {
+        "none".into()
+    } else {
+        parts.join("+")
+    }
 }
 
 fn needed_caps_string(current: Cap) -> String {

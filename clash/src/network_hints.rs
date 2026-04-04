@@ -88,7 +88,8 @@ pub fn check_for_sandbox_network_hint(
         "Detected network error in sandboxed command output"
     );
 
-    let sandbox_name = decision.sandbox_name
+    let sandbox_name = decision
+        .sandbox_name
         .map(|r| r.0)
         .unwrap_or_else(|| "unnamed".to_string());
 
@@ -142,7 +143,9 @@ fn contains_network_error(text: &str) -> bool {
 fn build_network_hint(sandbox_name: &str, action: ViolationAction) -> String {
     let directive = crate::sandbox_hints::formatter::directive_text(action);
     [
-        &format!("SANDBOX VIOLATION: sandbox \"{sandbox_name}\" blocked network access (policy: deny)."),
+        &format!(
+            "SANDBOX VIOLATION: sandbox \"{sandbox_name}\" blocked network access (policy: deny)."
+        ),
         "",
         "To fix:",
         &format!("  clash sandbox add-rule --name {sandbox_name} --net allow"),
