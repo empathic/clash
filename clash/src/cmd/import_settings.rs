@@ -216,7 +216,7 @@ fn generate_starlark_from_posture(posture: Posture, detection: &EcosystemDetecti
     let mut stmts = vec![load_builtin(), load_sandboxes(&[preset])];
     stmts.extend(detection.loads.iter().cloned());
 
-    let eco_rules = build_ecosystem_rules(&detection.ecosystems, preset);
+    let eco_rules = crate::policy_gen::ecosystems::ecosystem_rules(&detection.ecosystems, preset);
 
     stmts.extend([
         Stmt::Blank,
@@ -363,7 +363,7 @@ fn generate_starlark_from_analysis(
     // 4. Ecosystem sandbox routing — BEFORE generic import allows so that
     //    binaries like cargo/git get proper toolchain sandboxes instead of
     //    the generic project_files sandbox.
-    rules.extend(build_ecosystem_rules(
+    rules.extend(crate::policy_gen::ecosystems::ecosystem_rules(
         &detection.ecosystems,
         "project_files",
     ));
@@ -531,53 +531,6 @@ fn detect_ecosystem_loads() -> Result<EcosystemDetection> {
         loads,
         ecosystems: detected,
     })
-}
-
-/// Build `when()` routing rules for detected ecosystems.
-///
-/// Generates two kinds of rules:
-/// 1. File-access tools (Read, Glob, Grep, Write, Edit) → `fs_sandbox` sandbox
-/// 2. Bash binary routing → ecosystem-specific sandboxes
-fn build_ecosystem_rules(
-    ecosystems: &[&crate::ecosystem::EcosystemDef],
-    fs_sandbox: &str,
-) -> Vec<Expr> {
-    if ecosystems.is_empty() {
-        return vec![];
-    }
-
-    let mut rules = Vec::new();
-
-    // File-access tools — always allow within the given sandbox
-    // when ecosystems are detected, since the user is clearly doing development.
-    let fs_tools = &["Read", "Glob", "Grep", "Write", "Edit", "NotebookEdit"];
-    rules.push(Expr::commented(
-        "file-access tools — sandboxed to project",
-        tool_match(fs_tools, allow_with_sandbox(Expr::ident(fs_sandbox))),
-    ));
-
-    // Bash binary routing
-    let mut bash_entries: Vec<(MatchKey, MatchValue)> = Vec::new();
-    for eco in ecosystems {
-        let key: MatchKey = if eco.binaries.len() == 1 {
-            eco.binaries[0].into()
-        } else {
-            eco.binaries.into()
-        };
-        let sandbox_expr = allow_with_sandbox(Expr::ident(eco.full_sandbox));
-        let glob_entry = Expr::dict(vec![DictEntry::new(
-            Expr::call("glob", vec![Expr::string("**")]),
-            sandbox_expr,
-        )]);
-        bash_entries.push((key, MatchValue::Effect(glob_entry)));
-    }
-
-    rules.push(Expr::commented(
-        "ecosystem sandboxes (detected)",
-        match_rule(vec![("Bash".into(), MatchValue::Nested(bash_entries))]),
-    ));
-
-    rules
 }
 
 // ---------------------------------------------------------------------------
