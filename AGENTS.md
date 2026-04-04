@@ -62,7 +62,7 @@
 
 ## Layout
 
-* *clash* Clash binary + library (includes `src/agents/` for multi-agent protocol adapters)
+* *clash* Clash binary + library (includes `src/agents/` for multi-agent protocol adapters, `src/policy_gen/` for shared policy generation definitions)
 * *clash_starlark* Starlark policy evaluator — compiles `.star` files to JSON policy format
 * *clash-plugin* Claude Code plugin (hooks.json, .claude-plugin definitions)
 * *clash-gemini-ext* Gemini CLI extension package
