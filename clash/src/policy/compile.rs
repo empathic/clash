@@ -74,6 +74,7 @@ pub fn compile_multi_level_to_tree(
         on_sandbox_violation: first.on_sandbox_violation,
         tree: first.tree,
         default_effect: first.default_effect,
+        harness_defaults: first.harness_defaults,
     };
 
     // Annotate root-level nodes from the first level with source provenance.
@@ -92,6 +93,10 @@ pub fn compile_multi_level_to_tree(
         merged.tree.extend(policy.tree);
         for (k, v) in policy.sandboxes {
             merged.sandboxes.entry(k).or_insert(v);
+        }
+        // If any level explicitly disables harness defaults, honor it.
+        if policy.harness_defaults == Some(false) {
+            merged.harness_defaults = Some(false);
         }
     }
 
@@ -218,6 +223,31 @@ mod tests {
         assert!(
             err.contains("nonexistent"),
             "error should mention the undefined sandbox name, got: {err}"
+        );
+    }
+
+    #[test]
+    fn multi_level_merge_respects_harness_defaults_from_any_level() {
+        // User policy (lowest precedence) disables harness defaults.
+        let user = r#"{
+            "schema_version": 5, "default_effect": "ask",
+            "sandboxes": {}, "tree": [],
+            "harness_defaults": false
+        }"#;
+        // Project policy (higher precedence) does not set harness_defaults.
+        let project = r#"{
+            "schema_version": 5, "default_effect": "deny",
+            "sandboxes": {}, "tree": []
+        }"#;
+        let levels = vec![
+            (crate::settings::PolicyLevel::User, user, "user"),
+            (crate::settings::PolicyLevel::Project, project, "project"),
+        ];
+        let merged = compile_multi_level_to_tree(&levels).unwrap();
+        assert_eq!(
+            merged.harness_defaults,
+            Some(false),
+            "harness_defaults=false from any level should be honored"
         );
     }
 }

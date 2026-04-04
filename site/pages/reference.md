@@ -344,6 +344,28 @@ Values:
 - `"workaround"` — Tell the model to try an alternative approach. If no workaround is possible, suggest the policy fix.
 - `"smart"` — Let the model assess context to decide whether to suggest a fix or find an alternative.
 
+### `harness_defaults`
+
+Controls whether clash automatically injects rules that allow the agent to access its own infrastructure directories. Defaults to `True`.
+
+When enabled, clash injects rules at the lowest priority (after all user-defined rules) to allow access to:
+
+| Path | Permissions | Purpose |
+|------|-------------|---------|
+| `~/.claude/` | read, write, create, delete | Memories, settings, plugin cache, skills |
+| `<project>/.claude/` | read only | Project config |
+| `<transcript_dir>/` | read, write, create, delete | Session transcripts |
+
+Your rules always take precedence over harness defaults.
+
+```python
+settings(harness_defaults=False)  # disable harness defaults
+```
+
+Or via environment variable: `CLASH_NO_HARNESS_DEFAULTS=1`.
+
+`clash status` hides harness rules by default and shows a count. Use `clash status --verbose` to see them tagged with `[harness]`.
+
 ---
 
 ## Common recipes

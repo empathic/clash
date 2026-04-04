@@ -1,0 +1,57 @@
+meta:
+  name: harness defaults — auto-allow infrastructure paths
+  description: >
+    With a deny-all policy, harness rules auto-allow Claude's infrastructure
+    paths (~/.claude/ and <project>/.claude/) for the default claude agent.
+    Reads from project .claude/ and $HOME/.claude/ are allowed; writes to
+    project .claude/ are denied (project dir is read-only in harness rules);
+    writes to $HOME/.claude/ are allowed.
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "allow", "deny", "policy", "settings")
+    settings(default=deny())
+    policy("test", rules=[])
+
+steps:
+  - name: read from project .claude/ is allowed by harness rule
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: .claude/settings.json
+    expect:
+      decision: allow
+
+  - name: read from $HOME/.claude/ is allowed by harness rule
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: $HOME/.claude/settings.json
+    expect:
+      decision: allow
+
+  - name: write to $HOME/.claude/ is allowed by harness rule
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: $HOME/.claude/cache.json
+      content: "{}"
+    expect:
+      decision: allow
+
+  - name: write to project .claude/ is denied (harness only reads project .claude/)
+    hook: pre-tool-use
+    tool_name: Write
+    tool_input:
+      file_path: .claude/settings.json
+      content: "{}"
+    expect:
+      decision: deny
+
+  - name: unrelated read is denied by default-deny policy
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: /tmp/unrelated.txt
+    expect:
+      decision: deny

@@ -103,7 +103,7 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
     );
     println!("{}", style::dim("─────────────────────────────────"));
 
-    let lines = policy.format_tree();
+    let lines = policy.format_tree_filtered(verbose);
     if lines.is_empty() {
         println!(
             "  {}",
@@ -124,6 +124,22 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
         Effect::Ask => style::yellow("requires approval"),
     };
     println!("\n  Everything else: {}", everything_else);
+
+    // Show harness rule count when not verbose
+    if !verbose {
+        let harness_count = policy.harness_node_count();
+        if harness_count > 0 {
+            println!(
+                "\n  {}",
+                style::dim(&format!(
+                    "{} harness rule{} active (use --verbose to show)",
+                    harness_count,
+                    if harness_count == 1 { "" } else { "s" }
+                ))
+            );
+        }
+    }
+
     println!();
     println!(
         "{}  {}",

@@ -78,19 +78,19 @@ clash status [OPTIONS]
 | Flag | Description |
 |------|-------------|
 | `--json` | Output as JSON instead of human-readable text |
-| `--verbose` | Show all rules including builtin rules from `@clash//builtin.star` |
+| `--verbose` | Show all rules including builtin rules from `@clash//builtin.star` and harness default rules |
 
 Outputs a comprehensive breakdown covering:
 
 - **Policy layers** — which levels are active (user, project, session) with file paths, and the automatic precedence chain (session > project > user)
-- **Effective policy** — all rules in evaluation order grouped by domain (exec, filesystem, network, tool), with level tags showing where each rule originates and shadow indicators when a higher-precedence layer overrides a lower one. Builtin rules (from `@clash//builtin.star`, included via `base.update(...)`) are collapsed into a summary count by default; pass `--verbose` to expand them.
+- **Effective policy** — all rules in evaluation order grouped by domain (exec, filesystem, network, tool), with level tags showing where each rule originates and shadow indicators when a higher-precedence layer overrides a lower one. Builtin rules (from `@clash//builtin.star`, included via `base.update(...)`) are collapsed into a summary count by default; pass `--verbose` to expand them. Harness default rules are also hidden by default and shown with a `[harness]` tag when `--verbose` is used.
 - **Potential issues** — detectable misconfigurations (overly broad wildcards, missing deny rules, shadowed rules, etc.)
 
 **Example:**
 
 ```bash
-clash status            # user/project/session rules; builtin rules collapsed
-clash status --verbose  # all rules including builtin rules expanded
+clash status            # user/project/session rules; builtin and harness rules collapsed
+clash status --verbose  # all rules including builtin and harness rules expanded
 ```
 
 ---
@@ -792,6 +792,24 @@ CLASH_DISABLE=1 claude
 # Re-enable
 unset CLASH_DISABLE
 ```
+
+## Harness Default Permissions
+
+Clash automatically injects rules that allow the agent to access its own infrastructure directories (memories, settings, plugin cache, skills, session transcripts). These rules run at the lowest priority — user-defined rules always take precedence.
+
+To disable harness defaults for a single session:
+
+```bash
+CLASH_NO_HARNESS_DEFAULTS=1 claude
+```
+
+To disable permanently, add to your policy file:
+
+```python
+settings(harness_defaults=False)
+```
+
+Harness rules are hidden in `clash status` output by default (a count is shown). Use `clash status --verbose` to see them with a `[harness]` tag.
 
 ---
 

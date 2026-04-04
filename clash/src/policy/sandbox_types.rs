@@ -1370,7 +1370,11 @@ mod violation_action_tests {
 
     #[test]
     fn test_violation_action_serialize_roundtrip() {
-        for action in [ViolationAction::Stop, ViolationAction::Workaround, ViolationAction::Smart] {
+        for action in [
+            ViolationAction::Stop,
+            ViolationAction::Workaround,
+            ViolationAction::Smart,
+        ] {
             let json = serde_json::to_string(&action).unwrap();
             let back: ViolationAction = serde_json::from_str(&json).unwrap();
             assert_eq!(action, back);

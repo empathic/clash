@@ -135,6 +135,8 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         default_sandbox: Value<'v>,
         #[starlark(require = named, default = starlark::values::none::NoneType)]
         on_sandbox_violation: Value<'v>,
+        #[starlark(require = named, default = starlark::values::none::NoneType)]
+        harness_defaults: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<NoneType> {
         let ctx = eval
@@ -170,10 +172,20 @@ fn register_globals(builder: &mut GlobalsBuilder) {
             }
             Some(s)
         };
+        let hd = if harness_defaults.is_none() {
+            None
+        } else {
+            Some(
+                harness_defaults
+                    .unpack_bool()
+                    .ok_or_else(|| anyhow::anyhow!("harness_defaults must be True or False"))?,
+            )
+        };
         ctx.register_settings(SettingsValue {
             default_effect: default.to_string(),
             default_sandbox: ds,
             on_sandbox_violation: osv,
+            harness_defaults: hd,
         })?;
         Ok(NoneType)
     }

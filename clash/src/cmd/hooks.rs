@@ -74,7 +74,10 @@ impl HookCmd {
                     }
                     HookOutput::continue_execution()
                 } else {
-                    let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+                    let mut hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+                    if let Some(agent) = input.agent {
+                        hook_ctx = hook_ctx.with_agent(agent);
+                    }
                     let settings = ClashSettings::load_or_create_with_session(
                         Some(&input.session_id),
                         Some(&hook_ctx),
@@ -163,7 +166,10 @@ impl HookCmd {
                 // Check if a sandboxed Bash command failed with network or
                 // filesystem errors, and provide hints about sandbox restrictions.
                 let (network_context, fs_context) = {
-                    let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+                    let mut hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+                    if let Some(agent) = input.agent {
+                        hook_ctx = hook_ctx.with_agent(agent);
+                    }
                     let settings = ClashSettings::load_or_create_with_session(
                         Some(&input.session_id),
                         Some(&hook_ctx),
@@ -207,7 +213,10 @@ impl HookCmd {
                     );
                     HookOutput::continue_execution()
                 } else {
-                    let hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+                    let mut hook_ctx = HookContext::from_transcript_path(&input.transcript_path);
+                    if let Some(agent) = input.agent {
+                        hook_ctx = hook_ctx.with_agent(agent);
+                    }
                     let settings = ClashSettings::load_or_create_with_session(
                         Some(&input.session_id),
                         Some(&hook_ctx),
@@ -223,7 +232,7 @@ impl HookCmd {
                     input.session_id = fallback_session_id(self.agent);
                     info!(session_id = %input.session_id, "Agent did not provide session_id, using fallback");
                 }
-                crate::handlers::handle_session_start(&input)?
+                crate::handlers::handle_session_start(&input, Some(self.agent))?
             }
             HookSubcommand::Stop => {
                 let mut input = self

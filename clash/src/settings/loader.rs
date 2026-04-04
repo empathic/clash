@@ -243,6 +243,32 @@ impl ClashSettings {
         self.policy_error.as_deref()
     }
 
+    /// Inject agent-specific harness default rules into the compiled policy.
+    ///
+    /// Harness rules are appended at lowest priority (after all user-defined rules).
+    /// They are skipped if:
+    /// - No agent is provided
+    /// - No compiled policy exists
+    /// - `CLASH_NO_HARNESS_DEFAULTS` env var is set
+    /// - `settings(harness_defaults=False)` is in the policy
+    pub fn inject_harness_rules(&mut self, agent: Option<crate::agents::AgentKind>) {
+        let agent = match agent {
+            Some(a) => a,
+            None => return,
+        };
+        let compiled = match &mut self.compiled {
+            Some(c) => c,
+            None => return,
+        };
+        if !crate::harness::is_harness_enabled(compiled.harness_defaults) {
+            return;
+        }
+        let nodes = crate::harness::harness_nodes(agent);
+        if !nodes.is_empty() {
+            compiled.tree.extend(nodes);
+        }
+    }
+
     /// Set the policy source directly (compile from policy source text).
     pub fn set_policy_source(&mut self, source: &str) {
         match policy_loader::compile_source(source) {
@@ -330,10 +356,10 @@ impl ClashSettings {
     ///
     /// Pass `hook_ctx` to inject session-specific internal policies (e.g., the
     /// transcript directory). Pass `None` for CLI commands.
-    #[instrument(level = Level::TRACE, skip(session_id, _hook_ctx))]
+    #[instrument(level = Level::TRACE, skip(session_id, hook_ctx))]
     pub fn load_or_create_with_session(
         session_id: Option<&str>,
-        _hook_ctx: Option<&HookContext>,
+        hook_ctx: Option<&HookContext>,
     ) -> Result<Self> {
         let mut this = Self::default();
 
@@ -390,6 +416,10 @@ impl ClashSettings {
                 this.policy_error = Some(msg);
             }
         }
+
+        // Inject agent-specific harness default rules (lowest priority, after user rules).
+        let agent = hook_ctx.and_then(|ctx| ctx.agent);
+        this.inject_harness_rules(agent);
 
         Ok(this)
     }
@@ -581,6 +611,42 @@ mod test {
             }
             crate::policy::compile::StdEnvResolver.resolve(name)
         }
+    }
+
+    #[test]
+    fn harness_rules_appended_to_compiled_policy() {
+        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow())\npolicy(\"default\", rules = [])\n";
+        let dir = tempfile::tempdir().unwrap();
+        let policy_path = dir.path().join("policy.star");
+        std::fs::write(&policy_path, star_policy).unwrap();
+
+        let mut settings = ClashSettings::default();
+        settings.load_policy_from_path(&policy_path);
+        settings.inject_harness_rules(Some(crate::agents::AgentKind::Claude));
+
+        let tree = settings.decision_tree().unwrap();
+        assert!(
+            !tree.tree.is_empty(),
+            "policy tree should contain harness rules"
+        );
+    }
+
+    #[test]
+    fn harness_rules_disabled_by_policy_setting() {
+        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow(), harness_defaults = False)\npolicy(\"default\", rules = [])\n";
+        let dir = tempfile::tempdir().unwrap();
+        let policy_path = dir.path().join("policy.star");
+        std::fs::write(&policy_path, star_policy).unwrap();
+
+        let mut settings = ClashSettings::default();
+        settings.load_policy_from_path(&policy_path);
+        settings.inject_harness_rules(Some(crate::agents::AgentKind::Claude));
+
+        let tree = settings.decision_tree().unwrap();
+        assert!(
+            tree.tree.is_empty(),
+            "harness rules should not be injected when disabled"
+        );
     }
 
     #[test]

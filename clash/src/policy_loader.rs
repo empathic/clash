@@ -156,6 +156,7 @@ pub fn resolve_includes(
         default_effect: manifest.policy.default_effect,
         default_sandbox: None,
         on_sandbox_violation: Default::default(),
+        harness_defaults: None,
     };
 
     let mut warnings = Vec::new();
@@ -528,6 +529,7 @@ policy("include", rules = when({"Read": allow()}))
                 default_effect: crate::policy::Effect::Deny,
                 default_sandbox: None,
                 on_sandbox_violation: Default::default(),
+                harness_defaults: None,
             },
         };
 

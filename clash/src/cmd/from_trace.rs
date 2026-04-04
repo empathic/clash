@@ -363,44 +363,31 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     let mut stmts = vec![
         load_builtin(),
         load_std(&[
-            "when", "policy", "settings", "sandbox", "cwd", "home", "allow", "ask", "deny",
+            "when", "policy", "settings", "sandbox", "allow", "ask", "deny",
         ]),
         load_sandboxes(&["project"]),
         Stmt::Blank,
     ];
 
     // Sandbox for fs tools
-    let rw = clash_starlark::kwargs!(read = true, write = true);
-    let fs_box = sandbox(
-        "cwd",
-        vec![(
-            "fs",
-            Expr::list(vec![
-                cwd(clash_starlark::kwargs!(follow_worktrees = true))
-                    .recurse()
-                    .allow_kwargs(rw.clone()),
-                home().child(".claude").recurse().allow_kwargs(rw),
-            ]),
-        )],
-    );
-    stmts.push(Stmt::comment(
-        "Sandbox for file-access tools (scoped to project + ~/.claude)",
-    ));
-    stmts.push(Stmt::assign("project_files", fs_box));
+    use crate::policy_gen::sandboxes;
+    stmts.extend(sandboxes::project_files_sandbox());
     stmts.push(Stmt::Blank);
 
     // Categorize tools
-    let read_tools: Vec<&str> = ["Read", "Glob", "Grep"]
+    use crate::policy_gen::sandboxes::PROJECT_FILES_SANDBOX;
+    use crate::policy_gen::tools::{FS_READ_TOOLS, FS_WRITE_TOOLS, NET_TOOLS, is_categorized_tool};
+    let read_tools: Vec<&str> = FS_READ_TOOLS
         .iter()
         .filter(|t| analysis.tools.contains(**t))
         .copied()
         .collect();
-    let write_tools: Vec<&str> = ["Write", "Edit", "NotebookEdit"]
+    let write_tools: Vec<&str> = FS_WRITE_TOOLS
         .iter()
         .filter(|t| analysis.tools.contains(**t))
         .copied()
         .collect();
-    let net_tools: Vec<&str> = ["WebFetch", "WebSearch"]
+    let net_tools: Vec<&str> = NET_TOOLS
         .iter()
         .filter(|t| analysis.tools.contains(**t))
         .copied()
@@ -408,19 +395,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     let other_tools: Vec<&String> = analysis
         .tools
         .iter()
-        .filter(|t| {
-            ![
-                "Read",
-                "Glob",
-                "Grep",
-                "Write",
-                "Edit",
-                "NotebookEdit",
-                "WebFetch",
-                "WebSearch",
-            ]
-            .contains(&t.as_str())
-        })
+        .filter(|t| !is_categorized_tool(t))
         .collect();
 
     let mut rules: Vec<Expr> = vec![];
@@ -429,7 +404,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     if !read_tools.is_empty() {
         let expr = tool_match(
             &read_tools,
-            allow_with_sandbox(Expr::ident("project_files")),
+            allow_with_sandbox(Expr::ident(PROJECT_FILES_SANDBOX)),
         );
         rules.push(Expr::commented(
             "Read-only fs tools — observed in session",
@@ -441,7 +416,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     if !write_tools.is_empty() {
         let expr = tool_match(
             &write_tools,
-            allow_with_sandbox(Expr::ident("project_files")),
+            allow_with_sandbox(Expr::ident(PROJECT_FILES_SANDBOX)),
         );
         rules.push(Expr::commented(
             "Write fs tools — observed in session",

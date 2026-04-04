@@ -222,11 +222,17 @@ fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSetti
 
 /// Handle a session start event — validate policy/settings and report status to Claude.
 #[instrument(level = Level::TRACE, skip(input))]
-pub fn handle_session_start(input: &SessionStartHookInput) -> anyhow::Result<HookOutput> {
+pub fn handle_session_start(
+    input: &SessionStartHookInput,
+    agent: Option<crate::agents::AgentKind>,
+) -> anyhow::Result<HookOutput> {
     // Ensure the user has a policy file — create one with safe defaults if not.
     let created_policy = ClashSettings::ensure_user_policy_exists()?;
 
-    let hook_ctx = crate::settings::HookContext::from_transcript_path(&input.transcript_path);
+    let mut hook_ctx = crate::settings::HookContext::from_transcript_path(&input.transcript_path);
+    if let Some(a) = agent {
+        hook_ctx = hook_ctx.with_agent(a);
+    }
     let _settings =
         ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx))?;
 
@@ -335,7 +341,7 @@ mod tests {
     use super::*;
 
     fn session_start_context(input: &SessionStartHookInput) -> String {
-        let output = handle_session_start(input).expect("session start should succeed");
+        let output = handle_session_start(input, None).expect("session start should succeed");
         match &output.hook_specific_output {
             Some(HookSpecificOutput::SessionStart(s)) => {
                 s.additional_context.clone().expect("should have context")

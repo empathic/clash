@@ -1,0 +1,29 @@
+meta:
+  name: harness defaults — disabled via policy setting
+  description: >
+    With harness_defaults=False in settings(), the deny-all policy blocks reads
+    from ~/.claude/ and project .claude/ that would otherwise be allowed by
+    the injected harness rules.
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "allow", "deny", "policy", "settings")
+    settings(default=deny(), harness_defaults=False)
+    policy("test", rules=[])
+
+steps:
+  - name: read from $HOME/.claude/ is denied when harness defaults are disabled
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: $HOME/.claude/settings.json
+    expect:
+      decision: deny
+
+  - name: read from project .claude/ is denied when harness defaults are disabled
+    hook: pre-tool-use
+    tool_name: Read
+    tool_input:
+      file_path: .claude/settings.json
+    expect:
+      decision: deny

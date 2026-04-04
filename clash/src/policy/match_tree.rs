@@ -108,7 +108,8 @@ impl Pattern {
             Pattern::Not(p) => !p.matches(value),
             Pattern::Prefix(v) => {
                 let prefix = v.resolve();
-                value == prefix || value.starts_with(&format!("{prefix}/"))
+                // An empty prefix (e.g. unset env var) matches nothing — not everything.
+                !prefix.is_empty() && (value == prefix || value.starts_with(&format!("{prefix}/")))
             }
             Pattern::ChildOf(v) => {
                 let parent = v.resolve();
@@ -310,6 +311,10 @@ pub struct CompiledPolicy {
     /// What the model should do when a sandbox blocks an operation.
     #[serde(default, skip_serializing_if = "ViolationAction::is_default")]
     pub on_sandbox_violation: ViolationAction,
+    /// When explicitly set to `false`, harness default rules are not injected.
+    /// `None` means enabled (default behavior).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_defaults: Option<bool>,
 }
 
 fn default_effect() -> Effect {
@@ -354,6 +359,38 @@ impl CompiledPolicy {
     /// Format rules as a tree with box-drawing characters.
     pub fn format_tree(&self) -> Vec<String> {
         super::format::format_tree(self)
+    }
+
+    /// Count root-level nodes stamped with source "harness".
+    pub fn harness_node_count(&self) -> usize {
+        self.tree
+            .iter()
+            .filter(|n| match n {
+                Node::Condition { source, .. } => source.as_deref() == Some("harness"),
+                _ => false,
+            })
+            .count()
+    }
+
+    /// Return a view of the tree with harness nodes filtered out.
+    pub fn tree_without_harness(&self) -> Vec<&Node> {
+        self.tree
+            .iter()
+            .filter(|n| match n {
+                Node::Condition { source, .. } => source.as_deref() != Some("harness"),
+                _ => true,
+            })
+            .collect()
+    }
+
+    /// Format rules as a tree, optionally excluding harness nodes.
+    pub fn format_tree_filtered(&self, include_harness: bool) -> Vec<String> {
+        if include_harness {
+            super::format::format_tree(self)
+        } else {
+            let nodes = self.tree_without_harness();
+            super::format::format_tree_nodes(&nodes)
+        }
     }
 }
 
@@ -1471,6 +1508,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
         let errors = policy.validate();
         assert_eq!(errors.len(), 1);
@@ -1497,6 +1535,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
         assert!(policy.validate().is_empty());
     }
@@ -1543,6 +1582,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
 
         // git push → allow
@@ -1683,6 +1723,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
 
         // Plain command should match
@@ -1725,6 +1766,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
         let json = serde_json::to_string_pretty(&policy).unwrap();
         let deserialized: CompiledPolicy = serde_json::from_str(&json).unwrap();
@@ -1885,6 +1927,14 @@ mod tests {
     }
 
     #[test]
+    fn pattern_prefix_empty_matches_nothing() {
+        // An unresolved env var produces an empty prefix — must not match anything.
+        let pat = Pattern::Prefix(Value::Env("CLASH_SURELY_UNSET_VAR_XYZ".into()));
+        assert!(!pat.matches("/any/path"));
+        assert!(!pat.matches(""));
+    }
+
+    #[test]
     fn pattern_literal_with_env() {
         unsafe { std::env::set_var("CLASH_TEST_TOOL", "Bash") };
         let pat = Pattern::Literal(Value::Env("CLASH_TEST_TOOL".into()));
@@ -2030,6 +2080,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
         let warnings = policy.platform_warnings();
         assert_eq!(warnings.len(), 1);
@@ -2055,6 +2106,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
         let warnings = policy.platform_warnings();
         assert_eq!(warnings.len(), 1);
@@ -2087,6 +2139,7 @@ mod tests {
             default_effect: Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
+            harness_defaults: None,
         };
         assert!(policy.platform_warnings().is_empty());
     }
@@ -2169,5 +2222,65 @@ mod tests {
             false,
             &ctx
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // CompiledPolicy harness_defaults field tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compiled_policy_harness_defaults_field() {
+        let json = r#"{
+            "schema_version": 5,
+            "default_effect": "ask",
+            "sandboxes": {},
+            "tree": [],
+            "harness_defaults": false
+        }"#;
+        let policy: CompiledPolicy = serde_json::from_str(json).unwrap();
+        assert_eq!(policy.harness_defaults, Some(false));
+    }
+
+    #[test]
+    fn count_harness_nodes() {
+        let policy = CompiledPolicy {
+            sandboxes: HashMap::new(),
+            tree: vec![
+                Node::Condition {
+                    observe: Observable::FsOp,
+                    pattern: Pattern::Literal(Value::Literal("read".to_string())),
+                    children: vec![Node::Decision(Decision::Allow(None))],
+                    doc: None,
+                    source: Some("harness".to_string()),
+                    terminal: false,
+                },
+                Node::Condition {
+                    observe: Observable::ToolName,
+                    pattern: Pattern::Literal(Value::Literal("Bash".to_string())),
+                    children: vec![Node::Decision(Decision::Allow(None))],
+                    doc: None,
+                    source: Some("~/.clash/policy.star".to_string()),
+                    terminal: false,
+                },
+            ],
+            default_effect: Effect::Ask,
+            default_sandbox: None,
+            on_sandbox_violation: ViolationAction::default(),
+            harness_defaults: None,
+        };
+        assert_eq!(policy.harness_node_count(), 1);
+        assert_eq!(policy.tree_without_harness().len(), 1);
+    }
+
+    #[test]
+    fn compiled_policy_harness_defaults_absent() {
+        let json = r#"{
+            "schema_version": 5,
+            "default_effect": "ask",
+            "sandboxes": {},
+            "tree": []
+        }"#;
+        let policy: CompiledPolicy = serde_json::from_str(json).unwrap();
+        assert_eq!(policy.harness_defaults, None);
     }
 }
