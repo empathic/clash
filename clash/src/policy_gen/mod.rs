@@ -4,4 +4,5 @@
 //! these definitions instead of hardcoding tool names, sandbox shapes,
 //! and load statements.
 
+pub mod sandboxes;
 pub mod tools;
