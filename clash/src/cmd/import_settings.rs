@@ -291,31 +291,13 @@ fn generate_starlark_from_analysis(
     stmts.extend(detection.loads.iter().cloned());
     stmts.push(Stmt::Blank);
 
-    // Sandbox for file-access tools (dict-based fs)
-    let fs_dict = Expr::dict(vec![
-        DictEntry::new(
-            Expr::call_kwargs(
-                "subpath",
-                vec![Expr::string("$PWD")],
-                vec![("follow_worktrees", Expr::ident("True"))],
-            ),
-            Expr::call("allow", vec![Expr::string("rwc")]),
-        ),
-        DictEntry::new(
-            Expr::call("glob", vec![Expr::string("$HOME/.claude/**")]),
-            Expr::call("allow", vec![Expr::string("rwc")]),
-        ),
-    ]);
-    let fs_box = sandbox("project_files", vec![("default", ask()), ("fs", fs_dict)]);
-    stmts.push(Stmt::comment(
-        "Sandbox for file-access tools (scoped to project + ~/.claude)",
-    ));
-    stmts.push(Stmt::assign("project_files", fs_box));
+    use crate::policy_gen::sandboxes::{self, PROJECT_FILES_SANDBOX};
+    stmts.extend(sandboxes::project_files_sandbox());
     stmts.push(Stmt::Blank);
 
     stmts.push(Stmt::Expr(settings(
         ask(),
-        Some(Expr::ident("project_files")),
+        Some(Expr::ident(PROJECT_FILES_SANDBOX)),
     )));
     stmts.push(Stmt::Blank);
 
@@ -365,7 +347,7 @@ fn generate_starlark_from_analysis(
     //    the generic project_files sandbox.
     rules.extend(crate::policy_gen::ecosystems::ecosystem_rules(
         &detection.ecosystems,
-        "project_files",
+        PROJECT_FILES_SANDBOX,
     ));
 
     // 5–7. Allow rules — comment only the first, leave the rest uncommented
@@ -375,11 +357,12 @@ fn generate_starlark_from_analysis(
     if !analysis.bash_allows.is_empty() {
         allow_rules.push(match_rule(vec![build_bash_entry(
             &analysis.bash_allows,
-            allow_with_sandbox(Expr::ident("project_files")),
+            allow_with_sandbox(Expr::ident(PROJECT_FILES_SANDBOX)),
         )]));
     }
 
-    let fs_tool_names: Vec<&str> = ["Read", "Glob", "Grep", "Write", "Edit", "NotebookEdit"]
+    use crate::policy_gen::tools::{FS_ALL_TOOLS, is_fs_tool};
+    let fs_tool_names: Vec<&str> = FS_ALL_TOOLS
         .iter()
         .filter(|t| analysis.tool_allows.contains(&t.to_string()))
         .copied()
@@ -387,23 +370,14 @@ fn generate_starlark_from_analysis(
     if !fs_tool_names.is_empty() {
         allow_rules.push(match_rule(vec![tool_entry(
             &fs_tool_names,
-            allow_with_sandbox(Expr::ident("project_files")),
+            allow_with_sandbox(Expr::ident(PROJECT_FILES_SANDBOX)),
         )]));
     }
 
-    let excluded: &[&str] = &[
-        "Read",
-        "Glob",
-        "Grep",
-        "Write",
-        "Edit",
-        "NotebookEdit",
-        "Bash",
-    ];
     let other_allows: Vec<&str> = analysis
         .tool_allows
         .iter()
-        .filter(|t| !excluded.contains(&t.as_str()))
+        .filter(|t| !is_fs_tool(t) && t.as_str() != "Bash")
         .map(|s| s.as_str())
         .collect();
     if !other_allows.is_empty() {
