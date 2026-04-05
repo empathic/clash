@@ -1171,35 +1171,37 @@ policy("test",
 
     #[test]
     fn test_from_claude_settings_in_policy() {
-        // The function returns an empty list when no settings files exist,
-        // but it should still be callable and composable with other rules.
+        // The function returns an empty dict when no settings files exist,
+        // but it should still be callable and composable via merge().
         let doc = eval_to_doc(
             r#"
 load("@clash//claude_compat.star", "from_claude_settings")
 
 settings(default = deny())
-policy("test",
-    rules = when({None: allow()}) + from_claude_settings(user = False, project = False),
-)
+policy("test", merge(
+    {None: allow()},
+    from_claude_settings(user = False, project = False),
+))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
         let tree = doc["tree"].as_array().unwrap();
-        // Only the when() rule should be present since settings don't exist
+        // Only the wildcard rule should be present since settings don't exist
         assert_eq!(tree.len(), 1);
     }
 
     #[test]
-    fn test_from_claude_settings_as_sole_rules() {
-        // from_claude_settings() alone (empty) should still work as rules
+    fn test_from_claude_settings_as_sole_policy() {
+        // from_claude_settings() alone (empty dict) should still work as policy dict
         let doc = eval_to_doc(
             r#"
 load("@clash//claude_compat.star", "from_claude_settings")
 
 settings(default = deny())
-policy("test",
-    rules = when({None: deny()}) + from_claude_settings(),
-)
+policy("test", merge(
+    {None: deny()},
+    from_claude_settings(),
+))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -1211,9 +1213,10 @@ policy("test",
         let doc = eval_to_doc(
             r#"
 settings(default = deny())
-policy("test",
-    rules = when({None: allow()}) + _from_claude_settings(user = False, project = False),
-)
+policy("test", merge(
+    {None: allow()},
+    _from_claude_settings(user = False, project = False),
+))
 "#,
         );
         assert_eq!(doc["schema_version"], 5);

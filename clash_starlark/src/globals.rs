@@ -192,10 +192,11 @@ fn register_globals(builder: &mut GlobalsBuilder) {
 
     // -- Claude settings import --
 
-    /// Import Claude Code permission settings as match tree rules at eval time.
+    /// Import Claude Code permission settings as a policy dict at eval time.
     ///
-    /// Returns a list of MatchTreeNode values that can be concatenated with
-    /// other rules in a policy() call.
+    /// Returns a Starlark dict suitable for passing to `merge()` and then
+    /// to `policy()`. Keys are tool name strings, values are effect structs
+    /// or nested dicts for argument-level rules.
     ///
     /// Parameters:
     ///   user (bool): include user-level (~/.claude/settings.json) permissions
@@ -205,9 +206,7 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named, default = true)] project: bool,
         heap: &'v starlark::values::Heap,
     ) -> anyhow::Result<Value<'v>> {
-        let nodes = crate::settings_compat::from_claude_settings(user, project);
-        let result: Vec<Value<'v>> = nodes.into_iter().map(|node| heap.alloc(node)).collect();
-        Ok(heap.alloc(starlark::values::list::AllocList(result)))
+        Ok(crate::settings_compat::from_claude_settings_as_dict(user, project, heap))
     }
 
     // -- Deep merge primitive --
