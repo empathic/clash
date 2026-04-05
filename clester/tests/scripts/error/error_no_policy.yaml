@@ -1,0 +1,13 @@
+meta:
+  name: error — no policy file
+  description: Hooks work sensibly when no policy file exists
+
+steps:
+  - name: hook with no policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: echo hello
+    expect:
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"

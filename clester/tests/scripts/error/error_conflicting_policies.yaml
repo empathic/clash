@@ -1,0 +1,28 @@
+meta:
+  name: error — conflicting user and project policies
+  description: When user allows and project denies, project takes precedence
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
+    settings(default=allow())
+    policy("user-policy", rules=[
+        when({"Bash": allow()}),
+    ])
+  project_policy_star: |
+    load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
+    settings(default=deny())
+    policy("project-policy", rules=[
+        when({"Bash": deny()}),
+    ])
+
+steps:
+  - name: project deny overrides user allow
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: echo hello
+    expect:
+      decision: deny
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"

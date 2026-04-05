@@ -1,0 +1,29 @@
+meta:
+  name: error — missing home directories
+  description: Clash commands work when expected directories do not exist
+
+steps:
+  - name: remove .claude directory
+    shell: "rm -rf $HOME/.claude"
+    expect:
+      exit_code: 0
+
+  - name: remove .clash directory
+    shell: "rm -rf $HOME/.clash"
+    expect:
+      exit_code: 0
+
+  - name: status with missing dirs
+    command: "status"
+    expect:
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"
+
+  - name: hook with missing dirs
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: echo hello
+    expect:
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"

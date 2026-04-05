@@ -1,0 +1,12 @@
+meta:
+  name: error — sandbox not found
+  description: Operating on nonexistent sandbox gives clear error
+
+steps:
+  - name: delete nonexistent sandbox
+    command: "sandbox delete nonexistent_sandbox_12345"
+    expect:
+      exit_code: 1
+      stderr_contains: "not found"
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"

@@ -1,0 +1,17 @@
+meta:
+  name: error — corrupted settings.json
+  description: Clash handles corrupted settings gracefully
+
+steps:
+  - name: write corrupted settings
+    shell: |
+      mkdir -p $HOME/.claude
+      echo '{"broken json {{{{' > $HOME/.claude/settings.json
+    expect:
+      exit_code: 0
+
+  - name: doctor with corrupted settings
+    command: "doctor"
+    expect:
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"
