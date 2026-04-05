@@ -789,4 +789,108 @@ mod tests {
         assert!(!assertion.passed);
         assert!(assertion.failures[0].contains("not:"));
     }
+
+    #[test]
+    fn test_stderr_regex_pass() {
+        let (_tmp, home, project) = temp_dirs();
+        let expect = Expectation {
+            stderr_regex: Some(r"warn(ing)?:".into()),
+            ..Default::default()
+        };
+        let result = HookResult {
+            exit_code: 0,
+            output: None,
+            stdout: String::new(),
+            stderr: "warning: something happened".into(),
+        };
+
+        let assertion = check(&expect, &result, &home, &project);
+        assert!(assertion.passed, "failures: {:?}", assertion.failures);
+    }
+
+    #[test]
+    fn test_stderr_regex_fail() {
+        let (_tmp, home, project) = temp_dirs();
+        let expect = Expectation {
+            stderr_regex: Some(r"^error:".into()),
+            ..Default::default()
+        };
+        let result = HookResult {
+            exit_code: 0,
+            output: None,
+            stdout: String::new(),
+            stderr: "warning: something happened".into(),
+        };
+
+        let assertion = check(&expect, &result, &home, &project);
+        assert!(!assertion.passed);
+        assert!(assertion.failures[0].contains("stderr_regex"));
+    }
+
+    #[test]
+    fn test_reason_regex_fail() {
+        let (_tmp, home, project) = temp_dirs();
+        let expect = Expectation {
+            reason_regex: Some(r"explicitly\s+denied".into()),
+            ..Default::default()
+        };
+        // make_allow_output has reason "explicitly allowed", not "explicitly denied"
+        let result = HookResult {
+            exit_code: 0,
+            output: Some(make_allow_output()),
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+
+        let assertion = check(&expect, &result, &home, &project);
+        assert!(!assertion.passed);
+        assert!(assertion.failures[0].contains("reason_regex"));
+    }
+
+    #[test]
+    fn test_invalid_regex_pattern() {
+        let (_tmp, home, project) = temp_dirs();
+        let expect = Expectation {
+            stdout_regex: Some("[invalid".into()),
+            ..Default::default()
+        };
+        let result = HookResult {
+            exit_code: 0,
+            output: None,
+            stdout: "some output".into(),
+            stderr: String::new(),
+        };
+
+        // Invalid regex must produce a failure, not a panic
+        let assertion = check(&expect, &result, &home, &project);
+        assert!(!assertion.passed);
+        assert!(assertion.failures[0].contains("stdout_regex"));
+        assert!(assertion.failures[0].contains("invalid regex"));
+    }
+
+    #[test]
+    fn test_file_regex_match() {
+        let (_tmp, home, project) = temp_dirs();
+        std::fs::write(home.join("data.txt"), "order-1234 placed").unwrap();
+
+        let expect = Expectation {
+            files: Some(vec![crate::script::FileAssertion {
+                path: "data.txt".into(),
+                root: "home".into(),
+                exists: Some(true),
+                contains: None,
+                regex: Some(r"\d{4}".into()),
+            }]),
+            ..Default::default()
+        };
+        let result = HookResult {
+            exit_code: 0,
+            output: None,
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+
+        let assertion = check(&expect, &result, &home, &project);
+        assert!(assertion.passed, "failures: {:?}", assertion.failures);
+    }
 }

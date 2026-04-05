@@ -1,6 +1,6 @@
 meta:
   name: filesystem assertions
-  description: Test file existence and content assertions
+  description: Test file existence and content assertions using shell-created files
 
 clash:
   policy_star: |
@@ -11,7 +11,12 @@ clash:
     ])
 
 steps:
-  - name: verify policy.star exists in home
+  - name: create test file via shell
+    shell: "echo 'hello world 123' > $HOME/testfile.txt"
+    expect:
+      exit_code: 0
+
+  - name: assert on shell-created file (exists, contains, regex)
     hook: pre-tool-use
     tool_name: Bash
     tool_input:
@@ -19,13 +24,13 @@ steps:
     expect:
       decision: allow
       files:
-        - path: .clash/policy.star
+        - path: testfile.txt
           root: home
           exists: true
-          contains: "default=deny"
-          regex: "exe\\(\"git\"\\)"
+          contains: "hello world"
+          regex: "\\d+"
 
-  - name: verify settings don't exist (no settings configured)
+  - name: assert nonexistent file does not exist
     hook: pre-tool-use
     tool_name: Bash
     tool_input:
@@ -33,18 +38,6 @@ steps:
     expect:
       decision: allow
       files:
-        - path: .claude/settings.json
+        - path: nonexistent.txt
           root: home
           exists: false
-
-  - name: verify .git exists in project
-    hook: pre-tool-use
-    tool_name: Bash
-    tool_input:
-      command: git log
-    expect:
-      decision: allow
-      files:
-        - path: .git
-          root: project
-          exists: true
