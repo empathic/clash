@@ -45,6 +45,7 @@ toolpath-claude = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 similar = { workspace = true }
+tempfile = { workspace = true }
 
 # from the workspace
 clash_notify = { workspace = true }

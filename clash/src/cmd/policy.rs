@@ -514,10 +514,119 @@ pub fn open_in_editor(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Validate a policy file, returning the compiled policy or an error message.
+fn validate_policy_source(path: &Path) -> Result<crate::policy::match_tree::CompiledPolicy> {
+    let source = crate::settings::evaluate_policy_file(path)
+        .with_context(|| format!("failed to evaluate: {}", path.display()))?;
+    crate::policy::compile::compile_to_tree(&source)
+        .with_context(|| "policy validation failed")
+}
+
+/// Visudo-style edit loop: copy to tempfile, edit, validate, confirm, write.
+///
+/// Loops until the user produces a valid policy and confirms, or cancels.
+fn edit_with_validation(path: &Path) -> Result<()> {
+    let original = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    // Compile the original policy for diff comparison
+    let original_policy = validate_policy_source(path).ok();
+
+    // Create temp file with same extension for syntax highlighting in editors
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("star");
+    let tmp_dir = tempfile::tempdir().context("failed to create temp directory")?;
+    let tmp_path = tmp_dir.path().join(format!("policy.{extension}"));
+    std::fs::write(&tmp_path, &original)
+        .with_context(|| format!("failed to write temp file {}", tmp_path.display()))?;
+
+    loop {
+        // Open editor
+        open_in_editor(&tmp_path)?;
+
+        let edited = std::fs::read_to_string(&tmp_path)
+            .with_context(|| format!("failed to read temp file {}", tmp_path.display()))?;
+
+        // Check if anything changed
+        if edited == original {
+            eprintln!("  No changes made.");
+            return Ok(());
+        }
+
+        // Validate the edited content by writing to temp and evaluating
+        match validate_policy_source(&tmp_path) {
+            Ok(new_policy) => {
+                // Show diff if we have both before and after policies
+                if let Some(ref old_policy) = original_policy {
+                    if let Some(diff) = crate::policy::diff::tree_diff(old_policy, &new_policy) {
+                        eprintln!();
+                        eprintln!("  {}:", style::bold("Policy changes"));
+                        for line in diff.lines() {
+                            eprintln!("    {line}");
+                        }
+                        eprintln!();
+                    }
+                }
+
+                // Show rule count summary
+                eprintln!(
+                    "  {} Valid policy: default {}, {} rules",
+                    style::green_bold("✓"),
+                    style::effect(&new_policy.default_effect.to_string()),
+                    new_policy.rule_count()
+                );
+
+                // Confirm
+                eprint!("  Apply changes? [y/n/e] (yes/no/re-edit) ");
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                match answer.trim().to_lowercase().as_str() {
+                    "y" | "yes" => {
+                        std::fs::write(path, &edited)
+                            .with_context(|| format!("failed to write {}", path.display()))?;
+                        println!(
+                            "{} Policy updated: {}",
+                            style::green_bold("✓"),
+                            style::dim(&path.display().to_string())
+                        );
+                        return Ok(());
+                    }
+                    "e" | "edit" => {
+                        // Re-edit
+                        continue;
+                    }
+                    _ => {
+                        eprintln!("  Cancelled. No changes written.");
+                        return Ok(());
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!();
+                eprintln!("  {} Validation error:", style::err_red_bold("✗"));
+                eprintln!("    {e:#}");
+                if let Some(hint) = extract_policy_hint(&e) {
+                    eprintln!("    {}: {hint}", style::err_cyan_bold("hint"));
+                }
+                eprintln!();
+                eprint!("  Re-edit? [y/n] ");
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                if !answer.trim().eq_ignore_ascii_case("y") {
+                    eprintln!("  Cancelled. No changes written.");
+                    return Ok(());
+                }
+                // Loop back to editor
+            }
+        }
+    }
+}
+
 /// Handle `clash policy edit`.
 fn handle_edit(scope: Option<String>, raw: bool, test: bool) -> Result<()> {
     if raw {
-        // --raw: open in $EDITOR
+        // --raw: visudo-style edit with validation
         let level = match scope.as_deref() {
             Some("user") => PolicyLevel::User,
             Some("project") => PolicyLevel::Project,
@@ -534,7 +643,7 @@ fn handle_edit(scope: Option<String>, raw: bool, test: bool) -> Result<()> {
                 level,
             );
         }
-        return open_in_editor(&path);
+        return edit_with_validation(&path);
     }
 
     // Interactive TUI editor
