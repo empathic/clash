@@ -10,7 +10,6 @@ use starlark::values::Value;
 use starlark::values::dict::{AllocDict, DictRef};
 use starlark::values::none::NoneType;
 
-use crate::builders::match_tree::{self as mt, MatchTreeNode, path_value_to_json, pattern_to_json};
 use crate::eval_context::{EvalContext, PolicyRegistration, SettingsValue, ShadowedRule};
 
 /// Build the globals environment with all Clash DSL functions and constants.
@@ -35,11 +34,6 @@ fn caller_source_location(eval: &Evaluator) -> Option<String> {
         }
     }
     None
-}
-
-pub(crate) fn starlark_to_json(value: Value) -> anyhow::Result<serde_json::Value> {
-    let json_str = value.to_json()?;
-    serde_json::from_str(&json_str).map_err(Into::into)
 }
 
 /// Deep-merge two Starlark dicts. When both sides have the same key and both
@@ -115,80 +109,6 @@ fn register_globals(builder: &mut GlobalsBuilder) {
     // Platform constants — let Starlark policies branch on OS/architecture
     const _OS: &str = std::env::consts::OS;
     const _ARCH: &str = std::env::consts::ARCH;
-
-    // -- Minimal Rust primitives (everything else is in @clash//std.star) --
-
-    /// Wrap an arbitrary dict/value as a MatchTreeNode.
-    /// This is the escape hatch that lets Starlark code build any node shape.
-    fn _mt_node<'v>(#[starlark(require = pos)] value: Value<'v>) -> anyhow::Result<MatchTreeNode> {
-        let json = starlark_to_json(value)?;
-        Ok(MatchTreeNode { json })
-    }
-
-    /// Generic condition builder. `observe` can be a string ("tool_name")
-    /// or a dict ({"positional_arg": 0}). `pattern` is a MatchTreeNode from _mt_pattern().
-    fn _mt_condition<'v>(
-        #[starlark(require = pos)] observe: Value<'v>,
-        #[starlark(require = pos)] pattern: &MatchTreeNode,
-        #[starlark(require = named)] doc: Option<&str>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> anyhow::Result<MatchTreeNode> {
-        let observe_json = starlark_to_json(observe)?;
-        // Walk the call stack to find the first non-stdlib frame (the user's policy file).
-        let source = caller_source_location(eval);
-        Ok(mt::mt_condition_with_doc(
-            observe_json,
-            pattern.json.clone(),
-            doc.map(|s| s.to_string()),
-            source,
-        ))
-    }
-
-    /// Convert a value to a matcher pattern (type dispatch in Rust).
-    /// - None          → wildcard
-    /// - "foo"         → literal
-    /// - ["a", "b"]    → any_of
-    /// - regex("...")  → regex
-    fn _mt_pattern<'v>(
-        #[starlark(require = pos)] value: Value<'v>,
-        heap: &'v starlark::values::Heap,
-    ) -> anyhow::Result<MatchTreeNode> {
-        let pat = pattern_to_json(value, heap)?;
-        Ok(MatchTreeNode { json: pat })
-    }
-
-    /// Convert a path value to a prefix pattern (needs Rust for env/join dispatch).
-    fn _mt_prefix<'v>(
-        #[starlark(require = pos)] value: Value<'v>,
-        heap: &'v starlark::values::Heap,
-    ) -> anyhow::Result<MatchTreeNode> {
-        let val_json = path_value_to_json(value, heap)?;
-        Ok(MatchTreeNode {
-            json: serde_json::json!({"prefix": val_json}),
-        })
-    }
-
-    /// Convert a path value to a child-of pattern (direct children only).
-    fn _mt_child_of<'v>(
-        #[starlark(require = pos)] value: Value<'v>,
-        heap: &'v starlark::values::Heap,
-    ) -> anyhow::Result<MatchTreeNode> {
-        let val_json = path_value_to_json(value, heap)?;
-        Ok(MatchTreeNode {
-            json: serde_json::json!({"child_of": val_json}),
-        })
-    }
-
-    /// Convert a path value to a literal (exact) pattern (needs Rust for env/join dispatch).
-    fn _mt_literal<'v>(
-        #[starlark(require = pos)] value: Value<'v>,
-        heap: &'v starlark::values::Heap,
-    ) -> anyhow::Result<MatchTreeNode> {
-        let val_json = path_value_to_json(value, heap)?;
-        Ok(MatchTreeNode {
-            json: serde_json::json!({"literal": val_json}),
-        })
-    }
 
     // -- Claude settings import --
 
