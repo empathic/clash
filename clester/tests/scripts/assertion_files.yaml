@@ -1,0 +1,50 @@
+meta:
+  name: filesystem assertions
+  description: Test file existence and content assertions
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
+    settings(default=deny())
+    policy("test", rules=[
+        when({"Bash": {"git": allow()}}),
+    ])
+
+steps:
+  - name: verify policy.star exists in home
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+      files:
+        - path: .clash/policy.star
+          root: home
+          exists: true
+          contains: "default=deny"
+          regex: "exe\\(\"git\"\\)"
+
+  - name: verify settings don't exist (no settings configured)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git diff
+    expect:
+      decision: allow
+      files:
+        - path: .claude/settings.json
+          root: home
+          exists: false
+
+  - name: verify .git exists in project
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git log
+    expect:
+      decision: allow
+      files:
+        - path: .git
+          root: project
+          exists: true
