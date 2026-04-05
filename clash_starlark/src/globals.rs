@@ -126,6 +126,26 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         })
     }
 
+    // -- Claude settings import --
+
+    /// Import Claude Code permission settings as match tree rules at eval time.
+    ///
+    /// Returns a list of MatchTreeNode values that can be concatenated with
+    /// other rules in a policy() call.
+    ///
+    /// Parameters:
+    ///   user (bool): include user-level (~/.claude/settings.json) permissions
+    ///   project (bool): include project-level (.claude/settings.json) permissions
+    fn _from_claude_settings<'v>(
+        #[starlark(require = named, default = true)] user: bool,
+        #[starlark(require = named, default = true)] project: bool,
+        heap: &'v starlark::values::Heap,
+    ) -> anyhow::Result<Value<'v>> {
+        let nodes = crate::settings_compat::from_claude_settings(user, project);
+        let result: Vec<Value<'v>> = nodes.into_iter().map(|node| heap.alloc(node)).collect();
+        Ok(heap.alloc(starlark::values::list::AllocList(result)))
+    }
+
     // -- Registration functions (side-effecting, write into EvalContext) --
 
     /// Register settings into the evaluation context.

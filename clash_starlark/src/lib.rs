@@ -9,6 +9,7 @@ pub mod codegen;
 pub mod eval_context;
 mod globals;
 mod loader;
+pub mod settings_compat;
 pub mod stdlib;
 mod when;
 
@@ -1159,6 +1160,56 @@ policy("test",
         let sandboxes = doc["sandboxes"].as_object().unwrap();
         let sb = &sandboxes["local_only"];
         assert_eq!(sb["network"], json!("localhost"));
+    }
+
+    #[test]
+    fn test_from_claude_settings_in_policy() {
+        // The function returns an empty list when no settings files exist,
+        // but it should still be callable and composable with other rules.
+        let doc = eval_to_doc(
+            r#"
+load("@clash//claude_compat.star", "from_claude_settings")
+
+settings(default = deny())
+policy("test",
+    rules = when({None: allow()}) + from_claude_settings(user = False, project = False),
+)
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+        let tree = doc["tree"].as_array().unwrap();
+        // Only the when() rule should be present since settings don't exist
+        assert_eq!(tree.len(), 1);
+    }
+
+    #[test]
+    fn test_from_claude_settings_as_sole_rules() {
+        // from_claude_settings() alone (empty) should still work as rules
+        let doc = eval_to_doc(
+            r#"
+load("@clash//claude_compat.star", "from_claude_settings")
+
+settings(default = deny())
+policy("test",
+    rules = when({None: deny()}) + from_claude_settings(),
+)
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
+    }
+
+    #[test]
+    fn test_from_claude_settings_implicit_stdlib() {
+        // _from_claude_settings is a global, usable without load()
+        let doc = eval_to_doc(
+            r#"
+settings(default = deny())
+policy("test",
+    rules = when({None: allow()}) + _from_claude_settings(user = False, project = False),
+)
+"#,
+        );
+        assert_eq!(doc["schema_version"], 5);
     }
 
     #[test]
