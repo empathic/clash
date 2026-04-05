@@ -34,6 +34,9 @@ pub struct LastDecision {
 /// Thread-safe shared state for the prompt to read the last decision.
 pub type SharedDecision = Arc<std::sync::Mutex<Option<LastDecision>>>;
 
+/// Thread-safe shared policy that can be reloaded between commands.
+type SharedPolicy = Arc<std::sync::RwLock<Arc<CompiledPolicy>>>;
+
 /// Build the external command hook that evaluates the policy for each command
 /// and wraps it with the appropriate sandbox (same as Claude's Bash tool).
 /// Shell builtins that should never be wrapped — they must run in-process.
@@ -102,7 +105,7 @@ const SHELL_BUILTINS: &[&str] = &[
 ];
 
 fn make_sandbox_hook(
-    policy: Arc<CompiledPolicy>,
+    shared_policy: SharedPolicy,
     default_sandbox: Option<SandboxPolicy>,
     debug: bool,
     audit_config: crate::audit::AuditConfig,
@@ -130,6 +133,9 @@ fn make_sandbox_hook(
         let tool_input = serde_json::json!({
             "command": command_str,
         });
+
+        // Read the current policy (reloaded each REPL iteration).
+        let policy = shared_policy.read().unwrap_or_else(|e| e.into_inner());
 
         // Evaluate the policy exactly as check_permission would.
         let decision = policy.evaluate("Bash", &tool_input);
@@ -293,9 +299,10 @@ pub fn run_shell(
     let _ = crate::audit::init_session(&session_id, &cwd, Some("clash-shell"), None);
 
     let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));
+    let shared_policy: SharedPolicy = Arc::new(std::sync::RwLock::new(Arc::new(policy)));
 
     let hook = make_sandbox_hook(
-        Arc::new(policy),
+        shared_policy.clone(),
         default_sandbox,
         debug,
         settings.audit.clone(),
@@ -312,7 +319,7 @@ pub fn run_shell(
         } else if !script_args.is_empty() {
             run_script(&script_args, &cwd, hook).await
         } else {
-            run_interactive(&cwd, hook, last_decision).await
+            run_interactive(&cwd, hook, last_decision, shared_policy).await
         }
     })
 }
@@ -425,6 +432,7 @@ async fn run_interactive(
     cwd: &str,
     hook: clash_brush_core::ExternalCommandHook,
     last_decision: SharedDecision,
+    shared_policy: SharedPolicy,
 ) -> Result<()> {
     info!("starting interactive shell with sandbox hook");
 
@@ -464,6 +472,15 @@ async fn run_interactive(
         .map_err(|e| anyhow::anyhow!("failed to start interactive session: {e}"))?;
 
     loop {
+        // Reload policy to pick up changes from other terminals.
+        if let Ok(fresh_settings) = ClashSettings::load_or_create() {
+            if let Some(fresh_policy) = fresh_settings.policy_tree() {
+                if let Ok(mut guard) = shared_policy.write() {
+                    *guard = Arc::new(fresh_policy.clone());
+                }
+            }
+        }
+
         // Update prompt based on last decision.
         {
             let prompt_str = format_prompt(&last_decision);
@@ -555,8 +572,9 @@ mod tests {
 
     fn test_hook() -> clash_brush_core::ExternalCommandHook {
         let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));
+        let shared_policy: SharedPolicy = Arc::new(std::sync::RwLock::new(test_policy()));
         make_sandbox_hook(
-            test_policy(),
+            shared_policy,
             None,
             false,
             crate::audit::AuditConfig::default(),
@@ -632,8 +650,9 @@ mod tests {
         ]);
         let policy = Arc::new(compile_star(&source));
         let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));
+        let shared_policy: SharedPolicy = Arc::new(std::sync::RwLock::new(policy));
         let hook = make_sandbox_hook(
-            policy,
+            shared_policy,
             None,
             false,
             crate::audit::AuditConfig::default(),
@@ -658,8 +677,9 @@ mod tests {
         ]);
         let policy = Arc::new(compile_star(&source));
         let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));
+        let shared_policy: SharedPolicy = Arc::new(std::sync::RwLock::new(policy));
         let hook = make_sandbox_hook(
-            policy,
+            shared_policy,
             None,
             false,
             crate::audit::AuditConfig::default(),
