@@ -25,7 +25,7 @@ steps:
     expect:
       exit_code: 0
 
-  - name: pre-existing permissions still present
+  - name: pre-existing permissions still present and clash added
     shell: "true"
     expect:
       exit_code: 0
@@ -33,4 +33,4 @@ steps:
         - path: ".claude/settings.json"
           root: home
           exists: true
-          contains: "Read"
+          regex: "(?s).*Read.*clash|(?s).*clash.*Read"

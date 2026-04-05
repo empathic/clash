@@ -315,13 +315,13 @@ fn check_leaf(
             if fa.contains.is_some() || fa.regex.is_some() {
                 match std::fs::read_to_string(&full_path) {
                     Ok(contents) => {
-                        if let Some(ref substr) = fa.contains {
-                            if !contents.contains(substr.as_str()) {
-                                failures.push(format!(
-                                    "files: expected {} to contain \"{}\", but it did not",
-                                    fa.path, substr
-                                ));
-                            }
+                        if let Some(ref substr) = fa.contains
+                            && !contents.contains(substr.as_str())
+                        {
+                            failures.push(format!(
+                                "files: expected {} to contain \"{}\", but it did not",
+                                fa.path, substr
+                            ));
                         }
                         if let Some(ref pattern) = fa.regex {
                             match Regex::new(pattern) {

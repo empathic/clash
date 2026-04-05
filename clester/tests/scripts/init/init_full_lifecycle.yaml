@@ -19,13 +19,7 @@ steps:
       exit_code: 0
 
   - name: write a deny-all policy
-    shell: |
-      mkdir -p $HOME/.clash
-      cat > $HOME/.clash/policy.star << 'POLICY'
-      load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
-      settings(default=deny())
-      policy("test", rules=[when({"Read": allow()})])
-      POLICY
+    shell: "mkdir -p $HOME/.clash && printf 'load(\"@clash//std.star\", \"when\", \"policy\", \"settings\", \"allow\", \"deny\")\\nsettings(default=deny())\\npolicy(\"test\", rules=[when({\"Read\": allow()})])\\n' > $HOME/.clash/policy.star"
     expect:
       exit_code: 0
 

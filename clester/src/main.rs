@@ -166,7 +166,7 @@ fn run_script(script_path: &Path, clash_bin: &Path, verbose: bool) -> ScriptResu
         let result = if let Some(ref cmd) = step.command {
             run_command(clash_bin, &env, cmd)
         } else if let Some(ref shell_cmd) = step.shell {
-            run_shell(&env, shell_cmd)
+            run_shell(clash_bin, &env, shell_cmd)
         } else {
             run_step(clash_bin, &env, step)
         };
@@ -239,10 +239,10 @@ fn print_results(results: &[ScriptResult]) -> bool {
                 for failure in &step.failures {
                     eprintln!("    - {}", failure);
                 }
-                if first_failure.is_none() {
-                    if let Some(f) = step.failures.first() {
-                        first_failure = Some(f.as_str());
-                    }
+                if first_failure.is_none()
+                    && let Some(f) = step.failures.first()
+                {
+                    first_failure = Some(f.as_str());
                 }
             }
 

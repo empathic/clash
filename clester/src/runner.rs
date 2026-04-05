@@ -155,11 +155,12 @@ pub fn run_command(clash_bin: &Path, env: &TestEnvironment, command: &str) -> Re
 ///
 /// Runs the command via `sh -c` with the test environment's HOME and project dir.
 /// Useful for filesystem setup between hook steps (e.g., writing session policy files).
-pub fn run_shell(env: &TestEnvironment, shell_cmd: &str) -> Result<HookResult> {
+pub fn run_shell(clash_bin: &Path, env: &TestEnvironment, shell_cmd: &str) -> Result<HookResult> {
     let output = Command::new("sh")
         .arg("-c")
         .arg(shell_cmd)
         .env("HOME", &env.home_dir)
+        .env("CLASH_BIN", clash_bin)
         .current_dir(&env.project_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

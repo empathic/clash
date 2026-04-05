@@ -16,3 +16,10 @@ steps:
       exit_code: 2
       not:
         stderr_regex: "panic|RUST_BACKTRACE"
+
+  - name: unknown subcommand
+    command: "notacommand"
+    expect:
+      exit_code: 2
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"
