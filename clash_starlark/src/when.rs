@@ -644,6 +644,24 @@ fn convert_net_policy<'v>(sb: Value<'v>, heap: &'v Heap) -> anyhow::Result<JsonV
         None => Ok(json!("deny")),
         Some(v) if v.is_none() => Ok(json!("deny")),
         Some(v) if v.unpack_str().is_some() => Ok(json!(v.unpack_str().unwrap())),
+        Some(v) if DictRef::from_value(v).is_some() => {
+            // Dict — check for _localhost_ports key
+            let dict = DictRef::from_value(v).unwrap();
+            let key = heap.alloc_str("_localhost_ports");
+            if let Ok(Some(ports_val)) = dict.get(key.to_value()) {
+                if let Some(ports_list) = ListRef::from_value(ports_val) {
+                    let ports: Vec<u16> = ports_list
+                        .iter()
+                        .filter_map(|item| item.unpack_i32().map(|n| n as u16))
+                        .collect();
+                    if ports.is_empty() {
+                        return Ok(json!("localhost"));
+                    }
+                    return Ok(json!({"localhost": ports}));
+                }
+            }
+            Ok(json!("deny"))
+        }
         Some(v) if ListRef::from_value(v).is_some() => {
             // List of domain rules — check for stored domain names
             let domain_names = sb

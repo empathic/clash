@@ -72,6 +72,7 @@ pub fn evaluate(source: &str, filename: &str, base_dir: &Path) -> Result<EvalOut
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::path::PathBuf;
 
     fn eval_to_doc(source: &str) -> serde_json::Value {
@@ -1111,5 +1112,52 @@ policy("test", rules=[])
         );
         // When not specified, harness_defaults should not appear (defaults to true at runtime)
         assert!(doc.get("harness_defaults").is_none());
+    }
+
+    #[test]
+    fn test_sandbox_localhost_ports() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "localhost")
+
+_box = sandbox(
+    name = "local_only",
+    default = deny(),
+    net = localhost(ports = [8080, 3000]),
+)
+
+settings(default = deny())
+policy("test",
+    rules = when({"Bash": {"curl": allow(sandbox = _box)}}),
+)
+"#,
+        );
+        let sandboxes = doc["sandboxes"].as_object().unwrap();
+        let sb = &sandboxes["local_only"];
+        let network = &sb["network"];
+        assert_eq!(network, &json!({"localhost": [8080, 3000]}));
+    }
+
+    #[test]
+    fn test_sandbox_localhost_no_ports() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings", "sandbox", "localhost")
+
+_box = sandbox(
+    name = "local_only",
+    default = deny(),
+    net = localhost(),
+)
+
+settings(default = deny())
+policy("test",
+    rules = when({"Bash": {"curl": allow(sandbox = _box)}}),
+)
+"#,
+        );
+        let sandboxes = doc["sandboxes"].as_object().unwrap();
+        let sb = &sandboxes["local_only"];
+        assert_eq!(sb["network"], json!("localhost"));
     }
 }
