@@ -1,0 +1,19 @@
+meta:
+  name: error — commands before init
+  description: Running clash commands before init gives clear guidance
+
+steps:
+  - name: policy list before init
+    command: "policy list"
+    expect:
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"
+
+  - name: hook before init
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: echo hello
+    expect:
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"

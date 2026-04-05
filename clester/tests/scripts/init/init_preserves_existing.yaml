@@ -1,0 +1,36 @@
+meta:
+  name: init preserves existing settings
+  description: clash init does not clobber pre-existing user settings
+
+settings:
+  user:
+    permissions:
+      allow:
+        - "Read"
+        - "Glob"
+
+steps:
+  - name: verify pre-existing settings
+    shell: "true"
+    expect:
+      exit_code: 0
+      files:
+        - path: ".claude/settings.json"
+          root: home
+          exists: true
+          contains: "Read"
+
+  - name: run init
+    command: "init --no-import --agent claude"
+    expect:
+      exit_code: 0
+
+  - name: pre-existing permissions still present and clash added
+    shell: "true"
+    expect:
+      exit_code: 0
+      files:
+        - path: ".claude/settings.json"
+          root: home
+          exists: true
+          regex: "(?s).*Read.*clash|(?s).*clash.*Read"

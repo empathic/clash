@@ -1,0 +1,19 @@
+meta:
+  name: init idempotent
+  description: Running clash init twice does not break the installation
+
+steps:
+  - name: first init
+    command: "init --no-import --agent claude"
+    expect:
+      exit_code: 0
+
+  - name: second init
+    command: "init --no-import --agent claude"
+    expect:
+      exit_code: 0
+
+  - name: doctor still healthy after double init
+    command: "doctor"
+    expect:
+      exit_code: 0

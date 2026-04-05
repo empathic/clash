@@ -211,7 +211,7 @@ pub struct Step {
 }
 
 /// Expected outcome of a step.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Expectation {
     /// Expected permission decision: "allow", "deny", "ask".
     #[serde(default)]
@@ -236,6 +236,63 @@ pub struct Expectation {
     /// Expected substring in stderr.
     #[serde(default)]
     pub stderr_contains: Option<String>,
+
+    /// Regex pattern to match against the decision reason.
+    #[serde(default)]
+    pub reason_regex: Option<String>,
+
+    /// Regex pattern to match against stdout.
+    #[serde(default)]
+    pub stdout_regex: Option<String>,
+
+    /// Regex pattern to match against stderr.
+    #[serde(default)]
+    pub stderr_regex: Option<String>,
+
+    /// Filesystem assertions.
+    #[serde(default)]
+    pub files: Option<Vec<FileAssertion>>,
+
+    /// All child expectations must pass (implicit for top-level fields).
+    #[serde(default)]
+    pub all_of: Option<Vec<Expectation>>,
+
+    /// At least one child expectation must pass.
+    #[serde(default)]
+    pub any_of: Option<Vec<Expectation>>,
+
+    /// The child expectation must fail for this to pass.
+    #[serde(default)]
+    pub not: Option<Box<Expectation>>,
+}
+
+/// Assertion about a file in the test environment.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileAssertion {
+    /// Relative path to the file.
+    pub path: String,
+
+    /// Root directory: "home" (default) or "project".
+    #[serde(default = "FileAssertion::default_root")]
+    pub root: String,
+
+    /// Whether the file should exist (true) or not (false).
+    #[serde(default)]
+    pub exists: Option<bool>,
+
+    /// Expected substring in file contents.
+    #[serde(default)]
+    pub contains: Option<String>,
+
+    /// Regex pattern to match against file contents.
+    #[serde(default)]
+    pub regex: Option<String>,
+}
+
+impl FileAssertion {
+    fn default_root() -> String {
+        "home".into()
+    }
 }
 
 impl Step {

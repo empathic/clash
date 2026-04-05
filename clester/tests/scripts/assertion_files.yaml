@@ -1,0 +1,43 @@
+meta:
+  name: filesystem assertions
+  description: Test file existence and content assertions using shell-created files
+
+clash:
+  policy_star: |
+    load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
+    settings(default=deny())
+    policy("test", rules=[
+        when({"Bash": {"git": allow()}}),
+    ])
+
+steps:
+  - name: create test file via shell
+    shell: "echo 'hello world 123' > $HOME/testfile.txt"
+    expect:
+      exit_code: 0
+
+  - name: assert on shell-created file (exists, contains, regex)
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git status
+    expect:
+      decision: allow
+      files:
+        - path: testfile.txt
+          root: home
+          exists: true
+          contains: "hello world"
+          regex: "\\d+"
+
+  - name: assert nonexistent file does not exist
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: git diff
+    expect:
+      decision: allow
+      files:
+        - path: nonexistent.txt
+          root: home
+          exists: false

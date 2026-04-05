@@ -72,6 +72,7 @@ pub fn run_step(clash_bin: &Path, env: &TestEnvironment, step: &Step) -> Result<
         .arg("hook")
         .arg(hook_subcommand)
         .env("HOME", &env.home_dir)
+        .env("CLASH_HOME", env.home_dir.join(".clash"))
         .current_dir(&env.project_dir)
         // Prevent any system-level clash config from leaking in
         .env_remove("CLASH_CONFIG")
@@ -125,6 +126,7 @@ pub fn run_command(clash_bin: &Path, env: &TestEnvironment, command: &str) -> Re
     let output = Command::new(clash_bin)
         .args(&args)
         .env("HOME", &env.home_dir)
+        .env("CLASH_HOME", env.home_dir.join(".clash"))
         .current_dir(&env.project_dir)
         .env_remove("CLASH_CONFIG")
         .env_remove("CLASH_POLICY_FILE")
@@ -155,11 +157,13 @@ pub fn run_command(clash_bin: &Path, env: &TestEnvironment, command: &str) -> Re
 ///
 /// Runs the command via `sh -c` with the test environment's HOME and project dir.
 /// Useful for filesystem setup between hook steps (e.g., writing session policy files).
-pub fn run_shell(env: &TestEnvironment, shell_cmd: &str) -> Result<HookResult> {
+pub fn run_shell(clash_bin: &Path, env: &TestEnvironment, shell_cmd: &str) -> Result<HookResult> {
     let output = Command::new("sh")
         .arg("-c")
         .arg(shell_cmd)
         .env("HOME", &env.home_dir)
+        .env("CLASH_HOME", env.home_dir.join(".clash"))
+        .env("CLASH_BIN", clash_bin)
         .current_dir(&env.project_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -275,11 +279,7 @@ mod tests {
             notification_type: None,
             expect: Expectation {
                 decision: Some("allow".into()),
-                exit_code: None,
-                no_decision: None,
-                reason_contains: None,
-                stdout_contains: None,
-                stderr_contains: None,
+                ..Default::default()
             },
         };
 
@@ -306,12 +306,9 @@ mod tests {
             message: Some("test message".into()),
             notification_type: Some("permission_prompt".into()),
             expect: Expectation {
-                decision: None,
                 exit_code: Some(0),
                 no_decision: Some(true),
-                reason_contains: None,
-                stdout_contains: None,
-                stderr_contains: None,
+                ..Default::default()
             },
         };
 

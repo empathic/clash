@@ -1,0 +1,25 @@
+meta:
+  name: error — invalid CLI flags
+  description: Invalid arguments produce helpful errors
+
+steps:
+  - name: policy allow with no arguments
+    command: "policy allow"
+    expect:
+      exit_code: 1
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"
+
+  - name: sandbox create with no name
+    command: "sandbox create"
+    expect:
+      exit_code: 2
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"
+
+  - name: unknown subcommand
+    command: "notacommand"
+    expect:
+      exit_code: 2
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"

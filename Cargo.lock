@@ -919,6 +919,8 @@ version = "0.6.2"
 dependencies = [
  "anyhow",
  "clap",
+ "rayon",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml",
