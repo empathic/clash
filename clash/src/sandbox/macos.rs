@@ -187,6 +187,15 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
         NetworkPolicy::Allow => {
             p += "(allow network*)\n";
         }
+        NetworkPolicy::LocalhostPorts(ports) => {
+            for port in ports {
+                p += &format!(
+                    "(allow network-outbound (remote tcp \"localhost:{}\"))\n",
+                    port
+                );
+            }
+            p += "(deny network*)\n";
+        }
         NetworkPolicy::Localhost | NetworkPolicy::AllowDomains(_) => {
             // Allow only localhost connections. For Localhost, this is the
             // complete enforcement. For AllowDomains, a proxy on localhost
@@ -552,5 +561,32 @@ mod tests {
         let domains_profile = compile_to_sbpl(&domains_policy, "/tmp");
         // Both should produce the same network section (localhost-only + deny rest)
         assert_eq!(localhost_profile, domains_profile);
+    }
+
+    #[test]
+    fn sbpl_localhost_ports_emits_per_port_rules() {
+        let policy = SandboxPolicy {
+            default: Cap::READ | Cap::EXECUTE,
+            rules: vec![],
+            network: NetworkPolicy::LocalhostPorts(vec![8080, 3000]),
+            doc: None,
+        };
+        let profile = compile_to_sbpl(&policy, "/tmp");
+        assert!(
+            profile.contains(r#"(allow network-outbound (remote tcp "localhost:8080"))"#),
+            "should allow TCP to localhost:8080\nprofile:\n{profile}"
+        );
+        assert!(
+            profile.contains(r#"(allow network-outbound (remote tcp "localhost:3000"))"#),
+            "should allow TCP to localhost:3000\nprofile:\n{profile}"
+        );
+        assert!(
+            profile.contains("(deny network*)"),
+            "should deny all other network\nprofile:\n{profile}"
+        );
+        assert!(
+            !profile.contains("localhost:*"),
+            "should not contain wildcard localhost rule\nprofile:\n{profile}"
+        );
     }
 }

@@ -436,6 +436,10 @@ fn format_network(net: &crate::policy::sandbox_types::NetworkPolicy) -> String {
         NetworkPolicy::Allow => "allow".into(),
         NetworkPolicy::Localhost => "localhost".into(),
         NetworkPolicy::AllowDomains(domains) => format!("allow [{}]", domains.join(", ")),
+        NetworkPolicy::LocalhostPorts(ports) => {
+            let ps: Vec<String> = ports.iter().map(|p| p.to_string()).collect();
+            format!("localhost:{}", ps.join(","))
+        }
     }
 }
 

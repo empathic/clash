@@ -43,6 +43,11 @@ pub fn exec_sandboxed(
             // server-side operations.
             install_seccomp_advisory_network_filter()?;
         }
+        NetworkPolicy::LocalhostPorts(_) => {
+            // Port-level filtering is not enforceable via seccomp (can't inspect
+            // connect() sockaddr). Same advisory behavior as Localhost.
+            install_seccomp_advisory_network_filter()?;
+        }
         NetworkPolicy::AllowDomains(_) => {
             // On Linux, seccomp cannot filter connect() by destination address
             // (the address arg is a pointer seccomp can't dereference). We allow
