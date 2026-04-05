@@ -397,11 +397,34 @@ async fn run_script(
     Ok(())
 }
 
+/// Format the clash shell prompt based on the last policy decision.
+fn format_prompt(last_decision: &SharedDecision) -> String {
+    let guard = last_decision.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.as_ref() {
+        None => "clash $ ".to_string(),
+        Some(d) => {
+            let (symbol, color) = match d.effect {
+                Effect::Allow => ("✓", "\x1b[32m"), // green
+                Effect::Deny => ("✗", "\x1b[31m"),  // red
+                Effect::Ask => ("?", "\x1b[33m"),   // yellow
+            };
+            let reset = "\x1b[0m";
+            let dim = "\x1b[2m";
+            // \x01 and \x02 bracket non-printing chars for readline;
+            // brush's prompt expansion strips them (prompts.rs:69).
+            format!(
+                "clash[\x01{dim}\x02{}\x01{reset}\x02:\x01{color}\x02{}\x01{reset}\x02] $ ",
+                d.hash, symbol
+            )
+        }
+    }
+}
+
 /// Run an interactive shell REPL (`clash shell`).
 async fn run_interactive(
     cwd: &str,
     hook: clash_brush_core::ExternalCommandHook,
-    _last_decision: SharedDecision,
+    last_decision: SharedDecision,
 ) -> Result<()> {
     info!("starting interactive shell with sandbox hook");
 
@@ -418,22 +441,68 @@ async fn run_interactive(
 
     register_builtins(&mut shell);
 
+    // Set initial prompt (no decision yet).
+    set_ps1(&mut shell, "clash $ ");
+
     let shell_ref = std::sync::Arc::new(tokio::sync::Mutex::new(shell));
-
     let mut input = clash_brush_interactive::BasicInputBackend;
-
     let options = clash_brush_interactive::InteractiveOptions::default();
 
     let mut interactive =
         clash_brush_interactive::InteractiveShell::new(&shell_ref, &mut input, &options)
             .map_err(|e| anyhow::anyhow!("failed to create interactive shell: {e}"))?;
 
+    // Startup banner.
+    eprintln!(
+        "{}",
+        "\x1b[2mRun `clash policy allow|deny <id>` to change policy for any command.\x1b[0m"
+    );
+
     interactive
-        .run_interactively()
+        .start()
         .await
-        .map_err(|e| anyhow::anyhow!("interactive shell error: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("failed to start interactive session: {e}"))?;
+
+    loop {
+        // Update prompt based on last decision.
+        {
+            let prompt_str = format_prompt(&last_decision);
+            let mut sh = shell_ref.lock().await;
+            set_ps1(&mut sh, &prompt_str);
+        }
+
+        match interactive.run_interactively_once().await {
+            Ok(clash_brush_interactive::InteractiveExecutionResult::Eof) => break,
+            Ok(clash_brush_interactive::InteractiveExecutionResult::Executed(result)) => {
+                if matches!(
+                    result.next_control_flow,
+                    clash_brush_core::ExecutionControlFlow::ExitShell
+                ) {
+                    break;
+                }
+            }
+            Ok(clash_brush_interactive::InteractiveExecutionResult::Failed(_)) => {}
+            Err(e) => return Err(anyhow::anyhow!("interactive shell error: {e}")),
+        }
+    }
+
+    interactive
+        .finish()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to finish interactive session: {e}"))?;
 
     Ok(())
+}
+
+/// Set the PS1 environment variable on a shell instance.
+fn set_ps1(shell: &mut clash_brush_core::Shell, value: &str) {
+    let _ = shell.env_mut().update_or_add(
+        "PS1",
+        clash_brush_core::variables::ShellValueLiteral::Scalar(value.to_string()),
+        |_| Ok(()),
+        clash_brush_core::env::EnvironmentLookup::Anywhere,
+        clash_brush_core::env::EnvironmentScope::Global,
+    );
 }
 
 #[cfg(test)]

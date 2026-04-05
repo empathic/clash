@@ -183,8 +183,30 @@ impl<'a, IB: InputBackend, SE: brush_core::ShellExtensions> InteractiveShell<'a,
         Ok(())
     }
 
+    /// Initialize the interactive session (call before the first `run_interactively_once`).
+    pub async fn start(&mut self) -> Result<(), ShellError> {
+        let mut shell = self.shell.lock().await;
+        shell.start_interactive_session()?;
+        Ok(())
+    }
+
+    /// Finalize the interactive session (call after the loop ends).
+    pub async fn finish(&mut self) -> Result<(), ShellError> {
+        let mut shell = self.shell.lock().await;
+
+        shell.end_interactive_session()?;
+
+        if let Err(e) = shell.save_history() {
+            tracing::debug!("couldn't save history: {e}");
+        }
+
+        shell.on_exit().await?;
+
+        Ok(())
+    }
+
     /// Runs the interactive shell loop once, reading a single command from standard input.
-    async fn run_interactively_once(&mut self) -> Result<InteractiveExecutionResult, ShellError> {
+    pub async fn run_interactively_once(&mut self) -> Result<InteractiveExecutionResult, ShellError> {
         let mut shell = self.shell.lock().await;
 
         // Run any pre-prompt actions.
