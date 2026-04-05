@@ -31,16 +31,16 @@ Each ecosystem gets a `.star` file in `clash_starlark/stdlib/` exporting sandbox
 
 ### Git (`sandboxes.star`)
 
-**`git_safe`**: fetch, pull, log, diff, status, branch --list
+**`git_safe`**: fetch, pull, log, diff, status, branch --list, gh
 - `rx` on `$PWD` with `follow_worktrees=True`
-- Read `~/.gitconfig`, `~/.config/git/**`
+- Read `~/.gitconfig`, `~/.config/git/**`, `~/.config/gh/**`
 - Read+execute `~/.ssh/**`
 - Full `$TMPDIR`
 - Network: allow
 
-**`git_full`**: + commit, push, checkout, merge, rebase, stash
+**`git_full`**: + commit, push, checkout, merge, rebase, stash, gh
 - `FULL` on `$PWD` with `follow_worktrees=True`
-- Same config/SSH/tmpdir access as `git_safe`
+- Same config/SSH/tmpdir/gh access as `git_safe`
 - Network: allow
 
 ### Rust (`rust.star`)
