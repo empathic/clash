@@ -13,4 +13,4 @@ swift_full = sandbox(
     doc = "Swift full: build, test, package resolve. Full project + SPM cache access.",
 )
 
-swift = when({"Bash": {("swift", "swiftc", "xcodebuild"): allow(sandbox = swift_full)}})
+swift = {"Bash": {("swift", "swiftc", "xcodebuild"): allow(sandbox = swift_full)}}

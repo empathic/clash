@@ -220,30 +220,30 @@ def mode(name=None, doc=None):
 
 
 # ---------------------------------------------------------------------------
-# Typed match keys — used in when() dicts to distinguish observables
+# Typed match keys — used in policy dicts to distinguish observables
 # ---------------------------------------------------------------------------
 
 
 def Mode(name):
-    """Typed key for when() dicts — matches Claude Code's permission mode.
+    """Typed key for policy dicts — matches Claude Code's permission mode.
 
     Usage:
-        when({Mode("plan"): {Tool("Read"): allow()}})
+        policy("name", {Mode("plan"): {Tool("Read"): allow()}})
     """
     return struct(_match_key="mode", _match_value=name)
 
 
 def Tool(name):
-    """Typed key for when() dicts — matches tool name (explicit alternative to raw strings).
+    """Typed key for policy dicts — matches tool name (explicit alternative to raw strings).
 
     Usage:
-        when({Tool("Bash"): {"git": allow()}})
+        policy("name", {Tool("Bash"): {"git": allow()}})
     """
     return struct(_match_key="tool", _match_value=name)
 
 
 # ---------------------------------------------------------------------------
-# when() and policy() — thin wrappers around Rust-native implementations
+# merge() and policy() — thin wrappers around Rust-native implementations
 # ---------------------------------------------------------------------------
 
 
@@ -252,31 +252,21 @@ def merge(*dicts):
     return _merge(*dicts)
 
 
-def when(tree):
-    """Build rules from a nested dict tree.
-
-    Keys can be raw strings (tool names), Tool("Bash"), Mode("plan"),
-    or tuples thereof. Values are effects (allow/deny/ask) or nested dicts.
-    """
-    return _when_impl(tree)
-
-
-def policy(name, rules_or_dict=None, default="deny", rules=None, default_sandbox=None):
+def policy(name, rules_or_dict=None, default="deny", default_sandbox=None):
     """Register a named policy.
 
-    Usage (dict form):
+    Usage:
         policy("default", {
             mode("plan"): allow(sandbox=plan_box),
             mode("edit"): allow(sandbox=edit_box),
         })
 
-    Usage (rules form):
-        policy("default", rules=[
-            when({"Bash": {"git": {"push": deny()}}}),
-            when({("Read", "Glob", "Grep"): allow()}),
-        ])
+        policy("default", merge(
+            {mode("plan"): allow(sandbox=plan_box)},
+            from_claude_settings(),
+        ))
     """
-    _policy_impl(name, rules_or_dict, default=_unwrap_effect(default), rules=rules, default_sandbox=default_sandbox)
+    _policy_impl(name, rules_or_dict, default=_unwrap_effect(default), default_sandbox=default_sandbox)
 
 
 # ---------------------------------------------------------------------------

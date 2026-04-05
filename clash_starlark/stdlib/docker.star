@@ -26,4 +26,4 @@ docker_full = sandbox(
     doc = "Docker full: build, run, compose, push. Full project access, network enabled.",
 )
 
-docker = when({"Bash": {("docker", "docker-compose", "podman"): allow(sandbox = docker_full)}})
+docker = {"Bash": {("docker", "docker-compose", "podman"): allow(sandbox = docker_full)}}

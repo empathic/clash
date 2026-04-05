@@ -301,43 +301,17 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
-    // -- Rust-native when() and policy() --
-
-    /// Build rules from a nested dict tree.
-    ///
-    /// Keys can be raw strings (tool names), Tool("Bash"), Mode("plan"),
-    /// or tuples of the above. Values are effects (allow/deny/ask) or nested dicts.
-    fn _when_impl<'v>(
-        #[starlark(require = pos)] tree: Value<'v>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> anyhow::Result<Value<'v>> {
-        let source = caller_source_location(eval);
-        let heap = eval.heap();
-        let (nodes, sandboxes) = crate::when::when_impl(tree, heap, source)?;
-
-        // Stash collected sandboxes in EvalContext for policy() to drain.
-        if !sandboxes.is_empty() {
-            if let Some(ctx) = eval.extra.and_then(|e| e.downcast_ref::<EvalContext>()) {
-                ctx.pending_sandboxes.borrow_mut().extend(sandboxes);
-            }
-        }
-
-        // Return plain list of MatchTreeNode values.
-        let result: Vec<Value<'v>> = nodes.into_iter().map(|node| heap.alloc(node)).collect();
-        Ok(heap.alloc(starlark::values::list::AllocList(result)))
-    }
+    // -- Rust-native policy() --
 
     /// Register a named policy.
     ///
-    /// Accepts dict form: `policy("name", {mode("plan"): allow(), ...})`
-    /// or rules form: `policy("name", rules=[when({...}), ...])`
+    /// Accepts dict form only: `policy("name", {mode("plan"): allow(), ...})`
     fn _policy_impl<'v>(
         #[starlark(require = pos)] name: &str,
         #[starlark(require = pos, default = starlark::values::none::NoneType)] rules_or_dict: Value<
             'v,
         >,
         #[starlark(require = named, default = starlark::values::none::NoneType)] default: Value<'v>,
-        #[starlark(require = named)] rules: Option<Value<'v>>,
         #[starlark(require = named, default = starlark::values::none::NoneType)]
         default_sandbox: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
@@ -352,8 +326,16 @@ fn register_globals(builder: &mut GlobalsBuilder) {
                 )
             })?;
 
-        // Unwrap default effect
-        let default_effect = if default.is_none() {
+        // Reject non-dict, non-None values with a helpful error
+        if !rules_or_dict.is_none() && DictRef::from_value(rules_or_dict).is_none() {
+            anyhow::bail!(
+                "policy() requires a dict argument, got {}. The when()/rules= syntax has been removed — use dict syntax instead. Run 'clash policy migrate' to convert.",
+                rules_or_dict.get_type()
+            );
+        }
+
+        // Unwrap default effect (reserved for future use in policy registration)
+        let _default_effect = if default.is_none() {
             "deny".to_string()
         } else if let Some(s) = default.unpack_str() {
             s.to_string()
@@ -370,11 +352,8 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         };
 
         let source = caller_source_location(eval);
-        let (flat_nodes, mut sandboxes) =
-            crate::when::policy_impl(name, rules_or_dict, rules, default_sandbox, heap, source)?;
-
-        // Drain pending sandboxes from when() calls
-        sandboxes.extend(ctx.pending_sandboxes.borrow_mut().drain(..));
+        let (flat_nodes, sandboxes) =
+            crate::when::policy_impl(name, rules_or_dict, default_sandbox, heap, source)?;
 
         ctx.register_policy(PolicyRegistration {
             name: name.to_string(),

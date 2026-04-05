@@ -9,7 +9,7 @@ clashbox = sandbox(
     net=allow(),
 )
 
-clash = when({
+clash = {
     "Bash": {
         "clash": {
             ("bug", "status"): allow(sandbox=clashbox),
@@ -20,7 +20,7 @@ clash = when({
             },
         },
     },
-})
+}
 
 _claude_fs = sandbox(
     name="claude_fs",
@@ -30,7 +30,7 @@ _claude_fs = sandbox(
     },
 )
 
-claude = when({
+claude = {
     (
         "Agent",
         "AskUserQuestion",
@@ -46,7 +46,7 @@ claude = when({
         "TaskStop",
         "TaskUpdate",
     ): allow(sandbox=_claude_fs),
-})
+}
 
-# Flat list of all builtin rule nodes
-builtins = clash + claude
+# Merged dict of all builtin rules
+builtins = merge(clash, claude)
