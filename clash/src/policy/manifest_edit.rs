@@ -59,7 +59,7 @@ fn find_matching_chain(tree: &[Node], target: &Node) -> Option<usize> {
 ///
 /// Walks both trees in lockstep comparing `(observable, pattern)` at each level.
 /// The leaf decision is ignored — only the condition path matters.
-fn same_match_chain(a: &Node, b: &Node) -> bool {
+pub(crate) fn same_match_chain(a: &Node, b: &Node) -> bool {
     match (a, b) {
         (
             Node::Condition {

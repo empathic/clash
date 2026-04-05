@@ -4,6 +4,7 @@
 //! Evaluation is a single DFS pass — first match wins.
 
 pub mod compile;
+pub mod diff;
 pub mod error;
 pub mod format;
 pub mod ir;
