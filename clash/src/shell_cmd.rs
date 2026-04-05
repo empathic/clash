@@ -164,7 +164,14 @@ fn make_sandbox_hook(
         // Block denied commands with actionable hints.
         if decision.effect == Effect::Deny {
             let noun = if command_str.len() > 60 {
-                format!("{}...", &command_str[..60])
+                // Truncate at a char boundary to avoid panicking on multi-byte UTF-8.
+                let truncate_at = command_str
+                    .char_indices()
+                    .map(|(i, _)| i)
+                    .take_while(|&i| i <= 60)
+                    .last()
+                    .unwrap_or(0);
+                format!("{}...", &command_str[..truncate_at])
             } else {
                 command_str.clone()
             };
@@ -292,9 +299,13 @@ pub fn run_shell(
     };
 
     // Create a shell session for audit logging.
-    let session_id = format!("shell-{:x}-{:03x}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() & 0xFFFF_FFFF,
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_millis()
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let session_id = format!(
+        "shell-{:x}-{:03x}",
+        now.as_secs() & 0xFFFF_FFFF,
+        now.subsec_millis()
     );
     let _ = crate::audit::init_session(&session_id, &cwd, Some("clash-shell"), None);
 
