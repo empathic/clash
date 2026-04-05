@@ -1,27 +1,23 @@
-//! Starlark builders for match tree IR.
+//! Match tree IR builders.
 //!
 //! These produce JSON that deserializes to `clash::policy::match_tree::CompiledPolicy`.
 //! The builders emit tree-shaped policies where capability domains are compile-time
 //! sugar, not IR concepts.
+//!
+//! `MatchTreeNode` is a thin JSON wrapper used internally by `when.rs` and
+//! `settings_compat.rs` — it is **not** exposed to Starlark.
 
-use std::fmt::{self, Display};
-
-use allocative::Allocative;
 use serde_json::{Value as JsonValue, json};
-use starlark::starlark_simple_value;
 use starlark::values::list::ListRef;
-use starlark::values::{
-    Heap, ProvidesStaticType, StarlarkValue, Trace, Value, ValueLike, starlark_value,
-};
+use starlark::values::{Heap, Value};
 
 // ---------------------------------------------------------------------------
-// MatchTreeNode — Starlark wrapper for match tree nodes
+// MatchTreeNode — internal JSON wrapper (not a Starlark value)
 // ---------------------------------------------------------------------------
 
-/// A match tree node value in Starlark — represents a Condition or Decision node.
-#[derive(Debug, Clone, ProvidesStaticType, Allocative)]
+/// A match tree node — represents a Condition or Decision node as JSON.
+#[derive(Debug, Clone)]
 pub struct MatchTreeNode {
-    #[allocative(skip)]
     pub json: JsonValue,
 }
 
@@ -31,97 +27,7 @@ impl serde::Serialize for MatchTreeNode {
     }
 }
 
-unsafe impl Trace<'_> for MatchTreeNode {
-    fn trace(&mut self, _tracer: &starlark::values::Tracer<'_>) {}
-}
-
-impl Display for MatchTreeNode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MatchTreeNode({})", self.json)
-    }
-}
-
-starlark_simple_value!(MatchTreeNode);
-
-#[starlark_value(type = "MatchTreeNode")]
-impl<'v> StarlarkValue<'v> for MatchTreeNode {
-    fn get_methods() -> Option<&'static starlark::environment::Methods> {
-        static RES: starlark::environment::MethodsStatic =
-            starlark::environment::MethodsStatic::new();
-        RES.methods(match_tree_node_methods)
-    }
-}
-
-#[starlark::starlark_module]
-fn match_tree_node_methods(builder: &mut starlark::environment::MethodsBuilder) {
-    /// Set children on a condition node.
-    fn on<'v>(
-        this: &MatchTreeNode,
-        #[starlark(require = pos)] children: Value<'v>,
-    ) -> anyhow::Result<MatchTreeNode> {
-        let list = ListRef::from_value(children)
-            .ok_or_else(|| anyhow::anyhow!(".on() requires a list of nodes"))?;
-
-        let mut child_nodes = Vec::new();
-        for item in list.iter() {
-            if let Some(node) = item.downcast_ref::<MatchTreeNode>() {
-                child_nodes.push(node.json.clone());
-            } else {
-                anyhow::bail!(
-                    ".on() children must be MatchTreeNode values, got {}",
-                    item.get_type()
-                );
-            }
-        }
-
-        // Clone this node and set children on the deepest leaf
-        let mut json = this.json.clone();
-        set_children_on_deepest_leaf(&mut json, child_nodes);
-
-        Ok(MatchTreeNode { json })
-    }
-
-    /// Sugar for `.on([allow_node])`.
-    fn allow(
-        this: &MatchTreeNode,
-        #[starlark(require = named)] sandbox: Option<&str>,
-    ) -> anyhow::Result<MatchTreeNode> {
-        let decision = if let Some(sb) = sandbox {
-            json!({"decision": {"allow": sb}})
-        } else {
-            json!({"decision": {"allow": null}})
-        };
-        set_children(this, vec![decision])
-    }
-
-    /// Sugar for `.on([deny_node])`.
-    fn deny(this: &MatchTreeNode) -> anyhow::Result<MatchTreeNode> {
-        let decision = json!({"decision": "deny"});
-        set_children(this, vec![decision])
-    }
-
-    /// Sugar for `.on([ask_node])`.
-    fn ask(
-        this: &MatchTreeNode,
-        #[starlark(require = named)] sandbox: Option<&str>,
-    ) -> anyhow::Result<MatchTreeNode> {
-        let decision = if let Some(sb) = sandbox {
-            json!({"decision": {"ask": sb}})
-        } else {
-            json!({"decision": {"ask": null}})
-        };
-        set_children(this, vec![decision])
-    }
-}
-
-fn set_children(node: &MatchTreeNode, children: Vec<JsonValue>) -> anyhow::Result<MatchTreeNode> {
-    let mut json = node.json.clone();
-    set_children_on_deepest_leaf(&mut json, children);
-    Ok(MatchTreeNode { json })
-}
-
 /// Recursively find the deepest condition node with empty children and set its children.
-/// (Also available as `set_children_on_deepest_leaf_pub` for external callers.)
 fn set_children_on_deepest_leaf(json: &mut JsonValue, children: Vec<JsonValue>) {
     if let Some(obj) = json.as_object_mut()
         && let Some(cond) = obj.get_mut("condition").and_then(|c| c.as_object_mut())
@@ -149,14 +55,8 @@ pub fn set_children_on_deepest_leaf_pub(json: &mut JsonValue, children: Vec<Json
 }
 
 // ---------------------------------------------------------------------------
-// Builder functions (registered as Starlark globals)
+// Builder helpers (used by when.rs dict processing)
 // ---------------------------------------------------------------------------
-
-/// Create a condition node. `observe` is JSON (string or structured).
-#[allow(dead_code)]
-pub fn mt_condition(observe: JsonValue, pattern: JsonValue) -> MatchTreeNode {
-    mt_condition_with_doc(observe, pattern, None, None)
-}
 
 /// Create a condition node with an optional docstring and source location.
 pub fn mt_condition_with_doc(
@@ -238,24 +138,3 @@ pub fn pattern_to_json<'v>(value: Value<'v>, heap: &'v Heap) -> anyhow::Result<J
     )
 }
 
-/// Convert a Starlark path value (string, struct with _env, struct with _join) to a Value JSON.
-pub fn path_value_to_json<'v>(value: Value<'v>, heap: &'v Heap) -> anyhow::Result<JsonValue> {
-    if let Some(s) = value.unpack_str() {
-        return Ok(json!({"literal": s}));
-    }
-    if value.get_type() == "struct" {
-        if let Ok(Some(env_val)) = value.get_attr("_env", heap)
-            && let Some(env_name) = env_val.unpack_str()
-        {
-            return Ok(json!({"env": env_name}));
-        }
-        if let Ok(Some(join_val)) = value.get_attr("_join", heap)
-            && let Some(list) = ListRef::from_value(join_val)
-        {
-            let parts: Result<Vec<_>, _> =
-                list.iter().map(|v| path_value_to_json(v, heap)).collect();
-            return Ok(json!({"path": parts?}));
-        }
-    }
-    anyhow::bail!("cannot convert {} to a path value", value.get_type())
-}

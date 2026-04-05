@@ -1,9 +1,7 @@
 # Clash standard library — all DSL builders.
 #
-# Emits v5 match tree nodes using minimal Rust primitives.
-# Rust globals available: _mt_node, _mt_condition, _mt_pattern, _mt_prefix,
-# _mt_literal, _ALLOW, _DENY, _ASK, _OS, _ARCH,
-# _register_settings
+# Rust globals available: _ALLOW, _DENY, _ASK, _OS, _ARCH,
+# _register_settings, _from_claude_settings, _merge, _policy_impl
 
 # ---------------------------------------------------------------------------
 # Platform constants — re-export from Rust for use in policy files
@@ -69,17 +67,6 @@ def ask(caps=None, sandbox=None, read=None, write=None, create=None, delete=None
 # ---------------------------------------------------------------------------
 
 
-def _pattern(value):
-    """Convert a value to a matcher pattern.
-
-    - None          → wildcard
-    - "foo"         → literal
-    - ["a", "b"]    → any_of
-    - regex("...")  → regex
-    """
-    return _mt_pattern(value)
-
-
 def regex(pattern):
     """Create a regex pattern."""
     return struct(_regex=pattern)
@@ -105,102 +92,6 @@ def glob(pattern):
 
 
 # ---------------------------------------------------------------------------
-# Match tree node builders (pure Starlark over _mt_condition / _mt_node)
-# ---------------------------------------------------------------------------
-
-
-def _cond(observe, pattern, doc=None):
-    """Build a condition node, only passing doc when non-None."""
-    if doc != None:
-        return _mt_condition(observe, pattern, doc=doc)
-    return _mt_condition(observe, pattern)
-
-
-def _mt_tool(pattern, doc=None):
-    """Build ToolName=pattern."""
-    return _cond("tool_name", pattern, doc=doc)
-
-
-def _mt_hook(pattern, doc=None):
-    """Build HookType=pattern."""
-    return _cond("hook_type", pattern, doc=doc)
-
-
-def _mt_agent(pattern, doc=None):
-    """Build AgentName=pattern."""
-    return _cond("agent_name", pattern, doc=doc)
-
-
-def _mt_mode(pattern, doc=None):
-    """Build Mode=pattern."""
-    return _cond("mode", pattern, doc=doc)
-
-
-def _mt_arg(n, pattern):
-    """Build PosArg(n)=pattern."""
-    return _mt_condition({"positional_arg": n}, pattern)
-
-
-def _mt_has_arg(pattern):
-    """Build HasArg=pattern."""
-    return _mt_condition("has_arg", pattern)
-
-
-def _mt_named(name, pattern):
-    """Build NamedArg(name)=pattern."""
-    return _mt_condition({"named_arg": name}, pattern)
-
-
-def _mt_field(path, pattern):
-    """Build NestedField(path)=pattern."""
-    return _mt_condition({"nested_field": path}, pattern)
-
-
-def _mt_fs_op(pattern):
-    """Build FsOp=pattern."""
-    return _mt_condition("fs_op", pattern)
-
-
-def _mt_fs_path(pattern):
-    """Build FsPath=pattern."""
-    return _mt_condition("fs_path", pattern)
-
-
-def _mt_net_domain(pattern):
-    """Build NetDomain=pattern."""
-    return _mt_condition("net_domain", pattern)
-
-
-def _mt_allow(sandbox):
-    """Build an allow decision node."""
-    if sandbox != None:
-        return _mt_node({"decision": {"allow": sandbox}})
-    return _mt_node({"decision": {"allow": None}})
-
-
-def _mt_deny():
-    """Build a deny decision node."""
-    return _mt_node({"decision": "deny"})
-
-
-def _mt_ask(sandbox):
-    """Build an ask decision node."""
-    if sandbox != None:
-        return _mt_node({"decision": {"ask": sandbox}})
-    return _mt_node({"decision": {"ask": None}})
-
-
-def _mt_not(pattern):
-    """Build a negated pattern."""
-    return _mt_node({"not": pattern})
-
-
-def _mt_or(patterns):
-    """Build an any_of pattern."""
-    return _mt_node({"any_of": patterns})
-
-
-# ---------------------------------------------------------------------------
 # Mode key builder
 # ---------------------------------------------------------------------------
 
@@ -220,30 +111,30 @@ def mode(name=None, doc=None):
 
 
 # ---------------------------------------------------------------------------
-# Typed match keys — used in when() dicts to distinguish observables
+# Typed match keys — used in policy dicts to distinguish observables
 # ---------------------------------------------------------------------------
 
 
 def Mode(name):
-    """Typed key for when() dicts — matches Claude Code's permission mode.
+    """Typed key for policy dicts — matches Claude Code's permission mode.
 
     Usage:
-        when({Mode("plan"): {Tool("Read"): allow()}})
+        policy("name", {Mode("plan"): {Tool("Read"): allow()}})
     """
     return struct(_match_key="mode", _match_value=name)
 
 
 def Tool(name):
-    """Typed key for when() dicts — matches tool name (explicit alternative to raw strings).
+    """Typed key for policy dicts — matches tool name (explicit alternative to raw strings).
 
     Usage:
-        when({Tool("Bash"): {"git": allow()}})
+        policy("name", {Tool("Bash"): {"git": allow()}})
     """
     return struct(_match_key="tool", _match_value=name)
 
 
 # ---------------------------------------------------------------------------
-# when() and policy() — thin wrappers around Rust-native implementations
+# merge() and policy() — thin wrappers around Rust-native implementations
 # ---------------------------------------------------------------------------
 
 
@@ -252,31 +143,21 @@ def merge(*dicts):
     return _merge(*dicts)
 
 
-def when(tree):
-    """Build rules from a nested dict tree.
-
-    Keys can be raw strings (tool names), Tool("Bash"), Mode("plan"),
-    or tuples thereof. Values are effects (allow/deny/ask) or nested dicts.
-    """
-    return _when_impl(tree)
-
-
-def policy(name, rules_or_dict=None, default="deny", rules=None, default_sandbox=None):
+def policy(name, rules_or_dict=None, default="deny", default_sandbox=None):
     """Register a named policy.
 
-    Usage (dict form):
+    Usage:
         policy("default", {
             mode("plan"): allow(sandbox=plan_box),
             mode("edit"): allow(sandbox=edit_box),
         })
 
-    Usage (rules form):
-        policy("default", rules=[
-            when({"Bash": {"git": {"push": deny()}}}),
-            when({("Read", "Glob", "Grep"): allow()}),
-        ])
+        policy("default", merge(
+            {mode("plan"): allow(sandbox=plan_box)},
+            from_claude_settings(),
+        ))
     """
-    _policy_impl(name, rules_or_dict, default=_unwrap_effect(default), rules=rules, default_sandbox=default_sandbox)
+    _policy_impl(name, rules_or_dict, default=_unwrap_effect(default), default_sandbox=default_sandbox)
 
 
 # ---------------------------------------------------------------------------
@@ -284,60 +165,11 @@ def policy(name, rules_or_dict=None, default="deny", rules=None, default_sandbox
 # ---------------------------------------------------------------------------
 
 
-def _fs_nodes(path_pattern, read=None, write=None):
-    """Build match tree nodes for filesystem access.
-
-    path_pattern: a MatchTreeNode from _mt_prefix, _mt_literal, or _mt_pattern.
-    read/write: effect values (allow/deny/ask) or None to skip.
-    """
-    nodes = []
-
-    if read != None:
-        node = _mt_fs_op(_pattern("read")).on(
-            [
-                _mt_fs_path(path_pattern).on(
-                    [
-                        _effect_decision(read),
-                    ]
-                ),
-            ]
-        )
-        nodes.append(node)
-
-    if write != None:
-        node = _mt_fs_op(_pattern("write")).on(
-            [
-                _mt_fs_path(path_pattern).on(
-                    [
-                        _effect_decision(write),
-                    ]
-                ),
-            ]
-        )
-        nodes.append(node)
-
-    return nodes
-
-
 def _unwrap_effect(effect):
     """Extract the effect string from an effect descriptor or raw string."""
     if hasattr(effect, "_is_effect"):
         return effect._effect
     return effect
-
-
-def _effect_decision(effect):
-    """Create a decision node from an effect string or descriptor."""
-    e = _unwrap_effect(effect)
-    if e == _ALLOW:
-        return _mt_allow(None)
-    elif e == _DENY:
-        return _mt_deny()
-    elif e == _ASK:
-        return _mt_ask(None)
-    else:
-        fail("unknown effect: " + str(e))
-
 
 
 def _caps_from_bools(read, write, execute, all_ops):
@@ -463,18 +295,6 @@ def _process_fs_dict(fs_dict, parent_path=None):
     return rules
 
 
-def _make_path_pattern(path_value, match_type):
-    """Create the appropriate FsPath pattern for the given match type."""
-    if match_type == "literal":
-        return _mt_literal(path_value)
-    elif match_type == "regex":
-        return _mt_pattern(path_value)
-    elif match_type == "child_of":
-        return _mt_child_of(path_value)
-    else:
-        return _mt_prefix(path_value)
-
-
 def _path_match(path_value, worktree=False, match_type="literal"):
     """A path selector — use .child()/.file()/.recurse()/.match() to refine, then .allow()/.deny()/.ask() to decide."""
 
@@ -498,11 +318,6 @@ def _path_match(path_value, worktree=False, match_type="literal"):
 
     def _resolve(effect, read, write, execute, all, doc=None):
         all_ops = read == None and write == None and execute == None
-        _read = effect if (read or all_ops) else None
-        _write = effect if (write or all_ops) else None
-
-        path_pat = _make_path_pattern(path_value, match_type)
-        nodes = _fs_nodes(path_pat, _read, _write)
 
         sandbox_rules = []
         if effect == _ALLOW or effect == _DENY:
@@ -527,7 +342,6 @@ def _path_match(path_value, worktree=False, match_type="literal"):
 
         return struct(
             _is_path=True,
-            _nodes=nodes,
             _path_value=path_value,
             _sandbox_rules=sandbox_rules,
         )
@@ -603,37 +417,16 @@ def path(path_str=None, env=None):
 # ---------------------------------------------------------------------------
 
 
-def _domain_pattern(name):
-    """Convert a domain string to a matcher pattern."""
-    if name == "*":
-        return _pattern(None)  # wildcard
-    if name.startswith("*."):
-        suffix = name[2:]
-        escaped = ""
-        for c in suffix.elems():
-            if c in ".+*?^${}()|[]\\":
-                escaped += "\\" + c
-            else:
-                escaped += c
-        return _pattern(regex("(^|.*\\.)" + escaped))
-    return _pattern(name)
-
-
 def domains(mapping):
     """Build net rules from a {domain: effect} dict.
 
     Usage:
         domains({"github.com": allow, "*.npmjs.org": allow})
     """
-    nodes = []
-    for domain_name, effect in mapping.items():
-        node = _mt_net_domain(_domain_pattern(domain_name)).on(
-            [
-                _effect_decision(effect),
-            ]
-        )
-        nodes.append(struct(_node=node, _domain_name=domain_name))
-    return nodes
+    entries = []
+    for domain_name, _effect in mapping.items():
+        entries.append(struct(_domain_name=domain_name))
+    return entries
 
 
 def domain(name, effect):
@@ -642,12 +435,7 @@ def domain(name, effect):
     Usage:
         domain("github.com", allow)
     """
-    node = _mt_net_domain(_domain_pattern(name)).on(
-        [
-            _effect_decision(effect),
-        ]
-    )
-    return [struct(_node=node, _domain_name=name)]
+    return [struct(_domain_name=name)]
 
 
 def localhost(ports = None):
@@ -759,27 +547,16 @@ def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
         elif type(net) == "string":
             net_policy = net  # "allow" or "deny"
         elif type(net) == "list":
-            # domains() returns a list of structs with _node and _domain_name
-            net_domains = []
+            # domains() returns a list of structs with _domain_name
             for entry in net:
                 if type(entry) == "list":
                     for sub in entry:
                         if hasattr(sub, "_domain_name"):
                             net_domain_names.append(sub._domain_name)
-                            net_domains.append(
-                                sub._node if hasattr(sub, "_node") else sub
-                            )
-                        else:
-                            net_domains.append(sub)
                 else:
                     if hasattr(entry, "_domain_name"):
                         net_domain_names.append(entry._domain_name)
-                        net_domains.append(
-                            entry._node if hasattr(entry, "_node") else entry
-                        )
-                    else:
-                        net_domains.append(entry)
-            net_policy = net_domains
+            net_policy = net_domain_names
         else:
             fail("sandbox net= must be an effect string or a list of domain entries")
 
@@ -789,19 +566,6 @@ def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
 # ---------------------------------------------------------------------------
 # Sandbox support for rule builders (exe, tool)
 # ---------------------------------------------------------------------------
-
-
-def _expand_children(children):
-    """Expand a list of children, flattening path entries into their nodes."""
-    expanded = []
-    for child in children:
-        if hasattr(child, "_is_path"):
-            expanded.extend(child._nodes)
-        elif hasattr(child, "_node"):
-            expanded.append(child._node)
-        else:
-            expanded.append(child)
-    return expanded
 
 
 def _merge_sandboxes(*sandboxes):

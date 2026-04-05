@@ -13,4 +13,4 @@ dotnet_full = sandbox(
     doc = ".NET full: build, test, restore. Full project + NuGet cache access.",
 )
 
-dotnet = when({"Bash": {("dotnet", "msbuild"): allow(sandbox = dotnet_full)}})
+dotnet = {"Bash": {("dotnet", "msbuild"): allow(sandbox = dotnet_full)}}

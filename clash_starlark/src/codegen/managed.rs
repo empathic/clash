@@ -2,8 +2,8 @@
 //!
 //! Rules added by `clash policy allow/deny` are placed in a "managed section"
 //! of the `.star` file, marked by a comment sentinel. Each managed rule is a
-//! variable assignment (`_clash_rule_N = when({...})`) referenced in the
-//! `policy()` call's `rules` list.
+//! variable assignment (`_clash_rule_N = {Tool("Bash"): {...}}`) referenced as
+//! an argument in the `policy()` call's `merge()` expression.
 //!
 //! This makes CLI-added rules easy to identify, upsert, and remove without
 //! disturbing hand-written rules.
@@ -38,7 +38,7 @@ pub fn upsert_exec_rule(
     effect: mutate::Effect,
     sandbox: Option<&str>,
 ) -> Result<ManagedUpsertResult, String> {
-    let new_expr = build_exec_when_expr(binary, args, effect, sandbox);
+    let new_expr = build_exec_dict_expr(binary, args, effect, sandbox);
 
     // Look for an existing managed rule with the same match key
     let match_key = exec_match_key(binary, args);
@@ -66,13 +66,10 @@ pub fn upsert_tool_rule(
     sandbox: Option<&str>,
 ) -> Result<ManagedUpsertResult, String> {
     let effect_expr = build_effect_expr(effect, sandbox);
-    let new_expr = Expr::call(
-        "when",
-        vec![Expr::dict(vec![DictEntry::new(
-            Expr::string(tool_name),
-            effect_expr,
-        )])],
-    );
+    let new_expr = Expr::dict(vec![DictEntry::new(
+        Expr::call("Tool", vec![Expr::string(tool_name)]),
+        effect_expr,
+    )]);
 
     let match_key = tool_match_key(tool_name);
     if let Some((_var_name, stmt_idx)) = find_managed_by_key(stmts, &match_key) {
@@ -152,7 +149,7 @@ fn find_managed_by_key(stmts: &[Stmt], match_key: &str) -> Option<(String, usize
 }
 
 /// Remove a managed rule by its match key.
-/// Removes the comment, the assignment, and the reference in policy rules.
+/// Removes the comment, the assignment, and the reference in policy merge() args.
 fn remove_managed_by_key(stmts: &mut Vec<Stmt>, match_key: &str) -> bool {
     // Find the comment + assignment pair
     let found = find_managed_by_key(stmts, match_key);
@@ -161,9 +158,9 @@ fn remove_managed_by_key(stmts: &mut Vec<Stmt>, match_key: &str) -> bool {
     };
     let comment_idx = assign_idx - 1;
 
-    // Remove the reference from policy() rules list
-    if let Some(rules) = mutate::policy_rules_mut(stmts) {
-        rules.retain(|expr| !is_ident_ref(expr, &var_name));
+    // Remove the reference from policy() merge() args
+    if let Some(merge_args) = mutate::policy_merge_args_mut(stmts) {
+        merge_args.retain(|expr| !is_ident_ref(expr, &var_name));
     }
 
     // Remove the assignment and comment (remove in reverse order to preserve indices)
@@ -173,7 +170,7 @@ fn remove_managed_by_key(stmts: &mut Vec<Stmt>, match_key: &str) -> bool {
     true
 }
 
-/// Insert a new managed rule: comment + assignment + add reference to policy rules.
+/// Insert a new managed rule: comment + assignment + add reference to policy merge() args.
 fn insert_managed_rule(
     stmts: &mut Vec<Stmt>,
     var_name: &str,
@@ -190,11 +187,10 @@ fn insert_managed_rule(
         value: expr,
     });
 
-    // Add reference to policy() rules list
-    mutate::ensure_loaded(stmts, "when");
-    let rules = mutate::policy_rules_mut(stmts)
-        .ok_or_else(|| "no policy() call with rules= found".to_string())?;
-    rules.push(Expr::ident(var_name));
+    // Add reference as last argument to policy() merge() call
+    let merge_args = mutate::policy_merge_args_mut(stmts)
+        .ok_or_else(|| "no policy() call with merge() found".to_string())?;
+    merge_args.push(Expr::ident(var_name));
 
     Ok(())
 }
@@ -253,7 +249,7 @@ fn is_ident_ref(expr: &Expr, name: &str) -> bool {
 // Expression builders
 // ---------------------------------------------------------------------------
 
-fn build_exec_when_expr(
+fn build_exec_dict_expr(
     binary: &str,
     args: &[&str],
     effect: mutate::Effect,
@@ -266,11 +262,10 @@ fn build_exec_when_expr(
     for arg in args.iter().rev() {
         value = Expr::dict(vec![DictEntry::new(Expr::string(*arg), value)]);
     }
-    let dict = Expr::dict(vec![DictEntry::new(
-        Expr::string("Bash"),
+    Expr::dict(vec![DictEntry::new(
+        Expr::call("Tool", vec![Expr::string("Bash")]),
         Expr::dict(vec![DictEntry::new(Expr::string(binary), value)]),
-    )]);
-    Expr::call("when", vec![dict])
+    )])
 }
 
 fn build_effect_expr(effect: mutate::Effect, sandbox: Option<&str>) -> Expr {
@@ -291,15 +286,13 @@ mod tests {
     use crate::codegen::serialize::serialize;
 
     fn base_stmts() -> Vec<Stmt> {
-        parse(
-            r#"load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
+        parse(r#"load("@clash//claude_compat.star", "from_claude_settings")
 
-settings(default = deny())
-
-policy("test", default = deny(), rules = [when({"Read": allow()})])
-"#,
-        )
-        .unwrap()
+policy("test", merge(
+    from_claude_settings(),
+    {"Read": allow()},
+))
+"#).unwrap()
     }
 
     #[test]
@@ -338,7 +331,7 @@ policy("test", default = deny(), rules = [when({"Read": allow()})])
             upsert_tool_rule(&mut stmts, "Write", mutate::Effect::Allow, None).unwrap();
         assert_eq!(result, ManagedUpsertResult::Inserted);
         let src = serialize(&stmts);
-        assert!(src.contains("\"Write\": allow()"), "got:\n{src}");
+        assert!(src.contains("Tool(\"Write\"): allow()"), "got:\n{src}");
     }
 
     #[test]
