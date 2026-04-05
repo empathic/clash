@@ -7,10 +7,11 @@ use starlark::environment::{GlobalsBuilder, LibraryExtension};
 use starlark::eval::Evaluator;
 use starlark::starlark_module;
 use starlark::values::Value;
+use starlark::values::dict::{AllocDict, DictRef};
 use starlark::values::none::NoneType;
 
 use crate::builders::match_tree::{self as mt, MatchTreeNode, path_value_to_json, pattern_to_json};
-use crate::eval_context::{EvalContext, PolicyRegistration, SettingsValue};
+use crate::eval_context::{EvalContext, PolicyRegistration, SettingsValue, ShadowedRule};
 
 /// Build the globals environment with all Clash DSL functions and constants.
 pub fn clash_globals() -> starlark::environment::Globals {
@@ -39,6 +40,69 @@ fn caller_source_location(eval: &Evaluator) -> Option<String> {
 pub(crate) fn starlark_to_json(value: Value) -> anyhow::Result<serde_json::Value> {
     let json_str = value.to_json()?;
     serde_json::from_str(&json_str).map_err(Into::into)
+}
+
+/// Deep-merge two Starlark dicts. When both sides have the same key and both
+/// values are dicts, recurse. Otherwise the right (later) value wins and the
+/// left value is recorded as a shadow.
+fn deep_merge<'v>(
+    left: Value<'v>,
+    right: Value<'v>,
+    path: &[String],
+    ctx: Option<&EvalContext>,
+    heap: &'v starlark::values::Heap,
+) -> anyhow::Result<Value<'v>> {
+    let left_dict = DictRef::from_value(left)
+        .ok_or_else(|| anyhow::anyhow!("merge: expected dict, got {}", left.get_type()))?;
+    let right_dict = DictRef::from_value(right)
+        .ok_or_else(|| anyhow::anyhow!("merge: expected dict, got {}", right.get_type()))?;
+
+    // Start with all entries from left.
+    let mut entries: Vec<(Value<'v>, Value<'v>)> = left_dict.iter().collect();
+
+    // Merge in entries from right.
+    for (rk, rv) in right_dict.iter() {
+        // Check if left already has this key.
+        let existing_idx = entries
+            .iter()
+            // unwrap_or(false): if equals() fails (shouldn't for policy keys — strings/structs),
+            // treat as not-equal so the key gets added as a new entry rather than merged.
+            .position(|(lk, _)| lk.equals(rk).unwrap_or(false));
+
+        match existing_idx {
+            Some(idx) => {
+                let (_lk, lv) = entries[idx];
+                let both_dicts =
+                    DictRef::from_value(lv).is_some() && DictRef::from_value(rv).is_some();
+                if both_dicts {
+                    // Recurse into nested dicts.
+                    let key_str = rk.to_repr();
+                    let mut child_path = path.to_vec();
+                    child_path.push(key_str);
+                    let merged = deep_merge(lv, rv, &child_path, ctx, heap)?;
+                    entries[idx].1 = merged;
+                } else {
+                    // Leaf conflict — rightmost wins.
+                    if let Some(ctx) = ctx {
+                        let key_str = rk.to_repr();
+                        let mut full_path = path.to_vec();
+                        full_path.push(key_str);
+                        ctx.shadows.borrow_mut().push(ShadowedRule {
+                            path: full_path,
+                            winner: rv.to_repr(),
+                            shadowed: lv.to_repr(),
+                        });
+                    }
+                    entries[idx].1 = rv;
+                }
+            }
+            None => {
+                entries.push((rk, rv));
+            }
+        }
+    }
+
+    Ok(heap.alloc(AllocDict(entries)))
 }
 
 #[starlark_module]
@@ -128,10 +192,11 @@ fn register_globals(builder: &mut GlobalsBuilder) {
 
     // -- Claude settings import --
 
-    /// Import Claude Code permission settings as match tree rules at eval time.
+    /// Import Claude Code permission settings as a policy dict at eval time.
     ///
-    /// Returns a list of MatchTreeNode values that can be concatenated with
-    /// other rules in a policy() call.
+    /// Returns a Starlark dict suitable for passing to `merge()` and then
+    /// to `policy()`. Keys are tool name strings, values are effect structs
+    /// or nested dicts for argument-level rules.
     ///
     /// Parameters:
     ///   user (bool): include user-level (~/.claude/settings.json) permissions
@@ -141,9 +206,35 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named, default = true)] project: bool,
         heap: &'v starlark::values::Heap,
     ) -> anyhow::Result<Value<'v>> {
-        let nodes = crate::settings_compat::from_claude_settings(user, project);
-        let result: Vec<Value<'v>> = nodes.into_iter().map(|node| heap.alloc(node)).collect();
-        Ok(heap.alloc(starlark::values::list::AllocList(result)))
+        Ok(crate::settings_compat::from_claude_settings_as_dict(user, project, heap))
+    }
+
+    // -- Deep merge primitive --
+
+    /// Deep-merge two or more dicts. Rightmost wins at leaf conflicts.
+    /// Records shadowed (overwritten) leaf values in the EvalContext.
+    fn _merge<'v>(
+        #[starlark(args)] args: &starlark::values::tuple::TupleRef<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        let heap = eval.heap();
+        let items = args.content();
+        if items.len() < 2 {
+            anyhow::bail!("merge() requires at least 2 dict arguments, got {}", items.len());
+        }
+        for (i, arg) in items.iter().enumerate() {
+            if DictRef::from_value(*arg).is_none() {
+                anyhow::bail!("merge() argument {} is not a dict", i + 1);
+            }
+        }
+
+        let ctx = eval.extra.and_then(|e| e.downcast_ref::<EvalContext>());
+
+        let mut result = items[0];
+        for arg in &items[1..] {
+            result = deep_merge(result, *arg, &[], ctx, heap)?;
+        }
+        Ok(result)
     }
 
     // -- Registration functions (side-effecting, write into EvalContext) --
