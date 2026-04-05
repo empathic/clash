@@ -4,7 +4,7 @@ meta:
 
 steps:
   - name: uninstall when never installed
-    command: "uninstall --yes"
+    command: "uninstall --yes --agent claude"
     expect:
       not:
         stderr_regex: "panic|RUST_BACKTRACE"
