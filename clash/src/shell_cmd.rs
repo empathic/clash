@@ -98,7 +98,7 @@ fn make_sandbox_hook(
             .next()
             .unwrap_or(executable_path);
         if SHELL_BUILTINS.contains(&basename) {
-            return None;
+            return clash_brush_core::ExternalCommandAction::Passthrough;
         }
 
         // Reconstruct the command string as it would appear in a Bash tool call.
@@ -130,7 +130,7 @@ fn make_sandbox_hook(
                     if debug {
                         eprintln!("[clash-shell] {}: no sandbox", command_str);
                     }
-                    return None;
+                    return clash_brush_core::ExternalCommandAction::Passthrough;
                 }
             },
         };
@@ -168,7 +168,7 @@ fn make_sandbox_hook(
                 if debug {
                     eprintln!("[clash-shell] failed to compile sandbox profile: {e}");
                 }
-                return None;
+                return clash_brush_core::ExternalCommandAction::Passthrough;
             }
         };
 
@@ -179,7 +179,7 @@ fn make_sandbox_hook(
             executable_path.to_string(),
         ];
         new_args.extend(args.iter().cloned());
-        Some(("sandbox-exec".to_string(), new_args))
+        clash_brush_core::ExternalCommandAction::Replace("sandbox-exec".to_string(), new_args)
     })
 }
 
@@ -407,7 +407,10 @@ mod tests {
         let hook = test_hook();
         // Brush resolves to full paths; hook should still match policy.
         let result = hook("/usr/bin/git", &["push".to_string()]);
-        let (exe, args) = result.unwrap();
+        let (exe, args) = match result {
+            clash_brush_core::ExternalCommandAction::Replace(exe, args) => (exe, args),
+            other => panic!("expected Replace, got {other:?}"),
+        };
         // Should invoke sandbox-exec directly, not clash sandbox exec.
         assert_eq!(exe, "sandbox-exec");
         assert_eq!(args[0], "-p");
@@ -429,7 +432,10 @@ mod tests {
             "/bin/cat",
             &["file1.txt".to_string(), "file2.txt".to_string()],
         );
-        let (exe, args) = result.unwrap();
+        let (exe, args) = match result {
+            clash_brush_core::ExternalCommandAction::Replace(exe, args) => (exe, args),
+            other => panic!("expected Replace, got {other:?}"),
+        };
         assert_eq!(exe, "sandbox-exec");
         let dash_pos = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(args[dash_pos + 1], "/bin/cat");
@@ -445,7 +451,7 @@ mod tests {
         let hook = test_hook();
         let result = hook("/usr/bin/git", &["push".to_string()]);
         assert!(
-            result.is_none(),
+            matches!(result, clash_brush_core::ExternalCommandAction::Passthrough),
             "Linux uses Landlock (in-process), not sandbox-exec"
         );
     }
@@ -464,6 +470,6 @@ mod tests {
         let hook = make_sandbox_hook(policy, None, false);
         // No sandbox → command runs unchanged.
         let result = hook("/usr/bin/git", &["push".to_string()]);
-        assert!(result.is_none());
+        assert!(matches!(result, clash_brush_core::ExternalCommandAction::Passthrough));
     }
 }
