@@ -645,6 +645,23 @@ def domain(name, effect):
     return [struct(_node=node, _domain_name=name)]
 
 
+def localhost(ports = None):
+    """Build a localhost network specifier, optionally restricted to specific ports.
+
+    Usage:
+        net = localhost()              # all ports (same as net = "localhost")
+        net = localhost(ports=[8080])  # only port 8080
+    """
+    if ports == None or len(ports) == 0:
+        return struct(_is_localhost=True, _ports=[])
+    for p in ports:
+        if type(p) != "int":
+            fail("localhost() ports must be integers, got: " + type(p))
+        if p < 1 or p > 65535:
+            fail("localhost() port out of range (1-65535): " + str(p))
+    return struct(_is_localhost=True, _ports=ports)
+
+
 # ---------------------------------------------------------------------------
 # Sandbox builder
 # ---------------------------------------------------------------------------
@@ -727,7 +744,12 @@ def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
     net_policy = None
     net_domain_names = []
     if net != None:
-        if hasattr(net, "_is_effect"):
+        if hasattr(net, "_is_localhost"):
+            if len(net._ports) > 0:
+                net_policy = {"_localhost_ports": net._ports}
+            else:
+                net_policy = "localhost"
+        elif hasattr(net, "_is_effect"):
             net_policy = _unwrap_effect(net)
         elif type(net) == "string":
             net_policy = net  # "allow" or "deny"
@@ -835,7 +857,9 @@ def _sandbox_to_json(sb):
 
     net = "deny"
     if sb._net_policy != None:
-        if type(sb._net_policy) == "string":
+        if type(sb._net_policy) == "dict" and "_localhost_ports" in sb._net_policy:
+            net = {"localhost": sb._net_policy["_localhost_ports"]}
+        elif type(sb._net_policy) == "string":
             net = sb._net_policy
         elif type(sb._net_policy) == "list":
             # Use stored domain names extracted during sandbox() construction

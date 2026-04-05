@@ -307,6 +307,10 @@ fn format_network(network: &NetworkPolicy) -> String {
         NetworkPolicy::AllowDomains(domains) => {
             format!("{}: {}", style::yellow("filtered"), domains.join(", "))
         }
+        NetworkPolicy::LocalhostPorts(ports) => {
+            let ports_str: Vec<String> = ports.iter().map(|p| p.to_string()).collect();
+            style::yellow(&format!("localhost ports: {}", ports_str.join(", ")))
+        }
     }
 }
 

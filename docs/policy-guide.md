@@ -330,14 +330,17 @@ Sandboxes automatically grant access to:
 
 ### Sandbox network restrictions
 
-Sandbox network access has four modes:
+Sandbox network access has five modes:
 
 - `net = allow()` -- sandbox **allows** all network access (no restrictions)
-- Localhost-only -- sandbox allows **localhost-only** connections, enforced at the kernel level without a proxy
+- `net = localhost()` -- sandbox allows **localhost-only** connections on any port, enforced at the kernel level without a proxy
+- `net = localhost(ports=[8080])` -- sandbox allows **localhost connections only on specified ports**, enforced at the kernel level on macOS (advisory on Linux)
 - Domain list -- sandbox allows network access **only to listed domains** via a local HTTP proxy
 - No net rule -- sandbox **denies** all network access
 
-**Localhost-only mode**: When all allowed domains are loopback addresses (`"localhost"`, `"127.0.0.1"`, `"::1"`), Clash uses a lightweight localhost-only mode that is enforced directly by the OS sandbox without spawning an HTTP proxy. This is useful for processes that need to connect to local development servers but should not access the internet. On macOS, Seatbelt blocks non-localhost connections at the kernel level. On Linux, enforcement is advisory (seccomp cannot filter connect destinations).
+**Localhost-only mode**: `localhost()` (or `localhost(ports=[...])`) restricts connections to the loopback interface. On macOS, Seatbelt blocks non-localhost connections at the kernel level. On Linux, enforcement is advisory (seccomp cannot filter connect destinations).
+
+**Port filtering**: `localhost(ports=[8080, 3000])` restricts connections to specific TCP ports on localhost. On macOS, Seatbelt emits per-port rules using `(remote tcp "localhost:<port>")`. On Linux, port filtering is not enforceable via seccomp and behaves the same as `localhost()` (advisory). `localhost()` with no arguments allows all ports.
 
 **Domain filtering**: Domain-specific net rules are enforced using a local HTTP proxy. The OS sandbox restricts the process to localhost-only connections, and clash starts a proxy that checks each request against the domain allowlist. Programs that respect `HTTP_PROXY`/`HTTPS_PROXY` environment variables (curl, cargo, npm, pip, etc.) are filtered; programs that bypass the proxy can still reach any host on Linux (advisory enforcement). On macOS, Seatbelt blocks non-localhost connections at the kernel level.
 

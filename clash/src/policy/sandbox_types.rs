@@ -222,11 +222,13 @@ pub enum RuleEffect {
 
 /// Network access policy for sandboxed processes.
 ///
-/// Four modes:
+/// Five modes:
 /// - `Deny`: block all network at kernel level
 /// - `Allow`: unrestricted network access
 /// - `Localhost`: allow connections only to localhost (127.0.0.1/::1),
 ///   enforced at kernel level without a proxy.
+/// - `LocalhostPorts`: allow localhost connections only on specific TCP ports,
+///   enforced at kernel level on macOS, advisory on Linux.
 /// - `AllowDomains`: domain-specific filtering via local HTTP proxy.
 ///   The sandbox restricts connections to localhost only; a proxy enforces
 ///   the domain allowlist.
@@ -241,6 +243,10 @@ pub enum NetworkPolicy {
     /// level on macOS (Seatbelt) and advisory on Linux (seccomp cannot filter
     /// connect by destination). No proxy is needed.
     Localhost,
+    /// Allow only localhost connections on specific ports. Enforced at kernel
+    /// level on macOS (Seatbelt restricts to specific TCP ports) and advisory
+    /// on Linux (same as Localhost — seccomp cannot filter by port).
+    LocalhostPorts(Vec<u16>),
     /// Allow network access only to specific domains via HTTP proxy.
     /// Domains support exact match and subdomain match (e.g., "github.com"
     /// also matches "api.github.com").
@@ -253,6 +259,12 @@ impl Serialize for NetworkPolicy {
             NetworkPolicy::Deny => serializer.serialize_str("deny"),
             NetworkPolicy::Allow => serializer.serialize_str("allow"),
             NetworkPolicy::Localhost => serializer.serialize_str("localhost"),
+            NetworkPolicy::LocalhostPorts(ports) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("localhost", ports)?;
+                map.end()
+            }
             NetworkPolicy::AllowDomains(domains) => {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(Some(1))?;
@@ -273,7 +285,9 @@ impl<'de> Deserialize<'de> for NetworkPolicy {
             type Value = NetworkPolicy;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str(r#""deny", "allow", "localhost", or {"allow_domains": [...]}"#)
+                formatter.write_str(
+                    r#""deny", "allow", "localhost", {"localhost": [ports]}, or {"allow_domains": [...]}"#,
+                )
             }
 
             fn visit_str<E: de::Error>(self, value: &str) -> Result<NetworkPolicy, E> {
@@ -294,12 +308,24 @@ impl<'de> Deserialize<'de> for NetworkPolicy {
             ) -> Result<NetworkPolicy, A::Error> {
                 let key: String = map
                     .next_key()?
-                    .ok_or_else(|| de::Error::custom("expected allow_domains key"))?;
-                if key == "allow_domains" {
-                    let domains: Vec<String> = map.next_value()?;
-                    Ok(NetworkPolicy::AllowDomains(domains))
-                } else {
-                    Err(de::Error::unknown_field(&key, &["allow_domains"]))
+                    .ok_or_else(|| de::Error::custom("expected allow_domains or localhost key"))?;
+                match key.as_str() {
+                    "allow_domains" => {
+                        let domains: Vec<String> = map.next_value()?;
+                        Ok(NetworkPolicy::AllowDomains(domains))
+                    }
+                    "localhost" => {
+                        let ports: Vec<u16> = map.next_value()?;
+                        if ports.is_empty() {
+                            Ok(NetworkPolicy::Localhost)
+                        } else {
+                            Ok(NetworkPolicy::LocalhostPorts(ports))
+                        }
+                    }
+                    _ => Err(de::Error::unknown_field(
+                        &key,
+                        &["allow_domains", "localhost"],
+                    )),
                 }
             }
         }
@@ -674,6 +700,26 @@ mod tests {
         let json = serde_json::to_string(&NetworkPolicy::Localhost).unwrap();
         assert_eq!(json, r#""localhost""#);
         let deserialized: NetworkPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, NetworkPolicy::Localhost);
+    }
+
+    #[test]
+    fn test_network_policy_localhost_ports_serde() {
+        let policy = NetworkPolicy::LocalhostPorts(vec![8080, 3000]);
+        let json = serde_json::to_string(&policy).unwrap();
+        assert_eq!(json, r#"{"localhost":[8080,3000]}"#);
+        let deserialized: NetworkPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            deserialized,
+            NetworkPolicy::LocalhostPorts(vec![8080, 3000])
+        );
+    }
+
+    #[test]
+    fn test_network_policy_localhost_ports_empty_is_localhost() {
+        // Empty ports list deserializes to plain Localhost
+        let json = r#"{"localhost":[]}"#;
+        let deserialized: NetworkPolicy = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized, NetworkPolicy::Localhost);
     }
 

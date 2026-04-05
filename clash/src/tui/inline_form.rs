@@ -454,6 +454,7 @@ impl FormState {
             Some(NetworkPolicy::Allow) => 1,
             Some(NetworkPolicy::Localhost) => 2,
             Some(NetworkPolicy::AllowDomains(_)) => 1, // approximate
+            Some(NetworkPolicy::LocalhostPorts(_)) => 2, // approximate as localhost
         };
 
         let fields = vec![
@@ -2140,6 +2141,10 @@ impl FormState {
             NetworkPolicy::Allow => "allow".to_string(),
             NetworkPolicy::Localhost => "localhost".to_string(),
             NetworkPolicy::AllowDomains(d) => format!("[{}]", d.join(", ")),
+            NetworkPolicy::LocalhostPorts(ports) => {
+                let ps: Vec<String> = ports.iter().map(|p| p.to_string()).collect();
+                format!("localhost:{}", ps.join(","))
+            }
         };
         let net_style = match &sb.network {
             NetworkPolicy::Deny => t.effect_deny,

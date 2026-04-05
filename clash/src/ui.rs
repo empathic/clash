@@ -220,6 +220,7 @@ pub fn print_sandbox_table(sandboxes: &HashMap<String, SandboxPolicy>) {
                 NetworkPolicy::Allow => style::green("allow"),
                 NetworkPolicy::Localhost => style::yellow("localhost"),
                 NetworkPolicy::AllowDomains(_) => style::yellow("proxy"),
+                NetworkPolicy::LocalhostPorts(_) => style::yellow("localhost"),
             };
             lpad(&s, col_w)
         })
