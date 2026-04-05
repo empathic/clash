@@ -29,6 +29,8 @@ pub struct LastDecision {
     pub effect: Effect,
     /// The full command string (e.g. "git push origin main").
     pub command: String,
+    /// Whether the command was wrapped in sandbox-exec.
+    pub sandboxed: bool,
 }
 
 /// Thread-safe shared state for the prompt to read the last decision.
@@ -152,12 +154,13 @@ fn make_sandbox_hook(
             None,
         );
 
-        // Update shared state for the prompt.
+        // Update shared state for the prompt (sandboxed field updated below if applicable).
         if let Ok(mut guard) = last_decision.lock() {
             *guard = Some(LastDecision {
                 hash: audit_hash.clone(),
                 effect: decision.effect,
                 command: command_str.clone(),
+                sandboxed: false,
             });
         }
 
@@ -259,6 +262,14 @@ fn make_sandbox_hook(
             executable_path.to_string(),
         ];
         new_args.extend(args.iter().cloned());
+
+        // Mark that this command is sandboxed so the REPL can detect sandbox failures.
+        if let Ok(mut guard) = last_decision.lock() {
+            if let Some(ref mut d) = *guard {
+                d.sandboxed = true;
+            }
+        }
+
         clash_brush_core::ExternalCommandAction::Replace("sandbox-exec".to_string(), new_args)
     })
 }
@@ -507,6 +518,17 @@ async fn run_interactive(
                     clash_brush_core::ExecutionControlFlow::ExitShell
                 ) {
                     break;
+                }
+                // If a sandboxed command failed, flip the indicator to Deny —
+                // the policy allowed it but the sandbox blocked execution.
+                if !result.is_success() {
+                    if let Ok(mut guard) = last_decision.lock() {
+                        if let Some(ref mut d) = *guard {
+                            if d.sandboxed {
+                                d.effect = Effect::Deny;
+                            }
+                        }
+                    }
                 }
             }
             Ok(clash_brush_interactive::InteractiveExecutionResult::Failed(_)) => {}
