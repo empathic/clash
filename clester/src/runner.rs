@@ -275,11 +275,7 @@ mod tests {
             notification_type: None,
             expect: Expectation {
                 decision: Some("allow".into()),
-                exit_code: None,
-                no_decision: None,
-                reason_contains: None,
-                stdout_contains: None,
-                stderr_contains: None,
+                ..Default::default()
             },
         };
 
@@ -306,12 +302,9 @@ mod tests {
             message: Some("test message".into()),
             notification_type: Some("permission_prompt".into()),
             expect: Expectation {
-                decision: None,
                 exit_code: Some(0),
                 no_decision: Some(true),
-                reason_contains: None,
-                stdout_contains: None,
-                stderr_contains: None,
+                ..Default::default()
             },
         };
 

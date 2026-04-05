@@ -141,7 +141,8 @@ fn cmd_run(path: &Path, verbose: bool, clash_bin: Option<&Path>) -> Result<bool>
             };
             match result {
                 Ok(result) => {
-                    let assertion = check(&step.expect, &result);
+                    let assertion =
+                        check(&step.expect, &result, &env.home_dir, &env.project_dir);
 
                     if assertion.passed {
                         total_passed += 1;
