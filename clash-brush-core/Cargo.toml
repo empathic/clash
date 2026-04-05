@@ -58,10 +58,6 @@ nix = { workspace = true }
 terminfo = { workspace = true }
 uzers = { workspace = true }
 
-[target.wasm32-unknown-unknown.dependencies]
-getrandom = { workspace = true }
-uuid = { workspace = true, features = ["js"] }
-
 [dev-dependencies]
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }

@@ -25,7 +25,6 @@ arbitrary = { workspace = true, optional = true }
 bon = { workspace = true }
 cached = { workspace = true }
 indenter = { workspace = true }
-insta = { workspace = true, features = ["redactions"] }
 miette = { workspace = true, optional = true }
 peg = { workspace = true }
 serde = { workspace = true, optional = true, features = ["rc"] }
@@ -33,10 +32,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 utf8-chars = { workspace = true }
 winnow = { workspace = true, optional = true }
-
-[target.wasm32-unknown-unknown.dependencies]
-getrandom = { workspace = true }
-uuid = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }

@@ -47,7 +47,6 @@ fs2 = "0.4"
 figment = { version = "0.10", features = ["json", "toml", "yaml"] }
 flate2 = "1"
 futures = "0.3.32"
-getrandom = { version = "0.4.1", features = ["wasm_js"] }
 hostname = "0.4.2"
 hotln = "0.2.1"
 http-body-util = "0.1"
@@ -77,8 +76,6 @@ notify-rust = "4"
 nu-ansi-term = "0.50"
 nucleo-matcher = "0.3"
 peg = "0.8.5"
-pest = "2"
-pest_derive = "2"
 pretty_assertions = { version = "1.4.1", features = ["unstable"] }
 indoc = "2"
 procfs = "0.18.0"
@@ -94,7 +91,6 @@ rpds = "1.2.0"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_regex = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
 shlex = "1"
@@ -131,7 +127,6 @@ tracing-subscriber = { version = "0.3.22", features = [
 ] }
 ureq = "2"
 utf8-chars = "3.0.6"
-uuid = { version = "1", features = ["v4"] }
 uucore = { version = "0.6.0", default-features = false, features = ["format"] }
 uzers = "0.12.2"
 which = "7"
