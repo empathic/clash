@@ -514,10 +514,119 @@ pub fn open_in_editor(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Validate a policy file, returning the compiled policy or an error message.
+fn validate_policy_source(path: &Path) -> Result<crate::policy::match_tree::CompiledPolicy> {
+    let source = crate::settings::evaluate_policy_file(path)
+        .with_context(|| format!("failed to evaluate: {}", path.display()))?;
+    crate::policy::compile::compile_to_tree(&source)
+        .with_context(|| "policy validation failed")
+}
+
+/// Visudo-style edit loop: copy to tempfile, edit, validate, confirm, write.
+///
+/// Loops until the user produces a valid policy and confirms, or cancels.
+fn edit_with_validation(path: &Path) -> Result<()> {
+    let original = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    // Compile the original policy for diff comparison
+    let original_policy = validate_policy_source(path).ok();
+
+    // Create temp file with same extension for syntax highlighting in editors
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("star");
+    let tmp_dir = tempfile::tempdir().context("failed to create temp directory")?;
+    let tmp_path = tmp_dir.path().join(format!("policy.{extension}"));
+    std::fs::write(&tmp_path, &original)
+        .with_context(|| format!("failed to write temp file {}", tmp_path.display()))?;
+
+    loop {
+        // Open editor
+        open_in_editor(&tmp_path)?;
+
+        let edited = std::fs::read_to_string(&tmp_path)
+            .with_context(|| format!("failed to read temp file {}", tmp_path.display()))?;
+
+        // Check if anything changed
+        if edited == original {
+            eprintln!("  No changes made.");
+            return Ok(());
+        }
+
+        // Validate the edited content by writing to temp and evaluating
+        match validate_policy_source(&tmp_path) {
+            Ok(new_policy) => {
+                // Show diff if we have both before and after policies
+                if let Some(ref old_policy) = original_policy {
+                    if let Some(diff) = crate::policy::diff::tree_diff(old_policy, &new_policy) {
+                        eprintln!();
+                        eprintln!("  {}:", style::bold("Policy changes"));
+                        for line in diff.lines() {
+                            eprintln!("    {line}");
+                        }
+                        eprintln!();
+                    }
+                }
+
+                // Show rule count summary
+                eprintln!(
+                    "  {} Valid policy: default {}, {} rules",
+                    style::green_bold("✓"),
+                    style::effect(&new_policy.default_effect.to_string()),
+                    new_policy.rule_count()
+                );
+
+                // Confirm
+                eprint!("  Apply changes? [y/n/e] (yes/no/re-edit) ");
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                match answer.trim().to_lowercase().as_str() {
+                    "y" | "yes" => {
+                        std::fs::write(path, &edited)
+                            .with_context(|| format!("failed to write {}", path.display()))?;
+                        println!(
+                            "{} Policy updated: {}",
+                            style::green_bold("✓"),
+                            style::dim(&path.display().to_string())
+                        );
+                        return Ok(());
+                    }
+                    "e" | "edit" => {
+                        // Re-edit
+                        continue;
+                    }
+                    _ => {
+                        eprintln!("  Cancelled. No changes written.");
+                        return Ok(());
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!();
+                eprintln!("  {} Validation error:", style::err_red_bold("✗"));
+                eprintln!("    {e:#}");
+                if let Some(hint) = extract_policy_hint(&e) {
+                    eprintln!("    {}: {hint}", style::err_cyan_bold("hint"));
+                }
+                eprintln!();
+                eprint!("  Re-edit? [y/n] ");
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                if !answer.trim().eq_ignore_ascii_case("y") {
+                    eprintln!("  Cancelled. No changes written.");
+                    return Ok(());
+                }
+                // Loop back to editor
+            }
+        }
+    }
+}
+
 /// Handle `clash policy edit`.
 fn handle_edit(scope: Option<String>, raw: bool, test: bool) -> Result<()> {
     if raw {
-        // --raw: open in $EDITOR
+        // --raw: visudo-style edit with validation
         let level = match scope.as_deref() {
             Some("user") => PolicyLevel::User,
             Some("project") => PolicyLevel::Project,
@@ -534,7 +643,7 @@ fn handle_edit(scope: Option<String>, raw: bool, test: bool) -> Result<()> {
                 level,
             );
         }
-        return open_in_editor(&path);
+        return edit_with_validation(&path);
     }
 
     // Interactive TUI editor
@@ -563,11 +672,11 @@ fn apply_mutation(
     mutation: PolicyMutation,
 ) -> Result<()> {
     let path = resolve_manifest_path(scope)?;
+
     if path.extension().is_some_and(|ext| ext == "star") {
-        anyhow::bail!(
-            "CLI rule mutations are not yet supported for .star files — use `clash policy edit` instead"
-        );
+        return apply_mutation_star(&path, &command, tool.as_deref(), bin.as_deref(), mutation);
     }
+
     let mut manifest = crate::policy_loader::read_manifest(&path)?;
 
     // For Remove we only need the observable chain — Decision::Deny is a dummy.
@@ -604,6 +713,136 @@ fn apply_mutation(
         }
     };
 
+    println!("{} {}", style::green_bold("✓"), result_str);
+    println!("  {}", style::dim(&path.display().to_string()));
+    Ok(())
+}
+
+/// Apply a mutation to a `.star` policy file using the managed section approach.
+fn apply_mutation_star(
+    path: &Path,
+    command: &[String],
+    tool: Option<&str>,
+    bin: Option<&str>,
+    mutation: PolicyMutation,
+) -> Result<()> {
+    use clash_starlark::codegen::document::StarDocument;
+    use clash_starlark::codegen::managed::{self, ManagedUpsertResult};
+    use clash_starlark::codegen::mutate::Effect as StarEffect;
+
+    let mut doc = StarDocument::open(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+
+    let star_effect = match &mutation {
+        PolicyMutation::Allow { .. } => StarEffect::Allow,
+        PolicyMutation::Deny => StarEffect::Deny,
+        PolicyMutation::Remove => StarEffect::Deny, // unused for remove
+    };
+
+    let sandbox_name = match &mutation {
+        PolicyMutation::Allow { sandbox } => sandbox.as_deref(),
+        _ => None,
+    };
+
+    // Determine what kind of rule to create/remove
+    let (rule_kind, result_str) = if let Some((bin_name, args)) = parse_command(command) {
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        match mutation {
+            PolicyMutation::Remove => {
+                if managed::remove_exec_rule(&mut doc.stmts, &bin_name, &arg_refs) {
+                    doc.save()
+                        .with_context(|| format!("failed to write {}", path.display()))?;
+                    println!("{} Rule removed", style::green_bold("✓"));
+                    println!("  {}", style::dim(&path.display().to_string()));
+                } else {
+                    println!("No matching managed rule found");
+                }
+                return Ok(());
+            }
+            _ => {
+                let result = managed::upsert_exec_rule(
+                    &mut doc.stmts,
+                    &bin_name,
+                    &arg_refs,
+                    star_effect,
+                    sandbox_name,
+                )
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+                (
+                    "exec",
+                    match result {
+                        ManagedUpsertResult::Inserted => "Rule added",
+                        ManagedUpsertResult::Replaced => "Rule updated (replaced existing)",
+                    },
+                )
+            }
+        }
+    } else if let Some(bin_name) = bin {
+        match mutation {
+            PolicyMutation::Remove => {
+                if managed::remove_exec_rule(&mut doc.stmts, bin_name, &[]) {
+                    doc.save()
+                        .with_context(|| format!("failed to write {}", path.display()))?;
+                    println!("{} Rule removed", style::green_bold("✓"));
+                    println!("  {}", style::dim(&path.display().to_string()));
+                } else {
+                    println!("No matching managed rule found");
+                }
+                return Ok(());
+            }
+            _ => {
+                let result = managed::upsert_exec_rule(
+                    &mut doc.stmts,
+                    bin_name,
+                    &[],
+                    star_effect,
+                    sandbox_name,
+                )
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+                (
+                    "exec",
+                    match result {
+                        ManagedUpsertResult::Inserted => "Rule added",
+                        ManagedUpsertResult::Replaced => "Rule updated (replaced existing)",
+                    },
+                )
+            }
+        }
+    } else if let Some(tool_name) = tool {
+        let resolved = crate::agents::resolve_any_to_internal(tool_name).unwrap_or(tool_name);
+        match mutation {
+            PolicyMutation::Remove => {
+                if managed::remove_tool_rule(&mut doc.stmts, resolved) {
+                    doc.save()
+                        .with_context(|| format!("failed to write {}", path.display()))?;
+                    println!("{} Rule removed", style::green_bold("✓"));
+                    println!("  {}", style::dim(&path.display().to_string()));
+                } else {
+                    println!("No matching managed rule found");
+                }
+                return Ok(());
+            }
+            _ => {
+                let result =
+                    managed::upsert_tool_rule(&mut doc.stmts, resolved, star_effect, sandbox_name)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                (
+                    "tool",
+                    match result {
+                        ManagedUpsertResult::Inserted => "Rule added",
+                        ManagedUpsertResult::Replaced => "Rule updated (replaced existing)",
+                    },
+                )
+            }
+        }
+    } else {
+        anyhow::bail!("provide a command, --tool, or --bin");
+    };
+
+    doc.save()
+        .with_context(|| format!("failed to write {}", path.display()))?;
+
+    let _ = rule_kind; // might be useful for logging later
     println!("{} {}", style::green_bold("✓"), result_str);
     println!("  {}", style::dim(&path.display().to_string()));
     Ok(())
@@ -800,13 +1039,7 @@ fn handle_allow_by_hash(
     // Default to user scope for hash-based invocations.
     let scope = scope.or_else(|| Some("user".to_string()));
 
-    // Check for .star early — don't prompt if we can't write.
     let path = resolve_manifest_path(scope)?;
-    if path.extension().is_some_and(|ext| ext == "star") {
-        anyhow::bail!(
-            "CLI rule mutations are not yet supported for .star files — use `clash policy edit` instead"
-        );
-    }
 
     let scope_label = path
         .to_string_lossy()
@@ -830,22 +1063,87 @@ fn handle_allow_by_hash(
         }
     }
 
-    let decision = Decision::Allow(
-        sandbox
-            .as_deref()
-            .map(|s| crate::policy::match_tree::SandboxRef(s.to_string())),
-    );
-    let rule_arg_refs: Vec<&str> = rule_args.iter().map(|s| s.as_str()).collect();
-    let node = manifest_edit::build_exec_rule(&bin_name, &rule_arg_refs, decision);
-    let mut manifest = crate::policy_loader::read_manifest(&path)?;
-    let result = manifest_edit::upsert_rule(&mut manifest, node);
-    crate::policy_loader::write_manifest(&path, &manifest)?;
+    apply_mutation_by_path(&path, &bin_name, &rule_args, PolicyMutation::Allow { sandbox })
+}
 
-    let result_str = match result {
-        manifest_edit::UpsertResult::Inserted => "Rule added",
-        manifest_edit::UpsertResult::Replaced => "Rule updated (replaced existing)",
+/// Write a hash-based rule mutation using an already-resolved path.
+fn apply_mutation_by_path(
+    path: &Path,
+    bin_name: &str,
+    rule_args: &[String],
+    mutation: PolicyMutation,
+) -> Result<()> {
+    if path.extension().is_some_and(|ext| ext == "star") {
+        let arg_refs: Vec<&str> = rule_args.iter().map(|s| s.as_str()).collect();
+        let star_effect = match &mutation {
+            PolicyMutation::Allow { .. } => clash_starlark::codegen::mutate::Effect::Allow,
+            PolicyMutation::Deny => clash_starlark::codegen::mutate::Effect::Deny,
+            PolicyMutation::Remove => clash_starlark::codegen::mutate::Effect::Deny,
+        };
+        let sandbox_name = match &mutation {
+            PolicyMutation::Allow { sandbox } => sandbox.as_deref(),
+            _ => None,
+        };
+        let mut doc = clash_starlark::codegen::document::StarDocument::open(path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        match mutation {
+            PolicyMutation::Remove => {
+                if clash_starlark::codegen::managed::remove_exec_rule(
+                    &mut doc.stmts, bin_name, &arg_refs,
+                ) {
+                    doc.save().with_context(|| format!("failed to write {}", path.display()))?;
+                    println!("{} Rule removed", style::green_bold("✓"));
+                } else {
+                    println!("No matching managed rule found");
+                }
+            }
+            _ => {
+                let result = clash_starlark::codegen::managed::upsert_exec_rule(
+                    &mut doc.stmts, bin_name, &arg_refs, star_effect, sandbox_name,
+                ).map_err(|e| anyhow::anyhow!("{e}"))?;
+                doc.save().with_context(|| format!("failed to write {}", path.display()))?;
+                let result_str = match result {
+                    clash_starlark::codegen::managed::ManagedUpsertResult::Inserted => "Rule added",
+                    clash_starlark::codegen::managed::ManagedUpsertResult::Replaced => {
+                        "Rule updated (replaced existing)"
+                    }
+                };
+                println!("{} {}", style::green_bold("✓"), result_str);
+            }
+        }
+        println!("  {}", style::dim(&path.display().to_string()));
+        return Ok(());
+    }
+
+    let rule_arg_refs: Vec<&str> = rule_args.iter().map(|s| s.as_str()).collect();
+    let decision = match &mutation {
+        PolicyMutation::Allow { sandbox } => Decision::Allow(
+            sandbox.as_deref().map(|s| crate::policy::match_tree::SandboxRef(s.to_string())),
+        ),
+        PolicyMutation::Deny => Decision::Deny,
+        PolicyMutation::Remove => Decision::Deny,
     };
-    println!("{} {}", style::green_bold("✓"), result_str);
+    let node = manifest_edit::build_exec_rule(bin_name, &rule_arg_refs, decision);
+    let mut manifest = crate::policy_loader::read_manifest(path)?;
+    match mutation {
+        PolicyMutation::Remove => {
+            if manifest_edit::remove_rule(&mut manifest, &node) {
+                crate::policy_loader::write_manifest(path, &manifest)?;
+                println!("{} Rule removed", style::green_bold("✓"));
+            } else {
+                println!("No matching rule found");
+            }
+        }
+        _ => {
+            let result = manifest_edit::upsert_rule(&mut manifest, node);
+            crate::policy_loader::write_manifest(path, &manifest)?;
+            let result_str = match result {
+                manifest_edit::UpsertResult::Inserted => "Rule added",
+                manifest_edit::UpsertResult::Replaced => "Rule updated (replaced existing)",
+            };
+            println!("{} {}", style::green_bold("✓"), result_str);
+        }
+    }
     println!("  {}", style::dim(&path.display().to_string()));
     Ok(())
 }
@@ -875,14 +1173,7 @@ fn handle_deny_by_hash(
     };
 
     let scope = scope.or_else(|| Some("user".to_string()));
-
-    // Check for .star early — don't prompt if we can't write.
     let path = resolve_manifest_path(scope)?;
-    if path.extension().is_some_and(|ext| ext == "star") {
-        anyhow::bail!(
-            "CLI rule mutations are not yet supported for .star files — use `clash policy edit` instead"
-        );
-    }
 
     let scope_label = path
         .to_string_lossy()
@@ -906,18 +1197,7 @@ fn handle_deny_by_hash(
         }
     }
 
-    let rule_arg_refs: Vec<&str> = rule_args.iter().map(|s| s.as_str()).collect();
-    let node = manifest_edit::build_exec_rule(&bin_name, &rule_arg_refs, Decision::Deny);
-    let mut manifest = crate::policy_loader::read_manifest(&path)?;
-    let result = manifest_edit::upsert_rule(&mut manifest, node);
-    crate::policy_loader::write_manifest(&path, &manifest)?;
-
-    let result_str = match result {
-        manifest_edit::UpsertResult::Inserted => "Rule added",
-        manifest_edit::UpsertResult::Replaced => "Rule updated (replaced existing)",
-    };
-    println!("{} {}", style::green_bold("✓"), result_str);
-    println!("  {}", style::dim(&path.display().to_string()));
+    apply_mutation_by_path(&path, &bin_name, &rule_args, PolicyMutation::Deny)?;
     Ok(())
 }
 

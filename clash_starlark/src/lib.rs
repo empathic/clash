@@ -1211,4 +1211,58 @@ policy("test",
         );
         assert_eq!(doc["schema_version"], 5);
     }
+
+    #[test]
+    fn test_git_safe_has_gh_config() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//sandboxes.star", "git_safe")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings")
+
+settings(default = deny())
+policy("test",
+    rules = when({"Bash": {"git": allow(sandbox=git_safe)}}),
+)
+"#,
+        );
+        let sandboxes = doc["sandboxes"].as_object().unwrap();
+        let sb = &sandboxes["git_safe"];
+        let rules = sb["rules"].as_array().unwrap();
+        let gh_rule = rules.iter().find(|r| {
+            r["path"]
+                .as_str()
+                .map_or(false, |p| p.contains(".config/gh"))
+        });
+        assert!(
+            gh_rule.is_some(),
+            "git_safe sandbox should include .config/gh/** rule, got: {rules:?}"
+        );
+    }
+
+    #[test]
+    fn test_git_full_has_gh_config() {
+        let doc = eval_to_doc(
+            r#"
+load("@clash//sandboxes.star", "git_full")
+load("@clash//std.star", "allow", "deny", "when", "policy", "settings")
+
+settings(default = deny())
+policy("test",
+    rules = when({"Bash": {"git": allow(sandbox=git_full)}}),
+)
+"#,
+        );
+        let sandboxes = doc["sandboxes"].as_object().unwrap();
+        let sb = &sandboxes["git_full"];
+        let rules = sb["rules"].as_array().unwrap();
+        let gh_rule = rules.iter().find(|r| {
+            r["path"]
+                .as_str()
+                .map_or(false, |p| p.contains(".config/gh"))
+        });
+        assert!(
+            gh_rule.is_some(),
+            "git_full sandbox should include .config/gh/** rule, got: {rules:?}"
+        );
+    }
 }

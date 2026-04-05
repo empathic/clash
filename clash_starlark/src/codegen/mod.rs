@@ -10,6 +10,7 @@ pub mod from_manifest;
 #[macro_use]
 pub mod macros;
 pub mod canonicalize;
+pub mod managed;
 pub mod mutate;
 pub mod parser;
 pub mod serialize;
