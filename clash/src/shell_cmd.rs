@@ -16,8 +16,23 @@ use anyhow::{Context, Result};
 use tracing::info;
 
 use crate::policy::CompiledPolicy;
+use crate::policy::Effect;
 use crate::policy::sandbox_types::SandboxPolicy;
 use crate::settings::ClashSettings;
+
+/// Last policy decision made by the shell hook — read by the prompt renderer.
+#[derive(Debug, Clone)]
+pub struct LastDecision {
+    /// 7-char audit log hash identifying this evaluation.
+    pub hash: String,
+    /// The policy effect (allow/deny/ask).
+    pub effect: Effect,
+    /// The full command string (e.g. "git push origin main").
+    pub command: String,
+}
+
+/// Thread-safe shared state for the prompt to read the last decision.
+pub type SharedDecision = Arc<std::sync::Mutex<Option<LastDecision>>>;
 
 /// Build the external command hook that evaluates the policy for each command
 /// and wraps it with the appropriate sandbox (same as Claude's Bash tool).
@@ -90,6 +105,9 @@ fn make_sandbox_hook(
     policy: Arc<CompiledPolicy>,
     default_sandbox: Option<SandboxPolicy>,
     debug: bool,
+    audit_config: crate::audit::AuditConfig,
+    session_id: String,
+    last_decision: SharedDecision,
 ) -> clash_brush_core::ExternalCommandHook {
     Arc::new(move |executable_path: &str, args: &[String]| {
         // Don't wrap shell builtins — they must run in the shell process.
@@ -115,6 +133,55 @@ fn make_sandbox_hook(
 
         // Evaluate the policy exactly as check_permission would.
         let decision = policy.evaluate("Bash", &tool_input);
+
+        // Write audit log entry so the hash is meaningful for `clash policy allow <hash>`.
+        let audit_hash = crate::audit::log_decision(
+            &audit_config,
+            &session_id,
+            "Bash",
+            &tool_input,
+            decision.effect,
+            decision.reason.as_deref(),
+            &decision.trace,
+            None,
+        );
+
+        // Update shared state for the prompt.
+        if let Ok(mut guard) = last_decision.lock() {
+            *guard = Some(LastDecision {
+                hash: audit_hash.clone(),
+                effect: decision.effect,
+                command: command_str.clone(),
+            });
+        }
+
+        // Block denied commands with actionable hints.
+        if decision.effect == Effect::Deny {
+            let noun = if command_str.len() > 60 {
+                format!("{}...", &command_str[..60])
+            } else {
+                command_str.clone()
+            };
+            eprintln!(
+                "{} blocked shell on {}",
+                "\x1b[1;31mclash:\x1b[0m",
+                noun,
+            );
+            eprintln!(
+                "  clash policy allow {}          # allow this exact command",
+                audit_hash,
+            );
+            // Show --broad hint only when there are trailing args to glob.
+            let parts: Vec<&str> = command_str.split_whitespace().collect();
+            if parts.len() > 2 {
+                eprintln!(
+                    "  clash policy allow {} --broad  # allow all {}",
+                    audit_hash,
+                    parts[..2].join(" "),
+                );
+            }
+            return clash_brush_core::ExternalCommandAction::Block;
+        }
 
         // Use the policy's sandbox if present, otherwise fall back to the
         // user-specified default sandbox for the shell session.
@@ -218,7 +285,23 @@ pub fn run_shell(
         None => None,
     };
 
-    let hook = make_sandbox_hook(Arc::new(policy), default_sandbox, debug);
+    // Create a shell session for audit logging.
+    let session_id = format!("shell-{:x}-{:03x}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() & 0xFFFF_FFFF,
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_millis()
+    );
+    let _ = crate::audit::init_session(&session_id, &cwd, Some("clash-shell"), None);
+
+    let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));
+
+    let hook = make_sandbox_hook(
+        Arc::new(policy),
+        default_sandbox,
+        debug,
+        settings.audit.clone(),
+        session_id,
+        last_decision.clone(),
+    );
 
     // Build a tokio runtime for brush's async API.
     let rt = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
@@ -229,7 +312,7 @@ pub fn run_shell(
         } else if !script_args.is_empty() {
             run_script(&script_args, &cwd, hook).await
         } else {
-            run_interactive(&cwd, hook).await
+            run_interactive(&cwd, hook, last_decision).await
         }
     })
 }
@@ -315,7 +398,11 @@ async fn run_script(
 }
 
 /// Run an interactive shell REPL (`clash shell`).
-async fn run_interactive(cwd: &str, hook: clash_brush_core::ExternalCommandHook) -> Result<()> {
+async fn run_interactive(
+    cwd: &str,
+    hook: clash_brush_core::ExternalCommandHook,
+    _last_decision: SharedDecision,
+) -> Result<()> {
     info!("starting interactive shell with sandbox hook");
 
     let mut shell = clash_brush_core::Shell::builder()
@@ -398,7 +485,15 @@ mod tests {
     }
 
     fn test_hook() -> clash_brush_core::ExternalCommandHook {
-        make_sandbox_hook(test_policy(), None, false)
+        let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));
+        make_sandbox_hook(
+            test_policy(),
+            None,
+            false,
+            crate::audit::AuditConfig::default(),
+            "test-session".to_string(),
+            last_decision,
+        )
     }
 
     #[test]
@@ -467,9 +562,52 @@ mod tests {
             Stmt::Expr(policy("test", allow(), vec![], None)),
         ]);
         let policy = Arc::new(compile_star(&source));
-        let hook = make_sandbox_hook(policy, None, false);
+        let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));
+        let hook = make_sandbox_hook(
+            policy,
+            None,
+            false,
+            crate::audit::AuditConfig::default(),
+            "test-no-sandbox".to_string(),
+            last_decision,
+        );
         // No sandbox → command runs unchanged.
         let result = hook("/usr/bin/git", &["push".to_string()]);
         assert!(matches!(result, clash_brush_core::ExternalCommandAction::Passthrough));
+    }
+
+    #[test]
+    fn hook_blocks_denied_commands() {
+        use clash_starlark::codegen::ast::Stmt;
+        use clash_starlark::codegen::builder::*;
+
+        // Policy that denies everything.
+        let source = clash_starlark::codegen::serialize(&[
+            load_std(&["deny", "policy", "settings"]),
+            Stmt::Expr(settings(deny(), None)),
+            Stmt::Expr(policy("test", deny(), vec![], None)),
+        ]);
+        let policy = Arc::new(compile_star(&source));
+        let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));
+        let hook = make_sandbox_hook(
+            policy,
+            None,
+            false,
+            crate::audit::AuditConfig::default(),
+            "test-deny".to_string(),
+            last_decision.clone(),
+        );
+
+        let result = hook("/usr/bin/git", &["push".to_string()]);
+        assert!(
+            matches!(result, clash_brush_core::ExternalCommandAction::Block),
+            "denied command should be blocked"
+        );
+
+        // Shared state should reflect the denial.
+        let decision = last_decision.lock().unwrap();
+        let d = decision.as_ref().expect("should have a decision");
+        assert_eq!(d.effect, Effect::Deny);
+        assert_eq!(d.command, "git push");
     }
 }
