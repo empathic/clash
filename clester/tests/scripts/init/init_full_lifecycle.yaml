@@ -40,7 +40,7 @@ steps:
       decision: deny
 
   - name: clash uninstall removes hooks
-    command: "uninstall --yes --agent claude"
+    command: "uninstall --yes"
     expect:
       exit_code: 0
 
