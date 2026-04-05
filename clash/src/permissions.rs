@@ -76,7 +76,7 @@ pub fn check_permission(
     );
 
     // Write audit log entry (global + session).
-    let _audit_hash = crate::audit::log_decision(
+    let audit_hash = crate::audit::log_decision(
         &settings.audit,
         &input.session_id,
         &input.tool_name,
@@ -123,11 +123,7 @@ pub fn check_permission(
         eprintln!(
             "  {} {}",
             crate::style::err_dim("To allow this:"),
-            crate::style::err_yellow(&suggest_allow_command(&verb_str))
-        );
-        eprintln!(
-            "  {}",
-            crate::style::err_dim("(run \"clash policy allow --help\" for more options)")
+            crate::style::err_yellow(&format!("clash policy allow {}", audit_hash))
         );
     }
 
@@ -154,6 +150,7 @@ pub fn check_permission(
                 &input.tool_name,
                 decision.reason.as_deref(),
                 &input.tool_input,
+                &audit_hash,
             );
             HookOutput::deny(
                 decision.reason.unwrap_or_else(|| "policy: denied".into()),
@@ -311,22 +308,23 @@ fn truncate_noun(noun: &str, max_len: usize) -> String {
 
 /// Build structured agent context for a Deny decision.
 fn build_deny_context(
-    tool_name: &str,
+    _tool_name: &str,
     reason: Option<&str>,
-    tool_input: &serde_json::Value,
+    _tool_input: &serde_json::Value,
+    audit_hash: &str,
 ) -> String {
     let is_explicit_deny = reason.is_some_and(|r| r.contains("denied") || r.contains("deny"));
-
-    let suggested = suggest_allow_command_specific(tool_name, tool_input);
 
     let mut lines = Vec::new();
 
     if is_explicit_deny {
         lines.push(format!(
-            "BLOCKED by explicit deny rule. To allow: {suggested}"
+            "BLOCKED by explicit deny rule. To allow: clash policy allow {audit_hash}"
         ));
     } else {
-        lines.push(format!("BLOCKED by default deny. To allow: {suggested}"));
+        lines.push(format!(
+            "BLOCKED by default deny. To allow: clash policy allow {audit_hash}"
+        ));
     }
 
     lines.push("Do NOT retry this tool call — it will be blocked again.".into());
@@ -634,9 +632,9 @@ mod tests {
     #[test]
     fn test_build_deny_context_contains_allow_command() {
         let input = json!({"command": "ls -la"});
-        let ctx = build_deny_context("Bash", None, &input);
+        let ctx = build_deny_context("Bash", None, &input, "test123");
         assert!(ctx.contains("BLOCKED"));
-        assert!(ctx.contains("clash policy allow \"ls -la\""));
+        assert!(ctx.contains("clash policy allow test123"));
         assert!(ctx.contains("Do NOT retry"));
     }
 
