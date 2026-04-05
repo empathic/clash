@@ -42,12 +42,13 @@ git_safe = sandbox(
         "$HOME": {
             ".gitconfig": allow("r"),
             glob(".config/git/**"): allow("r"),
+            glob(".config/gh/**"): allow("r"),
             glob(".ssh/**"): allow("rx"),
         },
         glob("$TMPDIR/**"): allow(),
     },
     net = allow(),
-    doc = "Git safe: fetch, pull, log, diff. Worktree-aware, network + SSH enabled.",
+    doc = "Git safe: fetch, pull, log, diff, gh. Worktree-aware, network + SSH + gh CLI enabled.",
 )
 
 git_full = sandbox(
@@ -58,12 +59,13 @@ git_full = sandbox(
         "$HOME": {
             ".gitconfig": allow("r"),
             glob(".config/git/**"): allow("r"),
+            glob(".config/gh/**"): allow("r"),
             glob(".ssh/**"): allow("rx"),
         },
         glob("$TMPDIR/**"): allow(),
     },
     net = allow(),
-    doc = "Git full: commit, push, checkout, merge. Worktree-aware, network + SSH enabled.",
+    doc = "Git full: commit, push, checkout, merge, gh. Worktree-aware, network + SSH + gh CLI enabled.",
 )
 
 workspace = sandbox(
