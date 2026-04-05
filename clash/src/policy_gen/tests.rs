@@ -47,10 +47,10 @@ mod test {
 
     #[test]
     fn ecosystem_rules_with_shared_sandbox_compile() {
-        use clash_starlark::codegen::ast::Stmt;
-        use clash_starlark::codegen::builder::*;
         use crate::policy_gen::ecosystems;
         use crate::policy_gen::loads;
+        use clash_starlark::codegen::ast::Stmt;
+        use clash_starlark::codegen::builder::*;
 
         let rust = crate::ecosystem::ECOSYSTEMS
             .iter()
@@ -59,8 +59,7 @@ mod test {
 
         let mut stmts = loads::standard_loads(&[], &[rust]);
         stmts.push(load_std(&[
-            "settings", "policy", "sandbox", "allow", "ask", "deny",
-            "glob", "subpath",
+            "settings", "policy", "sandbox", "allow", "ask", "deny", "glob", "subpath",
         ]));
         stmts.push(Stmt::Blank);
         stmts.extend(sandboxes::project_files_sandbox());
@@ -68,10 +67,7 @@ mod test {
         stmts.push(Stmt::Expr(settings(ask(), None)));
         stmts.push(Stmt::Blank);
 
-        let eco_rules = ecosystems::ecosystem_rules(
-            &[rust],
-            sandboxes::PROJECT_FILES_SANDBOX,
-        );
+        let eco_rules = ecosystems::ecosystem_rules(&[rust], sandboxes::PROJECT_FILES_SANDBOX);
         stmts.push(Stmt::Expr(policy("test", ask(), eco_rules, None)));
 
         let code = clash_starlark::codegen::serialize(&stmts);

@@ -10,10 +10,7 @@ use crate::ecosystem::EcosystemDef;
 ///
 /// Always includes `load("@clash//builtin.star", "builtins")`.
 /// Adds sandbox preset loads and ecosystem-specific loads as needed.
-pub fn standard_loads(
-    sandbox_presets: &[&str],
-    ecosystems: &[&EcosystemDef],
-) -> Vec<Stmt> {
+pub fn standard_loads(sandbox_presets: &[&str], ecosystems: &[&EcosystemDef]) -> Vec<Stmt> {
     let mut stmts = vec![load_builtin()];
 
     // Collect sandbox names from presets + ecosystem sandboxes that live in sandboxes.star
