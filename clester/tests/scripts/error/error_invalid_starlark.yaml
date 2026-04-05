@@ -1,0 +1,20 @@
+meta:
+  name: error — invalid starlark syntax
+  description: Malformed starlark policy produces a clear error, not a panic
+
+clash:
+  policy_star: |
+    this is not valid starlark {{{{
+    def broken(
+    settings(default=
+
+steps:
+  - name: hook with broken policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: echo hello
+    expect:
+      exit_code: 1
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"

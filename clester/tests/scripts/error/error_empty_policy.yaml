@@ -1,0 +1,16 @@
+meta:
+  name: error — empty policy file
+  description: An empty starlark policy file is handled gracefully
+
+clash:
+  policy_star: ""
+
+steps:
+  - name: hook with empty policy
+    hook: pre-tool-use
+    tool_name: Bash
+    tool_input:
+      command: echo hello
+    expect:
+      not:
+        stderr_regex: "panic|RUST_BACKTRACE"
