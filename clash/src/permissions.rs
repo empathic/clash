@@ -236,55 +236,6 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Suggest the most specific `clash policy allow` command for a denied tool use.
-///
-/// Prefers precise commands (e.g., `clash policy allow "git status"`) over broad
-/// ones (e.g., `clash policy allow --tool Bash`).
-fn suggest_allow_command_specific(tool_name: &str, tool_input: &serde_json::Value) -> String {
-    let display = crate::agents::display_name(tool_name);
-    match tool_name {
-        "Bash" => {
-            // Extract the command and suggest allowing the specific binary (+ first arg if present).
-            if let Some(cmd) = tool_input.get("command").and_then(|v| v.as_str()) {
-                let parts: Vec<&str> = cmd.split_whitespace().collect();
-                match parts.len() {
-                    0 => format!("clash policy allow --tool {display}"),
-                    1 => format!("clash policy allow \"{}\"", parts[0]),
-                    _ => {
-                        // Include binary + first arg for specificity
-                        format!("clash policy allow \"{} {}\"", parts[0], parts[1])
-                    }
-                }
-            } else {
-                format!("clash policy allow --tool {display}")
-            }
-        }
-        _ => format!("clash policy allow --tool {display}"),
-    }
-}
-
-/// Suggest a broad `clash policy allow` command for a denied verb (used in stderr).
-fn suggest_allow_command(verb_str: &str) -> String {
-    match verb_str {
-        "edit" | "bash" | "read" | "web" | "tool" => {
-            format!("clash policy allow --tool {}", verb_str_to_tool(verb_str))
-        }
-        _ => format!("clash policy allow '{verb_str}'"),
-    }
-}
-
-/// Map verb strings back to display tool names for suggestions.
-fn verb_str_to_tool(verb_str: &str) -> &'static str {
-    match verb_str {
-        "shell" => "shell",
-        "bash" => "shell",
-        "edit" => "edit",
-        "read" => "read",
-        "web" => "web_fetch",
-        "tool" => "Skill",
-        _ => "shell",
-    }
-}
 
 /// Return a plain-English explanation for why a verb was denied.
 fn denial_explanation(verb_str: &str) -> &'static str {
@@ -585,35 +536,6 @@ mod tests {
         };
         let result = wrap_bash_with_sandbox(&input, Some("edit"));
         assert!(result.is_none());
-    }
-
-    // --- suggest/deny tests ---
-
-    #[test]
-    fn test_suggest_allow_specific_bash_command() {
-        let input = json!({"command": "git status"});
-        assert_eq!(
-            suggest_allow_command_specific("Bash", &input),
-            "clash policy allow \"git status\""
-        );
-    }
-
-    #[test]
-    fn test_suggest_allow_specific_bash_single_binary() {
-        let input = json!({"command": "ls"});
-        assert_eq!(
-            suggest_allow_command_specific("Bash", &input),
-            "clash policy allow \"ls\""
-        );
-    }
-
-    #[test]
-    fn test_suggest_allow_specific_tool() {
-        let input = json!({"file_path": "/tmp/test.txt"});
-        assert_eq!(
-            suggest_allow_command_specific("Read", &input),
-            "clash policy allow --tool read"
-        );
     }
 
     #[test]

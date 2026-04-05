@@ -799,7 +799,20 @@ fn handle_allow_by_hash(
 
     // Default to user scope for hash-based invocations.
     let scope = scope.or_else(|| Some("user".to_string()));
-    let scope_label = scope.as_deref().unwrap_or("user");
+
+    // Check for .star early — don't prompt if we can't write.
+    let path = resolve_manifest_path(scope)?;
+    if path.extension().is_some_and(|ext| ext == "star") {
+        anyhow::bail!(
+            "CLI rule mutations are not yet supported for .star files — use `clash policy edit` instead"
+        );
+    }
+
+    let scope_label = path
+        .to_string_lossy()
+        .contains(".clash/policy")
+        .then_some("project")
+        .unwrap_or("user");
 
     eprintln!();
     eprintln!("  Add rule to {} policy:", scope_label);
@@ -824,13 +837,6 @@ fn handle_allow_by_hash(
     );
     let rule_arg_refs: Vec<&str> = rule_args.iter().map(|s| s.as_str()).collect();
     let node = manifest_edit::build_exec_rule(&bin_name, &rule_arg_refs, decision);
-
-    let path = resolve_manifest_path(scope)?;
-    if path.extension().is_some_and(|ext| ext == "star") {
-        anyhow::bail!(
-            "CLI rule mutations are not yet supported for .star files — use `clash policy edit` instead"
-        );
-    }
     let mut manifest = crate::policy_loader::read_manifest(&path)?;
     let result = manifest_edit::upsert_rule(&mut manifest, node);
     crate::policy_loader::write_manifest(&path, &manifest)?;
@@ -869,7 +875,20 @@ fn handle_deny_by_hash(
     };
 
     let scope = scope.or_else(|| Some("user".to_string()));
-    let scope_label = scope.as_deref().unwrap_or("user");
+
+    // Check for .star early — don't prompt if we can't write.
+    let path = resolve_manifest_path(scope)?;
+    if path.extension().is_some_and(|ext| ext == "star") {
+        anyhow::bail!(
+            "CLI rule mutations are not yet supported for .star files — use `clash policy edit` instead"
+        );
+    }
+
+    let scope_label = path
+        .to_string_lossy()
+        .contains(".clash/policy")
+        .then_some("project")
+        .unwrap_or("user");
 
     eprintln!();
     eprintln!("  Add rule to {} policy:", scope_label);
@@ -889,13 +908,6 @@ fn handle_deny_by_hash(
 
     let rule_arg_refs: Vec<&str> = rule_args.iter().map(|s| s.as_str()).collect();
     let node = manifest_edit::build_exec_rule(&bin_name, &rule_arg_refs, Decision::Deny);
-
-    let path = resolve_manifest_path(scope)?;
-    if path.extension().is_some_and(|ext| ext == "star") {
-        anyhow::bail!(
-            "CLI rule mutations are not yet supported for .star files — use `clash policy edit` instead"
-        );
-    }
     let mut manifest = crate::policy_loader::read_manifest(&path)?;
     let result = manifest_edit::upsert_rule(&mut manifest, node);
     crate::policy_loader::write_manifest(&path, &manifest)?;
