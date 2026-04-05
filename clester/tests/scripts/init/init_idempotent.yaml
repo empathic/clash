@@ -4,12 +4,12 @@ meta:
 
 steps:
   - name: first init
-    command: "init --no-import"
+    command: "init --no-import --agent claude"
     expect:
       exit_code: 0
 
   - name: second init
-    command: "init --no-import"
+    command: "init --no-import --agent claude"
     expect:
       exit_code: 0
 

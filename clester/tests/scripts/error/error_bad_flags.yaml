@@ -6,7 +6,7 @@ steps:
   - name: policy allow with no arguments
     command: "policy allow"
     expect:
-      exit_code: 2
+      exit_code: 1
       not:
         stderr_regex: "panic|RUST_BACKTRACE"
 

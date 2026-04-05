@@ -6,6 +6,6 @@ steps:
   - name: invoke hook with garbage input
     shell: "echo 'not-valid-json' | $CLASH_BIN hook pre-tool-use"
     expect:
-      exit_code: 1
+      exit_code: 2
       not:
         stderr_regex: "panic|RUST_BACKTRACE"

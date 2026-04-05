@@ -35,8 +35,8 @@ steps:
       exit_code: 0
       stdout_regex: "\\w+"
 
-  - name: doctor — stderr matches regex
+  - name: doctor — stdout matches regex
     command: doctor
     expect:
       exit_code: 0
-      stderr_regex: "(?i)(clash|doctor|check)"
+      stdout_regex: "(?i)(clash|doctor|check)"

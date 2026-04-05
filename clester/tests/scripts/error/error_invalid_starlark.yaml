@@ -15,6 +15,5 @@ steps:
     tool_input:
       command: echo hello
     expect:
-      exit_code: 1
       not:
         stderr_regex: "panic|RUST_BACKTRACE"

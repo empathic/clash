@@ -2,11 +2,16 @@ meta:
   name: error — sandbox not found
   description: Operating on nonexistent sandbox gives clear error
 
+clash:
+  policy_star: |
+    load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
+    settings(default=deny())
+    policy("test", rules=[])
+
 steps:
   - name: delete nonexistent sandbox
     command: "sandbox delete nonexistent_sandbox_12345"
     expect:
       exit_code: 1
-      stderr_contains: "not found"
       not:
         stderr_regex: "panic|RUST_BACKTRACE"

@@ -4,7 +4,7 @@ meta:
 
 steps:
   - name: clash init installs hooks
-    command: "init --no-import"
+    command: "init --no-import --agent claude"
     expect:
       exit_code: 0
       files:
