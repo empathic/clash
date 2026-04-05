@@ -24,6 +24,8 @@ pub struct EvalOutput {
     pub json: String,
     /// Paths of all files loaded during evaluation.
     pub loaded_files: Vec<String>,
+    /// Leaf conflicts recorded by `merge()` calls during evaluation.
+    pub shadows: Vec<eval_context::ShadowedRule>,
 }
 
 /// Evaluate a Starlark policy source and return a JSON policy document.
@@ -66,8 +68,13 @@ pub fn evaluate(source: &str, filename: &str, base_dir: &Path) -> Result<EvalOut
     let json = serde_json::to_string_pretty(&doc).context("failed to serialize policy document")?;
 
     let loaded_files = loader.loaded_files();
+    let shadows = ctx.shadows.borrow().clone();
 
-    Ok(EvalOutput { json, loaded_files })
+    Ok(EvalOutput {
+        json,
+        loaded_files,
+        shadows,
+    })
 }
 
 #[cfg(test)]
@@ -1263,6 +1270,124 @@ policy("test",
         assert!(
             gh_rule.is_some(),
             "git_full sandbox should include .config/gh/** rule, got: {rules:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // merge() tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn merge_non_overlapping_dicts() {
+        let doc = eval_to_doc(
+            r#"
+settings(default = deny())
+a = {Tool("Bash"): allow()}
+b = {Tool("Read"): allow()}
+policy("test", merge(a, b))
+"#,
+        );
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 2, "both tool rules should be present: {tree:?}");
+    }
+
+    #[test]
+    fn merge_rightmost_wins() {
+        let doc = eval_to_doc(
+            r#"
+settings(default = deny())
+a = {Tool("Bash"): deny()}
+b = {Tool("Bash"): allow()}
+policy("test", merge(a, b))
+"#,
+        );
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 1, "merged to single rule: {tree:?}");
+        // The rightmost (allow) should win — look for allow decision.
+        let decision = &tree[0]["condition"]["children"][0]["decision"];
+        assert_eq!(decision, &json!({"allow": null}));
+    }
+
+    #[test]
+    fn merge_deep_nested() {
+        let doc = eval_to_doc(
+            r#"
+settings(default = deny())
+a = {Tool("Bash"): {"git": deny()}}
+b = {Tool("Bash"): {"npm": allow()}}
+policy("test", merge(a, b))
+"#,
+        );
+        let tree = doc["tree"].as_array().unwrap();
+        // One Tool("Bash") node with two children (git + npm).
+        assert_eq!(tree.len(), 1, "should merge into single tool node: {tree:?}");
+        let children = tree[0]["condition"]["children"].as_array().unwrap();
+        // Each nested key (git, npm) becomes a child condition node.
+        assert_eq!(
+            children.len(),
+            2,
+            "nested dict should have 2 children: {children:?}"
+        );
+    }
+
+    #[test]
+    fn merge_variadic_three_dicts() {
+        let doc = eval_to_doc(
+            r#"
+settings(default = deny())
+a = {Tool("Bash"): deny()}
+b = {Tool("Bash"): ask()}
+c = {Tool("Bash"): allow()}
+policy("test", merge(a, b, c))
+"#,
+        );
+        let tree = doc["tree"].as_array().unwrap();
+        assert_eq!(tree.len(), 1);
+        let decision = &tree[0]["condition"]["children"][0]["decision"];
+        // c (allow) is rightmost and should win.
+        assert_eq!(decision, &json!({"allow": null}));
+    }
+
+    #[test]
+    fn merge_rejects_single_arg() {
+        let source = r#"
+settings(default = deny())
+policy("test", merge({Tool("Bash"): allow()}))
+"#;
+        let result = evaluate(source, "test.star", &PathBuf::from("."));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn merge_rejects_non_dict() {
+        let source = r#"
+settings(default = deny())
+policy("test", merge("not a dict", {Tool("Bash"): allow()}))
+"#;
+        let result = evaluate(source, "test.star", &PathBuf::from("."));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn merge_records_shadows() {
+        let source = r#"
+settings(default = deny())
+a = {Tool("Bash"): deny()}
+b = {Tool("Bash"): allow()}
+policy("test", merge(a, b))
+"#;
+        let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
+        assert!(
+            !result.shadows.is_empty(),
+            "merge should have recorded a shadow"
+        );
+        let shadow = &result.shadows[0];
+        assert_eq!(shadow.path.len(), 1);
+        // The key path should contain the Tool("Bash") representation.
+        assert!(
+            shadow.path[0].contains("Bash"),
+            "path should mention Bash: {:?}",
+            shadow.path
         );
     }
 }

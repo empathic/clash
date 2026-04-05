@@ -9,6 +9,17 @@ use std::cell::RefCell;
 use serde_json::Value as JsonValue;
 use starlark::values::ProvidesStaticType;
 
+/// A record of a leaf value that was overwritten during `merge()`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ShadowedRule {
+    /// Dict key path to the conflicting leaf (e.g. `["Tool(Bash)", "git"]`).
+    pub path: Vec<String>,
+    /// String representation of the winning (rightmost) value.
+    pub winner: String,
+    /// String representation of the value that was overwritten.
+    pub shadowed: String,
+}
+
 /// Settings registered via the `settings()` DSL call.
 #[derive(Debug, Clone)]
 pub struct SettingsValue {
@@ -35,6 +46,8 @@ pub struct EvalContext {
     pub settings: RefCell<Option<SettingsValue>>,
     /// Sandboxes collected by when() calls, drained by policy().
     pub pending_sandboxes: RefCell<Vec<JsonValue>>,
+    /// Leaf conflicts recorded by merge().
+    pub shadows: RefCell<Vec<ShadowedRule>>,
 }
 
 impl EvalContext {
@@ -43,6 +56,7 @@ impl EvalContext {
             policy: RefCell::new(None),
             settings: RefCell::new(None),
             pending_sandboxes: RefCell::new(Vec::new()),
+            shadows: RefCell::new(Vec::new()),
         }
     }
 

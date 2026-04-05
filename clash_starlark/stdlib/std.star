@@ -247,6 +247,11 @@ def Tool(name):
 # ---------------------------------------------------------------------------
 
 
+def merge(*dicts):
+    """Deep-merge policy dicts. Rightmost wins at leaf conflicts."""
+    return _merge(*dicts)
+
+
 def when(tree):
     """Build rules from a nested dict tree.
 
