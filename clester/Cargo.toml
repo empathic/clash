@@ -18,3 +18,5 @@ serde_yaml = { workspace = true }
 tempfile = { workspace = true }
 clap = { workspace = true }
 shlex = { workspace = true }
+rayon = { workspace = true }
+regex = { workspace = true }
