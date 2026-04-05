@@ -222,11 +222,13 @@ clash policy validate            # validate policy syntax
 clash policy edit                # open the interactive policy editor
 clash policy allow "gh pr create"  # allow a command
 clash policy deny --bin rm         # deny a binary
+clash policy allow a3f9b12         # allow by audit hash (from clash shell prompt)
+clash policy deny  a3f9b12 --broad # deny by hash, widen to glob on trailing args
 clash policy remove --tool Read    # remove a rule
 clash sandbox create dev           # create a named sandbox
 clash sandbox add-rule dev ./src   # add a sandbox filesystem rule
 clash playground                 # interactive policy sandbox for testing rules
-clash shell                      # sandboxed shell with per-command enforcement
+clash shell                      # sandboxed interactive shell with per-command enforcement
 clash debug log                  # view audit log entries
 clash trace export               # export session trace as JSON
 clash session list               # list recent sessions

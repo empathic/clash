@@ -102,6 +102,12 @@ pub enum PolicyCmd {
         /// Policy scope: "user" or "project" (default: auto-detect)
         #[arg(long)]
         scope: Option<String>,
+        /// Widen the match by dropping trailing arguments and using a glob pattern.
+        #[arg(long)]
+        broad: bool,
+        /// Skip confirmation dialog.
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
     /// Add a deny rule for a tool or binary
     ///
@@ -121,6 +127,12 @@ pub enum PolicyCmd {
         /// Policy scope: "user" or "project" (default: auto-detect)
         #[arg(long)]
         scope: Option<String>,
+        /// Widen the match by dropping trailing arguments and using a glob pattern.
+        #[arg(long)]
+        broad: bool,
+        /// Skip confirmation dialog.
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
     /// Remove a rule matching a tool or binary
     ///

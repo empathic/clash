@@ -32,13 +32,17 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
             bin,
             sandbox,
             scope,
-        } => handle_allow(command, tool, bin, sandbox, scope),
+            broad,
+            yes,
+        } => handle_allow(command, tool, bin, sandbox, scope, broad, yes),
         PolicyCmd::Deny {
             command,
             tool,
             bin,
             scope,
-        } => handle_deny(command, tool, bin, scope),
+            broad,
+            yes,
+        } => handle_deny(command, tool, bin, scope, broad, yes),
         PolicyCmd::Remove {
             command,
             tool,
@@ -697,13 +701,53 @@ fn build_rule_node(
     }
 }
 
+/// Check if a string looks like an audit log hash (3-7 hex chars).
+fn looks_like_hash(s: &str) -> bool {
+    (3..=7).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Extract the binary name and args from an audit log entry's tool_input_summary.
+fn extract_command_from_entry(entry: &crate::debug::AuditLogEntry) -> Result<(String, Vec<String>)> {
+    let summary = &entry.tool_input_summary;
+    let clean = summary.trim_end_matches("...");
+
+    // Try to parse as JSON to extract the command field.
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(clean) {
+        if let Some(cmd) = val.get("command").and_then(|v| v.as_str()) {
+            let parts: Vec<&str> = cmd.split_whitespace().collect();
+            if parts.is_empty() {
+                anyhow::bail!("empty command in audit entry");
+            }
+            let bin = parts[0].to_string();
+            let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+            return Ok((bin, args));
+        }
+    }
+
+    anyhow::bail!(
+        "cannot extract command from audit entry (tool: {}, summary: {})",
+        entry.tool_name,
+        summary
+    )
+}
+
 fn handle_allow(
     command: Vec<String>,
     tool: Option<String>,
     bin: Option<String>,
     sandbox: Option<String>,
     scope: Option<String>,
+    broad: bool,
+    yes: bool,
 ) -> Result<()> {
+    // Detect hash-based invocation: single positional arg that looks like a hex hash.
+    if command.len() == 1
+        && tool.is_none()
+        && bin.is_none()
+        && looks_like_hash(&command[0])
+    {
+        return handle_allow_by_hash(&command[0], sandbox, scope, broad, yes);
+    }
     apply_mutation(command, tool, bin, scope, PolicyMutation::Allow { sandbox })
 }
 
@@ -712,8 +756,169 @@ fn handle_deny(
     tool: Option<String>,
     bin: Option<String>,
     scope: Option<String>,
+    broad: bool,
+    yes: bool,
 ) -> Result<()> {
+    // Detect hash-based invocation: single positional arg that looks like a hex hash.
+    if command.len() == 1
+        && tool.is_none()
+        && bin.is_none()
+        && looks_like_hash(&command[0])
+    {
+        return handle_deny_by_hash(&command[0], scope, broad, yes);
+    }
     apply_mutation(command, tool, bin, scope, PolicyMutation::Deny)
+}
+
+fn handle_allow_by_hash(
+    hash: &str,
+    sandbox: Option<String>,
+    scope: Option<String>,
+    broad: bool,
+    yes: bool,
+) -> Result<()> {
+    let entry = crate::debug::log::find_by_hash(hash)
+        .context("failed to look up audit entry")?;
+
+    let (bin_name, args) = extract_command_from_entry(&entry)?;
+
+    let (display_args, rule_args) = if broad && !args.is_empty() {
+        // Broad: keep binary + first arg, glob the rest.
+        let display = format!("{} {} *", bin_name, args[0]);
+        let rule = vec![args[0].clone(), "*".to_string()];
+        (display, rule)
+    } else {
+        // Exact: use all args.
+        let display = if args.is_empty() {
+            bin_name.clone()
+        } else {
+            format!("{} {}", bin_name, args.join(" "))
+        };
+        (display, args.clone())
+    };
+
+    // Default to user scope for hash-based invocations.
+    let scope = scope.or_else(|| Some("user".to_string()));
+
+    // Check for .star early — don't prompt if we can't write.
+    let path = resolve_manifest_path(scope)?;
+    if path.extension().is_some_and(|ext| ext == "star") {
+        anyhow::bail!(
+            "CLI rule mutations are not yet supported for .star files — use `clash policy edit` instead"
+        );
+    }
+
+    let scope_label = path
+        .to_string_lossy()
+        .contains(".clash/policy")
+        .then_some("project")
+        .unwrap_or("user");
+
+    eprintln!();
+    eprintln!("  Add rule to {} policy:", scope_label);
+    eprintln!("    allow exec {}", display_args);
+    eprintln!();
+
+    if !yes {
+        eprint!("  Proceed? [y/N] ");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !answer.trim().eq_ignore_ascii_case("y") {
+            eprintln!("  Cancelled.");
+            return Ok(());
+        }
+    }
+
+    let decision = Decision::Allow(
+        sandbox
+            .as_deref()
+            .map(|s| crate::policy::match_tree::SandboxRef(s.to_string())),
+    );
+    let rule_arg_refs: Vec<&str> = rule_args.iter().map(|s| s.as_str()).collect();
+    let node = manifest_edit::build_exec_rule(&bin_name, &rule_arg_refs, decision);
+    let mut manifest = crate::policy_loader::read_manifest(&path)?;
+    let result = manifest_edit::upsert_rule(&mut manifest, node);
+    crate::policy_loader::write_manifest(&path, &manifest)?;
+
+    let result_str = match result {
+        manifest_edit::UpsertResult::Inserted => "Rule added",
+        manifest_edit::UpsertResult::Replaced => "Rule updated (replaced existing)",
+    };
+    println!("{} {}", style::green_bold("✓"), result_str);
+    println!("  {}", style::dim(&path.display().to_string()));
+    Ok(())
+}
+
+fn handle_deny_by_hash(
+    hash: &str,
+    scope: Option<String>,
+    broad: bool,
+    yes: bool,
+) -> Result<()> {
+    let entry = crate::debug::log::find_by_hash(hash)
+        .context("failed to look up audit entry")?;
+
+    let (bin_name, args) = extract_command_from_entry(&entry)?;
+
+    let (display_args, rule_args) = if broad && !args.is_empty() {
+        let display = format!("{} {} *", bin_name, args[0]);
+        let rule = vec![args[0].clone(), "*".to_string()];
+        (display, rule)
+    } else {
+        let display = if args.is_empty() {
+            bin_name.clone()
+        } else {
+            format!("{} {}", bin_name, args.join(" "))
+        };
+        (display, args.clone())
+    };
+
+    let scope = scope.or_else(|| Some("user".to_string()));
+
+    // Check for .star early — don't prompt if we can't write.
+    let path = resolve_manifest_path(scope)?;
+    if path.extension().is_some_and(|ext| ext == "star") {
+        anyhow::bail!(
+            "CLI rule mutations are not yet supported for .star files — use `clash policy edit` instead"
+        );
+    }
+
+    let scope_label = path
+        .to_string_lossy()
+        .contains(".clash/policy")
+        .then_some("project")
+        .unwrap_or("user");
+
+    eprintln!();
+    eprintln!("  Add rule to {} policy:", scope_label);
+    eprintln!("    deny exec {}", display_args);
+    eprintln!();
+
+    if !yes {
+        eprint!("  Proceed? [y/N] ");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !answer.trim().eq_ignore_ascii_case("y") {
+            eprintln!("  Cancelled.");
+            return Ok(());
+        }
+    }
+
+    let rule_arg_refs: Vec<&str> = rule_args.iter().map(|s| s.as_str()).collect();
+    let node = manifest_edit::build_exec_rule(&bin_name, &rule_arg_refs, Decision::Deny);
+    let mut manifest = crate::policy_loader::read_manifest(&path)?;
+    let result = manifest_edit::upsert_rule(&mut manifest, node);
+    crate::policy_loader::write_manifest(&path, &manifest)?;
+
+    let result_str = match result {
+        manifest_edit::UpsertResult::Inserted => "Rule added",
+        manifest_edit::UpsertResult::Replaced => "Rule updated (replaced existing)",
+    };
+    println!("{} {}", style::green_bold("✓"), result_str);
+    println!("  {}", style::dim(&path.display().to_string()));
+    Ok(())
 }
 
 fn handle_remove(

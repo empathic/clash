@@ -16,8 +16,28 @@ use anyhow::{Context, Result};
 use tracing::info;
 
 use crate::policy::CompiledPolicy;
+use crate::policy::Effect;
 use crate::policy::sandbox_types::SandboxPolicy;
 use crate::settings::ClashSettings;
+
+/// Last policy decision made by the shell hook — read by the prompt renderer.
+#[derive(Debug, Clone)]
+pub struct LastDecision {
+    /// 7-char audit log hash identifying this evaluation.
+    pub hash: String,
+    /// The policy effect (allow/deny/ask).
+    pub effect: Effect,
+    /// The full command string (e.g. "git push origin main").
+    pub command: String,
+    /// Whether the command was wrapped in sandbox-exec.
+    pub sandboxed: bool,
+}
+
+/// Thread-safe shared state for the prompt to read the last decision.
+pub type SharedDecision = Arc<std::sync::Mutex<Option<LastDecision>>>;
+
+/// Thread-safe shared policy that can be reloaded between commands.
+type SharedPolicy = Arc<std::sync::RwLock<Arc<CompiledPolicy>>>;
 
 /// Build the external command hook that evaluates the policy for each command
 /// and wraps it with the appropriate sandbox (same as Claude's Bash tool).
@@ -87,9 +107,12 @@ const SHELL_BUILTINS: &[&str] = &[
 ];
 
 fn make_sandbox_hook(
-    policy: Arc<CompiledPolicy>,
+    shared_policy: SharedPolicy,
     default_sandbox: Option<SandboxPolicy>,
     debug: bool,
+    audit_config: crate::audit::AuditConfig,
+    session_id: String,
+    last_decision: SharedDecision,
 ) -> clash_brush_core::ExternalCommandHook {
     Arc::new(move |executable_path: &str, args: &[String]| {
         // Don't wrap shell builtins — they must run in the shell process.
@@ -98,7 +121,7 @@ fn make_sandbox_hook(
             .next()
             .unwrap_or(executable_path);
         if SHELL_BUILTINS.contains(&basename) {
-            return None;
+            return clash_brush_core::ExternalCommandAction::Passthrough;
         }
 
         // Reconstruct the command string as it would appear in a Bash tool call.
@@ -113,8 +136,68 @@ fn make_sandbox_hook(
             "command": command_str,
         });
 
+        // Read the current policy (reloaded each REPL iteration).
+        let policy = shared_policy.read().unwrap_or_else(|e| e.into_inner());
+
         // Evaluate the policy exactly as check_permission would.
         let decision = policy.evaluate("Bash", &tool_input);
+
+        // Write audit log entry so the hash is meaningful for `clash policy allow <hash>`.
+        let audit_hash = crate::audit::log_decision(
+            &audit_config,
+            &session_id,
+            "Bash",
+            &tool_input,
+            decision.effect,
+            decision.reason.as_deref(),
+            &decision.trace,
+            None,
+        );
+
+        // Update shared state for the prompt (sandboxed field updated below if applicable).
+        if let Ok(mut guard) = last_decision.lock() {
+            *guard = Some(LastDecision {
+                hash: audit_hash.clone(),
+                effect: decision.effect,
+                command: command_str.clone(),
+                sandboxed: false,
+            });
+        }
+
+        // Block denied commands with actionable hints.
+        if decision.effect == Effect::Deny {
+            let noun = if command_str.len() > 60 {
+                // Truncate at a char boundary to avoid panicking on multi-byte UTF-8.
+                let truncate_at = command_str
+                    .char_indices()
+                    .map(|(i, _)| i)
+                    .take_while(|&i| i <= 60)
+                    .last()
+                    .unwrap_or(0);
+                format!("{}...", &command_str[..truncate_at])
+            } else {
+                command_str.clone()
+            };
+            eprintln!(
+                "{} blocked shell on {}",
+                "\x1b[1;31mclash:\x1b[0m",
+                noun,
+            );
+            eprintln!(
+                "  clash policy allow {}          # allow this exact command",
+                audit_hash,
+            );
+            // Show --broad hint only when there are trailing args to glob.
+            let parts: Vec<&str> = command_str.split_whitespace().collect();
+            if parts.len() > 2 {
+                eprintln!(
+                    "  clash policy allow {} --broad  # allow all {}",
+                    audit_hash,
+                    parts[..2].join(" "),
+                );
+            }
+            return clash_brush_core::ExternalCommandAction::Block;
+        }
 
         // Use the policy's sandbox if present, otherwise fall back to the
         // user-specified default sandbox for the shell session.
@@ -130,7 +213,7 @@ fn make_sandbox_hook(
                     if debug {
                         eprintln!("[clash-shell] {}: no sandbox", command_str);
                     }
-                    return None;
+                    return clash_brush_core::ExternalCommandAction::Passthrough;
                 }
             },
         };
@@ -168,7 +251,7 @@ fn make_sandbox_hook(
                 if debug {
                     eprintln!("[clash-shell] failed to compile sandbox profile: {e}");
                 }
-                return None;
+                return clash_brush_core::ExternalCommandAction::Passthrough;
             }
         };
 
@@ -179,7 +262,15 @@ fn make_sandbox_hook(
             executable_path.to_string(),
         ];
         new_args.extend(args.iter().cloned());
-        Some(("sandbox-exec".to_string(), new_args))
+
+        // Mark that this command is sandboxed so the REPL can detect sandbox failures.
+        if let Ok(mut guard) = last_decision.lock() {
+            if let Some(ref mut d) = *guard {
+                d.sandboxed = true;
+            }
+        }
+
+        clash_brush_core::ExternalCommandAction::Replace("sandbox-exec".to_string(), new_args)
     })
 }
 
@@ -218,7 +309,28 @@ pub fn run_shell(
         None => None,
     };
 
-    let hook = make_sandbox_hook(Arc::new(policy), default_sandbox, debug);
+    // Create a shell session for audit logging.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let session_id = format!(
+        "shell-{:x}-{:03x}",
+        now.as_secs() & 0xFFFF_FFFF,
+        now.subsec_millis()
+    );
+    let _ = crate::audit::init_session(&session_id, &cwd, Some("clash-shell"), None);
+
+    let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));
+    let shared_policy: SharedPolicy = Arc::new(std::sync::RwLock::new(Arc::new(policy)));
+
+    let hook = make_sandbox_hook(
+        shared_policy.clone(),
+        default_sandbox,
+        debug,
+        settings.audit.clone(),
+        session_id,
+        last_decision.clone(),
+    );
 
     // Build a tokio runtime for brush's async API.
     let rt = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
@@ -229,7 +341,7 @@ pub fn run_shell(
         } else if !script_args.is_empty() {
             run_script(&script_args, &cwd, hook).await
         } else {
-            run_interactive(&cwd, hook).await
+            run_interactive(&cwd, hook, last_decision, shared_policy).await
         }
     })
 }
@@ -314,8 +426,36 @@ async fn run_script(
     Ok(())
 }
 
+/// Format the clash shell prompt based on the last policy decision.
+fn format_prompt(last_decision: &SharedDecision) -> String {
+    let guard = last_decision.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.as_ref() {
+        None => "clash $ ".to_string(),
+        Some(d) => {
+            let (symbol, color) = match d.effect {
+                Effect::Allow => ("✓", "\x1b[32m"), // green
+                Effect::Deny => ("✗", "\x1b[31m"),  // red
+                Effect::Ask => ("?", "\x1b[33m"),   // yellow
+            };
+            let reset = "\x1b[0m";
+            let dim = "\x1b[2m";
+            // \x01 and \x02 bracket non-printing chars for readline;
+            // brush's prompt expansion strips them (prompts.rs:69).
+            format!(
+                "clash[\x01{dim}\x02{}\x01{reset}\x02:\x01{color}\x02{}\x01{reset}\x02] $ ",
+                d.hash, symbol
+            )
+        }
+    }
+}
+
 /// Run an interactive shell REPL (`clash shell`).
-async fn run_interactive(cwd: &str, hook: clash_brush_core::ExternalCommandHook) -> Result<()> {
+async fn run_interactive(
+    cwd: &str,
+    hook: clash_brush_core::ExternalCommandHook,
+    last_decision: SharedDecision,
+    shared_policy: SharedPolicy,
+) -> Result<()> {
     info!("starting interactive shell with sandbox hook");
 
     let mut shell = clash_brush_core::Shell::builder()
@@ -331,22 +471,88 @@ async fn run_interactive(cwd: &str, hook: clash_brush_core::ExternalCommandHook)
 
     register_builtins(&mut shell);
 
+    // Set initial prompt (no decision yet).
+    set_ps1(&mut shell, "clash $ ");
+
     let shell_ref = std::sync::Arc::new(tokio::sync::Mutex::new(shell));
-
     let mut input = clash_brush_interactive::BasicInputBackend;
-
     let options = clash_brush_interactive::InteractiveOptions::default();
 
     let mut interactive =
         clash_brush_interactive::InteractiveShell::new(&shell_ref, &mut input, &options)
             .map_err(|e| anyhow::anyhow!("failed to create interactive shell: {e}"))?;
 
+    // Startup banner.
+    eprintln!(
+        "{}",
+        "\x1b[2mRun `clash policy allow|deny <id>` to change policy for any command.\x1b[0m"
+    );
+
     interactive
-        .run_interactively()
+        .start()
         .await
-        .map_err(|e| anyhow::anyhow!("interactive shell error: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("failed to start interactive session: {e}"))?;
+
+    loop {
+        // Reload policy to pick up changes from other terminals.
+        if let Ok(fresh_settings) = ClashSettings::load_or_create() {
+            if let Some(fresh_policy) = fresh_settings.policy_tree() {
+                if let Ok(mut guard) = shared_policy.write() {
+                    *guard = Arc::new(fresh_policy.clone());
+                }
+            }
+        }
+
+        // Update prompt based on last decision.
+        {
+            let prompt_str = format_prompt(&last_decision);
+            let mut sh = shell_ref.lock().await;
+            set_ps1(&mut sh, &prompt_str);
+        }
+
+        match interactive.run_interactively_once().await {
+            Ok(clash_brush_interactive::InteractiveExecutionResult::Eof) => break,
+            Ok(clash_brush_interactive::InteractiveExecutionResult::Executed(result)) => {
+                if matches!(
+                    result.next_control_flow,
+                    clash_brush_core::ExecutionControlFlow::ExitShell
+                ) {
+                    break;
+                }
+                // If a sandboxed command failed, flip the indicator to Deny —
+                // the policy allowed it but the sandbox blocked execution.
+                if !result.is_success() {
+                    if let Ok(mut guard) = last_decision.lock() {
+                        if let Some(ref mut d) = *guard {
+                            if d.sandboxed {
+                                d.effect = Effect::Deny;
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(clash_brush_interactive::InteractiveExecutionResult::Failed(_)) => {}
+            Err(e) => return Err(anyhow::anyhow!("interactive shell error: {e}")),
+        }
+    }
+
+    interactive
+        .finish()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to finish interactive session: {e}"))?;
 
     Ok(())
+}
+
+/// Set the PS1 environment variable on a shell instance.
+fn set_ps1(shell: &mut clash_brush_core::Shell, value: &str) {
+    let _ = shell.env_mut().update_or_add(
+        "PS1",
+        clash_brush_core::variables::ShellValueLiteral::Scalar(value.to_string()),
+        |_| Ok(()),
+        clash_brush_core::env::EnvironmentLookup::Anywhere,
+        clash_brush_core::env::EnvironmentScope::Global,
+    );
 }
 
 #[cfg(test)]
@@ -398,7 +604,16 @@ mod tests {
     }
 
     fn test_hook() -> clash_brush_core::ExternalCommandHook {
-        make_sandbox_hook(test_policy(), None, false)
+        let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));
+        let shared_policy: SharedPolicy = Arc::new(std::sync::RwLock::new(test_policy()));
+        make_sandbox_hook(
+            shared_policy,
+            None,
+            false,
+            crate::audit::AuditConfig::default(),
+            "test-session".to_string(),
+            last_decision,
+        )
     }
 
     #[test]
@@ -407,7 +622,10 @@ mod tests {
         let hook = test_hook();
         // Brush resolves to full paths; hook should still match policy.
         let result = hook("/usr/bin/git", &["push".to_string()]);
-        let (exe, args) = result.unwrap();
+        let (exe, args) = match result {
+            clash_brush_core::ExternalCommandAction::Replace(exe, args) => (exe, args),
+            other => panic!("expected Replace, got {other:?}"),
+        };
         // Should invoke sandbox-exec directly, not clash sandbox exec.
         assert_eq!(exe, "sandbox-exec");
         assert_eq!(args[0], "-p");
@@ -429,7 +647,10 @@ mod tests {
             "/bin/cat",
             &["file1.txt".to_string(), "file2.txt".to_string()],
         );
-        let (exe, args) = result.unwrap();
+        let (exe, args) = match result {
+            clash_brush_core::ExternalCommandAction::Replace(exe, args) => (exe, args),
+            other => panic!("expected Replace, got {other:?}"),
+        };
         assert_eq!(exe, "sandbox-exec");
         let dash_pos = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(args[dash_pos + 1], "/bin/cat");
@@ -445,7 +666,7 @@ mod tests {
         let hook = test_hook();
         let result = hook("/usr/bin/git", &["push".to_string()]);
         assert!(
-            result.is_none(),
+            matches!(result, clash_brush_core::ExternalCommandAction::Passthrough),
             "Linux uses Landlock (in-process), not sandbox-exec"
         );
     }
@@ -461,9 +682,54 @@ mod tests {
             Stmt::Expr(policy("test", allow(), vec![], None)),
         ]);
         let policy = Arc::new(compile_star(&source));
-        let hook = make_sandbox_hook(policy, None, false);
+        let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));
+        let shared_policy: SharedPolicy = Arc::new(std::sync::RwLock::new(policy));
+        let hook = make_sandbox_hook(
+            shared_policy,
+            None,
+            false,
+            crate::audit::AuditConfig::default(),
+            "test-no-sandbox".to_string(),
+            last_decision,
+        );
         // No sandbox → command runs unchanged.
         let result = hook("/usr/bin/git", &["push".to_string()]);
-        assert!(result.is_none());
+        assert!(matches!(result, clash_brush_core::ExternalCommandAction::Passthrough));
+    }
+
+    #[test]
+    fn hook_blocks_denied_commands() {
+        use clash_starlark::codegen::ast::Stmt;
+        use clash_starlark::codegen::builder::*;
+
+        // Policy that denies everything.
+        let source = clash_starlark::codegen::serialize(&[
+            load_std(&["deny", "policy", "settings"]),
+            Stmt::Expr(settings(deny(), None)),
+            Stmt::Expr(policy("test", deny(), vec![], None)),
+        ]);
+        let policy = Arc::new(compile_star(&source));
+        let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));
+        let shared_policy: SharedPolicy = Arc::new(std::sync::RwLock::new(policy));
+        let hook = make_sandbox_hook(
+            shared_policy,
+            None,
+            false,
+            crate::audit::AuditConfig::default(),
+            "test-deny".to_string(),
+            last_decision.clone(),
+        );
+
+        let result = hook("/usr/bin/git", &["push".to_string()]);
+        assert!(
+            matches!(result, clash_brush_core::ExternalCommandAction::Block),
+            "denied command should be blocked"
+        );
+
+        // Shared state should reflect the denial.
+        let decision = last_decision.lock().unwrap();
+        let d = decision.as_ref().expect("should have a decision");
+        assert_eq!(d.effect, Effect::Deny);
+        assert_eq!(d.command, "git push");
     }
 }

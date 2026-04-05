@@ -50,10 +50,18 @@ impl AuditLogEntry {
     /// Derived from the timestamp + tool name + input summary, so the
     /// same invocation always produces the same hash across runs.
     pub fn short_hash(&self) -> String {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.timestamp.hash(&mut hasher);
-        self.tool_name.hash(&mut hasher);
-        self.tool_input_summary.hash(&mut hasher);
-        format!("{:07x}", hasher.finish() & 0x0FFF_FFFF)
+        compute_short_hash(&self.timestamp, &self.tool_name, &self.tool_input_summary)
     }
+}
+
+/// Compute the 7-character short hash from its component parts.
+///
+/// Same algorithm as `AuditLogEntry::short_hash()` — factored out so callers
+/// that don't have a full entry can still produce a matching hash.
+pub fn compute_short_hash(timestamp: &str, tool_name: &str, tool_input_summary: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    timestamp.hash(&mut hasher);
+    tool_name.hash(&mut hasher);
+    tool_input_summary.hash(&mut hasher);
+    format!("{:07x}", hasher.finish() & 0x0FFF_FFFF)
 }

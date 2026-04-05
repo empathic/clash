@@ -163,7 +163,7 @@ clash policy check --json
 
 ### clash policy allow
 
-Add an allow rule for a tool or binary. Supports positional command syntax or explicit flags.
+Add an allow rule for a tool or binary. Supports positional command syntax, explicit flags, or an audit hash from the interactive shell.
 
 ```
 clash policy allow [OPTIONS] [COMMAND]...
@@ -173,7 +173,7 @@ clash policy allow [OPTIONS] [COMMAND]...
 
 | Argument | Description |
 |----------|-------------|
-| `[COMMAND]...` | Command to allow (e.g. `"gh pr create"` → bin=gh, args=[pr, create]) |
+| `[COMMAND]...` | Command to allow (e.g. `"gh pr create"` → bin=gh, args=[pr, create]), **or** a short audit hash from the interactive shell prompt (e.g. `a3f9b12`) |
 
 **Options:**
 
@@ -182,9 +182,13 @@ clash policy allow [OPTIONS] [COMMAND]...
 | `--tool <TOOL>` | Tool name (e.g. "Bash", "Read", "Write") |
 | `--bin <BIN>` | Binary name (implies --tool Bash) |
 | `--sandbox <SANDBOX>` | Named sandbox to apply (must be defined in the policy) |
-| `--scope <SCOPE>` | Policy scope: "user" or "project" (default: auto-detect) |
+| `--scope <SCOPE>` | Policy scope: "user" or "project" (default: user when invoked with a hash, otherwise auto-detect) |
+| `--broad` | Widen the match: keep binary + first argument, replace remaining args with a glob (`*`) |
+| `-y`, `--yes` | Skip the confirmation dialog |
 
 When no flags are provided, the positional command is parsed as a Bash tool rule: the first word becomes the binary name and remaining words become positional arguments.
+
+**Hash-based usage:** When you pass a single short hex string (3–7 characters) as the only positional argument, clash looks it up in the audit log and builds the rule from the recorded command. This lets you allow a previously seen command directly from the interactive shell prompt without retyping it.
 
 **Examples:**
 
@@ -203,11 +207,20 @@ clash policy allow --tool Read
 
 # Allow in user scope
 clash policy allow --scope user --bin git
+
+# Allow by audit hash (from interactive shell prompt)
+clash policy allow a3f9b12
+
+# Allow by hash, widen to match any subcommands (e.g. "git push *")
+clash policy allow a3f9b12 --broad
+
+# Allow by hash without confirmation prompt
+clash policy allow a3f9b12 --yes
 ```
 
 ### clash policy deny
 
-Add a deny rule for a tool or binary. Same syntax as `allow`.
+Add a deny rule for a tool or binary. Same syntax as `allow`, including hash-based invocation.
 
 ```
 clash policy deny [OPTIONS] [COMMAND]...
@@ -226,6 +239,15 @@ clash policy deny --tool WebSearch
 
 # Deny a binary
 clash policy deny --bin curl
+
+# Deny by audit hash (from interactive shell prompt)
+clash policy deny a3f9b12
+
+# Deny by hash, widen to match any subcommands
+clash policy deny a3f9b12 --broad
+
+# Deny by hash without confirmation
+clash policy deny a3f9b12 --yes
 ```
 
 ### clash policy remove
@@ -445,6 +467,68 @@ clash launch --policy ./project.policy
 
 # Pass arguments to Claude Code
 clash launch -- --model sonnet
+```
+
+---
+
+## clash shell
+
+Run a bash-compatible interactive shell (REPL) with per-command policy enforcement. Every command is evaluated against the active clash policy before execution: allowed commands run normally, denied commands are blocked, and `ask` commands prompt for confirmation.
+
+```
+clash shell [OPTIONS] [ARGS]...
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `-c <CMD>` | Execute a command string and exit (like `bash -c`) |
+| `--cwd <DIR>` | Working directory for sandbox path resolution (default: `.`) |
+| `--sandbox <NAME>` | Default named sandbox from the policy (used when no rule-specific sandbox matches) |
+| `--debug` | Print the matched sandbox policy before each command |
+
+**Arguments:**
+
+| Arg | Description |
+|-----|-------------|
+| `[ARGS]...` | Script path and arguments (when not using `-c` or interactive mode) |
+
+**Interactive prompt:**
+
+The REPL prompt reflects the policy decision for the most recently run command:
+
+```
+clash $                    # initial prompt (no command run yet)
+clash[a3f9b12:✓] $         # last command was allowed  (green ✓)
+clash[a3f9b12:✗] $         # last command was denied   (red ✗)
+clash[a3f9b12:?] $         # last command needed ask   (yellow ?)
+```
+
+The short hex token (`a3f9b12`) is an **audit hash** that identifies the policy decision in the audit log. Pass it directly to `clash policy allow` or `clash policy deny` to create a rule for that command without retyping it:
+
+```bash
+clash policy allow a3f9b12       # allow the command that produced this hash
+clash policy deny  a3f9b12       # deny it instead
+clash policy allow a3f9b12 --broad  # allow with a glob on trailing args
+```
+
+**Policy reload:** The active policy is reloaded automatically before each command. Edits to your policy files take effect immediately — no shell restart needed.
+
+**Examples:**
+
+```bash
+# Start an interactive shell
+clash shell
+
+# Run a one-off command under policy enforcement
+clash shell -c "git push origin main"
+
+# Run a script
+clash shell myscript.sh
+
+# Specify a different working directory
+clash shell --cwd /path/to/project
 ```
 
 ---

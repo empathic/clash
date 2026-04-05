@@ -7,12 +7,21 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+/// Result of an external command hook evaluation.
+#[derive(Debug)]
+pub enum ExternalCommandAction {
+    /// Run the command as-is (hook doesn't apply).
+    Passthrough,
+    /// Replace with a different command and arguments.
+    Replace(String, Vec<String>),
+    /// Block the command entirely. The hook already printed feedback to stderr.
+    Block,
+}
+
 /// Hook called before spawning an external command. Receives the executable
-/// path and string arguments. Returns an optional replacement
-/// `(executable, args)` pair. If `None` is returned, the original command
-/// is executed unchanged.
+/// path and string arguments. Returns an action: passthrough, replace, or block.
 pub type ExternalCommandHook =
-    Arc<dyn Fn(&str, &[String]) -> Option<(String, Vec<String>)> + Send + Sync>;
+    Arc<dyn Fn(&str, &[String]) -> ExternalCommandAction + Send + Sync>;
 
 use crate::{
     ExecutionControlFlow, ExecutionResult, builtins, env::ShellEnvironment, error, extensions,
