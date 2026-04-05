@@ -498,7 +498,7 @@ mod test {
 
     #[test]
     fn load_valid_policy_succeeds() {
-        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow())\npolicy(\"default\", rules = [])\n";
+        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow())\npolicy(\"default\", {})\n";
         let dir = tempfile::tempdir().unwrap();
         let policy_path = dir.path().join("policy.star");
         std::fs::write(&policy_path, star_policy).unwrap();
@@ -568,7 +568,7 @@ mod test {
         let policy_path = dir.path().join("policy.star");
         std::fs::write(
             &policy_path,
-            "load(\"@clash//std.star\", \"policy\", \"settings\", \"deny\")\nsettings(default = deny())\npolicy(\"default\", rules = [])\n",
+            "load(\"@clash//std.star\", \"policy\", \"settings\", \"deny\")\nsettings(default = deny())\npolicy(\"default\", {})\n",
         )
         .unwrap();
 
@@ -615,7 +615,7 @@ mod test {
 
     #[test]
     fn harness_rules_appended_to_compiled_policy() {
-        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow())\npolicy(\"default\", rules = [])\n";
+        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow())\npolicy(\"default\", {})\n";
         let dir = tempfile::tempdir().unwrap();
         let policy_path = dir.path().join("policy.star");
         std::fs::write(&policy_path, star_policy).unwrap();
@@ -633,7 +633,7 @@ mod test {
 
     #[test]
     fn harness_rules_disabled_by_policy_setting() {
-        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow(), harness_defaults = False)\npolicy(\"default\", rules = [])\n";
+        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow(), harness_defaults = False)\npolicy(\"default\", {})\n";
         let dir = tempfile::tempdir().unwrap();
         let policy_path = dir.path().join("policy.star");
         std::fs::write(&policy_path, star_policy).unwrap();

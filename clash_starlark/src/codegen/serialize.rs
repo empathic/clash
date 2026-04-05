@@ -220,10 +220,13 @@ fn format_call(func: &Expr, args: &[Expr], kwargs: &[(String, Expr)], depth: usi
     let func_str = format_expr(func, depth);
     let all_args = format_arg_list(args, kwargs, depth);
 
-    // Try single line
+    // Try single line (comments force multi-line)
+    let has_commented_args = args
+        .iter()
+        .any(|e| matches!(e, Expr::Commented { .. }));
     let oneline = format!("{func_str}({all_args})");
     let approx_col = depth * INDENT.len() + oneline.len();
-    if approx_col <= MAX_LINE && !oneline.contains('\n') {
+    if !has_commented_args && approx_col <= MAX_LINE && !oneline.contains('\n') {
         return oneline;
     }
 
@@ -232,6 +235,12 @@ fn format_call(func: &Expr, args: &[Expr], kwargs: &[(String, Expr)], depth: usi
     let outer = INDENT.repeat(depth);
     let mut out = format!("{func_str}(\n");
     for a in args {
+        // Emit comment line before the item if it's a Commented expression
+        if has_commented_args {
+            if let Expr::Commented { comment, .. } = a {
+                let _ = writeln!(out, "{inner}# {comment}");
+            }
+        }
         write_indented_item(&mut out, &format_expr(a, depth + 1), &inner);
         out.push_str(",\n");
     }
@@ -472,7 +481,7 @@ load(\"@clash//std.star\",
         let stmts = vec![
             Stmt::load(
                 "@clash//std.star",
-                &["when", "policy", "settings", "allow", "ask"],
+                &["policy", "settings", "allow", "ask"],
             ),
             Stmt::Blank,
             Stmt::Expr(settings(ask(), None)),
@@ -496,18 +505,14 @@ load(\"@clash//std.star\",
         assert_eq!(
             src,
             indoc! {r#"
-                load("@clash//std.star", "when", "policy", "settings", "allow", "ask")
+                load("@clash//std.star", "policy", "settings", "allow", "ask")
 
                 settings(default = ask())
 
                 policy(
                     "test",
+                    merge({"Bash": {("git", "cargo"): allow()}}, {"Read": allow()}, {"Write": allow()}),
                     default = ask(),
-                    rules = [
-                        when({"Bash": {("git", "cargo"): allow()}}),
-                        when({"Read": allow()}),
-                        when({"Write": allow()}),
-                    ],
                 )
             "#}
         );

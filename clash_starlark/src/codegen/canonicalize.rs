@@ -122,10 +122,11 @@ impl ast::Transform for NoDoubleBlanks {
 struct MergeConsecutiveWhens;
 
 impl MergeConsecutiveWhens {
-    /// Extract the dict entries from a `when({...})` call expression.
-    /// Returns `None` if the expression is not a simple `when(dict)`.
-    fn when_dict_entries(expr: &Expr) -> Option<&Vec<DictEntry>> {
+    /// Extract the dict entries from a plain dict or a legacy `when({...})` call.
+    /// Returns `None` if the expression is neither.
+    fn dict_entries(expr: &Expr) -> Option<&Vec<DictEntry>> {
         match expr {
+            Expr::Dict(entries) => Some(entries),
             Expr::Call { func, args, kwargs }
                 if matches!(func.as_ref(), Expr::Ident(n) if n == "when")
                     && args.len() == 1
@@ -149,46 +150,46 @@ impl MergeConsecutiveWhens {
         if pending_entries.is_empty() {
             return;
         }
-        let merged = Self::merge_when_entries(std::mem::take(pending_entries));
+        let merged = Expr::Dict(std::mem::take(pending_entries));
         if let Some(comment) = pending_comment.take() {
             result.push(Expr::commented(comment, merged));
         } else {
             result.push(merged);
         }
     }
-
-    /// Merge a run of when-dict expressions into a single when call.
-    fn merge_when_entries(entries: Vec<DictEntry>) -> Expr {
-        Expr::Call {
-            func: Box::new(Expr::Ident("when".into())),
-            args: vec![Expr::Dict(entries)],
-            kwargs: vec![],
-        }
-    }
 }
 
 impl Transform for MergeConsecutiveWhens {
     fn visit_expr(&mut self, expr: &Expr, ctx: &WalkCtx) -> TransformOp<Expr> {
-        // Only operate on lists inside a policy() call (the rules list).
+        // Only operate inside a policy() call.
         if !ctx.inside_call("policy") {
             return TransformOp::Keep;
         }
 
-        let Expr::List(items) = expr else {
-            return TransformOp::Keep;
+        // Handle merge(...) calls: collapse consecutive plain dicts.
+        let items = match expr {
+            Expr::Call { func, args, kwargs }
+                if matches!(func.as_ref(), Expr::Ident(n) if n == "merge")
+                    && kwargs.is_empty() =>
+            {
+                args
+            }
+            // Legacy: also handle List form for backwards compat.
+            Expr::List(items) => items,
+            _ => return TransformOp::Keep,
         };
 
-        // Scan for consecutive when() calls and merge them.
-        // A commented when() starts a new group (flushing any prior group)
-        // and subsequent uncommented when() calls merge into it.
+        // Scan for consecutive dict expressions and merge them.
+        // A commented dict starts a new group (flushing any prior group)
+        // and subsequent uncommented dicts merge into it.
         let mut result: Vec<Expr> = Vec::with_capacity(items.len());
         let mut pending_entries: Vec<DictEntry> = Vec::new();
         let mut pending_comment: Option<String> = None;
 
         for item in items {
-            // Commented when() — starts a new group with this comment.
+            // Commented dict — starts a new group with this comment.
             if let Expr::Commented { comment, expr } = item {
-                if let Some(entries) = Self::when_dict_entries(expr) {
+                if let Some(entries) = Self::dict_entries(expr) {
                     // Flush any prior group.
                     Self::flush(&mut result, &mut pending_entries, &mut pending_comment);
                     // Start a new group with this comment.
@@ -196,16 +197,16 @@ impl Transform for MergeConsecutiveWhens {
                     pending_entries.extend(entries.iter().cloned());
                     continue;
                 }
-                // Non-when commented item: flush and pass through.
+                // Non-dict commented item: flush and pass through.
                 Self::flush(&mut result, &mut pending_entries, &mut pending_comment);
                 result.push(item.clone());
                 continue;
             }
 
-            if let Some(entries) = Self::when_dict_entries(item) {
+            if let Some(entries) = Self::dict_entries(item) {
                 pending_entries.extend(entries.iter().cloned());
             } else {
-                // Non-when item: flush pending, then add the item
+                // Non-dict item: flush pending, then add the item
                 Self::flush(&mut result, &mut pending_entries, &mut pending_comment);
                 result.push(item.clone());
             }
@@ -216,7 +217,17 @@ impl Transform for MergeConsecutiveWhens {
 
         // Only replace if we actually merged something (fewer items)
         if result.len() < items.len() {
-            TransformOp::Replace(Expr::List(result))
+            // Re-wrap: single dict can stand alone, multiple need merge()
+            let replacement = if result.len() == 1 {
+                result.into_iter().next().unwrap()
+            } else {
+                Expr::Call {
+                    func: Box::new(Expr::Ident("merge".into())),
+                    args: result,
+                    kwargs: vec![],
+                }
+            };
+            TransformOp::Replace(replacement)
         } else {
             TransformOp::Keep
         }
@@ -227,9 +238,9 @@ struct CollapseDictSiblingsSameResult;
 
 impl Transform for CollapseDictSiblingsSameResult {
     fn visit_expr(&mut self, current: &Expr, ctx: &WalkCtx) -> TransformOp<Expr> {
-        // Only collapse inside when() and policy() match dicts, not sandbox()
+        // Only collapse inside merge(), policy() match dicts, not sandbox()
         // fs dicts where path matchers as keys must stay separate.
-        if !["when", "policy"].iter().any(|name| ctx.inside_call(name)) {
+        if !["merge", "policy"].iter().any(|name| ctx.inside_call(name)) {
             return TransformOp::Keep;
         }
 
@@ -343,58 +354,58 @@ mod tests {
                     x = {"a": allow(), "b": allow()}
                     "#,
 
-        merge_consecutive_whens_single_key:
+        merge_consecutive_dicts_single_key:
             r#"
-                    load("@clash//std.star", "when", "policy", "settings", "allow", "ask")
+                    load("@clash//std.star", "policy", "settings", "allow", "ask")
 
                     settings(default = ask())
 
                     policy(
                         "test",
+                        merge(
+                            {"Read": allow()},
+                            {"Write": allow()},
+                        ),
                         default = ask(),
-                        rules = [
-                            when({"Read": allow()}),
-                            when({"Write": allow()}),
-                        ],
                     )"# => r#"
-                    load("@clash//std.star", "when", "policy", "settings", "allow", "ask")
+                    load("@clash//std.star", "policy", "settings", "allow", "ask")
 
                     settings(default = ask())
 
-                    policy("test", default = ask(), rules = [when({("Read", "Write"): allow()})])
+                    policy("test", {("Read", "Write"): allow()}, default = ask())
                     "#,
 
-        merge_whens_preserves_comments_as_separators:
+        merge_dicts_preserves_comments_as_separators:
             r#"
-                    load("@clash//std.star", "when", "policy", "settings", "allow", "deny", "ask")
+                    load("@clash//std.star", "policy", "settings", "allow", "deny", "ask")
 
                     settings(default = ask())
 
                     policy(
                         "test",
-                        default = ask(),
-                        rules = [
+                        merge(
                             # denied
-                            when({"Read": {".env": deny()}}),
+                            {"Read": {".env": deny()}},
                             # allowed
-                            when({"Bash": {"git": allow()}}),
-                            when({"Read": allow()}),
-                            when({"Write": allow()}),
-                        ],
+                            {"Bash": {"git": allow()}},
+                            {"Read": allow()},
+                            {"Write": allow()},
+                        ),
+                        default = ask(),
                     )"# => r#"
-                    load("@clash//std.star", "when", "policy", "settings", "allow", "deny", "ask")
+                    load("@clash//std.star", "policy", "settings", "allow", "deny", "ask")
 
                     settings(default = ask())
 
                     policy(
                         "test",
-                        default = ask(),
-                        rules = [
+                        merge(
                             # denied
-                            when({"Read": {".env": deny()}}),
+                            {"Read": {".env": deny()}},
                             # allowed
-                            when({"Bash": {"git": allow()}, ("Read", "Write"): allow()}),
-                        ],
+                            {"Bash": {"git": allow()}, ("Read", "Write"): allow()},
+                        ),
+                        default = ask(),
                     )
                     "#,
     }

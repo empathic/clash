@@ -151,7 +151,7 @@ mod tests {
             "Bash" => allow(),
         };
         let src = serialize(&[Stmt::Expr(expr)]);
-        assert_eq!(src, "when({\"Bash\": allow()})\n");
+        assert_eq!(src, "{\"Bash\": allow()}\n");
     }
 
     #[test]

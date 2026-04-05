@@ -14,7 +14,7 @@ mod test {
         let mut stmts = vec![
             load_builtin(),
             load_std(&[
-                "settings", "policy", "sandbox", "allow", "ask", "deny", "glob", "subpath", "when",
+                "settings", "policy", "sandbox", "allow", "ask", "deny", "glob", "subpath",
             ]),
             Stmt::Blank,
         ];
@@ -60,7 +60,7 @@ mod test {
         let mut stmts = loads::standard_loads(&[], &[rust]);
         stmts.push(load_std(&[
             "settings", "policy", "sandbox", "allow", "ask", "deny",
-            "glob", "subpath", "when",
+            "glob", "subpath",
         ]));
         stmts.push(Stmt::Blank);
         stmts.extend(sandboxes::project_files_sandbox());

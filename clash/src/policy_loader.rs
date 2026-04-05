@@ -454,9 +454,9 @@ mod tests {
         std::fs::write(
             &star_path,
             r#"
-load("@clash//std.star", "when", "policy", "settings", "deny")
+load("@clash//std.star", "policy", "settings", "deny")
 settings(default = deny())
-policy("include", rules = when({"Read": allow()}))
+policy("include", {"Read": allow()})
 "#,
         )
         .unwrap();

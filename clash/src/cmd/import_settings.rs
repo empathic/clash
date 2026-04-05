@@ -317,8 +317,8 @@ fn generate_starlark_from_analysis(
             .map_or(true, |bin| !eco_binaries.contains(bin.as_str()))
     });
 
-    // Build rules list — one when() per concern. Canonicalization merges
-    // consecutive uncommented when() calls automatically.
+    // Build rules list — one dict per concern. Canonicalization merges
+    // consecutive uncommented dicts automatically.
     let mut rules: Vec<Expr> = vec![];
 
     // 1. File denies
@@ -351,7 +351,7 @@ fn generate_starlark_from_analysis(
     ));
 
     // 5–7. Allow rules — comment only the first, leave the rest uncommented
-    //       so MergeConsecutiveWhens collapses them.
+    //       so canonicalization collapses them.
     let mut allow_rules: Vec<Expr> = vec![];
 
     if !analysis.bash_allows.is_empty() {
@@ -411,7 +411,7 @@ fn generate_starlark_from_analysis(
 
     stmts.push(Stmt::Expr(policy("imported", ask(), rules, None)));
 
-    // Canonicalize (merges consecutive when() calls, collapses dict siblings, etc.)
+    // Canonicalize (merges consecutive dicts, collapses dict siblings, etc.)
     clash_starlark::codegen::canonicalize::canonicalize(&mut stmts)
         .expect("canonicalize generated AST");
 
@@ -799,9 +799,9 @@ mod tests {
             },
         );
 
-        // Find deny() and allow(sandbox = ...) within the rules list, not in
+        // Find deny() and allow(sandbox = ...) within the policy section, not in
         // the settings/sandbox definitions above it.
-        let rules_start = starlark.find("rules = [").expect("should contain rules");
+        let rules_start = starlark.find("policy(").expect("should contain policy");
         let rules_section = &starlark[rules_start..];
         let deny_pos = rules_section
             .find("deny()")
@@ -837,7 +837,7 @@ mod tests {
 
         // "Bash" should not appear in the other-tools rule at all —
         // it's handled by the bash-commands rule.
-        let rules_start = starlark.find("rules = [").expect("should contain rules");
+        let rules_start = starlark.find("policy(").expect("should contain policy");
         let rules_section = &starlark[rules_start..];
 
         // The other-allows rule should be just WebFetch, not a tuple with Bash.

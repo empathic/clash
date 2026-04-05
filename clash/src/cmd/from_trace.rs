@@ -363,7 +363,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
     let mut stmts = vec![
         load_builtin(),
         load_std(&[
-            "when", "policy", "settings", "sandbox", "allow", "ask", "deny",
+            "policy", "settings", "sandbox", "allow", "ask", "deny",
         ]),
         load_sandboxes(&["project"]),
         Stmt::Blank,
@@ -702,7 +702,7 @@ mod tests {
         let policy = generate_starlark(&analysis);
         // Should generate a generic Bash when rule since we know bash was used
         // but total_invocations > tools count
-        assert!(policy.contains("when({\"Bash\": allow(sandbox = project)})"));
+        assert!(policy.contains("{\"Bash\": allow(sandbox = project)}"), "expected dict syntax in:\n{policy}");
     }
 
     #[test]
