@@ -288,7 +288,7 @@ pub fn log_decision(
     reason: Option<&str>,
     trace: &DecisionTrace,
     mode: Option<&str>,
-) {
+) -> String {
     // Truncate tool_input for the log entry.
     let input_str = tool_input.to_string();
     let tool_input_summary = if input_str.len() > 200 {
@@ -329,6 +329,8 @@ pub fn log_decision(
     if let Err(e) = append_entry(&session_log, &entry) {
         warn!(error = %e, path = %session_log.display(), "Failed to write session audit entry");
     }
+
+    crate::debug::compute_short_hash(&entry.timestamp, tool_name, &entry.tool_input_summary)
 }
 
 /// A single sandbox violation captured from the kernel.

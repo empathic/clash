@@ -76,7 +76,7 @@ pub fn check_permission(
     );
 
     // Write audit log entry (global + session).
-    crate::audit::log_decision(
+    let _audit_hash = crate::audit::log_decision(
         &settings.audit,
         &input.session_id,
         &input.tool_name,
