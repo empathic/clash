@@ -1,0 +1,19 @@
+meta:
+  name: init multi-agent
+  description: Test clash init with different agent flags
+
+steps:
+  - name: init for gemini
+    command: "init --agent gemini --no-import"
+    expect:
+      exit_code: 0
+
+  - name: init for codex
+    command: "init --agent codex --no-import"
+    expect:
+      exit_code: 0
+
+  - name: init for default claude
+    command: "init --no-import"
+    expect:
+      exit_code: 0
