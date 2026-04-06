@@ -214,6 +214,10 @@ fn generate_starlark_from_posture(posture: Posture, detection: &EcosystemDetecti
     let preset = posture.sandbox_preset();
 
     let mut stmts = vec![load_builtin(), load_sandboxes(&[preset])];
+    stmts.push(Stmt::load(
+        "@clash//claude_compat.star",
+        &["from_claude_settings"],
+    ));
     stmts.extend(detection.loads.iter().cloned());
 
     let eco_rules = crate::policy_gen::ecosystems::ecosystem_rules(&detection.ecosystems, preset);
@@ -225,12 +229,11 @@ fn generate_starlark_from_posture(posture: Posture, detection: &EcosystemDetecti
             Some(Expr::ident(preset)),
         )),
         Stmt::Blank,
-        Stmt::Expr(policy(
-            "default",
-            Expr::call(effect_name, vec![]),
-            eco_rules,
-            None,
-        )),
+        Stmt::Expr({
+            let mut all_rules = vec![Expr::call("from_claude_settings", vec![])];
+            all_rules.extend(eco_rules);
+            policy("default", Expr::call(effect_name, vec![]), all_rules, None)
+        }),
     ]);
 
     clash_starlark::codegen::serialize(&stmts)
@@ -288,6 +291,10 @@ fn generate_starlark_from_analysis(
         Stmt::comment("Imported from Claude Code settings"),
         load_builtin(),
     ];
+    stmts.push(Stmt::load(
+        "@clash//claude_compat.star",
+        &["from_claude_settings"],
+    ));
     stmts.extend(detection.loads.iter().cloned());
     stmts.push(Stmt::Blank);
 
@@ -409,6 +416,8 @@ fn generate_starlark_from_analysis(
     }
     rules.extend(ask_rules);
 
+    // Prepend from_claude_settings() as lowest-priority base.
+    rules.insert(0, Expr::call("from_claude_settings", vec![]));
     stmts.push(Stmt::Expr(policy("imported", ask(), rules, None)));
 
     // Canonicalize (merges consecutive dicts, collapses dict siblings, etc.)

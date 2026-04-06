@@ -366,6 +366,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
             "policy", "settings", "sandbox", "allow", "ask", "deny",
         ]),
         load_sandboxes(&["project"]),
+        Stmt::load("@clash//claude_compat.star", &["from_claude_settings"]),
         Stmt::Blank,
     ];
 
@@ -491,6 +492,7 @@ fn generate_starlark(analysis: &TraceAnalysis) -> String {
         Some(Expr::ident("project")),
     )));
     stmts.push(Stmt::Blank);
+    rules.insert(0, Expr::call("from_claude_settings", vec![]));
     stmts.push(Stmt::Expr(policy(
         "default",
         Expr::ident("ask"),
