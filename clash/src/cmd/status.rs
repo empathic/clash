@@ -169,6 +169,22 @@ pub fn run(_json: bool, verbose: bool) -> Result<()> {
         }
     }
 
+    // Show Claude Code settings overridden by merge().
+    let shadows = settings.shadows();
+    if !shadows.is_empty() {
+        println!();
+        ui::section("Overridden Claude Code settings");
+        for shadow in shadows {
+            let path_str = shadow.path.join(" > ");
+            println!(
+                "  {} {} (Claude Code: {})",
+                style::dim(&path_str),
+                style::bold(&shadow.winner),
+                style::dim(&shadow.shadowed),
+            );
+        }
+    }
+
     Ok(())
 }
 

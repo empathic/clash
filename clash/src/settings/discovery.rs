@@ -210,7 +210,7 @@ pub(crate) fn find_ancestor_with(
 /// Delegates to [`policy_loader::evaluate_star_policy`]. This wrapper is kept
 /// for backward compatibility with callers that import from `settings`.
 pub fn evaluate_star_policy(path: &std::path::Path) -> Result<String> {
-    crate::policy_loader::evaluate_star_policy(path)
+    crate::policy_loader::evaluate_star_policy(path).map(|o| o.json)
 }
 
 /// Evaluate a policy file (`.json` or `.star`) and return the compiled JSON source.
@@ -221,7 +221,7 @@ pub fn evaluate_policy_file(path: &std::path::Path) -> Result<String> {
     if path.extension().is_some_and(|ext| ext == "json") {
         crate::policy_loader::load_json_policy(path)
     } else {
-        crate::policy_loader::evaluate_star_policy(path)
+        crate::policy_loader::evaluate_star_policy(path).map(|o| o.json)
     }
 }
 

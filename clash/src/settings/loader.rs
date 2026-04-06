@@ -346,6 +346,11 @@ impl ClashSettings {
         &self.loaded_policies
     }
 
+    /// Return leaf conflicts recorded by `merge()` during Starlark evaluation.
+    pub fn shadows(&self) -> &[clash_starlark::eval_context::ShadowedRule] {
+        &self.shadows
+    }
+
     /// Load settings by resolving policies from disk and compiling them.
     ///
     /// Loads from all available levels (user, project, session) and merges them
@@ -379,6 +384,7 @@ impl ClashSettings {
                 let display_path = tilde_path(&path);
                 level_sources.push((level, validated.json_source, display_path));
                 this.loaded_policies.push(validated.loaded);
+                this.shadows.extend(validated.shadows);
             }
         }
 
@@ -393,6 +399,7 @@ impl ClashSettings {
                 let display_path = tilde_path(&session_path);
                 level_sources.push((PolicyLevel::Session, validated.json_source, display_path));
                 this.loaded_policies.push(validated.loaded);
+                this.shadows.extend(validated.shadows);
             }
         }
 

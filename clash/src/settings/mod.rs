@@ -97,4 +97,7 @@ pub struct ClashSettings {
 
     /// Error message if policy failed to parse or compile.
     policy_error: Option<String>,
+
+    /// Leaf conflicts recorded by `merge()` during Starlark policy evaluation.
+    shadows: Vec<clash_starlark::eval_context::ShadowedRule>,
 }
