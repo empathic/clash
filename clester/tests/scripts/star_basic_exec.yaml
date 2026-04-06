@@ -4,13 +4,17 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
+    load("@clash//std.star", "policy", "settings", "allow", "deny", "glob")
     settings(default=deny())
-    policy("test", rules=[
-        when({"Bash": {"git": {"push": deny()}}}),
-        when({"Bash": {"git": allow()}}),
-        when({"Read": allow()}),
-    ])
+    policy("test", {
+        "Bash": {
+            "git": {
+                "push": deny(),
+                glob("**"): allow(),
+            },
+        },
+        "Read": allow(),
+    })
 
 steps:
   - name: git status allowed by exec rule

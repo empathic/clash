@@ -2,9 +2,6 @@
 
 use std::path::Path;
 
-use clash_starlark::codegen::ast::{DictEntry, Expr, Stmt};
-use clash_starlark::codegen::builder::*;
-
 /// Definition of an ecosystem for sandbox auto-configuration.
 #[derive(Debug, Clone)]
 pub struct EcosystemDef {
@@ -210,139 +207,9 @@ fn has_glob_match(dir: &Path, patterns: &[&str]) -> bool {
 /// - Plan mode: `_safe` variants where available, `_full` otherwise
 /// - Edit/default mode: `_full` variants
 /// - Unrestricted mode: `workspace` sandbox
-pub fn generate_policy(ecosystems: &[&EcosystemDef]) -> String {
-    let mut stmts = Vec::new();
-
-    // --- Loads ---
-    stmts.push(load_builtin());
-
-    // Collect sandbox names needed from sandboxes.star
-    let mut sandbox_imports: Vec<&str> = vec!["readonly", "project", "workspace"];
-    for eco in ecosystems {
-        if eco.star_file == "sandboxes.star" {
-            if let Some(safe) = eco.safe_sandbox {
-                if !sandbox_imports.contains(&safe) {
-                    sandbox_imports.push(safe);
-                }
-            }
-            if !sandbox_imports.contains(&eco.full_sandbox) {
-                sandbox_imports.push(eco.full_sandbox);
-            }
-        }
-    }
-    stmts.push(load_sandboxes(&sandbox_imports));
-
-    // Load claude_compat for from_claude_settings
-    stmts.push(Stmt::load("@clash//claude_compat.star", &["from_claude_settings"]));
-
-    // Load ecosystem-specific .star files
-    for eco in ecosystems {
-        if eco.star_file == "sandboxes.star" {
-            continue;
-        }
-        let mut names: Vec<&str> = Vec::new();
-        if let Some(safe) = eco.safe_sandbox {
-            names.push(safe);
-        }
-        names.push(eco.full_sandbox);
-        stmts.push(load_ecosystem(eco.star_file, &names));
-    }
-
-    stmts.push(Stmt::Blank);
-
-    // --- Build mode-based policy dict ---
-    let mut mode_entries: Vec<DictEntry> = Vec::new();
-
-    // Plan mode
-    let plan_bash = build_bash_routing(ecosystems, true);
-    let mut plan_inner = vec![DictEntry::new(
-        Expr::call("glob", vec![Expr::string("**")]),
-        allow_with_sandbox(Expr::ident("readonly")),
-    )];
-    if !plan_bash.is_empty() {
-        plan_inner.push(DictEntry::new(
-            Expr::call("Tool", vec![Expr::string("Bash")]),
-            Expr::dict(plan_bash),
-        ));
-    }
-    mode_entries.push(DictEntry::new(
-        Expr::call("mode", vec![Expr::string("plan")]),
-        Expr::dict(plan_inner),
-    ));
-
-    // Edit/default mode
-    let edit_bash = build_bash_routing(ecosystems, false);
-    let mut edit_inner = vec![DictEntry::new(
-        Expr::call("glob", vec![Expr::string("**")]),
-        allow_with_sandbox(Expr::ident("project")),
-    )];
-    if !edit_bash.is_empty() {
-        edit_inner.push(DictEntry::new(
-            Expr::call("Tool", vec![Expr::string("Bash")]),
-            Expr::dict(edit_bash),
-        ));
-    }
-    mode_entries.push(DictEntry::new(
-        Expr::tuple(vec![
-            Expr::call("mode", vec![Expr::string("edit")]),
-            Expr::call("mode", vec![Expr::string("default")]),
-        ]),
-        Expr::dict(edit_inner),
-    ));
-
-    // Unrestricted mode
-    mode_entries.push(DictEntry::new(
-        Expr::call("mode", vec![Expr::string("unrestricted")]),
-        Expr::dict(vec![DictEntry::new(
-            Expr::call("glob", vec![Expr::string("**")]),
-            allow_with_sandbox(Expr::ident("workspace")),
-        )]),
-    ));
-
-    stmts.push(Stmt::Expr(Expr::call(
-        "policy",
-        vec![
-            Expr::string("default"),
-            Expr::call(
-                "merge",
-                vec![
-                    Expr::call("from_claude_settings", vec![]),
-                    Expr::dict(mode_entries),
-                ],
-            ),
-        ],
-    )));
-
-    clash_starlark::codegen::serialize(&stmts)
-}
-
-/// Build Bash routing entries for ecosystems.
-/// If `use_safe` is true, prefer `_safe` variants (plan mode).
-fn build_bash_routing(ecosystems: &[&EcosystemDef], use_safe: bool) -> Vec<DictEntry> {
-    let mut entries = Vec::new();
-
-    for eco in ecosystems {
-        let sandbox_name = if use_safe {
-            eco.safe_sandbox.unwrap_or(eco.full_sandbox)
-        } else {
-            eco.full_sandbox
-        };
-
-        let key = if eco.binaries.len() == 1 {
-            Expr::string(eco.binaries[0])
-        } else {
-            Expr::tuple(eco.binaries.iter().map(|b| Expr::string(*b)).collect())
-        };
-
-        let glob_entry = DictEntry::new(
-            Expr::call("glob", vec![Expr::string("**")]),
-            allow_with_sandbox(Expr::ident(sandbox_name)),
-        );
-
-        entries.push(DictEntry::new(key, Expr::dict(vec![glob_entry])));
-    }
-
-    entries
+pub fn generate_policy(ecosystems: &[&'static EcosystemDef]) -> String {
+    use crate::policy_gen::spec::PolicySpec;
+    PolicySpec::from_ecosystems(ecosystems).to_starlark()
 }
 
 #[cfg(test)]

@@ -20,13 +20,13 @@ struct ToolInvocation {
 
 /// Summary of observations from a trace file.
 #[derive(Debug)]
-struct TraceAnalysis {
+pub(crate) struct TraceAnalysis {
     /// Total number of tool invocations observed.
-    total_invocations: usize,
+    pub(crate) total_invocations: usize,
     /// Unique tool names (non-Bash) that were used.
-    tools: BTreeSet<String>,
+    pub(crate) tools: BTreeSet<String>,
     /// Unique binaries invoked via Bash.
-    binaries: BTreeSet<String>,
+    pub(crate) binaries: BTreeSet<String>,
 }
 
 /// Read a trace or audit JSONL file and generate a starter Starlark policy.
@@ -357,150 +357,8 @@ fn analyze(invocations: &[ToolInvocation]) -> TraceAnalysis {
 // ---------------------------------------------------------------------------
 
 fn generate_starlark(analysis: &TraceAnalysis) -> String {
-    use clash_starlark::codegen::ast::{Expr, Stmt};
-    use clash_starlark::codegen::builder::*;
-
-    let mut stmts = vec![
-        load_builtin(),
-        load_std(&[
-            "policy", "settings", "sandbox", "allow", "ask", "deny",
-        ]),
-        load_sandboxes(&["project"]),
-        Stmt::load("@clash//claude_compat.star", &["from_claude_settings"]),
-        Stmt::Blank,
-    ];
-
-    // Sandbox for fs tools
-    use crate::policy_gen::sandboxes;
-    stmts.extend(sandboxes::project_files_sandbox());
-    stmts.push(Stmt::Blank);
-
-    // Categorize tools
-    use crate::policy_gen::sandboxes::PROJECT_FILES_SANDBOX;
-    use crate::policy_gen::tools::{FS_READ_TOOLS, FS_WRITE_TOOLS, NET_TOOLS, is_categorized_tool};
-    let read_tools: Vec<&str> = FS_READ_TOOLS
-        .iter()
-        .filter(|t| analysis.tools.contains(**t))
-        .copied()
-        .collect();
-    let write_tools: Vec<&str> = FS_WRITE_TOOLS
-        .iter()
-        .filter(|t| analysis.tools.contains(**t))
-        .copied()
-        .collect();
-    let net_tools: Vec<&str> = NET_TOOLS
-        .iter()
-        .filter(|t| analysis.tools.contains(**t))
-        .copied()
-        .collect();
-    let other_tools: Vec<&String> = analysis
-        .tools
-        .iter()
-        .filter(|t| !is_categorized_tool(t))
-        .collect();
-
-    let mut rules: Vec<Expr> = vec![];
-
-    // Read-only fs tools
-    if !read_tools.is_empty() {
-        let expr = tool_match(
-            &read_tools,
-            allow_with_sandbox(Expr::ident(PROJECT_FILES_SANDBOX)),
-        );
-        rules.push(Expr::commented(
-            "Read-only fs tools — observed in session",
-            expr,
-        ));
-    }
-
-    // Write fs tools
-    if !write_tools.is_empty() {
-        let expr = tool_match(
-            &write_tools,
-            allow_with_sandbox(Expr::ident(PROJECT_FILES_SANDBOX)),
-        );
-        rules.push(Expr::commented(
-            "Write fs tools — observed in session",
-            expr,
-        ));
-    }
-
-    // Network tools — prompt user (safer default)
-    if !net_tools.is_empty() {
-        let expr = tool_match(&net_tools, ask());
-        rules.push(Expr::commented(
-            "Network tools — prompt before allowing",
-            expr,
-        ));
-    }
-
-    // Other tools (e.g., Agent)
-    for t in &other_tools {
-        rules.push(tool_match(&[t.as_str()], allow()));
-    }
-
-    // Deny destructive git ops if git was observed
-    if analysis.binaries.contains("git") {
-        let expr = clash_starlark::match_tree! {
-            "Bash" => {
-                "git" => {
-                    "push" => {
-                        "--force" => deny(),
-                        "--force-with-lease" => deny(),
-                    },
-                    "reset" => {
-                        "--hard" => deny(),
-                    },
-                },
-            },
-        };
-        rules.push(Expr::commented("Deny destructive git ops", expr));
-    }
-
-    // Binary-specific rules
-    if !analysis.binaries.is_empty() {
-        let bins: Vec<&str> = analysis.binaries.iter().map(|s| s.as_str()).collect();
-        let key: MatchKey = if bins.len() == 1 {
-            bins[0].into()
-        } else {
-            bins.as_slice().into()
-        };
-        let expr = clash_starlark::match_tree! {
-            "Bash" => {
-                key => allow_with_sandbox(Expr::ident("project")),
-            },
-        };
-        rules.push(Expr::commented("Observed binaries — sandboxed", expr));
-    }
-
-    // If we saw Bash but no specific binaries, add a generic Bash match rule
-    let saw_bash = analysis.total_invocations > 0
-        && analysis.binaries.is_empty()
-        && analysis.tools.len() < analysis.total_invocations;
-    if saw_bash {
-        let expr = clash_starlark::match_tree! {
-            "Bash" => allow_with_sandbox(Expr::ident("project")),
-        };
-        rules.push(Expr::commented(
-            "Bash commands observed (binaries unknown) — sandboxed",
-            expr,
-        ));
-    }
-
-    stmts.push(Stmt::Expr(settings(
-        Expr::ident("ask"),
-        Some(Expr::ident("project")),
-    )));
-    stmts.push(Stmt::Blank);
-    rules.insert(0, Expr::call("from_claude_settings", vec![]));
-    stmts.push(Stmt::Expr(policy(
-        "default",
-        Expr::ident("ask"),
-        rules,
-        None,
-    )));
-
-    clash_starlark::codegen::serialize(&stmts)
+    use crate::policy_gen::spec::PolicySpec;
+    PolicySpec::from_trace(analysis).to_starlark()
 }
 
 // ---------------------------------------------------------------------------
@@ -655,7 +513,7 @@ mod tests {
 
         // Should contain loads
         assert!(policy.contains("load(\"@clash//builtin.star\""));
-        assert!(policy.contains("load(\"@clash//std.star\""));
+        assert!(policy.contains("load(\"@clash//sandboxes.star\""));
 
         // Should contain tool rules
         assert!(policy.contains("(\"Read\", \"Grep\"): allow(sandbox = project_files)"));

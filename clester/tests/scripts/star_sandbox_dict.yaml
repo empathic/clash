@@ -4,7 +4,7 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "when", "policy", "settings", "sandbox", "allow", "deny", "subpath", "glob")
+    load("@clash//std.star", "policy", "settings", "sandbox", "allow", "deny", "subpath", "glob")
     dev_box = sandbox(
         name = "dev",
         default = deny(),
@@ -20,13 +20,13 @@ clash:
     )
 
     settings(default=deny())
-    policy("test", rules=[
-        when({"Bash": {
+    policy("test", {
+        "Bash": {
             "cargo": allow(sandbox = dev_box),
             "git": allow(sandbox = dev_box),
-        }}),
-        when({"Read": allow(sandbox = dev_box)}),
-    ])
+        },
+        "Read": allow(sandbox = dev_box),
+    })
 
 steps:
   - name: cargo allowed with dict sandbox
