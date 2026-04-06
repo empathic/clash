@@ -97,13 +97,17 @@ pub enum MatchValue {
     Nested(Vec<(MatchKey, MatchValue)>),
 }
 
-/// Build a `when({...})` expression from a nested key-value structure.
+/// Build a dict expression from a nested key-value structure.
+///
+/// Previously this wrapped the dict in a `when()` call, but `when()` has been
+/// removed.  The returned expression is now a plain dict suitable for passing
+/// directly to `policy()` or `merge()`.
 pub fn match_rule(entries: Vec<(MatchKey, MatchValue)>) -> Expr {
-    Expr::call("when", vec![match_dict(entries)])
+    match_dict(entries)
 }
 
-/// Build a simple tool match rule: `when({"Name": effect()})` or
-/// `when({("A", "B"): effect()})` for multiple tool names.
+/// Build a simple tool match rule: `{"Name": effect()}` or
+/// `{("A", "B"): effect()}` for multiple tool names.
 pub fn tool_match(names: &[&str], effect: Expr) -> Expr {
     let key: MatchKey = if names.len() == 1 {
         MatchKey::Single(names[0].to_owned())
@@ -154,14 +158,26 @@ pub fn sandbox(name: &str, kwargs: Vec<(&str, Expr)>) -> Expr {
 // Policy
 // ---------------------------------------------------------------------------
 
-/// Build a `policy("name", rules = [...])` call statement.
+/// Build a `policy("name", {...})` or `policy("name", merge({...}, {...}))` call.
+///
+/// When `rules` is empty an empty dict is passed.  When there is a single rule
+/// it is passed directly.  Multiple rules are wrapped in `merge(...)`.
 pub fn policy(name: &str, default: Expr, rules: Vec<Expr>, default_sandbox: Option<Expr>) -> Expr {
+    let dict_arg = match rules.len() {
+        0 => Expr::dict(vec![]),
+        1 => rules.into_iter().next().unwrap(),
+        _ => merge(rules),
+    };
     let mut kwargs: Vec<(&str, Expr)> = vec![("default", default)];
     if let Some(sb) = default_sandbox {
         kwargs.push(("default_sandbox", sb));
     }
-    kwargs.push(("rules", Expr::list(rules)));
-    Expr::call_kwargs("policy", vec![Expr::string(name)], kwargs)
+    Expr::call_kwargs("policy", vec![Expr::string(name), dict_arg], kwargs)
+}
+
+/// Build a `merge(a, b, ...)` call to combine multiple dicts.
+pub fn merge(exprs: Vec<Expr>) -> Expr {
+    Expr::call("merge", exprs)
 }
 
 /// Build a `settings(default = ..., ...)` call statement.
@@ -204,7 +220,7 @@ mod tests {
         let expr = tool_match(&["Read"], allow());
         let stmts = vec![Stmt::Expr(expr)];
         let src = serialize(&stmts);
-        assert_eq!(src, "when({\"Read\": allow()})\n");
+        assert_eq!(src, "{\"Read\": allow()}\n");
     }
 
     #[test]
@@ -242,7 +258,7 @@ mod tests {
     #[test]
     fn full_policy() {
         let stmts = vec![
-            load_std(&["when", "policy", "settings", "allow", "deny"]),
+            load_std(&["policy", "settings", "allow", "deny"]),
             Stmt::Blank,
             Stmt::Expr(settings(deny(), None)),
             Stmt::Blank,
@@ -257,7 +273,7 @@ mod tests {
         assert!(src.contains("load(\"@clash//std.star\""));
         assert!(src.contains("settings("));
         assert!(src.contains("policy(\"default\""));
-        assert!(src.contains("when({\"Read\": allow()})"));
+        assert!(src.contains("{\"Read\": allow()}"), "got:\n{src}");
     }
 
     #[test]

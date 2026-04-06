@@ -4,11 +4,9 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
+    load("@clash//std.star", "policy", "settings", "allow", "deny")
     settings(default=deny())
-    policy("test", rules=[
-        when({"Bash": {"git": allow()}}),
-    ])
+    policy("test", {"Bash": {"git": allow()}})
 
 steps:
   - name: git status allowed — reason matches regex

@@ -1,14 +1,14 @@
-//! Rust-native implementation of the `when()` and `policy()` Starlark functions.
+//! Rust-native implementation of the `policy()` Starlark function.
 //!
-//! These replace the complex dict-processing logic that was previously in std.star,
-//! moving tree building into typed Rust code for better error handling and safety.
+//! Processes dict-form policy definitions, building match tree nodes from
+//! nested key-value structures in typed Rust code for better error handling and safety.
 
 use anyhow::{Context, bail};
 use serde_json::{Value as JsonValue, json};
 use starlark::values::dict::DictRef;
 use starlark::values::list::ListRef;
 use starlark::values::tuple::TupleRef;
-use starlark::values::{Heap, Value, ValueLike};
+use starlark::values::{Heap, Value};
 
 use crate::builders::match_tree::{self as mt, MatchTreeNode, pattern_to_json};
 
@@ -194,7 +194,7 @@ fn build_arg_tree<'v>(
                 set_children_on_node(&cond, vec![decision])?
             } else {
                 bail!(
-                    "when() values must be effect descriptors (allow/deny/ask) or dicts, got {}",
+                    "policy dict values must be effect descriptors (allow/deny/ask) or dicts, got {}",
                     value.get_type()
                 )
             };
@@ -261,7 +261,7 @@ fn build_value_children<'v>(
         set_children_on_node(&cond, vec![decision])
     } else {
         bail!(
-            "when() values must be effect descriptors (allow/deny/ask) or dicts, got {}",
+            "policy dict values must be effect descriptors (allow/deny/ask) or dicts, got {}",
             value.get_type()
         )
     }
@@ -279,67 +279,16 @@ fn set_children_on_node(
 }
 
 // ---------------------------------------------------------------------------
-// Public API: when()
-// ---------------------------------------------------------------------------
-
-/// Rust-native implementation of `when(tree)`.
-///
-/// Walks the dict tree, dispatching on key types (Mode/Tool/string/tuple),
-/// and produces a list of `MatchTreeNode` values with collected sandboxes.
-pub fn when_impl<'v>(
-    tree: Value<'v>,
-    heap: &'v Heap,
-    source: Option<String>,
-) -> anyhow::Result<(Vec<MatchTreeNode>, Vec<JsonValue>)> {
-    let dict = DictRef::from_value(tree).ok_or_else(|| {
-        anyhow::anyhow!("when() requires a dict argument, got {}", tree.get_type())
-    })?;
-
-    let mut collector = SandboxCollector::new();
-    let mut result = Vec::new();
-
-    for (key, value) in dict.iter() {
-        for k in expand_keys(key) {
-            match classify_key(k, heap)? {
-                MatchKeyKind::Mode { pattern, doc } => {
-                    let cond = build_mode_condition(pattern, doc, source.clone());
-                    let node = if let Some(inner_dict) = DictRef::from_value(value) {
-                        let children =
-                            build_tool_level(&inner_dict, heap, &source, &mut collector)?;
-                        set_children_on_node(&cond, children)?
-                    } else if is_effect(value, heap) {
-                        let decision = effect_to_decision(value, heap)?;
-                        collector.collect_from_effect(value, heap)?;
-                        set_children_on_node(&cond, vec![decision])?
-                    } else {
-                        bail!("Mode() value must be a dict of tools or an effect")
-                    };
-                    result.push(node);
-                }
-                MatchKeyKind::Tool { pattern, doc } => {
-                    let cond = build_tool_condition(pattern, doc, source.clone());
-                    let node = build_value_children(cond, value, heap, &source, &mut collector)?;
-                    result.push(node);
-                }
-            }
-        }
-    }
-
-    Ok((result, collector.sandboxes))
-}
-
-// ---------------------------------------------------------------------------
 // Public API: policy()
 // ---------------------------------------------------------------------------
 
 /// Rust-native implementation of `policy()`.
 ///
-/// Handles both dict form and rules/list form, collects sandboxes,
+/// Handles dict form only, collects sandboxes,
 /// and registers the policy into EvalContext.
 pub fn policy_impl<'v>(
     _name: &str,
     rules_or_dict: Value<'v>,
-    rules: Option<Value<'v>>,
     default_sandbox: Value<'v>,
     heap: &'v Heap,
     source: Option<String>,
@@ -351,16 +300,6 @@ pub fn policy_impl<'v>(
     if !rules_or_dict.is_none() {
         if let Some(dict) = DictRef::from_value(rules_or_dict) {
             process_policy_dict(&dict, heap, &source, &mut flat_nodes, &mut collector)?;
-        } else if let Some(list) = ListRef::from_value(rules_or_dict) {
-            // List passed as positional arg
-            process_rules_list(&list, heap, &mut flat_nodes, &mut collector)?;
-        }
-    }
-
-    // Named rules= kwarg
-    if let Some(rules_val) = rules {
-        if let Some(list) = ListRef::from_value(rules_val) {
-            process_rules_list(&list, heap, &mut flat_nodes, &mut collector)?;
         }
     }
 
@@ -414,104 +353,6 @@ fn process_policy_dict<'v>(
             }
         }
     }
-    Ok(())
-}
-
-/// Process the rules/list form of policy().
-fn process_rules_list<'v>(
-    list: &ListRef<'v>,
-    heap: &'v Heap,
-    flat_nodes: &mut Vec<JsonValue>,
-    collector: &mut SandboxCollector,
-) -> anyhow::Result<()> {
-    for item in list.iter() {
-        // Path builder result (e.g., cwd().allow())
-        if item.get_type() == "struct" {
-            if let Ok(Some(is_path)) = item.get_attr("_is_path", heap) {
-                if is_path.unpack_bool() == Some(true) {
-                    if let Ok(Some(nodes_val)) = item.get_attr("_nodes", heap) {
-                        if let Some(node_list) = ListRef::from_value(nodes_val) {
-                            for node_item in node_list.iter() {
-                                if let Some(node) = node_item.downcast_ref::<MatchTreeNode>() {
-                                    flat_nodes.push(node.json.clone());
-                                }
-                            }
-                        }
-                    }
-                    continue;
-                }
-            }
-        }
-
-        // List from when() — each item is a MatchTreeNode
-        if let Some(sub_list) = ListRef::from_value(item) {
-            for sub in sub_list.iter() {
-                extract_node(sub, heap, flat_nodes, collector)?;
-            }
-            continue;
-        }
-
-        // Direct MatchTreeNode
-        if let Some(node) = item.downcast_ref::<MatchTreeNode>() {
-            flat_nodes.push(node.json.clone());
-            continue;
-        }
-
-        // Struct with _node field (legacy when() return format)
-        extract_node(item, heap, flat_nodes, collector)?;
-    }
-    Ok(())
-}
-
-/// Extract a node from a struct wrapper or direct MatchTreeNode.
-fn extract_node<'v>(
-    item: Value<'v>,
-    heap: &'v Heap,
-    flat_nodes: &mut Vec<JsonValue>,
-    collector: &mut SandboxCollector,
-) -> anyhow::Result<()> {
-    if let Some(node) = item.downcast_ref::<MatchTreeNode>() {
-        flat_nodes.push(node.json.clone());
-        return Ok(());
-    }
-
-    if item.get_type() == "struct" {
-        // Extract _node
-        if let Ok(Some(node_val)) = item.get_attr("_node", heap) {
-            if let Some(node) = node_val.downcast_ref::<MatchTreeNode>() {
-                flat_nodes.push(node.json.clone());
-            }
-        }
-
-        // Extract _sandbox
-        if let Ok(Some(sb_val)) = item.get_attr("_sandbox", heap) {
-            if !sb_val.is_none() && sb_val.get_type() == "struct" {
-                if let Ok(Some(name_val)) = sb_val.get_attr("_name", heap) {
-                    if let Some(name) = name_val.unpack_str() {
-                        if collector.seen.insert(name.to_string()) {
-                            let sb_json = sandbox_to_json(sb_val, heap)?;
-                            collector.sandboxes.push(sb_json);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Extract _cmd_sandboxes (from when() results)
-        if let Ok(Some(cmd_sb)) = item.get_attr("_cmd_sandboxes", heap) {
-            if let Some(sb_list) = ListRef::from_value(cmd_sb) {
-                for sb_item in sb_list.iter() {
-                    let sb_json = crate::globals::starlark_to_json(sb_item)?;
-                    if let Some(name) = sb_json.get("name").and_then(|n| n.as_str()) {
-                        if collector.seen.insert(name.to_string()) {
-                            collector.sandboxes.push(sb_json);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     Ok(())
 }
 

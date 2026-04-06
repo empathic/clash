@@ -214,6 +214,10 @@ fn generate_starlark_from_posture(posture: Posture, detection: &EcosystemDetecti
     let preset = posture.sandbox_preset();
 
     let mut stmts = vec![load_builtin(), load_sandboxes(&[preset])];
+    stmts.push(Stmt::load(
+        "@clash//claude_compat.star",
+        &["from_claude_settings"],
+    ));
     stmts.extend(detection.loads.iter().cloned());
 
     let eco_rules = crate::policy_gen::ecosystems::ecosystem_rules(&detection.ecosystems, preset);
@@ -225,12 +229,11 @@ fn generate_starlark_from_posture(posture: Posture, detection: &EcosystemDetecti
             Some(Expr::ident(preset)),
         )),
         Stmt::Blank,
-        Stmt::Expr(policy(
-            "default",
-            Expr::call(effect_name, vec![]),
-            eco_rules,
-            None,
-        )),
+        Stmt::Expr({
+            let mut all_rules = vec![Expr::call("from_claude_settings", vec![])];
+            all_rules.extend(eco_rules);
+            policy("default", Expr::call(effect_name, vec![]), all_rules, None)
+        }),
     ]);
 
     clash_starlark::codegen::serialize(&stmts)
@@ -288,6 +291,10 @@ fn generate_starlark_from_analysis(
         Stmt::comment("Imported from Claude Code settings"),
         load_builtin(),
     ];
+    stmts.push(Stmt::load(
+        "@clash//claude_compat.star",
+        &["from_claude_settings"],
+    ));
     stmts.extend(detection.loads.iter().cloned());
     stmts.push(Stmt::Blank);
 
@@ -317,8 +324,8 @@ fn generate_starlark_from_analysis(
             .map_or(true, |bin| !eco_binaries.contains(bin.as_str()))
     });
 
-    // Build rules list — one when() per concern. Canonicalization merges
-    // consecutive uncommented when() calls automatically.
+    // Build rules list — one dict per concern. Canonicalization merges
+    // consecutive uncommented dicts automatically.
     let mut rules: Vec<Expr> = vec![];
 
     // 1. File denies
@@ -351,7 +358,7 @@ fn generate_starlark_from_analysis(
     ));
 
     // 5–7. Allow rules — comment only the first, leave the rest uncommented
-    //       so MergeConsecutiveWhens collapses them.
+    //       so canonicalization collapses them.
     let mut allow_rules: Vec<Expr> = vec![];
 
     if !analysis.bash_allows.is_empty() {
@@ -409,9 +416,11 @@ fn generate_starlark_from_analysis(
     }
     rules.extend(ask_rules);
 
+    // Prepend from_claude_settings() as lowest-priority base.
+    rules.insert(0, Expr::call("from_claude_settings", vec![]));
     stmts.push(Stmt::Expr(policy("imported", ask(), rules, None)));
 
-    // Canonicalize (merges consecutive when() calls, collapses dict siblings, etc.)
+    // Canonicalize (merges consecutive dicts, collapses dict siblings, etc.)
     clash_starlark::codegen::canonicalize::canonicalize(&mut stmts)
         .expect("canonicalize generated AST");
 
@@ -799,9 +808,9 @@ mod tests {
             },
         );
 
-        // Find deny() and allow(sandbox = ...) within the rules list, not in
+        // Find deny() and allow(sandbox = ...) within the policy section, not in
         // the settings/sandbox definitions above it.
-        let rules_start = starlark.find("rules = [").expect("should contain rules");
+        let rules_start = starlark.find("policy(").expect("should contain policy");
         let rules_section = &starlark[rules_start..];
         let deny_pos = rules_section
             .find("deny()")
@@ -837,7 +846,7 @@ mod tests {
 
         // "Bash" should not appear in the other-tools rule at all —
         // it's handled by the bash-commands rule.
-        let rules_start = starlark.find("rules = [").expect("should contain rules");
+        let rules_start = starlark.find("policy(").expect("should contain policy");
         let rules_section = &starlark[rules_start..];
 
         // The other-allows rule should be just WebFetch, not a tuple with Bash.

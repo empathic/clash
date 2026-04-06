@@ -346,6 +346,11 @@ impl ClashSettings {
         &self.loaded_policies
     }
 
+    /// Return leaf conflicts recorded by `merge()` during Starlark evaluation.
+    pub fn shadows(&self) -> &[clash_starlark::eval_context::ShadowedRule] {
+        &self.shadows
+    }
+
     /// Load settings by resolving policies from disk and compiling them.
     ///
     /// Loads from all available levels (user, project, session) and merges them
@@ -379,6 +384,7 @@ impl ClashSettings {
                 let display_path = tilde_path(&path);
                 level_sources.push((level, validated.json_source, display_path));
                 this.loaded_policies.push(validated.loaded);
+                this.shadows.extend(validated.shadows);
             }
         }
 
@@ -393,6 +399,7 @@ impl ClashSettings {
                 let display_path = tilde_path(&session_path);
                 level_sources.push((PolicyLevel::Session, validated.json_source, display_path));
                 this.loaded_policies.push(validated.loaded);
+                this.shadows.extend(validated.shadows);
             }
         }
 
@@ -498,7 +505,7 @@ mod test {
 
     #[test]
     fn load_valid_policy_succeeds() {
-        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow())\npolicy(\"default\", rules = [])\n";
+        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow())\npolicy(\"default\", {})\n";
         let dir = tempfile::tempdir().unwrap();
         let policy_path = dir.path().join("policy.star");
         std::fs::write(&policy_path, star_policy).unwrap();
@@ -568,7 +575,7 @@ mod test {
         let policy_path = dir.path().join("policy.star");
         std::fs::write(
             &policy_path,
-            "load(\"@clash//std.star\", \"policy\", \"settings\", \"deny\")\nsettings(default = deny())\npolicy(\"default\", rules = [])\n",
+            "load(\"@clash//std.star\", \"policy\", \"settings\", \"deny\")\nsettings(default = deny())\npolicy(\"default\", {})\n",
         )
         .unwrap();
 
@@ -615,7 +622,7 @@ mod test {
 
     #[test]
     fn harness_rules_appended_to_compiled_policy() {
-        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow())\npolicy(\"default\", rules = [])\n";
+        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow())\npolicy(\"default\", {})\n";
         let dir = tempfile::tempdir().unwrap();
         let policy_path = dir.path().join("policy.star");
         std::fs::write(&policy_path, star_policy).unwrap();
@@ -633,7 +640,7 @@ mod test {
 
     #[test]
     fn harness_rules_disabled_by_policy_setting() {
-        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow(), harness_defaults = False)\npolicy(\"default\", rules = [])\n";
+        let star_policy = "load(\"@clash//std.star\", \"allow\", \"policy\", \"settings\")\nsettings(default = allow(), harness_defaults = False)\npolicy(\"default\", {})\n";
         let dir = tempfile::tempdir().unwrap();
         let policy_path = dir.path().join("policy.star");
         std::fs::write(&policy_path, star_policy).unwrap();

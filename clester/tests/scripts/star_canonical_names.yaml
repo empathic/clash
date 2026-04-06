@@ -5,9 +5,9 @@ meta:
 clash:
   policy_star: |
     settings(default=deny())
-    policy("test", rules=[
-        when({("shell", "read", "write", "edit", "glob", "grep", "web_fetch", "web_search"): allow()}),
-    ])
+    policy("test", {
+        ("shell", "read", "write", "edit", "glob", "grep", "web_fetch", "web_search"): allow(),
+    })
 
 steps:
   - name: Bash matches canonical "shell"

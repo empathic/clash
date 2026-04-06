@@ -136,6 +136,23 @@ pub fn policy_rules_mut(stmts: &mut [Stmt]) -> Option<&mut Vec<Expr>> {
     None
 }
 
+/// Find the `merge(...)` call inside `policy()` and return a mutable reference
+/// to its argument list. Expects `policy("name", merge(...))` where `merge` is
+/// the second positional argument.
+pub fn policy_merge_args_mut(stmts: &mut [Stmt]) -> Option<&mut Vec<Expr>> {
+    let policy_idx = find_policy_call(stmts)?;
+    if let Stmt::Expr(Expr::Call { args, .. }) = &mut stmts[policy_idx] {
+        if args.len() >= 2 {
+            if let Expr::Call { func, args: merge_args, .. } = &mut args[1] {
+                if matches!(func.as_ref(), Expr::Ident(n) if n == "merge") {
+                    return Some(merge_args);
+                }
+            }
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Rule mutations
 // ---------------------------------------------------------------------------
@@ -726,10 +743,21 @@ policy("test", default = deny(), rules = [])
 
     #[test]
     fn mutations_produce_valid_starlark() {
-        let mut stmts = policy_stmts();
-        add_tool_rule(&mut stmts, &["Write", "Edit"], Effect::Allow, None).unwrap();
-        add_exec_rule(&mut stmts, "cargo", &["build"], Effect::Allow, None).unwrap();
-        set_default_effect(&mut stmts, Effect::Ask).unwrap();
+        use crate::codegen::managed;
+
+        let mut stmts = parse(
+            r#"load("@clash//claude_compat.star", "from_claude_settings")
+
+policy("test", merge(
+    from_claude_settings(),
+    {"Read": allow()},
+))
+"#,
+        )
+        .unwrap();
+
+        managed::upsert_tool_rule(&mut stmts, "Write", Effect::Allow, None).unwrap();
+        managed::upsert_exec_rule(&mut stmts, "cargo", &["build"], Effect::Allow, None).unwrap();
 
         // The result should evaluate without error
         let src = serialize(&stmts);

@@ -12,9 +12,7 @@ sandbox(
 
 settings(default = deny())
 
-policy("read-only-repo",
-    rules = [
-        when({"Bash": allow(sandbox = "repo_readonly")}),
-        when({("Read", "Glob", "Grep"): allow()}),
-    ],
-)
+policy("read-only-repo", {
+    "Bash": allow(sandbox = "repo_readonly"),
+    ("Read", "Glob", "Grep"): allow(),
+})

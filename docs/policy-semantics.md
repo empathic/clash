@@ -68,12 +68,16 @@ This means **order matters**. Put more specific rules before broader ones:
 
 ```python
 # Correct: deny matches git push first, allow catches everything else
-when({"Bash": {"git": {"push": deny()}}})
-when({"Bash": {"git": allow()}})
+policy("default", {"Bash": {"git": {
+    "push": deny(),
+    glob("**"): allow(),
+}}})
 
 # Wrong: allow matches git push first, deny never fires
-when({"Bash": {"git": allow()}})
-when({"Bash": {"git": {"push": deny()}}})
+policy("default", {"Bash": {"git": {
+    glob("**"): allow(),
+    "push": deny(),  # never reached
+}}})
 ```
 
 Children at the same level are automatically sorted by specificity (literals before regexes before wildcards), but top-level rule order from the policy source is preserved. Put more specific rules before broader ones to ensure the desired evaluation order.
@@ -137,11 +141,9 @@ Runtime constraints (filesystem and network sandbox policies) are attached to de
 Sandbox definitions are declared at the top level of the policy and referenced by name in `Decision` nodes. When a decision includes a `SandboxRef`, the evaluator looks up the corresponding `SandboxPolicy` from `CompiledPolicy.sandboxes` and attaches it to the `PolicyDecision`.
 
 ```python
-policy(
-    rules = [
-        when({"Bash": {"cargo": allow(sandbox = cwd_sb)}}),
-    ],
-)
+policy("default", {
+    "Bash": {"cargo": allow(sandbox = cwd_sb)},
+})
 ```
 
 This keeps sandbox definitions decoupled from the decision tree — the same sandbox can be referenced by multiple rules.
@@ -184,8 +186,8 @@ Within a single domain, **first-match wins** — the policy author controls prec
 
 ```python
 # Allow reads, deny everything else
-when({("Read", "Glob", "Grep"): allow()})
-# The default=deny handles everything not matched above
+policy("default", {("Read", "Glob", "Grep"): allow()})
+# The default=deny (from settings) handles everything not matched above
 ```
 
 See [ADR-002](./adr/002-deny-overrides.md) for the full rationale.

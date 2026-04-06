@@ -49,8 +49,14 @@ mod test {
     fn project_files_sandbox_compiles() {
         let stmts = project_files_sandbox();
         let code = clash_starlark::codegen::serialize(&stmts);
-        assert!(code.contains("project_files"), "should define project_files");
+        assert!(
+            code.contains("project_files"),
+            "should define project_files"
+        );
         assert!(code.contains("$PWD"), "should reference $PWD");
-        assert!(code.contains("$HOME/.claude"), "should reference $HOME/.claude");
+        assert!(
+            code.contains("$HOME/.claude"),
+            "should reference $HOME/.claude"
+        );
     }
 }

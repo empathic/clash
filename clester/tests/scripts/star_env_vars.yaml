@@ -6,12 +6,14 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "when", "policy", "settings", "allow", "deny")
+    load("@clash//std.star", "policy", "settings", "allow", "deny")
     settings(default=deny())
-    policy("test", rules=[
-        when({"Bash": {"git": {"push": deny()}}}),
-        when({"Bash": {"cargo": allow()}}),
-    ])
+    policy("test", {
+        "Bash": {
+            "git": {"push": deny()},
+            "cargo": allow(),
+        },
+    })
 
 steps:
   - name: plain cargo build allowed

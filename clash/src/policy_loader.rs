@@ -32,11 +32,13 @@ pub struct ValidatedPolicy {
     pub json_source: String,
     /// The loaded policy metadata.
     pub loaded: LoadedPolicy,
+    /// Leaf conflicts recorded by `merge()` during Starlark evaluation.
+    pub shadows: Vec<clash_starlark::eval_context::ShadowedRule>,
 }
 
 /// Evaluate a `.star` policy file through the Starlark evaluator and return
-/// the compiled JSON source text.
-pub fn evaluate_star_policy(path: &Path) -> Result<String> {
+/// the full [`clash_starlark::EvalOutput`] (JSON source + shadow data).
+pub fn evaluate_star_policy(path: &Path) -> Result<clash_starlark::EvalOutput> {
     let source = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
 
@@ -44,7 +46,7 @@ pub fn evaluate_star_policy(path: &Path) -> Result<String> {
 
     let output = clash_starlark::evaluate(&source, &path.display().to_string(), base_dir)?;
 
-    Ok(output.json)
+    Ok(output)
 }
 
 /// Load a `policy.json` manifest: parse the JSON, resolve includes, and return
@@ -100,7 +102,7 @@ fn evaluate_include(include_path: &str, base_dir: &Path) -> Result<String> {
     } else {
         // Local .star file — must call policy().
         let resolved = base_dir.join(include_path);
-        evaluate_star_policy(&resolved)
+        evaluate_star_policy(&resolved).map(|o| o.json)
     }
 }
 
@@ -124,9 +126,9 @@ fn evaluate_stdlib_include(include_path: &str) -> Result<String> {
             None,
         )),
     ]);
-    let output = clash_starlark::evaluate(&wrapper, "<include>", Path::new("."))
+    let eval_output = clash_starlark::evaluate(&wrapper, "<include>", Path::new("."))
         .with_context(|| format!("failed to evaluate stdlib include {include_path}"))?;
-    Ok(output.json)
+    Ok(eval_output.json)
 }
 
 /// Read and parse a `policy.json` file into a [`PolicyManifest`].
@@ -309,36 +311,36 @@ pub fn try_load_policy(
     let _metadata = validate_policy_file(path, level)?;
 
     let is_json = path.extension().is_some_and(|ext| ext == "json");
-    let result = if is_json {
-        load_json_policy(path)
+    let (json_source, shadows) = if is_json {
+        match load_json_policy(path) {
+            Ok(json) => (json, Vec::new()),
+            Err(e) => {
+                error!(path = %path.display(), level = %level, error = %e, "Failed to evaluate JSON policy");
+                *policy_error = Some(format!("Failed to evaluate {}: {}", path.display(), e));
+                return None;
+            }
+        }
     } else {
-        evaluate_star_policy(path)
+        match evaluate_star_policy(path) {
+            Ok(output) => (output.json, output.shadows),
+            Err(e) => {
+                error!(path = %path.display(), level = %level, error = %e, "Failed to evaluate starlark policy");
+                *policy_error = Some(format!("Failed to evaluate {}: {}", path.display(), e));
+                return None;
+            }
+        }
     };
 
-    match result {
-        Ok(json_source) => {
-            let loaded = LoadedPolicy {
-                level,
-                path: path.to_path_buf(),
-                source: json_source.clone(),
-            };
-            Some(ValidatedPolicy {
-                json_source,
-                loaded,
-            })
-        }
-        Err(e) => {
-            let kind = if is_json { "JSON" } else { "starlark" };
-            error!(
-                path = %path.display(),
-                level = %level,
-                error = %e,
-                "Failed to evaluate {kind} policy"
-            );
-            *policy_error = Some(format!("Failed to evaluate {}: {}", path.display(), e));
-            None
-        }
-    }
+    let loaded = LoadedPolicy {
+        level,
+        path: path.to_path_buf(),
+        source: json_source.clone(),
+    };
+    Some(ValidatedPolicy {
+        json_source,
+        loaded,
+        shadows,
+    })
 }
 
 /// Compile one or more evaluated policy JSON sources into a [`CompiledPolicy`] tree.
@@ -391,7 +393,7 @@ pub fn load_and_compile_single(
     let eval_result = if is_json {
         load_json_policy(path)
     } else {
-        evaluate_star_policy(path)
+        evaluate_star_policy(path).map(|o| o.json)
     };
 
     match eval_result {
@@ -454,9 +456,9 @@ mod tests {
         std::fs::write(
             &star_path,
             r#"
-load("@clash//std.star", "when", "policy", "settings", "deny")
+load("@clash//std.star", "policy", "settings", "deny")
 settings(default = deny())
-policy("include", rules = when({"Read": allow()}))
+policy("include", {"Read": allow()})
 "#,
         )
         .unwrap();

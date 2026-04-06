@@ -114,11 +114,11 @@ policy("test", default = ask(), rules = [tool(["Read"]).allow()])
 
     #[test]
     fn evaluate_produces_json() {
-        let src = r#"load("@clash//std.star", "when", "policy", "settings", "allow", "ask")
+        let src = r#"load("@clash//std.star", "policy", "settings", "allow", "ask")
 
 settings(default = ask())
 
-policy("test", default = ask(), rules = when({"Read": allow()}))
+policy("test", {"Read": allow()}, default = ask())
 "#;
         let doc = doc_from_str(src);
         let json = doc.evaluate_to_json().unwrap();

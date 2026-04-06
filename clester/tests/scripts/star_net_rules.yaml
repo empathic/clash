@@ -4,11 +4,14 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "policy", "settings", "domains", "allow", "deny")
+    load("@clash//std.star", "policy", "settings", "allow", "deny")
     settings(default=deny())
-    policy("test", rules=[
-        domains({"github.com": allow(), "api.github.com": allow()}),
-    ])
+    policy("test", {
+        "WebFetch": {
+            "github.com": allow(),
+            "api.github.com": allow(),
+        },
+    })
 
 steps:
   - name: webfetch github.com allowed

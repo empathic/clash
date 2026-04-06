@@ -39,10 +39,16 @@ mod test {
     #[test]
     fn fs_all_is_union_of_read_and_write() {
         for tool in FS_READ_TOOLS {
-            assert!(FS_ALL_TOOLS.contains(tool), "{tool} missing from FS_ALL_TOOLS");
+            assert!(
+                FS_ALL_TOOLS.contains(tool),
+                "{tool} missing from FS_ALL_TOOLS"
+            );
         }
         for tool in FS_WRITE_TOOLS {
-            assert!(FS_ALL_TOOLS.contains(tool), "{tool} missing from FS_ALL_TOOLS");
+            assert!(
+                FS_ALL_TOOLS.contains(tool),
+                "{tool} missing from FS_ALL_TOOLS"
+            );
         }
         assert_eq!(
             FS_ALL_TOOLS.len(),
@@ -54,7 +60,10 @@ mod test {
     #[test]
     fn no_overlap_between_read_and_write() {
         for tool in FS_READ_TOOLS {
-            assert!(!FS_WRITE_TOOLS.contains(tool), "{tool} in both read and write");
+            assert!(
+                !FS_WRITE_TOOLS.contains(tool),
+                "{tool} in both read and write"
+            );
         }
     }
 

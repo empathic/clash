@@ -13,4 +13,4 @@ java_full = sandbox(
     doc = "Java/JVM full: gradle, maven builds. Full project + dependency cache access.",
 )
 
-java = when({"Bash": {("gradle", "gradlew", "mvn", "mvnw", "java", "javac"): allow(sandbox = java_full)}})
+java = {"Bash": {("gradle", "gradlew", "mvn", "mvnw", "java", "javac"): allow(sandbox = java_full)}}

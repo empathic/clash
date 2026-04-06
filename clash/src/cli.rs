@@ -188,6 +188,18 @@ pub enum PolicyCmd {
         #[arg(long)]
         replace: bool,
     },
+    /// Migrate policy from when()/rules= syntax to dict syntax
+    ///
+    /// Converts deprecated when() calls and rules= lists to dict syntax.
+    /// Adds from_claude_settings() if not already present.
+    Migrate {
+        /// Policy scope: "user" or "project" (default: auto-detect)
+        #[arg(long)]
+        scope: Option<String>,
+        /// Skip confirmation dialog
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
     /// Explain which policy rule would match a given tool invocation
     #[command(hide = true)]
     Explain {

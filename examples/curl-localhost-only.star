@@ -14,11 +14,9 @@ sandbox(
 
 settings(default = deny())
 
-policy("curl-localhost-only",
-    rules = [
-        when({"Bash": {
-            "curl": allow(sandbox = "localhost_only"),
-        }}),
-        when({("Read", "Glob", "Grep"): allow()}),
-    ],
-)
+policy("curl-localhost-only", {
+    "Bash": {
+        "curl": allow(sandbox = "localhost_only"),
+    },
+    ("Read", "Glob", "Grep"): allow(),
+})

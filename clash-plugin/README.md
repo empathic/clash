@@ -47,51 +47,61 @@ Policies can be managed via `policy.json` (machine-readable, CLI-friendly) or wr
 
 ```python
 # ~/.clash/policy.star
-load("@clash//std.star", "allow", "ask", "deny", "when", "policy", "sandbox", "subpath", "domains")
+load("@clash//std.star", "allow", "ask", "deny", "policy", "sandbox", "subpath", "domains", "merge")
 
-def main():
-    fs_access = sandbox(fs={
+fs_access = sandbox(
+    name = "fs_access",
+    fs = {
         subpath("$PWD", follow_worktrees = True): allow("rwc"),
         "$HOME/.ssh": allow("r"),
-    })
+    },
+)
 
-    return policy(default = deny(), rules = [
-        when({"Read": allow(sandbox = fs_access)}),
-        when({"Glob": allow(sandbox = fs_access)}),
-        when({"Grep": allow(sandbox = fs_access)}),
-        when({"Write": allow(sandbox = fs_access)}),
-        when({"Edit": allow(sandbox = fs_access)}),
-        when({"Bash": {"git": {"push": deny()}}}),
-        when({"Bash": {"git": allow()}}),
-        domains({"github.com": allow()}),
-    ])
+settings(default = deny())
+
+policy("default", merge(
+    {
+        ("Read", "Glob", "Grep", "Write", "Edit"): allow(sandbox = fs_access),
+        "Bash": {
+            "git": {
+                "push": deny(),
+                glob("**"): allow(),
+            },
+        },
+    },
+    domains({"github.com": allow()}),
+))
 ```
 
 ### Rule Syntax Quick Reference
 
 | Pattern | Starlark |
 |---------|----------|
-| Allow a binary | `when({"Bash": {"git": allow()}})` |
-| Deny a subcommand | `when({"Bash": {"git": {"push": deny()}}})` |
-| Ask for confirmation | `when({"Bash": {"git": {"commit": ask()}}})` |
-| Multiple binaries | `when({"Bash": {("cargo", "rustc"): allow()}})` |
-| Filesystem (via sandbox) | `when({"Read": allow(sandbox=sandbox(fs={"$PWD": allow("r")}))})` |
-| Home subdir (via sandbox) | `when({"Bash": {"ssh": allow(sandbox=sandbox(fs={"$HOME/.ssh": allow("r")}))}})` |
+| Allow a binary | `{"Bash": {"git": allow()}}` |
+| Deny a subcommand | `{"Bash": {"git": {"push": deny()}}}` |
+| Ask for confirmation | `{"Bash": {"git": {"commit": ask()}}}` |
+| Multiple binaries | `{"Bash": {("cargo", "rustc"): allow()}}` |
+| Filesystem (via sandbox) | `{"Read": allow(sandbox=sandbox(name="s", fs={"$PWD": allow("r")}))}` |
+| Home subdir (via sandbox) | `{"Bash": {"ssh": allow(sandbox=sandbox(name="s", fs={"$HOME/.ssh": allow("r")}))}}` |
 | Network domains | `domains({"github.com": allow()})` |
-| Tool access | `when({"Read": allow()})` |
-| Sandbox on exec | `when({"Bash": {"cargo": allow(sandbox=sb)}})` |
+| Tool access | `{"Read": allow()}` |
+| Sandbox on exec | `{"Bash": {"cargo": allow(sandbox=sb)}}` |
 
 ### Sandbox Definition
 
 ```python
 sb = sandbox(
+    name = "sb",
     default = deny(),
     fs = {
         subpath("$PWD", follow_worktrees = True): allow("rwc"),
     },
     net = allow(),
 )
-when({"Bash": {"cargo": allow(sandbox = sb)}})
+
+policy("default", {
+    "Bash": {"cargo": allow(sandbox = sb)},
+})
 ```
 
 ### Policy File Paths
@@ -108,13 +118,17 @@ If a command fails because of sandbox restrictions, update the policy's sandbox 
 ```python
 # If cargo needs network access, add net = allow() to its sandbox
 cargo_env = sandbox(
+    name = "cargo_env",
     default = deny(),
     fs = {
         subpath("$PWD", follow_worktrees = True): allow("rwc"),
     },
     net = allow(),
 )
-when({"Bash": {"cargo": allow(sandbox = cargo_env)}})
+
+policy("default", {
+    "Bash": {"cargo": allow(sandbox = cargo_env)},
+})
 ```
 
 See the [Policy Writing Guide](../docs/policy-guide.md) for full syntax.

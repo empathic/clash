@@ -13,15 +13,11 @@ sandbox(
 
 settings(default = ask())
 
-policy("node-dev",
-    rules = [
-        when({"Bash": {
-            "git": {"push": {"--force": deny()}},
-        }}),
-        when({"Bash": {
-            ("npm", "npx", "node", "bun"): allow(sandbox = "node"),
-            "git": allow(),
-        }}),
-        when({("Read", "Glob", "Grep"): allow()}),
-    ],
-)
+policy("node-dev", {
+    "Bash": {
+        "git": {"push": {"--force": deny()}},
+        ("npm", "npx", "node", "bun"): allow(sandbox = "node"),
+        "git": allow(),
+    },
+    ("Read", "Glob", "Grep"): allow(),
+})

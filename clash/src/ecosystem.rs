@@ -232,6 +232,9 @@ pub fn generate_policy(ecosystems: &[&EcosystemDef]) -> String {
     }
     stmts.push(load_sandboxes(&sandbox_imports));
 
+    // Load claude_compat for from_claude_settings
+    stmts.push(Stmt::load("@clash//claude_compat.star", &["from_claude_settings"]));
+
     // Load ecosystem-specific .star files
     for eco in ecosystems {
         if eco.star_file == "sandboxes.star" {
@@ -298,7 +301,16 @@ pub fn generate_policy(ecosystems: &[&EcosystemDef]) -> String {
 
     stmts.push(Stmt::Expr(Expr::call(
         "policy",
-        vec![Expr::string("default"), Expr::dict(mode_entries)],
+        vec![
+            Expr::string("default"),
+            Expr::call(
+                "merge",
+                vec![
+                    Expr::call("from_claude_settings", vec![]),
+                    Expr::dict(mode_entries),
+                ],
+            ),
+        ],
     )));
 
     clash_starlark::codegen::serialize(&stmts)
