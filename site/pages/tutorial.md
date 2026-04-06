@@ -27,13 +27,11 @@ Replace whatever's there with the code below as we go. Every time you save, Clas
 The safest starting point. Block everything, then open up what you need.
 
 ```python
-load("@clash//std.star", "deny", "policy")
-
-def main():
-    return policy(default = deny())
+settings(default = deny())
+policy("default", {})
 ```
 
-Every policy file has a `main()` function that returns a `policy()`. The `default` is the effect applied when no rule matches — here, deny everything.
+Every policy file calls `settings()` to set the default effect and `policy()` to register rules. The `default = deny()` in `settings()` means deny everything when no rule matches — and our empty dict `{}` means no rules yet.
 
 Save this file and try running your agent. Every tool call will be blocked. That's the point — we'll open it up from here.
 
@@ -44,15 +42,14 @@ Save this file and try running your agent. Every tool call will be blocked. That
 Your agent needs to read files to be useful. Let's allow that.
 
 ```python
-load("@clash//std.star", "allow", "deny", "when", "policy")
+settings(default = deny())
 
-def main():
-    return policy(default = deny(), rules = [
-        when({("Read", "Glob", "Grep"): allow()}),
-    ])
+policy("default", {
+    ("Read", "Glob", "Grep"): allow(),
+})
 ```
 
-One new concept: `when()` matches Claude Code tools by name. `Read`, `Glob`, and `Grep` are the read-only file tools — allowing all three lets the agent browse and read files without being able to write or edit them.
+The dict keys are tool names. `Read`, `Glob`, and `Grep` are the read-only file tools — allowing all three lets the agent browse and read files without being able to write or edit them.
 
 Test it:
 
@@ -69,53 +66,58 @@ You should see an <span class="badge badge--allow">allow</span> decision.
 Read-only is safe but not very productive. Let's allow writes too.
 
 ```python
-load("@clash//std.star", "allow", "deny", "when", "policy", "sandbox", "subpath")
+load("@clash//std.star", "allow", "deny", "policy", "sandbox", "subpath")
 
-def main():
-    project_sandbox = sandbox(
-        default = deny(),
-        fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
-    )
+project_sandbox = sandbox(
+    name = "project",
+    default = deny(),
+    fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
+)
 
-    return policy(default = deny(), rules = [
-        when({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
-    ])
+settings(default = deny())
+
+policy("default", {
+    ("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox),
+})
 ```
 
 The sandbox restricts file tool access to your project directory. Files outside your project are still denied.
 
 ---
 
-## Step 4: Allow commands with `when()`
+## Step 4: Allow commands
 
-Your agent needs to run build tools and git. The `when()` builder lets you define rules as a tree of tool names and subcommands:
+Your agent needs to run build tools and git. Nest dicts to define rules as a tree of tool names and subcommands:
 
 ```python
-load("@clash//std.star", "allow", "deny", "when", "policy", "sandbox", "subpath")
+load("@clash//std.star", "allow", "deny", "policy", "sandbox", "subpath")
 
-def main():
-    project_sandbox = sandbox(
-        default = deny(),
-        fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
-    )
+project_sandbox = sandbox(
+    name = "project",
+    default = deny(),
+    fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
+)
 
-    return policy(default = deny(), rules = [
-        when({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
+settings(default = deny())
 
-        when({"Bash": {"git": {
+policy("default", {
+    ("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox),
+
+    "Bash": {
+        "git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
-        }}}),
-
-        when({"Bash": {"cargo": {
+        },
+        "cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(),
             "publish": deny(),
-        }}}),
-    ])
+        },
+    },
+})
 ```
 
-`when()` takes a dict where roots are tool names and values are trees of subcommands. Each key maps to an effect:
+Dict keys are matched against positional arguments — deeper nesting = more specific matches:
 
 - Tuples like `("add", "commit", "diff")` match any of those subcommands
 - Nested dicts like `"reset": {"--hard": deny()}` match deeper argument patterns
@@ -136,28 +138,31 @@ clash explain bash "git stash"     # → deny (no rule, falls to default)
 Denying everything unmatched is safe but noisy when you're actively working. Switch the default to `ask` so your agent can request approval for things you haven't written rules for yet:
 
 ```python
-load("@clash//std.star", "allow", "ask", "deny", "when", "policy", "sandbox", "subpath")
+load("@clash//std.star", "allow", "ask", "deny", "policy", "sandbox", "subpath")
 
-def main():
-    project_sandbox = sandbox(
-        default = deny(),
-        fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
-    )
+project_sandbox = sandbox(
+    name = "project",
+    default = deny(),
+    fs = {subpath("$PWD", follow_worktrees = True): allow("rwc")},
+)
 
-    return policy(default = ask(), rules = [
-        when({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox)}),
+settings(default = ask())
 
-        when({"Bash": {"git": {
+policy("default", {
+    ("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = project_sandbox),
+
+    "Bash": {
+        "git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
-        }}}),
-
-        when({"Bash": {"cargo": {
+        },
+        "cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(),
             "publish": deny(),
-        }}}),
-    ])
+        },
+    },
+})
 ```
 
 Now unmatched commands prompt you instead of silently failing. As you work, you'll notice which commands you're approving repeatedly — add rules for those.
@@ -169,35 +174,37 @@ Now unmatched commands prompt you instead of silently failing. As you work, you'
 Rules control whether a command runs. Sandboxes control what it can access *while* it runs — filesystem paths and network access, enforced at the OS level.
 
 ```python
-load("@clash//std.star", "allow", "ask", "deny", "when", "policy", "sandbox", "subpath")
+load("@clash//std.star", "allow", "ask", "deny", "policy", "sandbox", "subpath")
 
-def main():
-    dev_sandbox = sandbox(
-        name = "dev",
-        default = deny(),
-        fs = {
-            subpath("$PWD", follow_worktrees = True): allow("rwc"),
-            "$HOME/.cargo": allow("rwc"),
-            "$HOME/.rustup": allow("r"),
-            "$TMPDIR": allow(),
-        },
-        net = allow(),
-    )
+dev_sandbox = sandbox(
+    name = "dev",
+    default = deny(),
+    fs = {
+        subpath("$PWD", follow_worktrees = True): allow("rwc"),
+        "$HOME/.cargo": allow("rwc"),
+        "$HOME/.rustup": allow("r"),
+        "$TMPDIR": allow(),
+    },
+    net = allow(),
+)
 
-    return policy(default = ask(), rules = [
-        when({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox)}),
+settings(default = ask())
 
-        when({"Bash": {"git": {
+policy("default", {
+    ("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox),
+
+    "Bash": {
+        "git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
-        }}}),
-
-        when({"Bash": {"cargo": {
+        },
+        "cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(sandbox = dev_sandbox),
             "publish": deny(),
-        }}}),
-    ])
+        },
+    },
+})
 ```
 
 The `sandbox()` builder defines a restricted environment:
@@ -215,41 +222,43 @@ Attach a sandbox to an effect with `allow(sandbox = dev_sandbox)`. When cargo ru
 Instead of allowing all network access in your sandbox, restrict it to specific domains:
 
 ```python
-load("@clash//std.star", "allow", "ask", "deny", "domains", "when", "policy", "sandbox", "subpath")
+load("@clash//std.star", "allow", "ask", "deny", "domains", "policy", "sandbox", "subpath")
 
-def main():
-    dev_sandbox = sandbox(
-        name = "dev",
-        default = deny(),
-        fs = {
-            subpath("$PWD", follow_worktrees = True): allow("rwc"),
-            "$HOME/.cargo": allow("rwc"),
-            "$HOME/.rustup": allow("r"),
-            "$TMPDIR": allow(),
-        },
-        net = [
-            domains({
-                "github.com": allow(),
-                "crates.io": allow(),
-                "*.crates.io": allow(),
-            }),
-        ],
-    )
+dev_sandbox = sandbox(
+    name = "dev",
+    default = deny(),
+    fs = {
+        subpath("$PWD", follow_worktrees = True): allow("rwc"),
+        "$HOME/.cargo": allow("rwc"),
+        "$HOME/.rustup": allow("r"),
+        "$TMPDIR": allow(),
+    },
+    net = [
+        domains({
+            "github.com": allow(),
+            "crates.io": allow(),
+            "*.crates.io": allow(),
+        }),
+    ],
+)
 
-    return policy(default = ask(), rules = [
-        when({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox)}),
+settings(default = ask())
 
-        when({"Bash": {"git": {
+policy("default", {
+    ("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox),
+
+    "Bash": {
+        "git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
-        }}}),
-
-        when({"Bash": {"cargo": {
+        },
+        "cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(sandbox = dev_sandbox),
             "publish": deny(),
-        }}}),
-    ])
+        },
+    },
+})
 ```
 
 Now cargo can reach GitHub and crates.io but nothing else. The `*` prefix matches subdomains.
@@ -262,44 +271,46 @@ Clash ships with built-in rules for its own CLI and common Claude Code tools. In
 
 ```python
 load("@clash//builtin.star", "builtins")
-load("@clash//std.star", "allow", "ask", "deny", "domains", "when", "policy", "sandbox", "subpath")
+load("@clash//std.star", "allow", "ask", "deny", "domains", "merge", "policy", "sandbox", "subpath")
 
-def main():
-    dev_sandbox = sandbox(
-        name = "dev",
-        default = deny(),
-        fs = {
-            subpath("$PWD", follow_worktrees = True): allow("rwc"),
-            "$HOME/.cargo": allow("rwc"),
-            "$HOME/.rustup": allow("r"),
-            "$TMPDIR": allow(),
-        },
-        net = [
-            domains({
-                "github.com": allow(),
-                "crates.io": allow(),
-                "*.crates.io": allow(),
-            }),
-        ],
-    )
+dev_sandbox = sandbox(
+    name = "dev",
+    default = deny(),
+    fs = {
+        subpath("$PWD", follow_worktrees = True): allow("rwc"),
+        "$HOME/.cargo": allow("rwc"),
+        "$HOME/.rustup": allow("r"),
+        "$TMPDIR": allow(),
+    },
+    net = [
+        domains({
+            "github.com": allow(),
+            "crates.io": allow(),
+            "*.crates.io": allow(),
+        }),
+    ],
+)
 
-    return policy(default = ask(), rules = builtins + [
-        when({("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox)}),
+settings(default = ask())
 
-        when({"Bash": {"git": {
+policy("default", merge(builtins, {
+    ("Read", "Write", "Edit", "Glob", "Grep"): allow(sandbox = dev_sandbox),
+
+    "Bash": {
+        "git": {
             ("add", "commit", "diff", "log", "status", "branch"): allow(),
             "push": deny(),
             "reset": {"--hard": deny()},
-        }}}),
-
-        when({"Bash": {"cargo": {
+        },
+        "cargo": {
             ("build", "test", "check", "clippy", "fmt"): allow(sandbox = dev_sandbox),
             "publish": deny(),
-        }}}),
-    ])
+        },
+    },
+}))
 ```
 
-`builtins` is a list of rules. Prepending it with `builtins + [...]` puts the built-in rules first, then yours.
+`builtins` is a dict exported from `@clash//builtin.star`. Merging it puts the built-in rules into your policy alongside yours.
 
 ---
 

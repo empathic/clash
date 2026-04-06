@@ -19,14 +19,12 @@ sandbox(
 
 settings(default = deny())
 
-policy("git-ssh-protected",
-    rules = [
-        when({"Bash": {
-            "git": {"push": deny()},
-        }}),
-        when({"Bash": {
-            "git": allow(sandbox = "git_github"),
-        }}),
-        when({("Read", "Glob", "Grep"): allow()}),
-    ],
-)
+policy("git-ssh-protected", {
+    "Bash": {
+        "git": {
+            "push": deny(),
+            glob("**"): allow(sandbox = "git_github"),
+        },
+    },
+    ("Read", "Glob", "Grep"): allow(),
+})

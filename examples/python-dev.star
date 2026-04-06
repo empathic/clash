@@ -13,15 +13,11 @@ sandbox(
 
 settings(default = ask())
 
-policy("python-dev",
-    rules = [
-        when({"Bash": {
-            "git": {"push": {"--force": deny()}},
-        }}),
-        when({"Bash": {
-            ("python", "python3", "pip", "uv", "pytest"): allow(sandbox = "python"),
-            "git": allow(),
-        }}),
-        when({("Read", "Glob", "Grep"): allow()}),
-    ],
-)
+policy("python-dev", {
+    "Bash": {
+        "git": {"push": {"--force": deny()}},
+        ("python", "python3", "pip", "uv", "pytest"): allow(sandbox = "python"),
+        "git": allow(),
+    },
+    ("Read", "Glob", "Grep"): allow(),
+})

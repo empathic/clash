@@ -18,16 +18,12 @@ sandbox(
 
 settings(default = ask())
 
-policy("rust-dev",
-    rules = [
-        when({"Bash": {
-            "git": {"push": {"--force": deny()}},
-        }}),
-        when({"Bash": {
-            ("cargo", "rustc", "rustfmt"): allow(sandbox = "rust"),
-            "rustup": allow(),
-            "git": allow(),
-        }}),
-        when({("Read", "Glob", "Grep"): allow()}),
-    ],
-)
+policy("rust-dev", {
+    "Bash": {
+        "git": {"push": {"--force": deny()}},
+        ("cargo", "rustc", "rustfmt"): allow(sandbox = "rust"),
+        "rustup": allow(),
+        "git": allow(),
+    },
+    ("Read", "Glob", "Grep"): allow(),
+})

@@ -15,13 +15,13 @@ In v0.3.x, policies declared rules inside fixed capability domains using s-expre
 
 In v0.4.0, the policy engine is a **match tree** — a trie of patterns that match against properties of each tool invocation (tool name, arguments, input fields). When a path through the tree reaches a leaf, it produces a decision (allow, deny, or ask) and optionally attaches a **sandbox** that constrains what the spawned process can access at the kernel level.
 
-The Starlark DSL provides `when()` and `domains()` that compile down to match tree nodes. Under the hood, every rule is a chain of "observe this value, match it against this pattern, then continue or decide."
+The Starlark DSL uses `policy()` with a dict and `merge()` for dict composition. Under the hood, every rule is a chain of "observe this value, match it against this pattern, then continue or decide."
 
 | | v0.3.x (s-expressions) | v0.4.0 (Starlark) |
 |---|---|---|
 | **Model** | Flat rules in fixed capability domains | Match tree: pattern match on invocation → decision |
 | **Evaluation** | Domain-grouped, specificity-based | First-match DFS walk through the tree |
-| **Composition** | Named policies with `(default ... "name")` | Starlark functions, variables, `load()` imports |
+| **Composition** | Named policies with `(default ... "name")` | Starlark dicts, `merge()`, `load()` imports |
 | **Sandbox** | Not available | Kernel-enforced filesystem + network constraints (Landlock/Seatbelt) |
 | **File format** | `.star` (s-expression syntax) | `.star` (Starlark/Python-like syntax) |
 
@@ -51,36 +51,39 @@ Or create `~/.clash/policy.star` manually — see the examples below.
 
 ```python
 # v0.4.0
-load("@clash//std.star", "allow", "deny", "when", "policy")
+settings(default = deny())
 
-def main():
-    return policy(default = deny(), rules = [
-        when({"Bash": {"git": {"push": deny()}}}),
-        when({"Bash": {"git": allow()}}),
-    ])
+policy("default", {
+    "Bash": {
+        "git": {
+            "push": deny(),
+            glob("**"): allow(),
+        },
+    },
+})
 ```
 
-Named policy blocks (`(policy "main" ...)`) are replaced by a single `main()` function that returns a `policy()` value. The `(default deny "name")` header becomes the `default` parameter (`default = deny()`).
+Named policy blocks (`(policy "main" ...)`) are replaced by a `policy()` call with a dict. The `(default deny "name")` header becomes `settings(default = deny())`.
 
 ### Exec rules
 
 | S-expression | Starlark |
 |---|---|
-| `(allow (exec "git" *))` | `when({"Bash": {"git": allow()}})` |
-| `(deny (exec "git" "push" *))` | `when({"Bash": {"git": {"push": deny()}}})` |
-| `(allow (exec "cargo" "test" *))` | `when({"Bash": {"cargo": {"test": allow()}}})` |
+| `(allow (exec "git" *))` | `{"Bash": {"git": allow()}}` |
+| `(deny (exec "git" "push" *))` | `{"Bash": {"git": {"push": deny()}}}` |
+| `(allow (exec "cargo" "test" *))` | `{"Bash": {"cargo": {"test": allow()}}}` |
 
-`when()` compiles to match tree nodes that observe the tool name (must be `Bash`) and then pattern-match against positional arguments extracted from the command string.
+Policy dicts compile to match tree nodes that observe the tool name (must be `Bash`) and then pattern-match against positional arguments extracted from the command string.
 
 ### Filesystem rules
 
 | S-expression | Starlark |
 |---|---|
-| `(allow (fs read (subpath "/project")))` | `when({"Read": allow()})`, `when({"Glob": allow()})`, `when({"Grep": allow()})` |
-| `(allow (fs (or read write) (subpath ".")))` | `when({("Read", "Write", "Edit", "Glob", "Grep"): allow()})` |
-| `(allow (fs read (subpath "$HOME/.ssh")))` | `when({"Bash": {"ssh": allow(sandbox=sandbox(fs={"$HOME/.ssh": allow("r")}))}})` |
+| `(allow (fs read (subpath "/project")))` | `{"Read": allow()}`, `{"Glob": allow()}`, `{"Grep": allow()}` |
+| `(allow (fs (or read write) (subpath ".")))` | `{("Read", "Write", "Edit", "Glob", "Grep"): allow()}` |
+| `(allow (fs read (subpath "$HOME/.ssh")))` | `{"Bash": {"ssh": allow(sandbox=sandbox(name="ssh", fs={"$HOME/.ssh": allow("r")}))}}` |
 
-`when()` matches agent tools by name. For path-scoped access, attach a `sandbox(fs=...)` to the `allow()` in the match rule. Working-directory access is expressed as `sandbox(fs={"$PWD": allow("r")})`.
+Policy dicts match agent tools by name. For path-scoped access, attach a `sandbox(fs=...)` to the `allow()` in the match rule. Working-directory access is expressed as `sandbox(name="cwd", fs={"$PWD": allow("r")})`.
 
 ### Network rules
 
@@ -104,16 +107,21 @@ Named policy blocks (`(policy "main" ...)`) are replaced by a single `main()` fu
 
 ```python
 # v0.4.0
-load("@clash//std.star", "allow", "deny", "when", "policy", "domains")
+settings(default = deny())
 
-def main():
-    return policy(default = deny(), rules = [
-        when({"Bash": {"git": {"push": deny()}}}),
-        when({"Bash": {"git": allow()}}),
-        when({"Bash": {"cargo": allow()}}),
-        when({("Read", "Glob", "Grep"): allow()}),
-        domains({"github.com": allow()}),
-    ])
+policy("default", merge(
+    {
+        "Bash": {
+            "git": {
+                "push": deny(),
+                glob("**"): allow(),
+            },
+            "cargo": allow(),
+        },
+        ("Read", "Glob", "Grep"): allow(),
+    },
+    domains({"github.com": allow()}),
+))
 ```
 
 **Rule order matters.** In v0.3.x, specificity determined which rule won. In v0.4.0, rules use **first-match semantics** — the first matching rule wins. Put specific denies before broad allows.
@@ -124,10 +132,10 @@ Claude Code's built-in format (used before Clash, or in v0.1.x with Clash) used 
 
 | Simple format | Starlark |
 |---|---|
-| `"Bash(git:*)"` in allow | `when({"Bash": {"git": allow()}})` |
-| `"Bash(rm:*)"` in deny | `when({"Bash": {"rm": deny()}})` |
-| `"Read(*)"` in allow | `when({("Read", "Glob", "Grep"): allow()})` |
-| `"Read(.env)"` in deny | Use `default = deny()` — only explicitly allowed tools can read files |
+| `"Bash(git:*)"` in allow | `{"Bash": {"git": allow()}}` |
+| `"Bash(rm:*)"` in deny | `{"Bash": {"rm": deny()}}` |
+| `"Read(*)"` in allow | `{("Read", "Glob", "Grep"): allow()}` |
+| `"Read(.env)"` in deny | Use `settings(default = deny())` — only explicitly allowed tools can read files |
 
 ### Full example
 
@@ -142,17 +150,18 @@ Claude Code's built-in format (used before Clash, or in v0.1.x with Clash) used 
 
 ```python
 # v0.4.0
-load("@clash//std.star", "allow", "deny", "when", "policy")
+settings(default = deny())
 
-def main():
-    return policy(default = deny(), rules = [
-        when({"Bash": {"rm": deny()}}),
-        when({"Bash": {"git": allow()}}),
-        when({("Read", "Glob", "Grep"): allow()}),
-    ])
+policy("default", {
+    "Bash": {
+        "rm": deny(),
+        "git": allow(),
+    },
+    ("Read", "Glob", "Grep"): allow(),
+})
 ```
 
-The `.env` deny is handled naturally by `default = deny()` — only explicitly allowed tools can read files.
+The `.env` deny is handled naturally by `settings(default = deny())` — only explicitly allowed tools can read files.
 
 ## Migrating from YAML profiles
 
@@ -177,22 +186,27 @@ profiles:
 
 ```python
 # v0.4.0
-load("@clash//std.star", "allow", "deny", "when", "policy")
+readonly_rules = {
+    ("Read", "Glob", "Grep"): allow(),
+}
 
-readonly_rules = [
-    when({("Read", "Glob", "Grep"): allow()}),
-]
+settings(default = deny())
 
-def main():
-    return policy(default = deny(), rules = [
-        *readonly_rules,
-        when({"Bash": {"git": {"push": {"--force": deny()}}}}),
-        when({"Bash": {"git": allow()}}),
-        when({"Bash": {"rm": deny()}}),
-    ])
+policy("default", merge(
+    readonly_rules,
+    {
+        "Bash": {
+            "git": {
+                "push": {"--force": deny()},
+                glob("**"): allow(),
+            },
+            "rm": deny(),
+        },
+    },
+))
 ```
 
-Profile inheritance (`include: readonly`) becomes list splicing (`*readonly_rules`). For cross-file reuse, use `load()`:
+Profile inheritance (`include: readonly`) becomes `merge()`. For cross-file reuse, use `load()`:
 
 ```python
 load("readonly.star", "readonly_rules")
@@ -203,9 +217,15 @@ load("readonly.star", "readonly_rules")
 YAML used `args: ["!--force"]` to forbid specific flags. In Starlark, express this as a deny rule for the specific argument placed before the allow:
 
 ```python
-when({"Bash": {"git": {"push": {"--force": deny()}}}})
-when({"Bash": {"git": {"reset": {"--hard": deny()}}}})
-when({"Bash": {"git": allow()}})
+policy("default", {
+    "Bash": {
+        "git": {
+            "push": {"--force": deny()},
+            "reset": {"--hard": deny()},
+            glob("**"): allow(),
+        },
+    },
+})
 ```
 
 ### URL constraints
@@ -226,9 +246,9 @@ domains({"github.com": allow(), "evil.com": deny()})
 ## Key differences to remember
 
 1. **First-match, not specificity.** In v0.3.x, more-specific rules won regardless of order. In v0.4.0, the first matching rule wins — order your rules deliberately.
-2. **Match tree, not capability domains.** `when()` and `domains()` compile down to a general-purpose match tree. Under the hood, rules pattern-match on observable properties of tool invocations (tool name, arguments, file paths, URLs).
+2. **Match tree, not capability domains.** Policy dicts compile down to a general-purpose match tree. Under the hood, rules pattern-match on observable properties of tool invocations (tool name, arguments, file paths, URLs).
 3. **Sandboxes are new.** You can attach kernel-enforced filesystem and network constraints to any exec rule via `allow(sandbox=...)` — see the [Policy Writing Guide](policy-guide.md#sandbox-policies).
-4. **No profiles or named policies.** Use Starlark variables, functions, and `load()` imports for composition.
+4. **No profiles or named policies.** Use Starlark variables, `merge()`, and `load()` imports for composition.
 5. **Validate after migrating.** Run `clash policy validate` to catch errors before they block your session.
 
 ## File locations
@@ -247,4 +267,5 @@ If you had a `.yaml` policy from an earlier format, that is also no longer read.
 - `clash init` — generate a starter policy interactively
 - `clash policy validate` — check your policy for errors
 - `clash policy show` — view the compiled policy
+- `clash policy migrate` — automatically migrate deprecated `when()`-based policies
 - [Policy Writing Guide](policy-guide.md) — full reference with recipes and examples
