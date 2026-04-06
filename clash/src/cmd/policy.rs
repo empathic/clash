@@ -49,6 +49,7 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
             bin,
             scope,
         } => handle_remove(command, tool, bin, scope),
+        PolicyCmd::Migrate { scope, yes } => handle_migrate(scope, yes),
     }
 }
 
@@ -1332,6 +1333,204 @@ fn handle_convert(file: Option<PathBuf>, replace: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Migrate
+// ---------------------------------------------------------------------------
+
+/// Handle `clash policy migrate` — upgrade old syntax and add `from_claude_settings()`.
+fn handle_migrate(scope: Option<String>, yes: bool) -> Result<()> {
+    let path = resolve_manifest_path(scope)?;
+
+    if !path
+        .extension()
+        .is_some_and(|ext| ext == "star")
+    {
+        anyhow::bail!(
+            "policy file is not .star format: {}\nRun `clash policy convert` first to migrate from JSON.",
+            path.display()
+        );
+    }
+
+    let source = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    // Detect what needs migration
+    let needs_when = source.contains("when(");
+    let needs_rules = source.contains("rules=") || source.contains("rules =");
+    let needs_claude_settings = !source.contains("from_claude_settings");
+
+    if !needs_when && !needs_rules && !needs_claude_settings {
+        eprintln!(
+            "{} Policy is already up to date — no migration needed.",
+            style::green_bold("✓"),
+        );
+        return Ok(());
+    }
+
+    // Report what we found
+    eprintln!("{}", style::bold("Migration report:"));
+    if needs_when {
+        eprintln!(
+            "  {} Found deprecated when() syntax — please convert to dict syntax manually",
+            style::yellow_bold("!"),
+        );
+    }
+    if needs_rules {
+        eprintln!(
+            "  {} Found deprecated rules= syntax — please convert to dict syntax manually",
+            style::yellow_bold("!"),
+        );
+    }
+
+    // For when()/rules= we only warn — full AST conversion is complex.
+    // We *do* automatically add from_claude_settings() wrapping.
+    if !needs_claude_settings {
+        if needs_when || needs_rules {
+            eprintln!(
+                "\n{} from_claude_settings() is already present. Manual migration of when()/rules= is required.",
+                style::green_bold("✓"),
+            );
+        }
+        return Ok(());
+    }
+
+    // --- Auto-migration: add from_claude_settings() ---
+    eprintln!(
+        "  {} Will add from_claude_settings() to import your Claude settings",
+        style::green_bold("+"),
+    );
+
+    let mut doc = clash_starlark::codegen::document::StarDocument::open(&path)?;
+
+    // 1. Add the load statement for from_claude_settings
+    add_claude_compat_load(&mut doc.stmts);
+
+    // 2. Wrap the policy() dict argument in merge(from_claude_settings(), ...)
+    wrap_policy_with_merge(&mut doc.stmts);
+
+    // Ensure merge is loaded
+    clash_starlark::codegen::mutate::ensure_loaded(&mut doc.stmts, "merge");
+
+    let new_source = doc.to_source();
+
+    // Validate by evaluating
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+    clash_starlark::evaluate(&new_source, &path.display().to_string(), base_dir)
+        .context("migrated policy failed validation — aborting")?;
+
+    // Show diff
+    eprintln!("\n{}", style::bold("Changes:"));
+    for line in diff_lines(&source, &new_source) {
+        eprintln!("{line}");
+    }
+
+    // Confirm
+    let confirmed = crate::dialog::confirm("Apply migration?", yes)?;
+    if !confirmed {
+        eprintln!("Migration cancelled.");
+        return Ok(());
+    }
+
+    std::fs::write(&path, &new_source)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    eprintln!(
+        "{} Migrated {}",
+        style::green_bold("✓"),
+        path.display()
+    );
+
+    Ok(())
+}
+
+/// Add `load("@clash//claude_compat.star", "from_claude_settings")` if not present.
+fn add_claude_compat_load(stmts: &mut Vec<clash_starlark::codegen::ast::Stmt>) {
+    use clash_starlark::codegen::ast::Stmt;
+
+    let compat_module = "@clash//claude_compat.star";
+
+    // Check if the load already exists
+    for stmt in stmts.iter() {
+        if let Stmt::Load { module, names } = stmt {
+            if module == compat_module && names.iter().any(|n| n == "from_claude_settings") {
+                return;
+            }
+        }
+    }
+
+    // Find the last load statement to insert after it
+    let insert_pos = stmts
+        .iter()
+        .rposition(|s| matches!(s, Stmt::Load { .. }))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+
+    stmts.insert(
+        insert_pos,
+        Stmt::load(compat_module, &["from_claude_settings"]),
+    );
+}
+
+/// Wrap the first argument of `policy(name, ...)` in `merge(from_claude_settings(), ...)`.
+fn wrap_policy_with_merge(stmts: &mut Vec<clash_starlark::codegen::ast::Stmt>) {
+    use clash_starlark::codegen::ast::{Expr, Stmt};
+
+    for stmt in stmts.iter_mut() {
+        let is_policy_call = matches!(
+            stmt,
+            Stmt::Expr(Expr::Call { func, args, .. })
+                if matches!(func.as_ref(), Expr::Ident(n) if n == "policy")
+                    && args.len() >= 2
+        );
+        if !is_policy_call {
+            continue;
+        }
+        if let Stmt::Expr(Expr::Call { args, .. }) = stmt {
+            // Check if already wrapped in merge()
+            let already_merged = matches!(
+                &args[1],
+                Expr::Call { func, .. } if matches!(func.as_ref(), Expr::Ident(n) if n == "merge")
+            );
+            if already_merged {
+                return;
+            }
+            // Wrap: policy("name", X) → policy("name", merge(from_claude_settings(), X))
+            let existing = args[1].clone();
+            let fcs = Expr::Call {
+                func: Box::new(Expr::Ident("from_claude_settings".to_string())),
+                args: vec![],
+                kwargs: vec![],
+            };
+            let merged = Expr::Call {
+                func: Box::new(Expr::Ident("merge".to_string())),
+                args: vec![fcs, existing],
+                kwargs: vec![],
+            };
+            args[1] = merged;
+            return;
+        }
+    }
+}
+
+/// Produce a simple line-by-line diff for display.
+fn diff_lines(old: &str, new: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+
+    // Simple diff: show removed and added lines
+    for line in &old_lines {
+        if !new_lines.contains(line) {
+            result.push(format!("  {} {line}", style::red("-")));
+        }
+    }
+    for line in &new_lines {
+        if !old_lines.contains(line) {
+            result.push(format!("  {} {line}", style::green_bold("+")));
+        }
+    }
+    result
 }
 
 /// Extract a help hint from an anyhow error chain.
