@@ -238,6 +238,270 @@ impl PolicySpec {
         }
     }
 
+    /// Build a spec from a session trace analysis.
+    ///
+    /// Moves the rule-building logic from `from_trace::generate_starlark` into the
+    /// spec pipeline. The caller provides a `TraceAnalysis` with observed tools and
+    /// binaries; we categorize them into sandboxed FS rules, net rules, git safety
+    /// denies, and binary-specific sandbox rules.
+    pub(crate) fn from_trace(
+        analysis: &crate::cmd::from_trace::TraceAnalysis,
+    ) -> Self {
+        use crate::policy_gen::sandboxes::PROJECT_FILES_SANDBOX;
+        use crate::policy_gen::tools::{
+            FS_READ_TOOLS, FS_WRITE_TOOLS, NET_TOOLS, is_categorized_tool,
+        };
+        use clash_starlark::codegen::builder::*;
+
+        // Categorize tools
+        let read_tools: Vec<&str> = FS_READ_TOOLS
+            .iter()
+            .filter(|t| analysis.tools.contains(**t))
+            .copied()
+            .collect();
+        let write_tools: Vec<&str> = FS_WRITE_TOOLS
+            .iter()
+            .filter(|t| analysis.tools.contains(**t))
+            .copied()
+            .collect();
+        let net_tools: Vec<&str> = NET_TOOLS
+            .iter()
+            .filter(|t| analysis.tools.contains(**t))
+            .copied()
+            .collect();
+        let other_tools: Vec<&String> = analysis
+            .tools
+            .iter()
+            .filter(|t| !is_categorized_tool(t))
+            .collect();
+
+        let mut rules: Vec<PolicyRule> = vec![];
+
+        // Read-only fs tools — sandboxed to project_files
+        if !read_tools.is_empty() {
+            let expr = tool_match(
+                &read_tools,
+                allow_with_sandbox(Expr::ident(PROJECT_FILES_SANDBOX)),
+            );
+            rules.push(PolicyRule {
+                expr: Expr::commented("Read-only fs tools — observed in session", expr),
+            });
+        }
+
+        // Write fs tools — sandboxed to project_files
+        if !write_tools.is_empty() {
+            let expr = tool_match(
+                &write_tools,
+                allow_with_sandbox(Expr::ident(PROJECT_FILES_SANDBOX)),
+            );
+            rules.push(PolicyRule {
+                expr: Expr::commented("Write fs tools — observed in session", expr),
+            });
+        }
+
+        // Network tools — prompt user (safer default)
+        if !net_tools.is_empty() {
+            let expr = tool_match(&net_tools, ask());
+            rules.push(PolicyRule {
+                expr: Expr::commented("Network tools — prompt before allowing", expr),
+            });
+        }
+
+        // Other tools (e.g., Agent) — allow without sandbox
+        for t in &other_tools {
+            rules.push(PolicyRule {
+                expr: tool_match(&[t.as_str()], allow()),
+            });
+        }
+
+        // Deny destructive git ops if git was observed
+        if analysis.binaries.contains("git") {
+            let expr = clash_starlark::match_tree! {
+                "Bash" => {
+                    "git" => {
+                        "push" => {
+                            "--force" => deny(),
+                            "--force-with-lease" => deny(),
+                        },
+                        "reset" => {
+                            "--hard" => deny(),
+                        },
+                    },
+                },
+            };
+            rules.push(PolicyRule {
+                expr: Expr::commented("Deny destructive git ops", expr),
+            });
+        }
+
+        // Binary-specific rules — sandboxed to the "project" preset
+        if !analysis.binaries.is_empty() {
+            let bins: Vec<&str> =
+                analysis.binaries.iter().map(|s| s.as_str()).collect();
+            let key: MatchKey = if bins.len() == 1 {
+                bins[0].into()
+            } else {
+                bins.as_slice().into()
+            };
+            let expr = clash_starlark::match_tree! {
+                "Bash" => {
+                    key => allow_with_sandbox(Expr::ident("project")),
+                },
+            };
+            rules.push(PolicyRule {
+                expr: Expr::commented("Observed binaries — sandboxed", expr),
+            });
+        }
+
+        // Generic Bash fallback when Bash was observed but no specific binaries extracted
+        let saw_bash = analysis.total_invocations > 0
+            && analysis.binaries.is_empty()
+            && analysis.tools.len() < analysis.total_invocations;
+        if saw_bash {
+            let expr = clash_starlark::match_tree! {
+                "Bash" => allow_with_sandbox(Expr::ident("project")),
+            };
+            rules.push(PolicyRule {
+                expr: Expr::commented(
+                    "Bash commands observed (binaries unknown) — sandboxed",
+                    expr,
+                ),
+            });
+        }
+
+        Self {
+            name: "default".to_string(),
+            default_effect: "ask".to_string(),
+            default_sandbox: Some("project_files".to_string()),
+            define_project_files_sandbox: true,
+            sandbox_presets: vec!["project".to_string()],
+            ecosystems: vec![],
+            mode_routing: false,
+            rules,
+            include_claude_settings: false,
+            auto_ecosystem_rules: false,
+            canonicalize: false,
+            header_comment: None,
+            emit_settings: true,
+        }
+    }
+
+    /// Build a spec for mode-based routing from detected ecosystems.
+    ///
+    /// Produces a policy with plan/edit+default/unrestricted modes, where each
+    /// mode has its own sandbox level and ecosystem-specific bash routing.
+    pub fn from_ecosystems(ecosystems: &[&'static EcosystemDef]) -> Self {
+        // Only base presets go in sandbox_presets (loaded from sandboxes.star).
+        // Ecosystem-specific sandboxes are handled by standard_loads via the
+        // ecosystems field.
+        let sandbox_presets: Vec<String> =
+            vec!["readonly".into(), "project".into(), "workspace".into()];
+
+        Self {
+            name: "default".to_string(),
+            default_effect: "deny".to_string(),
+            default_sandbox: None,
+            define_project_files_sandbox: false,
+            sandbox_presets,
+            ecosystems: ecosystems.to_vec(),
+            mode_routing: true,
+            rules: vec![],
+            // NOTE: from_claude_settings() produces nodes whose JSON shape
+            // ("children" at top level) is incompatible with compile_to_tree().
+            // Disabled until that compatibility issue is resolved.
+            include_claude_settings: false,
+            auto_ecosystem_rules: false,
+            canonicalize: false,
+            header_comment: None,
+            emit_settings: false,
+        }
+    }
+
+    /// Build the mode-routing dict for plan/edit+default/unrestricted modes.
+    fn build_mode_dict(&self) -> Expr {
+        let mut mode_entries: Vec<DictEntry> = Vec::new();
+
+        // Plan mode: readonly catch-all + ecosystem bash routing with safe sandboxes
+        let plan_bash = Self::build_bash_routing(&self.ecosystems, true);
+        let mut plan_inner = vec![DictEntry::new(
+            Expr::call("glob", vec![Expr::string("**")]),
+            allow_with_sandbox(Expr::ident("readonly")),
+        )];
+        if !plan_bash.is_empty() {
+            plan_inner.push(DictEntry::new(
+                Expr::call("Tool", vec![Expr::string("Bash")]),
+                Expr::dict(plan_bash),
+            ));
+        }
+        mode_entries.push(DictEntry::new(
+            Expr::call("mode", vec![Expr::string("plan")]),
+            Expr::dict(plan_inner),
+        ));
+
+        // Edit/default mode: project catch-all + ecosystem bash routing with full sandboxes
+        let edit_bash = Self::build_bash_routing(&self.ecosystems, false);
+        let mut edit_inner = vec![DictEntry::new(
+            Expr::call("glob", vec![Expr::string("**")]),
+            allow_with_sandbox(Expr::ident("project")),
+        )];
+        if !edit_bash.is_empty() {
+            edit_inner.push(DictEntry::new(
+                Expr::call("Tool", vec![Expr::string("Bash")]),
+                Expr::dict(edit_bash),
+            ));
+        }
+        mode_entries.push(DictEntry::new(
+            Expr::tuple(vec![
+                Expr::call("mode", vec![Expr::string("edit")]),
+                Expr::call("mode", vec![Expr::string("default")]),
+            ]),
+            Expr::dict(edit_inner),
+        ));
+
+        // Unrestricted mode: workspace catch-all
+        mode_entries.push(DictEntry::new(
+            Expr::call("mode", vec![Expr::string("unrestricted")]),
+            Expr::dict(vec![DictEntry::new(
+                Expr::call("glob", vec![Expr::string("**")]),
+                allow_with_sandbox(Expr::ident("workspace")),
+            )]),
+        ));
+
+        Expr::dict(mode_entries)
+    }
+
+    /// Build Bash routing entries for ecosystems.
+    /// If `use_safe` is true, prefer `_safe` variants (plan mode).
+    fn build_bash_routing(
+        ecosystems: &[&'static EcosystemDef],
+        use_safe: bool,
+    ) -> Vec<DictEntry> {
+        let mut entries = Vec::new();
+
+        for eco in ecosystems {
+            let sandbox_name = if use_safe {
+                eco.safe_sandbox.unwrap_or(eco.full_sandbox)
+            } else {
+                eco.full_sandbox
+            };
+
+            let key = if eco.binaries.len() == 1 {
+                Expr::string(eco.binaries[0])
+            } else {
+                Expr::tuple(eco.binaries.iter().map(|b| Expr::string(*b)).collect())
+            };
+
+            let glob_entry = DictEntry::new(
+                Expr::call("glob", vec![Expr::string("**")]),
+                allow_with_sandbox(Expr::ident(sandbox_name)),
+            );
+
+            entries.push(DictEntry::new(key, Expr::dict(vec![glob_entry])));
+        }
+
+        entries
+    }
+
     /// Generate the Starlark source from this spec.
     pub fn to_starlark(&self) -> String {
         let mut stmts = Vec::new();
@@ -276,31 +540,56 @@ impl PolicySpec {
             stmts.push(Stmt::Blank);
         }
 
-        // Build rules list
-        let mut rules: Vec<Expr> = Vec::new();
+        if self.mode_routing {
+            // Mode-based routing: use the dict form of policy() with the mode
+            // dict as the second positional arg, plus a rules= kwarg for
+            // from_claude_settings() and any custom rules.
+            let mode_dict = self.build_mode_dict();
 
-        // from_claude_settings() rule
-        if self.include_claude_settings {
-            rules.push(Expr::call("from_claude_settings", vec![]));
+            let mut kwargs: Vec<(&str, Expr)> = Vec::new();
+
+            // Collect rules for the rules= kwarg
+            let mut rules: Vec<Expr> = Vec::new();
+            if self.include_claude_settings {
+                rules.push(Expr::call("from_claude_settings", vec![]));
+            }
+            for rule in &self.rules {
+                rules.push(rule.expr.clone());
+            }
+            if !rules.is_empty() {
+                kwargs.push(("rules", Expr::list(rules)));
+            }
+
+            stmts.push(Stmt::Expr(Expr::call_kwargs(
+                "policy",
+                vec![Expr::string(&self.name), mode_dict],
+                kwargs,
+            )));
+        } else {
+            // Standard rules-based policy.
+            let mut rules: Vec<Expr> = Vec::new();
+
+            if self.include_claude_settings {
+                rules.push(Expr::call("from_claude_settings", vec![]));
+            }
+
+            // Ecosystem rules (non-mode-routing, auto only)
+            if self.auto_ecosystem_rules && !self.ecosystems.is_empty() {
+                let fs_sandbox = self
+                    .default_sandbox
+                    .as_deref()
+                    .unwrap_or(sandboxes::PROJECT_FILES_SANDBOX);
+                rules.extend(ecosystems::ecosystem_rules(&eco_refs, fs_sandbox));
+            }
+
+            // Custom rules
+            for rule in &self.rules {
+                rules.push(rule.expr.clone());
+            }
+
+            let default_expr = Expr::call(&self.default_effect, vec![]);
+            stmts.push(Stmt::Expr(policy(&self.name, default_expr, rules, None)));
         }
-
-        // Ecosystem rules (non-mode-routing, auto only)
-        if self.auto_ecosystem_rules && !self.mode_routing && !self.ecosystems.is_empty() {
-            let fs_sandbox = self
-                .default_sandbox
-                .as_deref()
-                .unwrap_or(sandboxes::PROJECT_FILES_SANDBOX);
-            rules.extend(ecosystems::ecosystem_rules(&eco_refs, fs_sandbox));
-        }
-
-        // Custom rules
-        for rule in &self.rules {
-            rules.push(rule.expr.clone());
-        }
-
-        // Policy call
-        let default_expr = Expr::call(&self.default_effect, vec![]);
-        stmts.push(Stmt::Expr(policy(&self.name, default_expr, rules, None)));
 
         // Canonicalize
         if self.canonicalize {
@@ -443,6 +732,84 @@ mod tests {
     }
 
     #[test]
+    fn from_trace_produces_valid_starlark() {
+        use std::collections::BTreeSet;
+        let analysis = crate::cmd::from_trace::TraceAnalysis {
+            total_invocations: 5,
+            tools: BTreeSet::from(["Read".into(), "Write".into(), "Grep".into()]),
+            binaries: BTreeSet::from(["git".into(), "cargo".into()]),
+        };
+
+        let spec = PolicySpec::from_trace(&analysis);
+        let code = spec.to_starlark();
+
+        let result = eval(&code);
+        assert!(
+            result.is_ok(),
+            "from_trace should produce evaluable Starlark: {:?}\n\nGenerated:\n{}",
+            result.err(),
+            code,
+        );
+
+        // Should include project_files sandbox definition
+        assert!(
+            code.contains("project_files"),
+            "output should define project_files sandbox\n\nGenerated:\n{}",
+            code,
+        );
+
+        // Should include tool rules
+        assert!(
+            code.contains("allow(sandbox = project_files)"),
+            "should sandbox fs tools to project_files\n\nGenerated:\n{}",
+            code,
+        );
+
+        // Should include git safety denies
+        assert!(
+            code.contains("deny()"),
+            "should deny destructive git ops\n\nGenerated:\n{}",
+            code,
+        );
+
+        // Should include settings with ask default
+        assert!(
+            code.contains("settings("),
+            "should include settings call\n\nGenerated:\n{}",
+            code,
+        );
+        assert!(
+            code.contains("default = ask()"),
+            "should use ask() as default\n\nGenerated:\n{}",
+            code,
+        );
+    }
+
+    #[test]
+    fn from_trace_no_claude_settings() {
+        use std::collections::BTreeSet;
+        let analysis = crate::cmd::from_trace::TraceAnalysis {
+            total_invocations: 1,
+            tools: BTreeSet::from(["Read".into()]),
+            binaries: BTreeSet::new(),
+        };
+
+        let spec = PolicySpec::from_trace(&analysis);
+        let code = spec.to_starlark();
+
+        assert!(
+            !code.contains("from_claude_settings"),
+            "from_trace should not include from_claude_settings\n\nGenerated:\n{}",
+            code,
+        );
+        assert!(
+            !code.contains("claude_compat.star"),
+            "from_trace should not load claude_compat.star\n\nGenerated:\n{}",
+            code,
+        );
+    }
+
+    #[test]
     fn from_posture_all_effects() {
         for (effect, preset) in [
             ("deny", "readonly"),
@@ -464,5 +831,76 @@ mod tests {
                 code,
             );
         }
+    }
+
+    #[test]
+    fn from_ecosystems_produces_valid_starlark() {
+        let rust = crate::ecosystem::ECOSYSTEMS
+            .iter()
+            .find(|e| e.name == "rust")
+            .unwrap();
+        let git = crate::ecosystem::ECOSYSTEMS
+            .iter()
+            .find(|e| e.name == "git")
+            .unwrap();
+
+        let spec = PolicySpec::from_ecosystems(&[git, rust]);
+        let code = spec.to_starlark();
+
+        let result = eval(&code);
+        assert!(
+            result.is_ok(),
+            "from_ecosystems should produce evaluable Starlark: {:?}\n\nGenerated:\n{}",
+            result.err(),
+            code,
+        );
+
+        // Should have mode-based routing
+        assert!(code.contains("mode(\"plan\")"), "should have plan mode\n\nGenerated:\n{}", code);
+        assert!(code.contains("mode(\"edit\")"), "should have edit mode\n\nGenerated:\n{}", code);
+        assert!(code.contains("mode(\"unrestricted\")"), "should have unrestricted mode\n\nGenerated:\n{}", code);
+
+        // Should have ecosystem sandboxes
+        assert!(code.contains("rust_safe"), "should have rust_safe\n\nGenerated:\n{}", code);
+        assert!(code.contains("rust_full"), "should have rust_full\n\nGenerated:\n{}", code);
+        assert!(code.contains("git_safe"), "should have git_safe\n\nGenerated:\n{}", code);
+        assert!(code.contains("git_full"), "should have git_full\n\nGenerated:\n{}", code);
+
+        // Should not emit settings
+        assert!(!code.contains("settings("), "should not emit settings()\n\nGenerated:\n{}", code);
+
+        // Should have base sandbox presets
+        assert!(code.contains("readonly"), "should have readonly\n\nGenerated:\n{}", code);
+        assert!(code.contains("project"), "should have project\n\nGenerated:\n{}", code);
+        assert!(code.contains("workspace"), "should have workspace\n\nGenerated:\n{}", code);
+    }
+
+    #[test]
+    fn from_ecosystems_empty() {
+        let spec = PolicySpec::from_ecosystems(&[]);
+        let code = spec.to_starlark();
+
+        let result = eval(&code);
+        assert!(
+            result.is_ok(),
+            "from_ecosystems with no ecosystems should evaluate: {:?}\n\nGenerated:\n{}",
+            result.err(),
+            code,
+        );
+    }
+
+    #[test]
+    fn from_ecosystems_compiles() {
+        let rust = crate::ecosystem::ECOSYSTEMS
+            .iter()
+            .find(|e| e.name == "rust")
+            .unwrap();
+
+        let spec = PolicySpec::from_ecosystems(&[rust]);
+        let code = spec.to_starlark();
+
+        let output = eval(&code).expect("should evaluate");
+        crate::policy::compile::compile_to_tree(&output.json)
+            .expect("from_ecosystems policy should compile");
     }
 }
