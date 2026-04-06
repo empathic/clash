@@ -94,6 +94,7 @@ fn run_diagnose() -> Result<()> {
         ("Binary on PATH", check_binary_on_path()),
         ("File permissions", check_file_permissions()),
         ("Sandbox support", check_sandbox_support()),
+        ("Policy syntax", check_deprecated_syntax()),
     ];
 
     let mut fail_count = 0;
@@ -143,6 +144,7 @@ fn run_diagnose_agent(agent: crate::agents::AgentKind) -> Result<()> {
         ("Policy files", check_policy_files()),
         ("Policy parsing", check_policy_parsing()),
         ("Sandbox support", check_sandbox_support()),
+        ("Policy syntax", check_deprecated_syntax()),
     ];
 
     let mut fail_count = 0;
@@ -673,6 +675,49 @@ fn check_sandbox_support() -> CheckResult {
             reason
         )),
     }
+}
+
+/// Check 7: Does the policy use deprecated when()/rules= syntax or lack from_claude_settings()?
+fn check_deprecated_syntax() -> CheckResult {
+    let policy_path = match ClashSettings::policy_file() {
+        Ok(p) => p.with_extension("star"),
+        Err(_) => return CheckResult::Pass("No policy file configured.".into()),
+    };
+
+    if !policy_path.exists() {
+        return CheckResult::Pass("No Starlark policy file found.".into());
+    }
+
+    let source = match std::fs::read_to_string(&policy_path) {
+        Ok(s) => s,
+        Err(_) => return CheckResult::Pass("Could not read policy file.".into()),
+    };
+
+    let has_when = source.contains("when(");
+    let has_rules = source.contains("rules=") || source.contains("rules =");
+
+    if has_when || has_rules {
+        return CheckResult::Warn(format!(
+            "Policy uses deprecated {} syntax. Run `clash policy migrate` to update.",
+            if has_when && has_rules {
+                "when() and rules="
+            } else if has_when {
+                "when()"
+            } else {
+                "rules="
+            }
+        ));
+    }
+
+    if !source.contains("from_claude_settings") {
+        return CheckResult::Warn(
+            "Policy does not use from_claude_settings(). \
+             Run `clash policy migrate` to add dynamic Claude settings import."
+                .into(),
+        );
+    }
+
+    CheckResult::Pass("Policy syntax is up to date.".into())
 }
 
 #[cfg(test)]
