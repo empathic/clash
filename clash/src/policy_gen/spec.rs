@@ -700,8 +700,8 @@ mod tests {
             code,
         );
         assert!(
-            code.contains("when("),
-            "output should include when() rules\n\nGenerated:\n{}",
+            code.contains("\"Bash\""),
+            "output should include Bash routing\n\nGenerated:\n{}",
             code,
         );
 
