@@ -3,13 +3,16 @@
 //! Every generator (from_posture, from_trace, from_manifest, etc.) builds a
 //! `PolicySpec`, then calls `to_starlark()` to produce the final output.
 
-use clash_starlark::codegen::ast::{Expr, Stmt};
+use std::collections::BTreeSet;
+
+use clash_starlark::codegen::ast::{DictEntry, Expr, Stmt};
 use clash_starlark::codegen::builder::*;
 
 use crate::ecosystem::EcosystemDef;
 use crate::policy_gen::ecosystems;
 use crate::policy_gen::loads;
 use crate::policy_gen::sandboxes;
+use crate::policy_gen::tools::{FS_ALL_TOOLS, is_fs_tool};
 
 /// A custom rule to include in the generated policy.
 #[derive(Debug, Clone)]
@@ -40,6 +43,9 @@ pub struct PolicySpec {
     pub rules: Vec<PolicyRule>,
     /// Whether to include `from_claude_settings()` in rules.
     pub include_claude_settings: bool,
+    /// Whether to auto-generate ecosystem routing rules in `to_starlark()`.
+    /// Set to false when the caller builds ecosystem rules manually (e.g. from_analysis).
+    pub auto_ecosystem_rules: bool,
     /// Whether to canonicalize the output.
     pub canonicalize: bool,
     /// Optional header comment.
@@ -65,8 +71,169 @@ impl PolicySpec {
             mode_routing: false,
             rules: vec![],
             include_claude_settings: true,
+            auto_ecosystem_rules: true,
             canonicalize: false,
             header_comment: None,
+            emit_settings: true,
+        }
+    }
+
+    /// Build a spec from an import analysis (Claude Code settings).
+    ///
+    /// Moves the rule-building logic from `generate_starlark_from_analysis`
+    /// into the spec pipeline. The caller passes a mutable analysis (for
+    /// dedup/filtering) and the detected ecosystems.
+    pub(crate) fn from_analysis(
+        analysis: &mut crate::cmd::import_settings::ImportAnalysis,
+        ecosystems: &[&'static EcosystemDef],
+    ) -> Self {
+        // Deduplicate tool lists
+        dedup_stable(&mut analysis.tool_allows);
+        dedup_stable(&mut analysis.tool_denies);
+        dedup_stable(&mut analysis.tool_asks);
+
+        // Collect ecosystem binary names so we can filter them from import
+        // rules. Ecosystem sandboxes have proper toolchain access while the
+        // generic project_files sandbox does not.
+        let eco_binaries: BTreeSet<&str> = ecosystems
+            .iter()
+            .flat_map(|e| e.binaries.iter().copied())
+            .collect();
+
+        // Remove ecosystem-covered binaries from bash_allows.
+        analysis.bash_allows.retain(|segs| {
+            segs.first()
+                .map_or(true, |bin| !eco_binaries.contains(bin.as_str()))
+        });
+
+        // Build rules list in order: denies → ecosystems → allows → asks.
+        let mut rules: Vec<PolicyRule> = vec![];
+
+        // 1. File denies
+        for (tool, path) in &analysis.file_denies {
+            let expr = match_rule(vec![(
+                tool.as_str().into(),
+                MatchValue::Nested(vec![(
+                    path.as_str().into(),
+                    MatchValue::Effect(deny()),
+                )]),
+            )]);
+            rules.push(PolicyRule {
+                expr: Expr::commented(
+                    &format!("deny {} on {}", tool, path),
+                    expr,
+                ),
+            });
+        }
+
+        // 2. Bash denies
+        if !analysis.bash_denies.is_empty() {
+            let expr = match_rule(vec![build_bash_entry(
+                &analysis.bash_denies,
+                deny(),
+            )]);
+            rules.push(PolicyRule {
+                expr: Expr::commented("denied bash commands", expr),
+            });
+        }
+
+        // 3. Tool denies
+        if !analysis.tool_denies.is_empty() {
+            let names: Vec<&str> =
+                analysis.tool_denies.iter().map(|s| s.as_str()).collect();
+            rules.push(PolicyRule {
+                expr: match_rule(vec![tool_entry(&names, deny())]),
+            });
+        }
+
+        // 4. Ecosystem sandbox routing
+        let eco_rules = ecosystems::ecosystem_rules(
+            ecosystems,
+            sandboxes::PROJECT_FILES_SANDBOX,
+        );
+        for expr in eco_rules {
+            rules.push(PolicyRule { expr });
+        }
+
+        // 5–7. Allow rules — comment only the first, leave the rest
+        //       uncommented so MergeConsecutiveWhens collapses them.
+        let mut allow_rules: Vec<Expr> = vec![];
+
+        if !analysis.bash_allows.is_empty() {
+            allow_rules.push(match_rule(vec![build_bash_entry(
+                &analysis.bash_allows,
+                allow_with_sandbox(Expr::ident(sandboxes::PROJECT_FILES_SANDBOX)),
+            )]));
+        }
+
+        let fs_tool_names: Vec<&str> = FS_ALL_TOOLS
+            .iter()
+            .filter(|t| analysis.tool_allows.contains(&t.to_string()))
+            .copied()
+            .collect();
+        if !fs_tool_names.is_empty() {
+            allow_rules.push(match_rule(vec![tool_entry(
+                &fs_tool_names,
+                allow_with_sandbox(Expr::ident(sandboxes::PROJECT_FILES_SANDBOX)),
+            )]));
+        }
+
+        let other_allows: Vec<&str> = analysis
+            .tool_allows
+            .iter()
+            .filter(|t| !is_fs_tool(t) && t.as_str() != "Bash")
+            .map(|s| s.as_str())
+            .collect();
+        if !other_allows.is_empty() {
+            allow_rules.push(match_rule(vec![tool_entry(
+                &other_allows,
+                allow(),
+            )]));
+        }
+
+        // Comment only the first allow rule; the rest stay bare for merging.
+        if let Some(first) = allow_rules.first_mut() {
+            *first = Expr::commented("allowed (sandboxed)", first.clone());
+        }
+        for expr in allow_rules {
+            rules.push(PolicyRule { expr });
+        }
+
+        // 8–9. Ask rules — same pattern: comment the first only.
+        let mut ask_rules: Vec<Expr> = vec![];
+
+        if !analysis.bash_asks.is_empty() {
+            ask_rules.push(match_rule(vec![build_bash_entry(
+                &analysis.bash_asks,
+                ask(),
+            )]));
+        }
+        if !analysis.tool_asks.is_empty() {
+            let names: Vec<&str> =
+                analysis.tool_asks.iter().map(|s| s.as_str()).collect();
+            ask_rules.push(match_rule(vec![tool_entry(&names, ask())]));
+        }
+
+        if let Some(first) = ask_rules.first_mut() {
+            *first = Expr::commented("requires confirmation", first.clone());
+        }
+        for expr in ask_rules {
+            rules.push(PolicyRule { expr });
+        }
+
+        Self {
+            name: "imported".to_string(),
+            default_effect: "ask".to_string(),
+            default_sandbox: Some("project_files".to_string()),
+            define_project_files_sandbox: true,
+            sandbox_presets: vec![],
+            ecosystems: ecosystems.to_vec(),
+            mode_routing: false,
+            rules,
+            include_claude_settings: false,
+            auto_ecosystem_rules: false,
+            canonicalize: true,
+            header_comment: Some("Imported from Claude Code settings".to_string()),
             emit_settings: true,
         }
     }
@@ -117,8 +284,8 @@ impl PolicySpec {
             rules.push(Expr::call("from_claude_settings", vec![]));
         }
 
-        // Ecosystem rules (non-mode-routing)
-        if !self.mode_routing && !self.ecosystems.is_empty() {
+        // Ecosystem rules (non-mode-routing, auto only)
+        if self.auto_ecosystem_rules && !self.mode_routing && !self.ecosystems.is_empty() {
             let fs_sandbox = self
                 .default_sandbox
                 .as_deref()
@@ -143,6 +310,49 @@ impl PolicySpec {
 
         clash_starlark::codegen::serialize(&stmts)
     }
+}
+
+/// Deduplicate a Vec<String> in place, preserving order.
+pub(crate) fn dedup_stable(v: &mut Vec<String>) {
+    let mut seen = BTreeSet::new();
+    v.retain(|item| seen.insert(item.clone()));
+}
+
+/// Build a `"Bash": {("git","cargo"): {glob("**"): effect}}` match entry
+/// from a list of command segments. Multi-segment commands are flattened to
+/// the first segment — `glob("**")` handles subcommand matching.
+fn build_bash_entry(commands: &[Vec<String>], effect: Expr) -> (MatchKey, MatchValue) {
+    let mut bins: BTreeSet<&str> = BTreeSet::new();
+    for cmd in commands {
+        if let Some(first) = cmd.first() {
+            bins.insert(first.as_str());
+        }
+    }
+    let sorted: Vec<&str> = bins.into_iter().collect();
+
+    let key: MatchKey = if sorted.len() == 1 {
+        sorted[0].into()
+    } else {
+        sorted.as_slice().into()
+    };
+
+    let glob_entry = DictEntry::new(Expr::call("glob", vec![Expr::string("**")]), effect);
+    let glob_dict = Expr::dict(vec![glob_entry]);
+
+    (
+        "Bash".into(),
+        MatchValue::Nested(vec![(key, MatchValue::Effect(glob_dict))]),
+    )
+}
+
+/// Build a match entry for one or more tool names with the given effect.
+fn tool_entry(names: &[&str], effect: Expr) -> (MatchKey, MatchValue) {
+    let key: MatchKey = if names.len() == 1 {
+        MatchKey::Single(names[0].to_owned())
+    } else {
+        MatchKey::Tuple(names.iter().map(|s| (*s).to_owned()).collect())
+    };
+    (key, MatchValue::Effect(effect))
 }
 
 #[cfg(test)]
