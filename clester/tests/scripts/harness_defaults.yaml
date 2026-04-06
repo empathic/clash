@@ -11,7 +11,7 @@ clash:
   policy_star: |
     load("@clash//std.star", "allow", "deny", "policy", "settings")
     settings(default=deny())
-    policy("test", rules=[])
+    policy("test", {})
 
 steps:
   - name: read from project .claude/ is allowed by harness rule

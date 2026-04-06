@@ -6,11 +6,11 @@ clash:
   policy_star: |
     load("@clash//std.star", "policy", "settings", "allow")
     settings(default=allow())
-    policy("test", rules=[])
+    policy("test", {})
   project_policy_star: |
     load("@clash//std.star", "policy", "settings", "deny")
     settings(default=deny())
-    policy("test", rules=[])
+    policy("test", {})
 
 steps:
   - name: unknown command denied by project default (overrides user allow)

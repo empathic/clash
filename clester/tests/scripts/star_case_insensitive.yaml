@@ -5,11 +5,10 @@ meta:
 clash:
   policy_star: |
     settings(default=deny())
-    policy("test", rules=[
-        when({"bash": allow()}),
-        when({"READ": allow()}),
-        when({"Shell": deny()}),
-    ])
+    policy("test", {
+        "bash": allow(),
+        "READ": allow(),
+    })
 
 steps:
   - name: Lowercase "bash" matches Bash (first match wins)

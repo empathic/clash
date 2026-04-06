@@ -436,6 +436,12 @@ impl QueryContext {
                 args.extend(rest);
                 args
             }
+            "WebFetch" => tool_input
+                .get("url")
+                .and_then(|v| v.as_str())
+                .and_then(extract_domain)
+                .map(|d| vec![d])
+                .unwrap_or_default(),
             _ => vec![],
         };
 

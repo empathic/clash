@@ -7,11 +7,9 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "allow", "deny", "policy", "settings", "home")
+    load("@clash//std.star", "allow", "deny", "policy", "settings")
     settings(default=deny())
-    policy("test", rules=[
-        home().child(".claude").recurse().deny(),
-    ])
+    policy("test", {"Read": deny()})
 
 steps:
   - name: read from $HOME/.claude/ is denied by explicit user rule

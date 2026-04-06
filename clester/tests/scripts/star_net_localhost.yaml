@@ -4,11 +4,9 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "policy", "settings", "domains", "allow", "deny")
+    load("@clash//std.star", "policy", "settings", "allow", "deny")
     settings(default=deny())
-    policy("test", rules=[
-        domains({"localhost": allow()}),
-    ])
+    policy("test", {"WebFetch": {"localhost": allow()}})
 
 steps:
   - name: webfetch localhost allowed

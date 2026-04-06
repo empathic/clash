@@ -9,7 +9,7 @@ clash:
   policy_star: |
     load("@clash//std.star", "allow", "deny", "policy", "settings")
     settings(default=deny(), harness_defaults=False)
-    policy("test", rules=[])
+    policy("test", {})
 
 steps:
   - name: read from $HOME/.claude/ is denied when harness defaults are disabled
