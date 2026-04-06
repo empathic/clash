@@ -7,6 +7,7 @@
 pub mod ecosystems;
 pub mod loads;
 pub mod sandboxes;
+pub mod spec;
 pub mod tools;
 
 #[cfg(test)]
