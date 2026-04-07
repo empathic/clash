@@ -1,42 +1,36 @@
 name = "Starlark"
-grammar = "starlark"
 path_suffixes = ["star"]
 line_comments = ["# "]
+autoclose_before = ";:.,=}])>"
 
-[brackets]
-enabled = true
-
-[[brackets.pairs]]
+[[brackets]]
 start = "{"
 end = "}"
 close = true
 newline = true
 
-[[brackets.pairs]]
+[[brackets]]
 start = "["
 end = "]"
 close = true
 newline = true
 
-[[brackets.pairs]]
+[[brackets]]
 start = "("
 end = ")"
 close = true
 newline = false
 
-[[brackets.pairs]]
+[[brackets]]
 start = "\""
 end = "\""
 close = true
 newline = false
 not_in = ["string"]
 
-[[brackets.pairs]]
+[[brackets]]
 start = "'"
 end = "'"
 close = true
 newline = false
 not_in = ["string"]
-
-[language_servers]
-default = "clash-lsp"
