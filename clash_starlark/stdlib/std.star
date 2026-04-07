@@ -165,21 +165,21 @@ def merge(*dicts):
     return _merge(*dicts)
 
 
-def policy(name, rules_or_dict=None, default="deny", default_sandbox=None):
-    """Register a named policy.
+def policy(name, tree, default="deny", default_sandbox=None, doc=None):
+    """Register a named policy from a decision-tree dict.
 
     Usage:
         policy("default", {
+            default(): deny(sandbox=plan_box),
             mode("plan"): allow(sandbox=plan_box),
-            mode("edit"): allow(sandbox=edit_box),
+            tool("Bash"): {"git push": deny()},
         })
-
-        policy("default", merge(
-            {mode("plan"): allow(sandbox=plan_box)},
-            from_claude_settings(),
-        ))
     """
-    _policy_impl(name, rules_or_dict, default=_unwrap_effect(default), default_sandbox=default_sandbox)
+    if type(name) != "string":
+        fail("policy() name must be a string")
+    if type(tree) != "dict":
+        fail("policy() tree must be a dict. Run `clash policy migrate` to convert legacy files.")
+    _policy_impl(name, tree, default=_unwrap_effect(default), default_sandbox=default_sandbox, doc=doc)
 
 
 # ---------------------------------------------------------------------------

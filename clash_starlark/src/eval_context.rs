@@ -34,6 +34,8 @@ pub struct SettingsValue {
 #[derive(Debug, Clone)]
 pub struct PolicyRegistration {
     pub name: String,
+    /// Per-policy default effect override from a `default()` root key.
+    pub default_effect: Option<String>,
     pub tree_nodes: Vec<JsonValue>,
     pub sandboxes: Vec<JsonValue>,
 }
@@ -101,9 +103,10 @@ impl EvalContext {
             .ok_or_else(|| anyhow::anyhow!("policy file must call policy()"))?;
 
         let settings = self.settings.borrow();
-        let default_effect = settings
-            .as_ref()
-            .map(|s| s.default_effect.clone())
+        let default_effect = policy
+            .default_effect
+            .clone()
+            .or_else(|| settings.as_ref().map(|s| s.default_effect.clone()))
             .unwrap_or_else(|| "deny".to_string());
 
         // Collect sandboxes from policy rules (allow(sandbox=box) references)

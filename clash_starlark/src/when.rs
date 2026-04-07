@@ -375,14 +375,22 @@ pub fn policy_impl<'v>(
     default_sandbox: Value<'v>,
     heap: &'v Heap,
     source: Option<String>,
-) -> anyhow::Result<(Vec<JsonValue>, Vec<JsonValue>)> {
+) -> anyhow::Result<(Option<String>, Vec<JsonValue>, Vec<JsonValue>)> {
     let mut flat_nodes: Vec<JsonValue> = Vec::new();
     let mut collector = SandboxCollector::new();
+    let mut default_override: Option<String> = None;
 
     // Dict form
     if !rules_or_dict.is_none() {
         if let Some(dict) = DictRef::from_value(rules_or_dict) {
-            process_policy_dict(&dict, heap, &source, &mut flat_nodes, &mut collector)?;
+            process_policy_dict(
+                &dict,
+                heap,
+                &source,
+                &mut flat_nodes,
+                &mut collector,
+                &mut default_override,
+            )?;
         }
     }
 
@@ -400,7 +408,7 @@ pub fn policy_impl<'v>(
         }
     }
 
-    Ok((flat_nodes, collector.sandboxes))
+    Ok((default_override, flat_nodes, collector.sandboxes))
 }
 
 /// Process the dict form of policy().
@@ -410,24 +418,24 @@ fn process_policy_dict<'v>(
     source: &Option<String>,
     flat_nodes: &mut Vec<JsonValue>,
     collector: &mut SandboxCollector,
+    default_override: &mut Option<String>,
 ) -> anyhow::Result<()> {
     for (key, value) in dict.iter() {
         for k in expand_keys(key) {
             match classify_root_key(k, heap)? {
                 MatchKeyKind::Default { .. } => {
-                    bail!("sandbox-only key default used in policy root");
+                    let eff = effect_to_string(value, heap)?;
+                    collector.collect_from_effect(value, heap)?;
+                    *default_override = Some(eff);
                 }
-                MatchKeyKind::Path { .. } => {
-                    bail!("sandbox-only key path used in policy root");
-                }
-                MatchKeyKind::Glob { .. } => {
-                    bail!("sandbox-only key glob used in policy root");
-                }
-                MatchKeyKind::Domain { .. } => {
-                    bail!("sandbox-only key domain used in policy root");
-                }
-                MatchKeyKind::Localhost { .. } => {
-                    bail!("sandbox-only key localhost used in policy root");
+                MatchKeyKind::Path { .. }
+                | MatchKeyKind::Glob { .. }
+                | MatchKeyKind::Domain { .. }
+                | MatchKeyKind::Localhost { .. } => {
+                    bail!(
+                        "path()/glob()/domain()/localhost() are sandbox-only keys; \
+                         policy() trees only accept default(), mode(), and tool() at the root"
+                    );
                 }
                 MatchKeyKind::Mode { pattern, doc } => {
                     let cond = build_mode_condition(pattern, doc, source.clone());
