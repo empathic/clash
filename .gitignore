@@ -44,3 +44,5 @@ target
 clash-vscode/out/
 clash-vscode/*.vsix
 clash-vscode/node_modules/
+clash-zed/extension.wasm
+clash-zed/target/
