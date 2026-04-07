@@ -100,8 +100,6 @@
 (for_statement "in" @keyword.control.repeat)
 (for_in_clause "in" @keyword.control.repeat)
 
-"load" @keyword.control.import
-
 ; -------
 ; Types
 ; -------
