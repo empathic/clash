@@ -725,8 +725,8 @@ pub fn sandbox_tree_impl<'v>(
                 default_effect = effect_to_string(value, heap)?;
             }
             MatchKeyKind::Path { worktree, .. } => {
-                let pv = raw_mv
-                    .ok_or_else(|| anyhow::anyhow!("path() key missing string value"))?;
+                let pv =
+                    raw_mv.ok_or_else(|| anyhow::anyhow!("path() key missing string value"))?;
                 fs_rules.push(fs_rule_from(
                     value,
                     pv,
@@ -737,8 +737,8 @@ pub fn sandbox_tree_impl<'v>(
                 )?);
             }
             MatchKeyKind::Glob { worktree, .. } => {
-                let pv = raw_mv
-                    .ok_or_else(|| anyhow::anyhow!("glob() key missing string value"))?;
+                let pv =
+                    raw_mv.ok_or_else(|| anyhow::anyhow!("glob() key missing string value"))?;
                 // Translate glob suffix to the IR's path_match enum.
                 let (final_path, mt) = if pv == "*" || pv == "**" {
                     ("/".to_string(), "subpath")
@@ -751,15 +751,16 @@ pub fn sandbox_tree_impl<'v>(
                 } else {
                     (pv, "literal")
                 };
-                fs_rules.push(fs_rule_from(value, final_path, key_doc, mt, worktree, heap)?);
+                fs_rules.push(fs_rule_from(
+                    value, final_path, key_doc, mt, worktree, heap,
+                )?);
             }
             MatchKeyKind::Network { .. } => {
                 let eff = effect_to_string(value, heap)?;
                 network_override = Some(eff);
             }
             MatchKeyKind::Domain { .. } => {
-                let dn = raw_mv
-                    .ok_or_else(|| anyhow::anyhow!("domain() key must be a string"))?;
+                let dn = raw_mv.ok_or_else(|| anyhow::anyhow!("domain() key must be a string"))?;
                 let _eff = effect_to_string(value, heap)?;
                 net_domains.push(dn);
             }
@@ -783,7 +784,13 @@ pub fn sandbox_tree_impl<'v>(
     } else {
         build_network_json(net_domains, net_localhost_allow, net_localhost_ports)
     };
-    Ok(build_sandbox_json(name, &default_effect, fs_rules, network, doc))
+    Ok(build_sandbox_json(
+        name,
+        &default_effect,
+        fs_rules,
+        network,
+        doc,
+    ))
 }
 
 /// Convert a sandbox Starlark struct to JSON.
@@ -906,9 +913,7 @@ fn convert_net_policy<'v>(sb: Value<'v>, heap: &'v Heap) -> anyhow::Result<JsonV
                             .filter_map(|item| item.unpack_i32().map(|n| n as u16))
                             .collect(),
                     )
-                } else if let Some(tup) =
-                    starlark::values::tuple::TupleRef::from_value(ports_val)
-                {
+                } else if let Some(tup) = starlark::values::tuple::TupleRef::from_value(ports_val) {
                     Some(
                         tup.iter()
                             .filter_map(|item| item.unpack_i32().map(|n| n as u16))

@@ -18,6 +18,14 @@ result = [
     .unwrap();
     assert_eq!(
         out.get_global_strings("result").unwrap(),
-        vec!["default", "tool", "path", "glob", "domain", "localhost", "mode"],
+        vec![
+            "default",
+            "tool",
+            "path",
+            "glob",
+            "domain",
+            "localhost",
+            "mode"
+        ],
     );
 }

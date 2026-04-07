@@ -60,7 +60,8 @@ pub fn load_starlark_source_for_test(source: &str) -> Result<TestModule> {
         let mut eval = Evaluator::new(&module);
         eval.set_loader(&loader);
         eval.extra = Some(&ctx);
-        eval.eval_module(ast, &globals).map_err(|e| anyhow!("{e}"))?;
+        eval.eval_module(ast, &globals)
+            .map_err(|e| anyhow!("{e}"))?;
     }
     for name in module.names() {
         let n = name.as_str();
@@ -107,7 +108,8 @@ pub fn eval_policy_source_for_test(source: &str) -> Result<EvalContext> {
         let mut eval = Evaluator::new(&module);
         eval.set_loader(&loader);
         eval.extra = Some(&ctx);
-        eval.eval_module(ast, &globals).map_err(|e| anyhow!("{e}"))?;
+        eval.eval_module(ast, &globals)
+            .map_err(|e| anyhow!("{e}"))?;
     }
     Ok(ctx)
 }

@@ -32,9 +32,7 @@ sandbox("rust-dev", {
     assert!(
         rules
             .iter()
-            .any(|r| r["path"] == "/tmp"
-                && r["effect"] == "allow"
-                && r["path_match"] == "subpath"),
+            .any(|r| r["path"] == "/tmp" && r["effect"] == "allow" && r["path_match"] == "subpath"),
         "expected /tmp subpath allow rule (from /tmp/** glob), got: {rules:#?}"
     );
 
