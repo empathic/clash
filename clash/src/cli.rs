@@ -391,8 +391,8 @@ pub enum Commands {
     #[command(subcommand)]
     Statusline(StatuslineCmd),
 
-    /// Run the clash language server over stdio (LSP)
-    Lsp,
+    /// Run the clash language server, or install editor configuration
+    Lsp(LspCmd),
 
     /// File a bug report to the clash issue tracker
     #[command(alias = "rage", hide = true)]
@@ -412,4 +412,31 @@ pub enum Commands {
         #[arg(long)]
         include_trace: bool,
     },
+}
+
+#[derive(clap::Args, Debug)]
+pub struct LspCmd {
+    #[command(subcommand)]
+    pub subcommand: Option<LspSubcommand>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LspSubcommand {
+    /// Install editor configuration to use clash lsp
+    Install {
+        /// Which editor to configure
+        #[arg(long, value_enum)]
+        editor: Editor,
+        /// Print the config that would be written without applying it
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum Editor {
+    Vscode,
+    Neovim,
+    Helix,
+    Zed,
 }

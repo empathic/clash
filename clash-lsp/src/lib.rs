@@ -3,6 +3,7 @@
 pub mod analysis;
 pub mod documents;
 pub mod features;
+pub mod install;
 pub mod schema;
 pub mod server;
 
