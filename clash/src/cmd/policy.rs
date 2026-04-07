@@ -25,7 +25,7 @@ pub fn run(cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::List { json } => handle_list(json),
         PolicyCmd::Validate { file, json } => handle_validate(file, json),
         PolicyCmd::Show { json } => handle_show(json),
-        PolicyCmd::Edit { scope, raw, test } => handle_edit(scope, raw, test),
+        PolicyCmd::Edit { scope } => handle_edit(scope),
         PolicyCmd::Allow {
             command,
             tool,
@@ -624,32 +624,25 @@ fn edit_with_validation(path: &Path) -> Result<()> {
 }
 
 /// Handle `clash policy edit`.
-fn handle_edit(scope: Option<String>, raw: bool, test: bool) -> Result<()> {
-    if raw {
-        // --raw: visudo-style edit with validation
-        let level = match scope.as_deref() {
-            Some("user") => PolicyLevel::User,
-            Some("project") => PolicyLevel::Project,
-            Some(other) => {
-                anyhow::bail!("unknown scope: \"{other}\" (expected \"user\" or \"project\")")
-            }
-            None => ClashSettings::default_scope(),
-        };
-        let path = ClashSettings::policy_file_for_level(level)?;
-        if !path.exists() {
-            anyhow::bail!(
-                "no policy file at {} — run `clash init {}` first",
-                path.display(),
-                level,
-            );
+fn handle_edit(scope: Option<String>) -> Result<()> {
+    // --raw: visudo-style edit with validation
+    let level = match scope.as_deref() {
+        Some("user") => PolicyLevel::User,
+        Some("project") => PolicyLevel::Project,
+        Some(other) => {
+            anyhow::bail!("unknown scope: \"{other}\" (expected \"user\" or \"project\")")
         }
-        return edit_with_validation(&path);
+        None => ClashSettings::default_scope(),
+    };
+    let path = ClashSettings::policy_file_for_level(level)?;
+    if !path.exists() {
+        anyhow::bail!(
+            "no policy file at {} — run `clash init {}` first",
+            path.display(),
+            level,
+        );
     }
-
-    // Interactive TUI editor
-    let path = resolve_manifest_path(scope)?;
-    crate::tui::run_with_options(&path, test, false)?;
-    Ok(())
+    edit_with_validation(&path)
 }
 
 // ---------------------------------------------------------------------------

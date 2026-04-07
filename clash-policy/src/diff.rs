@@ -7,15 +7,15 @@ use similar::{ChangeTag, TextDiff};
 
 use console::Style;
 
-use crate::format::format_tree;
+use crate::format::format_tree_with_options;
 use crate::match_tree::CompiledPolicy;
 
 /// Produce a unified diff between two compiled policies, rendered as tree strings.
 ///
 /// Returns `None` if the two policies produce identical tree output.
 pub fn tree_diff(before: &CompiledPolicy, after: &CompiledPolicy) -> Option<String> {
-    let before_lines = format_tree(before);
-    let after_lines = format_tree(after);
+    let before_lines = format_tree_with_options(before, false);
+    let after_lines = format_tree_with_options(after, false);
 
     let before_text = before_lines.join("\n");
     let after_text = after_lines.join("\n");
@@ -57,8 +57,8 @@ pub fn tree_diff(before: &CompiledPolicy, after: &CompiledPolicy) -> Option<Stri
 ///
 /// Useful for testing and non-TTY environments.
 pub fn tree_diff_plain(before: &CompiledPolicy, after: &CompiledPolicy) -> Option<String> {
-    let before_lines = format_tree(before);
-    let after_lines = format_tree(after);
+    let before_lines = format_tree_with_options(before, false);
+    let after_lines = format_tree_with_options(after, false);
 
     let before_text = before_lines.join("\n");
     let after_text = after_lines.join("\n");

@@ -106,14 +106,21 @@ pub fn run(agent: Option<AgentKind>) -> Result<()> {
         }
         None => ensure_starter_policy()?,
     };
-    let outcome = crate::tui::run_with_options(&policy_path, false, true)?;
-    if outcome == crate::tui::TuiOutcome::Aborted {
-        if created_new {
-            let _ = std::fs::remove_file(&policy_path);
+    #[cfg(feature = "tui")]
+    {
+        let outcome = crate::tui::run_with_options(&policy_path, false, true)?;
+        if outcome == crate::tui::TuiOutcome::Aborted {
+            if created_new {
+                let _ = std::fs::remove_file(&policy_path);
+            }
+            println!();
+            ui::warn("Setup cancelled. Run `clash init` to try again.");
+            return Ok(());
         }
-        println!();
-        ui::warn("Setup cancelled. Run `clash init` to try again.");
-        return Ok(());
+    }
+    #[cfg(not(feature = "tui"))]
+    {
+        let _ = &policy_path;
     }
     actions.policy_created = created_new;
     actions.policy_reviewed = true;

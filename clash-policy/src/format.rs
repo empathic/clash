@@ -21,11 +21,18 @@ pub fn format_rules(policy: &CompiledPolicy) -> Vec<String> {
 
 /// Format all rules in a policy as a tree with box-drawing characters.
 pub fn format_tree(policy: &CompiledPolicy) -> Vec<String> {
+    format_tree_with_options(policy, true)
+}
+
+/// Format all rules in a policy as a tree, optionally including `[source:line]`
+/// annotations on root nodes. Source annotations are noisy in contexts like
+/// `policy edit --raw` diffs, where line numbers shift on every edit.
+pub fn format_tree_with_options(policy: &CompiledPolicy, show_source: bool) -> Vec<String> {
     let mut lines = Vec::new();
     let len = policy.tree.len();
     for (i, node) in policy.tree.iter().enumerate() {
         let is_last = i == len - 1;
-        format_tree_node(node, "", is_last, true, &mut lines);
+        format_tree_node_opts(node, "", is_last, true, show_source, &mut lines);
     }
     lines
 }
@@ -51,6 +58,18 @@ pub fn format_tree_node(
     prefix: &str,
     is_last: bool,
     is_root: bool,
+    lines: &mut Vec<String>,
+) {
+    format_tree_node_opts(node, prefix, is_last, is_root, true, lines);
+}
+
+/// Like `format_tree_node`, but allows suppressing `[source:line]` annotations.
+pub fn format_tree_node_opts(
+    node: &Node,
+    prefix: &str,
+    is_last: bool,
+    is_root: bool,
+    show_source: bool,
     lines: &mut Vec<String>,
 ) {
     let connector = if is_root {
@@ -86,7 +105,7 @@ pub fn format_tree_node(
                 .as_deref()
                 .map(|d| format!("  # {d}"))
                 .unwrap_or_default();
-            let source_suffix = if is_root {
+            let source_suffix = if is_root && show_source {
                 source
                     .as_deref()
                     .map(|s| format!("  [{s}]"))
@@ -114,7 +133,7 @@ pub fn format_tree_node(
             let child_count = children.len();
             for (i, child) in children.iter().enumerate() {
                 let child_is_last = i == child_count - 1;
-                format_tree_node(child, &new_prefix, child_is_last, false, lines);
+                format_tree_node_opts(child, &new_prefix, child_is_last, false, show_source, lines);
             }
         }
     }

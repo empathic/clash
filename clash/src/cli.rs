@@ -73,12 +73,6 @@ pub enum PolicyCmd {
         /// Policy scope to edit: "user" or "project" (default: auto-detect)
         #[arg(long)]
         scope: Option<String>,
-        /// Open in $EDITOR instead of the interactive TUI
-        #[arg(long)]
-        raw: bool,
-        /// Open with the test console panel visible
-        #[arg(long)]
-        test: bool,
     },
     /// Add an allow rule for a tool or binary
     ///
