@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 clash_starlark.workspace = true
+starlark.workspace = true
 lsp-types.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
