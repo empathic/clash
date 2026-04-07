@@ -39,3 +39,8 @@ target
 # Local-only files
 /local
 .vscode
+
+# VS Code extension build artifacts
+clash-vscode/out/
+clash-vscode/*.vsix
+clash-vscode/node_modules/

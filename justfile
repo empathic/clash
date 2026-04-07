@@ -183,6 +183,10 @@ work issue:
     tmux new-window -n "$branch" -c "$dir" \
         "claude --dangerously-skip-permissions < $prompt_file"
 
+# Package the VS Code extension into a .vsix
+vscode-package:
+    cd clash-vscode && bun install && bun run build && bunx vsce package
+
 # Remove all worktrees under clash-wt/ and prune
 wt-clean:
     #!/usr/bin/env bash
