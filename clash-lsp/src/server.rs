@@ -2,9 +2,10 @@
 
 use tower_lsp::{Client, LanguageServer, jsonrpc};
 use tower_lsp::lsp_types::{
-    self as tl, Diagnostic, DiagnosticSeverity, InitializeParams, InitializeResult,
-    InitializedParams, MessageType, NumberOrString, Position, Range, ServerCapabilities,
-    ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    self as tl, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
+    DiagnosticSeverity, InitializeParams, InitializeResult, InitializedParams, MessageType,
+    NumberOrString, Position, Range, ServerCapabilities, ServerInfo,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Url,
     DidOpenTextDocumentParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
 };
 use lsp_types::DiagnosticSeverity as Sev95;
@@ -15,11 +16,12 @@ use crate::documents::DocumentStore;
 pub struct Backend {
     client: Client,
     docs: DocumentStore,
+    schema: crate::schema::Schema,
 }
 
 impl Backend {
     pub fn new(client: Client) -> Self {
-        Self { client, docs: DocumentStore::new() }
+        Self { client, docs: DocumentStore::new(), schema: crate::schema::load_builtin() }
     }
 
     async fn publish(&self, uri: Url, parsed: ParsedPolicy) {
@@ -64,6 +66,7 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                completion_provider: Some(CompletionOptions::default()),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -94,5 +97,17 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         self.docs.close(&params.text_document.uri);
+    }
+
+    async fn completion(
+        &self,
+        params: CompletionParams,
+    ) -> jsonrpc::Result<Option<CompletionResponse>> {
+        let items = crate::features::completion::complete(
+            &self.schema,
+            "",
+            params.text_document_position.position,
+        );
+        Ok(Some(CompletionResponse::Array(items)))
     }
 }
