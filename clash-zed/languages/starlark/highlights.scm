@@ -59,12 +59,8 @@
 
 (parameters (identifier) @variable.parameter)
 (parameters (default_parameter name: (identifier) @variable.parameter))
-(lambda_parameters (identifier) @variable.parameter)
 
 (keyword_argument name: (identifier) @variable.parameter)
-
-((identifier) @variable.special
- (#any-of? @variable.special "self" "cls"))
 
 ; -------
 ; Keywords
@@ -76,13 +72,9 @@
   "not"
   "in"
   "not in"
-  "is"
-  "is not"
 ] @keyword.operator
 
 [
-  "as"
-  "assert"
   "pass"
 ] @keyword
 
@@ -94,7 +86,6 @@
 
 [
   "def"
-  "lambda"
 ] @keyword.function
 
 "return" @keyword.control.return
@@ -118,8 +109,6 @@
 ((identifier) @type
  (#match? @type "^[A-Z]"))
 
-(class_definition name: (identifier) @type)
-
 ; -------
 ; Functions
 ; -------
@@ -129,9 +118,6 @@
 (call function: (identifier) @function)
 
 (call function: (attribute attribute: (identifier) @function.method))
-
-(decorator) @attribute
-(decorator (identifier) @attribute)
 
 ; Builtin functions
 ((call function: (identifier) @function.builtin)
