@@ -2,13 +2,19 @@
 
 use std::path::Path;
 
+use tower_lsp::lsp_types::{Position, Range};
+
 pub mod diagnostic;
 pub use diagnostic::AnalysisDiagnostic;
+
+pub mod symbols;
+pub use symbols::SymbolIndex;
 
 /// Result of analyzing a single `.star` source.
 #[derive(Debug, Clone, Default)]
 pub struct ParsedPolicy {
     pub diagnostics: Vec<AnalysisDiagnostic>,
+    pub symbols: SymbolIndex,
 }
 
 /// Parse and evaluate a `.star` source. Always returns a `ParsedPolicy`; failures land in
@@ -18,10 +24,24 @@ pub struct ParsedPolicy {
 /// - IR evaluation errors → `clash/validate` diagnostic
 pub fn parse(filename: &str, source: &str) -> ParsedPolicy {
     // Step 1: check syntax. A parse failure returns immediately.
-    if let Err(e) = clash_starlark::parse_source(filename, source) {
-        return ParsedPolicy {
-            diagnostics: vec![AnalysisDiagnostic::from_starlark_error(&e)],
+    let ast = match clash_starlark::parse_source(filename, source) {
+        Ok(ast) => ast,
+        Err(e) => {
+            return ParsedPolicy {
+                diagnostics: vec![AnalysisDiagnostic::from_starlark_error(&e)],
+                ..Default::default()
+            };
+        }
+    };
+
+    // Build the symbol index from top-level assignments and defs.
+    let mut symbols = SymbolIndex::default();
+    for sym in clash_starlark::top_level_symbols(&ast) {
+        let range = Range {
+            start: Position { line: sym.start_line, character: sym.start_col },
+            end:   Position { line: sym.end_line,   character: sym.end_col   },
         };
+        symbols.insert(sym.name, range);
     }
 
     // Step 2: evaluate the policy to catch IR-level errors (unknown effects, wrong types, etc.).
@@ -35,6 +55,7 @@ pub fn parse(filename: &str, source: &str) -> ParsedPolicy {
         Err(e) => {
             return ParsedPolicy {
                 diagnostics: vec![AnalysisDiagnostic::from_validation_error(&e)],
+                symbols,
             };
         }
     };
@@ -42,9 +63,10 @@ pub fn parse(filename: &str, source: &str) -> ParsedPolicy {
     // Step 3: compile the evaluated JSON through the clash-policy IR to catch
     // structural errors (unknown effects, malformed rule trees, etc.).
     match clash_policy::compile::compile_to_tree(&eval_output.json) {
-        Ok(_) => ParsedPolicy::default(),
+        Ok(_) => ParsedPolicy { symbols, ..Default::default() },
         Err(e) => ParsedPolicy {
             diagnostics: vec![AnalysisDiagnostic::from_validation_error(&e)],
+            symbols,
         },
     }
 }
@@ -70,6 +92,13 @@ mod tests {
         assert_eq!(parsed.diagnostics.len(), 1);
         let d = &parsed.diagnostics[0];
         assert!(d.message.to_lowercase().contains("syntax") || d.message.to_lowercase().contains("parse") || !d.message.is_empty());
+    }
+
+    #[test]
+    fn parses_top_level_assignment_into_symbols() {
+        let src = "my_rule = {}\npolicy(\"x\", my_rule)\n";
+        let parsed = parse("x.star", src);
+        assert!(parsed.symbols.get("my_rule").is_some(), "expected my_rule symbol, got {:?}", parsed.symbols);
     }
 
     #[test]

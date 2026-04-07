@@ -944,6 +944,7 @@ dependencies = [
  "serde",
  "serde_json",
  "starlark",
+ "starlark_syntax",
  "tempfile",
  "thiserror 2.0.18",
  "tree-sitter",

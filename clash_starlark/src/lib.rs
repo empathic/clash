@@ -40,6 +40,69 @@ pub fn parse_source(
     AstModule::parse(filename, source.to_owned(), &Dialect::Standard)
 }
 
+/// A top-level symbol definition: name + (0-indexed) line/column span.
+#[derive(Debug, Clone)]
+pub struct SymbolSpan {
+    pub name: String,
+    /// 0-indexed start line.
+    pub start_line: u32,
+    /// 0-indexed start column.
+    pub start_col: u32,
+    /// 0-indexed end line.
+    pub end_line: u32,
+    /// 0-indexed end column.
+    pub end_col: u32,
+}
+
+/// Walk the top-level statements of a parsed AST and return every top-level assignment
+/// target name and `def` name together with their source spans.
+///
+/// Only direct top-level bindings are returned:
+/// - `name = expr` → yields `name`
+/// - `def name(...): ...` → yields `name`
+/// - Augmented assignments (`name += ...`) are excluded (they reference but don't define).
+///
+/// Returns an empty `Vec` if `ast` is `None` (i.e. the parse failed).
+pub fn top_level_symbols(ast: &starlark::syntax::AstModule) -> Vec<SymbolSpan> {
+    use starlark_syntax::syntax::ast::{AssignTargetP, StmtP};
+    use starlark_syntax::syntax::module::AstModuleFields;
+    use starlark_syntax::syntax::top_level_stmts::top_level_stmts;
+
+    let stmts = top_level_stmts(ast.statement());
+    let codemap = ast.codemap();
+
+    let mut out = Vec::new();
+    for stmt in stmts {
+        match &**stmt {
+            StmtP::Assign(assign) => {
+                // Only simple `name = expr` forms (not tuple unpacking).
+                if let AssignTargetP::Identifier(ident) = &assign.lhs.node {
+                    let span = codemap.resolve_span(ident.span);
+                    out.push(SymbolSpan {
+                        name: ident.node.ident.clone(),
+                        start_line: span.begin.line as u32,
+                        start_col:  span.begin.column as u32,
+                        end_line:   span.end.line as u32,
+                        end_col:    span.end.column as u32,
+                    });
+                }
+            }
+            StmtP::Def(def) => {
+                let span = codemap.resolve_span(def.name.span);
+                out.push(SymbolSpan {
+                    name: def.name.node.ident.clone(),
+                    start_line: span.begin.line as u32,
+                    start_col:  span.begin.column as u32,
+                    end_line:   span.end.line as u32,
+                    end_col:    span.end.column as u32,
+                });
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Evaluate a Starlark policy source and return a JSON policy document.
 ///
 /// Top-level `policy()`, `sandbox()`, and `settings()` calls register into
