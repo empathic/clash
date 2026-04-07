@@ -5,7 +5,9 @@
   "version": "0.6.2",
   "publisher": "empathic",
   "repository": "https://github.com/empathic/clash",
-  "engines": { "vscode": "^1.85.0" },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
   "categories": ["Programming Languages", "Linters"],
   "activationEvents": [
     "onLanguage:clash-policy"
@@ -45,6 +47,7 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20",
     "@types/vscode": "^1.85.0",
     "@vscode/test-electron": "^2.4.0",
