@@ -432,13 +432,13 @@ mod tests {
     mod migrate_tests {
         use super::*;
 
-    #[test]
-    fn load_json_policy_without_includes() {
-        let dir = tempfile::tempdir().unwrap();
-        let json_path = dir.path().join("policy.json");
-        std::fs::write(
-            &json_path,
-            r#"{
+        #[test]
+        fn load_json_policy_without_includes() {
+            let dir = tempfile::tempdir().unwrap();
+            let json_path = dir.path().join("policy.json");
+            std::fs::write(
+                &json_path,
+                r#"{
                 "default_effect": "deny",
                 "sandboxes": {},
                 "tree": [{
@@ -449,35 +449,35 @@ mod tests {
                     }
                 }]
             }"#,
-        )
-        .unwrap();
+            )
+            .unwrap();
 
-        let source = migrate_load_json_policy(&json_path).unwrap();
-        let policy: CompiledPolicy = serde_json::from_str(&source).unwrap();
-        assert_eq!(policy.tree.len(), 1);
-    }
+            let source = migrate_load_json_policy(&json_path).unwrap();
+            let policy: CompiledPolicy = serde_json::from_str(&source).unwrap();
+            assert_eq!(policy.tree.len(), 1);
+        }
 
-    #[test]
-    fn load_json_policy_with_star_include() {
-        let dir = tempfile::tempdir().unwrap();
+        #[test]
+        fn load_json_policy_with_star_include() {
+            let dir = tempfile::tempdir().unwrap();
 
-        // Write a local .star include file.
-        let star_path = dir.path().join("extra.star");
-        std::fs::write(
-            &star_path,
-            r#"
+            // Write a local .star include file.
+            let star_path = dir.path().join("extra.star");
+            std::fs::write(
+                &star_path,
+                r#"
 load("@clash//std.star", "policy", "settings", "deny")
 settings(default = deny())
 policy("include", {"Read": allow()})
 "#,
-        )
-        .unwrap();
+            )
+            .unwrap();
 
-        // Write policy.json that includes extra.star and has its own inline rule.
-        let json_path = dir.path().join("policy.json");
-        std::fs::write(
-            &json_path,
-            r#"{
+            // Write policy.json that includes extra.star and has its own inline rule.
+            let json_path = dir.path().join("policy.json");
+            std::fs::write(
+                &json_path,
+                r#"{
                 "default_effect": "deny",
                 "sandboxes": {},
                 "includes": [{"path": "extra.star"}],
@@ -489,42 +489,42 @@ policy("include", {"Read": allow()})
                     }
                 }]
             }"#,
-        )
-        .unwrap();
+            )
+            .unwrap();
 
-        let source = migrate_load_json_policy(&json_path).unwrap();
-        let policy: CompiledPolicy = serde_json::from_str(&source).unwrap();
-        // Should have inline (Bash) + included (Read) rules.
-        assert!(
-            policy.tree.len() >= 2,
-            "expected at least 2 rules, got {}",
-            policy.tree.len()
-        );
-    }
+            let source = migrate_load_json_policy(&json_path).unwrap();
+            let policy: CompiledPolicy = serde_json::from_str(&source).unwrap();
+            // Should have inline (Bash) + included (Read) rules.
+            assert!(
+                policy.tree.len() >= 2,
+                "expected at least 2 rules, got {}",
+                policy.tree.len()
+            );
+        }
 
-    #[test]
-    fn load_json_policy_with_stdlib_include() {
-        let dir = tempfile::tempdir().unwrap();
-        let json_path = dir.path().join("policy.json");
-        std::fs::write(
-            &json_path,
-            r#"{
+        #[test]
+        fn load_json_policy_with_stdlib_include() {
+            let dir = tempfile::tempdir().unwrap();
+            let json_path = dir.path().join("policy.json");
+            std::fs::write(
+                &json_path,
+                r#"{
                 "default_effect": "deny",
                 "sandboxes": {},
                 "includes": [{"path": "@clash//builtin.star"}],
                 "tree": []
             }"#,
-        )
-        .unwrap();
+            )
+            .unwrap();
 
-        let source = migrate_load_json_policy(&json_path).unwrap();
-        let policy: CompiledPolicy = serde_json::from_str(&source).unwrap();
-        // builtin.star exports rules for clash commands + claude tools.
-        assert!(
-            !policy.tree.is_empty(),
-            "builtin.star should contribute rules"
-        );
-    }
+            let source = migrate_load_json_policy(&json_path).unwrap();
+            let policy: CompiledPolicy = serde_json::from_str(&source).unwrap();
+            // builtin.star exports rules for clash commands + claude tools.
+            assert!(
+                !policy.tree.is_empty(),
+                "builtin.star should contribute rules"
+            );
+        }
     }
 
     #[test]

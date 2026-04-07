@@ -4,8 +4,7 @@ use anyhow::{Context, Result};
 use tracing::{Level, info, instrument};
 
 use crate::cli::PolicyCmd;
-use crate::policy::manifest_edit;
-use crate::policy::match_tree::{Decision, PolicyManifest};
+use crate::policy::match_tree::PolicyManifest;
 use crate::settings::{ClashSettings, PolicyLevel};
 use crate::style;
 
@@ -666,49 +665,10 @@ fn apply_mutation(
 ) -> Result<()> {
     let path = resolve_manifest_path(scope)?;
 
-    if path.extension().is_some_and(|ext| ext == "star") {
-        return apply_mutation_star(&path, &command, tool.as_deref(), bin.as_deref(), mutation);
+    if !path.extension().is_some_and(|ext| ext == "star") {
+        return Err(crate::policy_loader::legacy_json_error(&path));
     }
-
-    let mut manifest = crate::policy_loader::read_manifest(&path)?;
-
-    // For Remove we only need the observable chain — Decision::Deny is a dummy.
-    let dummy_decision = Decision::Deny;
-    let decision = match &mutation {
-        PolicyMutation::Allow { sandbox } => Decision::Allow(
-            sandbox
-                .as_deref()
-                .map(|s| crate::policy::match_tree::SandboxRef(s.to_string())),
-        ),
-        PolicyMutation::Deny | PolicyMutation::Remove => dummy_decision,
-    };
-
-    let node = build_rule_node(&command, tool, bin, decision)?;
-
-    let result_str = match mutation {
-        PolicyMutation::Remove => {
-            if manifest_edit::remove_rule(&mut manifest, &node) {
-                crate::policy_loader::write_manifest(&path, &manifest)?;
-                println!("{} Rule removed", style::green_bold("✓"));
-                println!("  {}", style::dim(&path.display().to_string()));
-            } else {
-                println!("No matching rule found");
-            }
-            return Ok(());
-        }
-        _ => {
-            let result = manifest_edit::upsert_rule(&mut manifest, node);
-            crate::policy_loader::write_manifest(&path, &manifest)?;
-            match result {
-                manifest_edit::UpsertResult::Inserted => "Rule added",
-                manifest_edit::UpsertResult::Replaced => "Rule updated (replaced existing)",
-            }
-        }
-    };
-
-    println!("{} {}", style::green_bold("✓"), result_str);
-    println!("  {}", style::dim(&path.display().to_string()));
-    Ok(())
+    apply_mutation_star(&path, &command, tool.as_deref(), bin.as_deref(), mutation)
 }
 
 /// Apply a mutation to a `.star` policy file using the managed section approach.
@@ -841,7 +801,10 @@ fn apply_mutation_star(
     Ok(())
 }
 
-/// Resolve the policy.json path for the given scope, creating it if needed.
+/// Resolve the `policy.star` path for the given scope, creating it if needed.
+///
+/// If a legacy `policy.json` exists at the resolved location, returns the
+/// `legacy_json_error` directing the user to `clash policy migrate`.
 pub(crate) fn resolve_manifest_path(scope: Option<String>) -> Result<PathBuf> {
     let level = match scope.as_deref() {
         Some("user") => PolicyLevel::User,
@@ -858,7 +821,6 @@ pub(crate) fn resolve_manifest_path(scope: Option<String>) -> Result<PathBuf> {
         PolicyLevel::Session => anyhow::bail!("session scope not supported for policy mutation"),
     };
 
-    // Prefer .star over .json — .star is the primary format when both exist.
     let star_path = dir.join("policy.star");
     if star_path.exists() {
         return Ok(star_path);
@@ -866,26 +828,16 @@ pub(crate) fn resolve_manifest_path(scope: Option<String>) -> Result<PathBuf> {
 
     let json_path = dir.join("policy.json");
     if json_path.exists() {
-        return Ok(json_path);
+        return Err(crate::policy_loader::legacy_json_error(&json_path));
     }
 
-    // No policy at all — create a bare manifest.
+    // No policy at all — scaffold a starter .star file.
     std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
-    let manifest = PolicyManifest {
-        includes: vec![],
-        policy: crate::policy::match_tree::CompiledPolicy {
-            sandboxes: std::collections::HashMap::new(),
-            tree: vec![],
-            default_effect: crate::policy::Effect::Deny,
-            default_sandbox: None,
-            on_sandbox_violation: Default::default(),
-            harness_defaults: None,
-        },
-    };
-
-    crate::policy_loader::write_manifest(&json_path, &manifest)?;
-    info!(path = %json_path.display(), "Created policy.json");
-    Ok(json_path)
+    let source = include_str!("../default_policy.star");
+    std::fs::write(&star_path, source)
+        .with_context(|| format!("failed to write {}", star_path.display()))?;
+    info!(path = %star_path.display(), "Created policy.star");
+    Ok(star_path)
 }
 
 /// Parse a positional command string into (bin, args).
@@ -903,34 +855,6 @@ fn parse_command(command: &[String]) -> Option<(String, Vec<String>)> {
     let bin = parts[0].to_string();
     let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
     Some((bin, args))
-}
-
-/// Build a rule node from CLI arguments.
-///
-/// Priority: positional `command` > `--bin` > `--tool`.
-/// If no flags or command are provided, returns an error.
-fn build_rule_node(
-    command: &[String],
-    tool: Option<String>,
-    bin: Option<String>,
-    decision: Decision,
-) -> Result<crate::policy::match_tree::Node> {
-    // Positional command takes priority.
-    if let Some((bin_name, args)) = parse_command(command) {
-        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        return Ok(manifest_edit::build_exec_rule(
-            &bin_name, &arg_refs, decision,
-        ));
-    }
-    match (tool.as_deref(), bin.as_deref()) {
-        (_, Some(bin_name)) => Ok(manifest_edit::build_exec_rule(bin_name, &[], decision)),
-        (Some(tool_name), None) => {
-            // Resolve canonical/case-insensitive names: "shell" → "Bash", "bash" → "Bash", etc.
-            let resolved = crate::agents::resolve_any_to_internal(tool_name).unwrap_or(tool_name);
-            Ok(manifest_edit::build_tool_rule(resolved, decision))
-        }
-        (None, None) => anyhow::bail!("provide a command, --tool, or --bin"),
-    }
 }
 
 /// Check if a string looks like an audit log hash (3-7 hex chars).
@@ -1064,7 +988,10 @@ fn apply_mutation_by_path(
     rule_args: &[String],
     mutation: PolicyMutation,
 ) -> Result<()> {
-    if path.extension().is_some_and(|ext| ext == "star") {
+    if !path.extension().is_some_and(|ext| ext == "star") {
+        return Err(crate::policy_loader::legacy_json_error(path));
+    }
+    {
         let arg_refs: Vec<&str> = rule_args.iter().map(|s| s.as_str()).collect();
         let star_effect = match &mutation {
             PolicyMutation::Allow { .. } => clash_starlark::codegen::mutate::Effect::Allow,
@@ -1112,42 +1039,8 @@ fn apply_mutation_by_path(
             }
         }
         println!("  {}", style::dim(&path.display().to_string()));
-        return Ok(());
+        Ok(())
     }
-
-    let rule_arg_refs: Vec<&str> = rule_args.iter().map(|s| s.as_str()).collect();
-    let decision = match &mutation {
-        PolicyMutation::Allow { sandbox } => Decision::Allow(
-            sandbox
-                .as_deref()
-                .map(|s| crate::policy::match_tree::SandboxRef(s.to_string())),
-        ),
-        PolicyMutation::Deny => Decision::Deny,
-        PolicyMutation::Remove => Decision::Deny,
-    };
-    let node = manifest_edit::build_exec_rule(bin_name, &rule_arg_refs, decision);
-    let mut manifest = crate::policy_loader::read_manifest(path)?;
-    match mutation {
-        PolicyMutation::Remove => {
-            if manifest_edit::remove_rule(&mut manifest, &node) {
-                crate::policy_loader::write_manifest(path, &manifest)?;
-                println!("{} Rule removed", style::green_bold("✓"));
-            } else {
-                println!("No matching rule found");
-            }
-        }
-        _ => {
-            let result = manifest_edit::upsert_rule(&mut manifest, node);
-            crate::policy_loader::write_manifest(path, &manifest)?;
-            let result_str = match result {
-                manifest_edit::UpsertResult::Inserted => "Rule added",
-                manifest_edit::UpsertResult::Replaced => "Rule updated (replaced existing)",
-            };
-            println!("{} {}", style::green_bold("✓"), result_str);
-        }
-    }
-    println!("  {}", style::dim(&path.display().to_string()));
-    Ok(())
 }
 
 fn handle_deny_by_hash(hash: &str, scope: Option<String>, broad: bool, yes: bool) -> Result<()> {
@@ -1210,7 +1103,19 @@ fn handle_remove(
 fn handle_convert(file: Option<PathBuf>, replace: bool) -> Result<()> {
     let json_path = match file {
         Some(p) => p,
-        None => resolve_manifest_path(None)?,
+        None => {
+            // Look for a policy.json at the default scope without going through
+            // resolve_manifest_path (which now rejects .json).
+            let level = ClashSettings::default_scope();
+            let dir = match level {
+                PolicyLevel::User => ClashSettings::settings_dir()?,
+                PolicyLevel::Project => ClashSettings::project_root()?.join(".clash"),
+                PolicyLevel::Session => {
+                    anyhow::bail!("session scope not supported for policy convert")
+                }
+            };
+            dir.join("policy.json")
+        }
     };
 
     if !json_path.exists() {

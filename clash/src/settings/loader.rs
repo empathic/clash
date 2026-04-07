@@ -10,9 +10,8 @@ use crate::policy::match_tree::CompiledPolicy;
 use crate::policy_loader;
 
 use super::discovery::{
-    self, PolicyLevel, compile_default_policy_to_json, find_ancestor_with, parse_audit_config,
-    discover_star_in, parse_notification_config, session_policy_file, settings_dir,
-    tilde_path,
+    self, PolicyLevel, compile_default_policy_to_json, discover_star_in, find_ancestor_with,
+    parse_audit_config, parse_notification_config, session_policy_file, settings_dir, tilde_path,
 };
 use super::{ClashSettings, HookContext, LoadedPolicy};
 
