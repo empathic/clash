@@ -47,7 +47,7 @@
 
 * Clash uses a capability-based policy language with Starlark (.star) as the primary format, compiled to JSON IR
 * Three capability domains: `exec` (commands), `fs` (filesystem), `net` (network)
-* Policy source: `clash/src/policy/` — parse, compile, eval, IR
+* Policy source: `clash-policy/src/` — parse, compile, eval, IR (extracted crate; `clash::policy` re-exports it)
 * Rules are JSON objects with an `effect` and a capability matcher, e.g. `{ "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }`
 * The policy speaks in capabilities, not Claude Code tool names — the eval layer maps tools to capabilities
 * Policy files use `.json` or `.star` extension (`.json` preferred when both exist)
@@ -64,6 +64,7 @@
 ## Layout
 
 * *clash* Clash binary + library (includes `src/agents/` for multi-agent protocol adapters, `src/policy_gen/` for shared policy generation definitions)
+* *clash-policy* Policy language: parsing, IR, compilation, and evaluation (extracted from `clash` to break circular dep with `clash-lsp`)
 * *clash_starlark* Starlark policy evaluator — compiles `.star` files to JSON policy format
 * *clash-plugin* Claude Code plugin (hooks.json, .claude-plugin definitions)
 * *clash-gemini-ext* Gemini CLI extension package
