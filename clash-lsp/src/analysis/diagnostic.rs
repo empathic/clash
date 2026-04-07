@@ -34,6 +34,19 @@ impl AnalysisDiagnostic {
         }
     }
 
+    /// Create a diagnostic from a policy evaluation or IR validation error.
+    ///
+    /// IR errors don't carry source spans (they occur post-parse), so the range
+    /// defaults to the beginning of the file.
+    pub fn from_validation_error(err: &dyn std::fmt::Display) -> Self {
+        Self {
+            message: err.to_string(),
+            severity: DiagnosticSeverity::ERROR,
+            range: Range::default(),
+            code: Some("clash/validate".into()),
+        }
+    }
+
     pub fn to_lsp(&self) -> Diagnostic {
         Diagnostic {
             range: self.range,
