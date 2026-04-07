@@ -127,7 +127,7 @@ fn match_dict(entries: Vec<(MatchKey, MatchValue)>) -> Expr {
                     Expr::tuple(items.into_iter().map(Expr::string).collect())
                 }
                 MatchKey::Mode(name) => Expr::call("Mode", vec![Expr::string(name)]),
-                MatchKey::Tool(name) => Expr::call("Tool", vec![Expr::string(name)]),
+                MatchKey::Tool(name) => Expr::call("tool", vec![Expr::string(name)]),
             };
             let value = match v {
                 MatchValue::Effect(e) => e,

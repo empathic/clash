@@ -269,8 +269,8 @@ mod tests {
         };
         let src = serialize(&[Stmt::Expr(expr)]);
         assert!(src.contains("Mode(\"plan\")"));
-        assert!(src.contains("Tool(\"Read\"): allow()"));
-        assert!(src.contains("Tool(\"ExitPlanMode\"): allow()"));
+        assert!(src.contains("tool(\"Read\"): allow()"));
+        assert!(src.contains("tool(\"ExitPlanMode\"): allow()"));
     }
 
     #[test]

@@ -67,7 +67,7 @@ pub fn upsert_tool_rule(
 ) -> Result<ManagedUpsertResult, String> {
     let effect_expr = build_effect_expr(effect, sandbox);
     let new_expr = Expr::dict(vec![DictEntry::new(
-        Expr::call("Tool", vec![Expr::string(tool_name)]),
+        Expr::call("tool", vec![Expr::string(tool_name)]),
         effect_expr,
     )]);
 
@@ -268,7 +268,7 @@ fn build_exec_dict_expr(
         value = Expr::dict(vec![DictEntry::new(Expr::string(*arg), value)]);
     }
     Expr::dict(vec![DictEntry::new(
-        Expr::call("Tool", vec![Expr::string("Bash")]),
+        Expr::call("tool", vec![Expr::string("Bash")]),
         Expr::dict(vec![DictEntry::new(Expr::string(binary), value)]),
     )])
 }
@@ -334,7 +334,7 @@ policy("test", merge(
         let result = upsert_tool_rule(&mut stmts, "Write", mutate::Effect::Allow, None).unwrap();
         assert_eq!(result, ManagedUpsertResult::Inserted);
         let src = serialize(&stmts);
-        assert!(src.contains("Tool(\"Write\"): allow()"), "got:\n{src}");
+        assert!(src.contains("tool(\"Write\"): allow()"), "got:\n{src}");
     }
 
     #[test]

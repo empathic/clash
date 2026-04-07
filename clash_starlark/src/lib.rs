@@ -11,6 +11,8 @@ mod globals;
 mod loader;
 pub mod settings_compat;
 pub mod stdlib;
+pub mod test_support;
+pub use test_support::{TestModule, load_starlark_source_for_test};
 mod when;
 
 use std::path::Path;
@@ -527,12 +529,10 @@ policy("test", {"Bash": {"test": allow(sandbox=_box)}})
     fn test_path_static() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "policy", "settings", "sandbox", "path")
-
 _box = sandbox(
     name = "test",
     default = deny(),
-    fs = [path("/usr/local/bin").allow(read = True, execute = True)],
+    fs = {path("/usr/local/bin"): allow("rx")},
 )
 
 settings(default = deny())
@@ -547,12 +547,10 @@ policy("test", {"Bash": {"test": allow(sandbox=_box)}})
     fn test_path_env() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "policy", "settings", "sandbox", "path")
-
 _box = sandbox(
     name = "test",
     default = deny(),
-    fs = [path(env = "CARGO_HOME").allow(read = True, write = True)],
+    fs = {path("$CARGO_HOME"): allow("rwc")},
 )
 
 settings(default = deny())
@@ -1358,8 +1356,8 @@ policy("test", {"Bash": {"git": allow(sandbox=git_full)}})
         let doc = eval_to_doc(
             r#"
 settings(default = deny())
-a = {Tool("Bash"): allow()}
-b = {Tool("Read"): allow()}
+a = {tool("Bash"): allow()}
+b = {tool("Read"): allow()}
 policy("test", merge(a, b))
 "#,
         );
@@ -1372,8 +1370,8 @@ policy("test", merge(a, b))
         let doc = eval_to_doc(
             r#"
 settings(default = deny())
-a = {Tool("Bash"): deny()}
-b = {Tool("Bash"): allow()}
+a = {tool("Bash"): deny()}
+b = {tool("Bash"): allow()}
 policy("test", merge(a, b))
 "#,
         );
@@ -1389,13 +1387,13 @@ policy("test", merge(a, b))
         let doc = eval_to_doc(
             r#"
 settings(default = deny())
-a = {Tool("Bash"): {"git": deny()}}
-b = {Tool("Bash"): {"npm": allow()}}
+a = {tool("Bash"): {"git": deny()}}
+b = {tool("Bash"): {"npm": allow()}}
 policy("test", merge(a, b))
 "#,
         );
         let tree = doc["tree"].as_array().unwrap();
-        // One Tool("Bash") node with two children (git + npm).
+        // One tool("Bash") node with two children (git + npm).
         assert_eq!(
             tree.len(),
             1,
@@ -1415,9 +1413,9 @@ policy("test", merge(a, b))
         let doc = eval_to_doc(
             r#"
 settings(default = deny())
-a = {Tool("Bash"): deny()}
-b = {Tool("Bash"): ask()}
-c = {Tool("Bash"): allow()}
+a = {tool("Bash"): deny()}
+b = {tool("Bash"): ask()}
+c = {tool("Bash"): allow()}
 policy("test", merge(a, b, c))
 "#,
         );
@@ -1432,7 +1430,7 @@ policy("test", merge(a, b, c))
     fn merge_rejects_single_arg() {
         let source = r#"
 settings(default = deny())
-policy("test", merge({Tool("Bash"): allow()}))
+policy("test", merge({tool("Bash"): allow()}))
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from("."));
         assert!(result.is_err());
@@ -1442,7 +1440,7 @@ policy("test", merge({Tool("Bash"): allow()}))
     fn merge_rejects_non_dict() {
         let source = r#"
 settings(default = deny())
-policy("test", merge("not a dict", {Tool("Bash"): allow()}))
+policy("test", merge("not a dict", {tool("Bash"): allow()}))
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from("."));
         assert!(result.is_err());
@@ -1452,8 +1450,8 @@ policy("test", merge("not a dict", {Tool("Bash"): allow()}))
     fn merge_records_shadows() {
         let source = r#"
 settings(default = deny())
-a = {Tool("Bash"): deny()}
-b = {Tool("Bash"): allow()}
+a = {tool("Bash"): deny()}
+b = {tool("Bash"): allow()}
 policy("test", merge(a, b))
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
@@ -1463,7 +1461,7 @@ policy("test", merge(a, b))
         );
         let shadow = &result.shadows[0];
         assert_eq!(shadow.path.len(), 1);
-        // The key path should contain the Tool("Bash") representation.
+        // The key path should contain the tool("Bash") representation.
         assert!(
             shadow.path[0].contains("Bash"),
             "path should mention Bash: {:?}",

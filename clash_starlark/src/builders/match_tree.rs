@@ -114,7 +114,28 @@ pub fn pattern_to_json<'v>(value: Value<'v>, heap: &'v Heap) -> anyhow::Result<J
     {
         return Ok(json!({"regex": s}));
     }
-    // Check for glob struct
+    // Check for new typed-key glob struct: struct(_match_key="glob", _match_value="...")
+    if value.get_type() == "struct"
+        && let Ok(Some(mk_val)) = value.get_attr("_match_key", heap)
+        && mk_val.unpack_str() == Some("glob")
+        && let Ok(Some(mv_val)) = value.get_attr("_match_value", heap)
+        && let Some(pat) = mv_val.unpack_str()
+    {
+        if pat == "*" || pat == "**" {
+            return Ok(json!("wildcard"));
+        }
+        if let Some(stripped) = pat.strip_suffix("/**/*") {
+            return Ok(json!({"prefix": {"literal": stripped}}));
+        }
+        if let Some(stripped) = pat.strip_suffix("/**") {
+            return Ok(json!({"prefix": {"literal": stripped}}));
+        }
+        if let Some(stripped) = pat.strip_suffix("/*") {
+            return Ok(json!({"child_of": {"literal": stripped}}));
+        }
+        return Ok(json!({"prefix": {"literal": pat}}));
+    }
+    // Check for legacy glob struct
     if value.get_type() == "struct"
         && let Ok(Some(glob_val)) = value.get_attr("_glob", heap)
         && let Some(s) = glob_val.unpack_str()
