@@ -220,3 +220,33 @@ Two parse-time errors matter most. Both should be instructive, not punitive:
   the new root-key rule and the unified sandbox tree shape.
 - Any change to how sandboxes are *executed* — this is purely a source-format
   and parse-time change.
+
+## Known follow-ups
+
+The initial implementation pass (tasks A1–A6) left a few items as deferred
+tech debt rather than blocking the unify-policy-and-sandbox PR:
+
+1. **`_legacy_sandbox` / `_make_sandbox` shim retained.** The bundled stdlib
+   ecosystem files (`stdlib/rust.star`, `python.star`, `node.star`, `go.star`,
+   `java.star`, `ruby.star`, `swift.star`, `dotnet.star`, `make.star`,
+   `docker.star`, `sandboxes.star`) still call legacy `sandbox(fs=..., net=...)`
+   at module load time. The dispatch in `sandbox()` that routes legacy
+   `fs=`/`net=` kwargs to `_legacy_sandbox` is therefore still required, along
+   with the supporting `cwd()`, `home()`, `tempdir()`, `domains()`,
+   `_legacy_path_match`, `_legacy_glob`, and `_path_match` helpers.
+
+2. **Loader refactor needed to migrate stdlib ecosystems.** The reason these
+   files can't be mechanically migrated to the unified tree shape is that
+   module-level `sandbox()` calls during `load(...)` evaluation cannot
+   currently access `EvalContext` to register against the active policy.
+   Migrating them to the new DSL requires a loader refactor that gives
+   module-level constructors access to the registration context. That refactor
+   is out of scope for this PR but is the prerequisite for finally deleting
+   the legacy shim and its supporting helpers.
+
+3. **`network()` root constructor.** A5 added a `network()` root constructor
+   to the unified DSL because expressing "allow all network" in the new tree
+   shape required a typed constructor at the root that wasn't otherwise
+   reachable. This was a mechanical addition discovered during migration; it
+   should be reviewed for naming/ergonomics alongside any future revisions to
+   the network grammar.
