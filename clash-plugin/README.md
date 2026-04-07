@@ -41,7 +41,7 @@ The plugin registers five hook types via `hooks/hooks.json`:
 
 ## Policy Basics
 
-Policies can be managed via `policy.json` (machine-readable, CLI-friendly) or written in Starlark (`.star` files) for power users. Policy files are read from `~/.clash/policy.json` or `~/.clash/policy.star` (user-level) and `<project>/.clash/policy.json` or `<project>/.clash/policy.star` (project-level). When both exist at the same level, `.json` takes precedence.
+Policies are written in Starlark (`.star` files). Policy files are read from `~/.clash/policy.star` (user-level) and `<project>/.clash/policy.star` (project-level). Legacy `policy.json` files can be migrated with `clash policy convert`.
 
 ### Policy File Structure
 
@@ -106,10 +106,11 @@ policy("default", {
 
 ### Policy File Paths
 
-- User-level: `~/.clash/policy.json` (preferred) or `~/.clash/policy.star`
-- Project-level: `<project>/.clash/policy.json` (preferred) or `<project>/.clash/policy.star`
+- User-level: `~/.clash/policy.star`
+- Project-level: `<project>/.clash/policy.star`
 - Session-scoped rules can be added via `/clash:allow` or `/clash:deny` skills during a session
-- CLI commands (`clash policy allow/deny/remove`) operate on `policy.json` files
+- CLI commands (`clash policy allow/deny/remove`) operate on `policy.star` files
+- Legacy `policy.json` files are migrated with `clash policy convert`
 
 ### Fixing Sandbox Errors
 

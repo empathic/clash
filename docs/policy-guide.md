@@ -62,38 +62,23 @@ The Starlark policy above compiles to the following JSON intermediate representa
 
 | Path | Scope |
 |------|-------|
-| `~/.clash/policy.json` | User-level (machine-readable, preferred) |
-| `~/.clash/policy.star` | User-level (Starlark, for power users) |
-| `<project>/.clash/policy.json` | Project-level (machine-readable, preferred) |
-| `<project>/.clash/policy.star` | Project-level (Starlark, for power users) |
+| `~/.clash/policy.star` | User-level |
+| `<project>/.clash/policy.star` | Project-level |
 
-JSON (`.json`) is the preferred format. If both `.json` and `.star` exist at the same level, the `.json` file takes precedence. Clash reads the policy on every hook invocation, so changes take effect immediately.
+Policy files use the `.star` extension. Clash reads the policy on every hook invocation, so changes take effect immediately.
 
-CLI commands like `clash policy allow`, `clash policy deny`, and `clash policy remove` operate on `policy.json` files. If only a `policy.star` exists, these commands will auto-create a `policy.json` that includes the existing `.star` file.
+CLI commands like `clash policy allow`, `clash policy deny`, and `clash policy remove` operate on `policy.star` files.
 
-### policy.json Format
+### Migrating from `policy.json`
 
-The `policy.json` file extends the v5 compiled policy format with an `includes` field for referencing Starlark files:
+Earlier versions of clash supported a JSON-based `policy.json` format. To migrate an existing `policy.json` to Starlark, run:
 
-```json
-{
-  "schema_version": 5,
-  "default_effect": "deny",
-  "default_sandbox": "cwd",
-  "sandboxes": {},
-  "includes": [
-    { "path": "@clash//builtin.star" },
-    { "path": "team-rules.star" }
-  ],
-  "tree": []
-}
+```sh
+clash policy convert            # writes policy.star alongside policy.json
+clash policy convert --replace  # also removes the old policy.json
 ```
 
-- **`includes`** — References to `.star` files that are compiled and merged at load time. Use `@clash//` for stdlib modules or relative paths for local files.
-- **`tree`** — Inline rules managed by CLI commands. These take precedence over included rules.
-- **`sandboxes`** — Named sandbox definitions, also CLI-managed.
-
-Included `.star` files are evaluated and their rules are appended after the inline `tree` rules, so inline rules always have higher priority.
+The legacy JSON format is no longer loaded directly — `.star` is the only source format.
 
 ---
 
