@@ -661,7 +661,7 @@ mod tests {
 
     #[test]
     fn rust_sandbox_compiles() {
-        let source = "load(\"@clash//rust.star\", \"rust_safe\", \"rust_full\")\n\npolicy(\"test\", {Tool(\"Bash\"): {(\"cargo\", \"rustc\", \"rustup\"): {glob(\"**\"): allow(sandbox=rust_safe)}}})";
+        let source = "load(\"@clash//rust.star\", \"rust_safe\", \"rust_full\")\n\npolicy(\"test\", {tool(\"Bash\"): {(\"cargo\", \"rustc\", \"rustup\"): {glob(\"**\"): allow(sandbox=rust_safe)}}})";
         let output = clash_starlark::evaluate(source, "<test>", std::path::Path::new("."))
             .expect("rust sandbox starlark evaluation");
         crate::policy::compile::compile_to_tree(&output.json).expect("rust sandbox must compile");
@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn python_sandbox_compiles() {
-        let source = "load(\"@clash//python.star\", \"python_full\")\n\npolicy(\"test\", {Tool(\"Bash\"): {(\"python\", \"python3\"): {glob(\"**\"): allow(sandbox=python_full)}}})";
+        let source = "load(\"@clash//python.star\", \"python_full\")\n\npolicy(\"test\", {tool(\"Bash\"): {(\"python\", \"python3\"): {glob(\"**\"): allow(sandbox=python_full)}}})";
         let output = clash_starlark::evaluate(source, "<test>", std::path::Path::new("."))
             .expect("python sandbox starlark evaluation");
         crate::policy::compile::compile_to_tree(&output.json).expect("python sandbox must compile");
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn node_sandbox_compiles() {
-        let source = "load(\"@clash//node.star\", \"node_full\")\n\npolicy(\"test\", {Tool(\"Bash\"): {(\"node\", \"npm\"): {glob(\"**\"): allow(sandbox=node_full)}}})";
+        let source = "load(\"@clash//node.star\", \"node_full\")\n\npolicy(\"test\", {tool(\"Bash\"): {(\"node\", \"npm\"): {glob(\"**\"): allow(sandbox=node_full)}}})";
         let output = clash_starlark::evaluate(source, "<test>", std::path::Path::new("."))
             .expect("node sandbox starlark evaluation");
         crate::policy::compile::compile_to_tree(&output.json).expect("node sandbox must compile");
@@ -685,7 +685,7 @@ mod tests {
 
     #[test]
     fn go_sandbox_compiles() {
-        let source = "load(\"@clash//go.star\", \"go_safe\", \"go_full\")\n\npolicy(\"test\", {Tool(\"Bash\"): {\"go\": {glob(\"**\"): allow(sandbox=go_safe)}}})";
+        let source = "load(\"@clash//go.star\", \"go_safe\", \"go_full\")\n\npolicy(\"test\", {tool(\"Bash\"): {\"go\": {glob(\"**\"): allow(sandbox=go_safe)}}})";
         let output = clash_starlark::evaluate(source, "<test>", std::path::Path::new("."))
             .expect("go sandbox starlark evaluation");
         crate::policy::compile::compile_to_tree(&output.json).expect("go sandbox must compile");
@@ -693,7 +693,7 @@ mod tests {
 
     #[test]
     fn java_sandbox_compiles() {
-        let source = "load(\"@clash//java.star\", \"java_full\")\n\npolicy(\"test\", {Tool(\"Bash\"): {(\"gradle\", \"mvn\"): {glob(\"**\"): allow(sandbox=java_full)}}})";
+        let source = "load(\"@clash//java.star\", \"java_full\")\n\npolicy(\"test\", {tool(\"Bash\"): {(\"gradle\", \"mvn\"): {glob(\"**\"): allow(sandbox=java_full)}}})";
         let output = clash_starlark::evaluate(source, "<test>", std::path::Path::new("."))
             .expect("java sandbox starlark evaluation");
         crate::policy::compile::compile_to_tree(&output.json).expect("java sandbox must compile");
@@ -701,7 +701,7 @@ mod tests {
 
     #[test]
     fn ruby_sandbox_compiles() {
-        let source = "load(\"@clash//ruby.star\", \"ruby_full\")\n\npolicy(\"test\", {Tool(\"Bash\"): {(\"ruby\", \"gem\", \"bundle\"): {glob(\"**\"): allow(sandbox=ruby_full)}}})";
+        let source = "load(\"@clash//ruby.star\", \"ruby_full\")\n\npolicy(\"test\", {tool(\"Bash\"): {(\"ruby\", \"gem\", \"bundle\"): {glob(\"**\"): allow(sandbox=ruby_full)}}})";
         let output = clash_starlark::evaluate(source, "<test>", std::path::Path::new("."))
             .expect("ruby sandbox starlark evaluation");
         crate::policy::compile::compile_to_tree(&output.json).expect("ruby sandbox must compile");
@@ -709,7 +709,7 @@ mod tests {
 
     #[test]
     fn docker_sandbox_compiles() {
-        let source = "load(\"@clash//docker.star\", \"docker_safe\", \"docker_full\")\n\npolicy(\"test\", {Tool(\"Bash\"): {(\"docker\", \"podman\"): {glob(\"**\"): allow(sandbox=docker_safe)}}})";
+        let source = "load(\"@clash//docker.star\", \"docker_safe\", \"docker_full\")\n\npolicy(\"test\", {tool(\"Bash\"): {(\"docker\", \"podman\"): {glob(\"**\"): allow(sandbox=docker_safe)}}})";
         let output = clash_starlark::evaluate(source, "<test>", std::path::Path::new("."))
             .expect("docker sandbox starlark evaluation");
         crate::policy::compile::compile_to_tree(&output.json).expect("docker sandbox must compile");
@@ -717,7 +717,7 @@ mod tests {
 
     #[test]
     fn swift_sandbox_compiles() {
-        let source = "load(\"@clash//swift.star\", \"swift_full\")\n\npolicy(\"test\", {Tool(\"Bash\"): {(\"swift\", \"xcodebuild\"): {glob(\"**\"): allow(sandbox=swift_full)}}})";
+        let source = "load(\"@clash//swift.star\", \"swift_full\")\n\npolicy(\"test\", {tool(\"Bash\"): {(\"swift\", \"xcodebuild\"): {glob(\"**\"): allow(sandbox=swift_full)}}})";
         let output = clash_starlark::evaluate(source, "<test>", std::path::Path::new("."))
             .expect("swift sandbox starlark evaluation");
         crate::policy::compile::compile_to_tree(&output.json).expect("swift sandbox must compile");
@@ -725,7 +725,7 @@ mod tests {
 
     #[test]
     fn dotnet_sandbox_compiles() {
-        let source = "load(\"@clash//dotnet.star\", \"dotnet_full\")\n\npolicy(\"test\", {Tool(\"Bash\"): {(\"dotnet\", \"msbuild\"): {glob(\"**\"): allow(sandbox=dotnet_full)}}})";
+        let source = "load(\"@clash//dotnet.star\", \"dotnet_full\")\n\npolicy(\"test\", {tool(\"Bash\"): {(\"dotnet\", \"msbuild\"): {glob(\"**\"): allow(sandbox=dotnet_full)}}})";
         let output = clash_starlark::evaluate(source, "<test>", std::path::Path::new("."))
             .expect("dotnet sandbox starlark evaluation");
         crate::policy::compile::compile_to_tree(&output.json).expect("dotnet sandbox must compile");
@@ -733,7 +733,7 @@ mod tests {
 
     #[test]
     fn make_sandbox_compiles() {
-        let source = "load(\"@clash//make.star\", \"make_full\")\n\npolicy(\"test\", {Tool(\"Bash\"): {(\"make\", \"cmake\", \"just\"): {glob(\"**\"): allow(sandbox=make_full)}}})";
+        let source = "load(\"@clash//make.star\", \"make_full\")\n\npolicy(\"test\", {tool(\"Bash\"): {(\"make\", \"cmake\", \"just\"): {glob(\"**\"): allow(sandbox=make_full)}}})";
         let output = clash_starlark::evaluate(source, "<test>", std::path::Path::new("."))
             .expect("make sandbox starlark evaluation");
         crate::policy::compile::compile_to_tree(&output.json).expect("make sandbox must compile");

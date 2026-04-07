@@ -32,8 +32,10 @@ sandbox("rust-dev", {
     assert!(
         rules
             .iter()
-            .any(|r| r["path"] == "/tmp/**" && r["effect"] == "allow" && r["path_match"] == "glob"),
-        "expected /tmp/** glob allow rule, got: {rules:#?}"
+            .any(|r| r["path"] == "/tmp"
+                && r["effect"] == "allow"
+                && r["path_match"] == "subpath"),
+        "expected /tmp subpath allow rule (from /tmp/** glob), got: {rules:#?}"
     );
 
     // Network: domain + localhost present → represented somehow.

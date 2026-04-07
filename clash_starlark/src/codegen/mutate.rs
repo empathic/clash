@@ -497,7 +497,7 @@ policy("test", default = deny(), rules = [when({"Read": allow()})])
         let mut stmts = policy_stmts();
         add_tool_rule(&mut stmts, &["Write"], Effect::Allow, None).unwrap();
         let src = serialize(&stmts);
-        assert!(src.contains("\"Write\": allow()"), "got:\n{src}");
+        assert!(src.contains("tool(\"Write\"): allow()"), "got:\n{src}");
         // Original rule still there
         assert!(src.contains("\"Read\": allow()"), "got:\n{src}");
     }
@@ -508,7 +508,7 @@ policy("test", default = deny(), rules = [when({"Read": allow()})])
         add_tool_rule(&mut stmts, &["Bash"], Effect::Allow, Some("_box")).unwrap();
         let src = serialize(&stmts);
         assert!(
-            src.contains("\"Bash\": allow(sandbox = _box)"),
+            src.contains("tool(\"Bash\"): allow(sandbox = _box)"),
             "got:\n{src}"
         );
     }
@@ -556,7 +556,7 @@ policy("test", default = deny(), rules = [when({"Read": allow()})])
         replace_rule(&mut stmts, 0, new_rule).unwrap();
         let src = serialize(&stmts);
         assert!(!src.contains("Read"), "got:\n{src}");
-        assert!(src.contains("\"Write\": deny()"), "got:\n{src}");
+        assert!(src.contains("tool(\"Write\"): deny()"), "got:\n{src}");
     }
 
     #[test]

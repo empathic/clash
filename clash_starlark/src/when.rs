@@ -123,10 +123,12 @@ enum MatchKeyKind {
     Path {
         value: JsonValue,
         doc: Option<String>,
+        worktree: bool,
     },
     Glob {
         value: JsonValue,
         doc: Option<String>,
+        worktree: bool,
     },
     Domain {
         value: JsonValue,
@@ -134,6 +136,9 @@ enum MatchKeyKind {
     },
     Localhost {
         ports: JsonValue,
+        doc: Option<String>,
+    },
+    Network {
         doc: Option<String>,
     },
 }
@@ -157,6 +162,17 @@ fn classify_root_key<'v>(key: Value<'v>, heap: &'v Heap) -> anyhow::Result<Match
             return Ok(MatchKeyKind::Default { doc });
         }
 
+        let worktree = key
+            .get_attr("_worktree", heap)
+            .ok()
+            .flatten()
+            .and_then(|v| v.unpack_bool())
+            .unwrap_or(false);
+
+        if mk == "network" {
+            return Ok(MatchKeyKind::Network { doc });
+        }
+
         let mv = key
             .get_attr("_match_value", heap)
             .ok()
@@ -175,17 +191,19 @@ fn classify_root_key<'v>(key: Value<'v>, heap: &'v Heap) -> anyhow::Result<Match
             "path" => Ok(MatchKeyKind::Path {
                 value: pattern_to_json(mv, heap)?,
                 doc,
+                worktree,
             }),
             "glob" => Ok(MatchKeyKind::Glob {
                 value: pattern_to_json(mv, heap)?,
                 doc,
+                worktree,
             }),
             "domain" => Ok(MatchKeyKind::Domain {
                 value: pattern_to_json(mv, heap)?,
                 doc,
             }),
             "localhost" => Ok(MatchKeyKind::Localhost {
-                ports: pattern_to_json(mv, heap)?,
+                ports: serde_json::Value::Null,
                 doc,
             }),
             other => bail!("unknown match key type: {other}"),
@@ -431,9 +449,10 @@ fn process_policy_dict<'v>(
                 MatchKeyKind::Path { .. }
                 | MatchKeyKind::Glob { .. }
                 | MatchKeyKind::Domain { .. }
-                | MatchKeyKind::Localhost { .. } => {
+                | MatchKeyKind::Localhost { .. }
+                | MatchKeyKind::Network { .. } => {
                     bail!(
-                        "path()/glob()/domain()/localhost() are sandbox-only keys; \
+                        "path()/glob()/domain()/localhost()/network() are sandbox-only keys; \
                          policy() trees only accept default(), mode(), and tool() at the root"
                     );
                 }
@@ -564,6 +583,7 @@ fn fs_rule_from<'v>(
     path_str: String,
     doc: Option<String>,
     match_type: &str,
+    worktree: bool,
     heap: &'v Heap,
 ) -> anyhow::Result<JsonValue> {
     if !is_effect(effect, heap) {
@@ -580,6 +600,11 @@ fn fs_rule_from<'v>(
         "path": path_str,
         "path_match": match_type,
     });
+    if worktree {
+        rule.as_object_mut()
+            .unwrap()
+            .insert("follow_worktrees".to_string(), json!(true));
+    }
     if let Some(d) = doc {
         rule.as_object_mut()
             .unwrap()
@@ -658,6 +683,7 @@ pub fn sandbox_tree_impl<'v>(
     let mut net_domains: Vec<String> = Vec::new();
     let mut net_localhost_allow: Option<bool> = None;
     let mut net_localhost_ports: Vec<i64> = Vec::new();
+    let mut network_override: Option<String> = None;
 
     for (key, value) in dict.iter() {
         let raw_mv = key
@@ -670,11 +696,21 @@ pub fn sandbox_tree_impl<'v>(
             .ok()
             .flatten()
             .and_then(|v| {
-                ListRef::from_value(v).map(|list| {
-                    list.iter()
-                        .filter_map(|item| item.unpack_i32().map(|n| n as i64))
-                        .collect()
-                })
+                if let Some(list) = ListRef::from_value(v) {
+                    Some(
+                        list.iter()
+                            .filter_map(|item| item.unpack_i32().map(|n| n as i64))
+                            .collect::<Vec<_>>(),
+                    )
+                } else if let Some(tup) = starlark::values::tuple::TupleRef::from_value(v) {
+                    Some(
+                        tup.iter()
+                            .filter_map(|item| item.unpack_i32().map(|n| n as i64))
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                }
             })
             .unwrap_or_default();
         let key_doc = key
@@ -688,15 +724,38 @@ pub fn sandbox_tree_impl<'v>(
             MatchKeyKind::Default { .. } => {
                 default_effect = effect_to_string(value, heap)?;
             }
-            MatchKeyKind::Path { .. } => {
+            MatchKeyKind::Path { worktree, .. } => {
                 let pv = raw_mv
                     .ok_or_else(|| anyhow::anyhow!("path() key missing string value"))?;
-                fs_rules.push(fs_rule_from(value, pv, key_doc, "literal", heap)?);
+                fs_rules.push(fs_rule_from(
+                    value,
+                    pv,
+                    key_doc,
+                    if worktree { "subpath" } else { "literal" },
+                    worktree,
+                    heap,
+                )?);
             }
-            MatchKeyKind::Glob { .. } => {
+            MatchKeyKind::Glob { worktree, .. } => {
                 let pv = raw_mv
                     .ok_or_else(|| anyhow::anyhow!("glob() key missing string value"))?;
-                fs_rules.push(fs_rule_from(value, pv, key_doc, "glob", heap)?);
+                // Translate glob suffix to the IR's path_match enum.
+                let (final_path, mt) = if pv == "*" || pv == "**" {
+                    ("/".to_string(), "subpath")
+                } else if let Some(stripped) = pv.strip_suffix("/**/*") {
+                    (stripped.to_string(), "subpath")
+                } else if let Some(stripped) = pv.strip_suffix("/**") {
+                    (stripped.to_string(), "subpath")
+                } else if let Some(stripped) = pv.strip_suffix("/*") {
+                    (stripped.to_string(), "child_of")
+                } else {
+                    (pv, "literal")
+                };
+                fs_rules.push(fs_rule_from(value, final_path, key_doc, mt, worktree, heap)?);
+            }
+            MatchKeyKind::Network { .. } => {
+                let eff = effect_to_string(value, heap)?;
+                network_override = Some(eff);
             }
             MatchKeyKind::Domain { .. } => {
                 let dn = raw_mv
@@ -719,7 +778,11 @@ pub fn sandbox_tree_impl<'v>(
 
     append_system_rules(&mut fs_rules);
 
-    let network = build_network_json(net_domains, net_localhost_allow, net_localhost_ports);
+    let network = if let Some(ov) = network_override {
+        json!(ov)
+    } else {
+        build_network_json(net_domains, net_localhost_allow, net_localhost_ports)
+    };
     Ok(build_sandbox_json(name, &default_effect, fs_rules, network, doc))
 }
 
@@ -835,11 +898,26 @@ fn convert_net_policy<'v>(sb: Value<'v>, heap: &'v Heap) -> anyhow::Result<JsonV
             let dict = DictRef::from_value(v).unwrap();
             let key = heap.alloc_str("_localhost_ports");
             if let Ok(Some(ports_val)) = dict.get(key.to_value()) {
-                if let Some(ports_list) = ListRef::from_value(ports_val) {
-                    let ports: Vec<u16> = ports_list
-                        .iter()
-                        .filter_map(|item| item.unpack_i32().map(|n| n as u16))
-                        .collect();
+                let ports_iter: Option<Vec<u16>> = if let Some(list) =
+                    ListRef::from_value(ports_val)
+                {
+                    Some(
+                        list.iter()
+                            .filter_map(|item| item.unpack_i32().map(|n| n as u16))
+                            .collect(),
+                    )
+                } else if let Some(tup) =
+                    starlark::values::tuple::TupleRef::from_value(ports_val)
+                {
+                    Some(
+                        tup.iter()
+                            .filter_map(|item| item.unpack_i32().map(|n| n as u16))
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
+                if let Some(ports) = ports_iter {
                     if ports.is_empty() {
                         return Ok(json!("localhost"));
                     }

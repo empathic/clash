@@ -586,11 +586,11 @@ mod tests {
 
         // The other-allows rule should be just WebFetch, not a tuple with Bash.
         assert!(
-            rules_section.contains("\"WebFetch\": allow()"),
+            rules_section.contains("tool(\"WebFetch\"): allow()"),
             "expected WebFetch as sole other-allowed tool, got:\n{rules_section}"
         );
         assert!(
-            !rules_section.contains("(\"Bash\""),
+            !rules_section.contains("tool((\"Bash\""),
             "Bash should not appear in tool tuple:\n{rules_section}"
         );
 

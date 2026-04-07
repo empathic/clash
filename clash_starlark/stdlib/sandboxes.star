@@ -22,6 +22,7 @@ readonly = sandbox(
         glob("$HOME/.claude/**"): allow("r"),
     },
     net = allow(),
+    doc = "Read-only project access with network allowed.",
 )
 
 project = sandbox(
@@ -31,7 +32,8 @@ project = sandbox(
         glob("$PWD/**"): allow(FULL),
         glob("$HOME/.claude/**"): allow("rwcd"),
         glob("$TMPDIR/**"): allow(FULL),
-    }
+    },
+    doc = "Build tools: read+write project and TMPDIR, no network.",
 )
 
 git_safe = sandbox(
@@ -76,9 +78,11 @@ workspace = sandbox(
         } | {
         glob("$HOME/{}/**".format(d)): deny() for d in UNSAFE_IN_HOME
     },
+    doc = "Full home directory access, deny sensitive subdirs (.ssh, .gpg, .config, .aws, .gh, .git).",
 )
 
 unrestricted = sandbox(
     name = "unrestricted",
     default=allow(),
+    doc = "Fully trusted: all filesystem + network access.",
 )

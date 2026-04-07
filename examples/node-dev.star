@@ -1,23 +1,22 @@
 # Node.js Development Policy
 # Allows npm/bun/node with sandboxed filesystem access.
 
-sandbox(
-    name = "node",
-    default = deny(),
-    fs = {
-        subpath("$PWD", follow_worktrees = True): allow("rwc"),
-        glob("$TMPDIR/**"): allow(),
-    },
-    net = allow(),
-)
+sandbox("node", {
+    default(): deny(),
+    path("$PWD", worktree = True): allow("rwc"),
+    glob("$TMPDIR/**"): allow(),
+    network(): allow(),
+}, doc = "Node toolchain sandbox: project read/write, network allowed.")
 
 settings(default = ask())
 
 policy("node-dev", {
-    "Bash": {
-        "git": {"push": {"--force": deny()}},
+    tool("Bash"): {
+        "git": {
+            "push": {"--force": deny()},
+            glob("**"): allow(),
+        },
         ("npm", "npx", "node", "bun"): allow(sandbox = "node"),
-        "git": allow(),
     },
-    ("Read", "Glob", "Grep"): allow(),
-})
+    tool(("Read", "Glob", "Grep")): allow(),
+}, doc = "Node.js development: npm/npx/node/bun sandboxed; git push --force denied.")

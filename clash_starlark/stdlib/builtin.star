@@ -10,7 +10,7 @@ clashbox = sandbox(
 )
 
 clash = {
-    "Bash": {
+    tool("Bash"): {
         "clash": {
             ("bug", "status"): allow(sandbox=clashbox),
             "policy": {
@@ -31,7 +31,7 @@ _claude_fs = sandbox(
 )
 
 claude = {
-    (
+    tool((
         "Agent",
         "AskUserQuestion",
         "EnterPlanMode",
@@ -45,7 +45,7 @@ claude = {
         "TaskOutput",
         "TaskStop",
         "TaskUpdate",
-    ): allow(sandbox=_claude_fs),
+    )): allow(sandbox=_claude_fs),
 }
 
 # Merged dict of all builtin rules

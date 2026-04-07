@@ -5,9 +5,9 @@
 settings(default = ask())
 
 policy("permissive", {
-    "Bash": {
+    tool("Bash"): {
         "git": {"push": {"--force": deny()}},
         ("git", "cargo", "npm", "npx", "node", "bun", "python", "pip", "uv", "make", "just"): allow(),
     },
-    ("Read", "Write", "Edit", "Glob", "Grep"): allow(),
-})
+    tool(("Read", "Write", "Edit", "Glob", "Grep")): allow(),
+}, doc = "Permissive: ask-all default with common dev tools auto-allowed; denies only force-push.")

@@ -118,6 +118,12 @@ impl EvalContext {
                     .or_insert_with(|| sb.clone());
             }
         }
+        // Also include top-level sandbox(name, tree, ...) registrations.
+        for (name, sb) in self.sandboxes.borrow().iter() {
+            sandbox_map
+                .entry(name.clone())
+                .or_insert_with(|| sb.clone());
+        }
 
         let mut doc = serde_json::json!({
             "schema_version": 5,

@@ -409,7 +409,7 @@ impl PolicySpec {
         )];
         if !plan_bash.is_empty() {
             plan_inner.push(DictEntry::new(
-                Expr::call("Tool", vec![Expr::string("Bash")]),
+                Expr::call("tool", vec![Expr::string("Bash")]),
                 Expr::dict(plan_bash),
             ));
         }
@@ -426,7 +426,7 @@ impl PolicySpec {
         )];
         if !edit_bash.is_empty() {
             edit_inner.push(DictEntry::new(
-                Expr::call("Tool", vec![Expr::string("Bash")]),
+                Expr::call("tool", vec![Expr::string("Bash")]),
                 Expr::dict(edit_bash),
             ));
         }

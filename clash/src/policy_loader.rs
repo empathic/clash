@@ -452,7 +452,7 @@ mod tests {
                 r#"
 load("@clash//std.star", "policy", "settings", "deny")
 settings(default = deny())
-policy("include", {"Read": allow()})
+policy("include", {tool("Read"): allow()})
 "#,
             )
             .unwrap();

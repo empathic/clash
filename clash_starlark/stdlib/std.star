@@ -72,7 +72,7 @@ def regex(pattern):
     return struct(_regex=pattern)
 
 
-def glob(pattern, doc=None):
+def glob(pattern, doc=None, worktree=False):
     """Filesystem glob-path key.
 
     Usage:
@@ -84,7 +84,7 @@ def glob(pattern, doc=None):
         pattern.endswith("/*") or pattern.endswith("/**") or pattern.endswith("/**/*")
     ):
         fail("glob() pattern must end with /*, /**, or /**/* (got: " + pattern + ")")
-    return struct(_match_key="glob", _match_value=pattern, _doc=doc)
+    return struct(_match_key="glob", _match_value=pattern, _doc=doc, _worktree=worktree)
 
 
 def _legacy_glob(pattern):
@@ -440,15 +440,29 @@ def tempdir():
     return _path_match(struct(_env="TMPDIR"), False)
 
 
-def path(path_str, doc=None):
+def path(path_str, doc=None, worktree=False):
     """Filesystem literal-path key.
+
+    When `worktree=True`, the path is treated as a recursive subpath match and
+    follows git worktrees.
 
     Usage:
         sandbox("x", {path("$PWD"): allow("rwc")})
+        sandbox("x", {path("$PWD", worktree=True): allow("rwc")})
     """
     if type(path_str) != "string":
         fail("path() takes a string; got " + type(path_str))
-    return struct(_match_key="path", _match_value=path_str, _doc=doc)
+    return struct(_match_key="path", _match_value=path_str, _doc=doc, _worktree=worktree)
+
+
+def network(doc=None):
+    """Top-level network effect key.
+
+    Usage:
+        sandbox("x", {network(): allow()})   # allow all network
+        sandbox("x", {network(): deny()})    # deny all network (default)
+    """
+    return struct(_match_key="network", _match_value=None, _doc=doc)
 
 
 def _legacy_path_match(path_str=None, env=None):
@@ -499,6 +513,7 @@ def localhost(ports=None, doc=None):
                 fail("localhost() ports must be integers; got " + type(p))
             if p < 1 or p > 65535:
                 fail("localhost() port out of range (1-65535): " + str(p))
+        ports = tuple(ports)
     return struct(_match_key="localhost", _match_value=ports, _doc=doc)
 
 

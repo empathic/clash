@@ -103,11 +103,11 @@ pub enum MatchValue {
 /// removed.  The returned expression is now a plain dict suitable for passing
 /// directly to `policy()` or `merge()`.
 pub fn match_rule(entries: Vec<(MatchKey, MatchValue)>) -> Expr {
-    match_dict(entries)
+    match_dict(entries, true)
 }
 
-/// Build a simple tool match rule: `{"Name": effect()}` or
-/// `{("A", "B"): effect()}` for multiple tool names.
+/// Build a simple tool match rule: `{tool("Name"): effect()}` or
+/// `{tool(("A", "B")): effect()}` for multiple tool names.
 pub fn tool_match(names: &[&str], effect: Expr) -> Expr {
     let key: MatchKey = if names.len() == 1 {
         MatchKey::Single(names[0].to_owned())
@@ -117,21 +117,32 @@ pub fn tool_match(names: &[&str], effect: Expr) -> Expr {
     match_rule(vec![(key, MatchValue::Effect(effect))])
 }
 
-fn match_dict(entries: Vec<(MatchKey, MatchValue)>) -> Expr {
+fn match_dict(entries: Vec<(MatchKey, MatchValue)>, is_root: bool) -> Expr {
     let dict_entries = entries
         .into_iter()
         .map(|(k, v)| {
             let key = match k {
-                MatchKey::Single(s) => Expr::string(s),
+                MatchKey::Single(s) => {
+                    if is_root {
+                        Expr::call("tool", vec![Expr::string(s)])
+                    } else {
+                        Expr::string(s)
+                    }
+                }
                 MatchKey::Tuple(items) => {
-                    Expr::tuple(items.into_iter().map(Expr::string).collect())
+                    let tup = Expr::tuple(items.into_iter().map(Expr::string).collect());
+                    if is_root {
+                        Expr::call("tool", vec![tup])
+                    } else {
+                        tup
+                    }
                 }
                 MatchKey::Mode(name) => Expr::call("Mode", vec![Expr::string(name)]),
                 MatchKey::Tool(name) => Expr::call("tool", vec![Expr::string(name)]),
             };
             let value = match v {
                 MatchValue::Effect(e) => e,
-                MatchValue::Nested(inner) => match_dict(inner),
+                MatchValue::Nested(inner) => match_dict(inner, false),
             };
             DictEntry::new(key, value)
         })
@@ -220,7 +231,7 @@ mod tests {
         let expr = tool_match(&["Read"], allow());
         let stmts = vec![Stmt::Expr(expr)];
         let src = serialize(&stmts);
-        assert_eq!(src, "{\"Read\": allow()}\n");
+        assert_eq!(src, "{tool(\"Read\"): allow()}\n");
     }
 
     #[test]
@@ -232,7 +243,7 @@ mod tests {
         let stmts = vec![Stmt::Expr(expr)];
         let src = serialize(&stmts);
         assert!(
-            src.contains("(\"Read\", \"Glob\", \"Grep\"): allow(sandbox = _fs_box)"),
+            src.contains("tool((\"Read\", \"Glob\", \"Grep\")): allow(sandbox = _fs_box)"),
             "got:\n{src}"
         );
     }
@@ -273,7 +284,7 @@ mod tests {
         assert!(src.contains("load(\"@clash//std.star\""));
         assert!(src.contains("settings("));
         assert!(src.contains("policy(\"default\""));
-        assert!(src.contains("{\"Read\": allow()}"), "got:\n{src}");
+        assert!(src.contains("{tool(\"Read\"): allow()}"), "got:\n{src}");
     }
 
     #[test]

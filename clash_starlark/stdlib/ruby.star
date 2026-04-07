@@ -14,4 +14,4 @@ ruby_full = sandbox(
     doc = "Ruby full: gem install, bundle, rails. Full project + gem access.",
 )
 
-ruby = {"Bash": {("ruby", "gem", "bundle", "rails"): allow(sandbox = ruby_full)}}
+ruby = {tool("Bash"): {("ruby", "gem", "bundle", "rails"): allow(sandbox = ruby_full)}}

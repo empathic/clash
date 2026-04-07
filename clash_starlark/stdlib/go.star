@@ -24,4 +24,4 @@ go_full = sandbox(
     doc = "Go full: get, mod tidy, install. Full project access, network enabled.",
 )
 
-go = {"Bash": {"go": allow(sandbox = go_full)}}
+go = {tool("Bash"): {"go": allow(sandbox = go_full)}}
