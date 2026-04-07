@@ -3,9 +3,9 @@
 use tower_lsp::{Client, LanguageServer, jsonrpc};
 use tower_lsp::lsp_types::{
     self as tl, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
-    DiagnosticSeverity, Hover, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, InitializedParams, MessageType,
-    NumberOrString, Position, Range, ServerCapabilities, ServerInfo,
+    DiagnosticSeverity, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, MessageType,
+    NumberOrString, OneOf, Position, Range, ServerCapabilities, ServerInfo,
     TextDocumentSyncCapability, TextDocumentSyncKind, Url,
     DidOpenTextDocumentParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
 };
@@ -69,6 +69,7 @@ impl LanguageServer for Backend {
                 )),
                 completion_provider: Some(CompletionOptions::default()),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                definition_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -121,5 +122,20 @@ impl LanguageServer for Backend {
             params.text_document_position.position,
         );
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> jsonrpc::Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri.clone();
+        let Some(source) = self.docs.get_text(&uri) else { return Ok(None) };
+        let Some(parsed) = self.docs.get(&uri) else { return Ok(None) };
+        Ok(crate::features::goto_definition::goto(
+            &parsed,
+            &source,
+            &uri,
+            params.text_document_position_params.position,
+        ))
     }
 }
