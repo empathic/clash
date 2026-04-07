@@ -10,12 +10,16 @@ impl zed::Extension for ClashExtension {
     fn language_server_command(
         &mut self,
         _language_server_id: &LanguageServerId,
-        _worktree: &zed::Worktree,
+        worktree: &zed::Worktree,
     ) -> Result<zed::Command> {
+        let command = worktree.which("clash").ok_or_else(|| {
+            "could not find `clash` on PATH — install clash from https://github.com/empathic/clash"
+                .to_string()
+        })?;
         Ok(zed::Command {
-            command: "clash".to_string(),
+            command,
             args: vec!["lsp".to_string()],
-            env: vec![],
+            env: worktree.shell_env(),
         })
     }
 }
