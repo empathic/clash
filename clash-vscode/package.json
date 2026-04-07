@@ -23,7 +23,7 @@
     }],
     "grammars": [{
       "language": "clash-policy",
-      "scopeName": "source.python",
+      "scopeName": "source.starlark",
       "path": "./syntaxes/starlark.tmLanguage.json"
     }],
     "configuration": {

@@ -77,3 +77,8 @@ Publishing to the VS Code Marketplace is a manual step:
 ## Bugs and feedback
 
 File issues at https://github.com/empathic/clash/issues.
+
+
+## Credits
+
+- **Starlark syntax highlighting**: [`syntaxes/starlark.tmLanguage.json`](syntaxes/starlark.tmLanguage.json) is vendored from [bazelbuild/vscode-bazel](https://github.com/bazelbuild/vscode-bazel/blob/master/syntaxes/starlark.tmLanguage.json), Apache-2.0 licensed.
