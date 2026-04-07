@@ -6,6 +6,10 @@ schema_version = 1
 authors = ["Empathic Systems <contact@empathic.dev>"]
 repository = "https://github.com/empathic/clash"
 
+[grammars.starlark]
+repository = "https://github.com/tree-sitter-grammars/tree-sitter-starlark"
+rev = "a453dbf3ba433db0e5ec621a38a7e59d72e4dc69"
+
 [language_servers.clash-lsp]
 name = "clash-lsp"
 languages = ["Starlark"]
