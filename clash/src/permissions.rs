@@ -236,7 +236,6 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-
 /// Return a plain-English explanation for why a verb was denied.
 fn denial_explanation(verb_str: &str) -> &'static str {
     match verb_str {

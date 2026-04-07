@@ -23,7 +23,11 @@ pub fn install(dry_run: bool) -> Result<String> {
 
 fn config_path() -> Result<PathBuf> {
     let base = dirs::config_dir().context("no config dir")?;
-    Ok(base.join("nvim").join("after").join("ftplugin").join("starlark.lua"))
+    Ok(base
+        .join("nvim")
+        .join("after")
+        .join("ftplugin")
+        .join("starlark.lua"))
 }
 
 #[cfg(test)]

@@ -1,5 +1,4 @@
 pub mod bug;
-pub mod lsp;
 pub mod commands;
 pub mod debug;
 pub mod doctor;
@@ -10,6 +9,7 @@ pub mod hooks;
 pub mod import_settings;
 pub mod init;
 pub mod launch;
+pub mod lsp;
 pub mod policy;
 pub mod schema;
 pub mod session;

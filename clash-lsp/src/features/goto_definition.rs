@@ -14,7 +14,10 @@ pub fn goto(
 ) -> Option<GotoDefinitionResponse> {
     let word = word_at(source, pos)?;
     let range = parsed.symbols.get(&word)?;
-    Some(GotoDefinitionResponse::Scalar(Location { uri: uri.clone(), range }))
+    Some(GotoDefinitionResponse::Scalar(Location {
+        uri: uri.clone(),
+        range,
+    }))
 }
 
 #[cfg(test)]
@@ -28,7 +31,15 @@ mod tests {
         let parsed = parse("x.star", src);
         let uri: Url = "file:///x.star".parse().unwrap();
         // Line 1: `policy("x", my_rule)` — col 13 is 'y' (inside "my_rule" which starts at col 12).
-        let resp = goto(&parsed, src, &uri, Position { line: 1, character: 13 });
+        let resp = goto(
+            &parsed,
+            src,
+            &uri,
+            Position {
+                line: 1,
+                character: 13,
+            },
+        );
         assert!(resp.is_some(), "expected definition, got None");
     }
 }

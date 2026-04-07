@@ -142,12 +142,7 @@ impl DictTree {
             DictTree::Branch(children) => {
                 let entries: Vec<(Value<'v>, Value<'v>)> = children
                     .iter()
-                    .map(|(key, child)| {
-                        (
-                            heap.alloc_str(key).to_value(),
-                            child.to_starlark(heap),
-                        )
-                    })
+                    .map(|(key, child)| (heap.alloc_str(key).to_value(), child.to_starlark(heap)))
                     .collect();
                 heap.alloc(starlark::values::dict::AllocDict(entries))
             }
@@ -241,11 +236,7 @@ pub fn build_policy_dict<'v>(perms: &PermissionSet, heap: &'v Heap) -> Value<'v>
 ///
 /// This is the dict-based counterpart of `from_claude_settings()`.
 /// The returned dict can be passed to `merge()` and then to `policy()`.
-pub fn from_claude_settings_as_dict<'v>(
-    user: bool,
-    project: bool,
-    heap: &'v Heap,
-) -> Value<'v> {
+pub fn from_claude_settings_as_dict<'v>(user: bool, project: bool, heap: &'v Heap) -> Value<'v> {
     from_claude_settings_as_dict_inner(user, project, None, heap)
 }
 
@@ -298,16 +289,28 @@ mod tests {
         let perms = PermissionSet::new().allow(Permission::for_tool("Read"));
         let repr = dict_repr(&perms);
         // Should produce {"Read": struct(_effect = "allow", ...)}
-        assert!(repr.contains("\"Read\""), "dict should have Read key: {repr}");
-        assert!(repr.contains("_effect=\"allow\""), "should have allow effect: {repr}");
+        assert!(
+            repr.contains("\"Read\""),
+            "dict should have Read key: {repr}"
+        );
+        assert!(
+            repr.contains("_effect=\"allow\""),
+            "should have allow effect: {repr}"
+        );
     }
 
     #[test]
     fn test_dict_tool_only_deny() {
         let perms = PermissionSet::new().deny(Permission::for_tool("Write"));
         let repr = dict_repr(&perms);
-        assert!(repr.contains("\"Write\""), "dict should have Write key: {repr}");
-        assert!(repr.contains("_effect=\"deny\""), "should have deny effect: {repr}");
+        assert!(
+            repr.contains("\"Write\""),
+            "dict should have Write key: {repr}"
+        );
+        assert!(
+            repr.contains("_effect=\"deny\""),
+            "should have deny effect: {repr}"
+        );
     }
 
     #[test]
@@ -315,9 +318,15 @@ mod tests {
         let perms = PermissionSet::new().allow(Permission::prefix("Bash", "git"));
         let repr = dict_repr(&perms);
         // Should produce {"Bash": {"git": struct(...)}}
-        assert!(repr.contains("\"Bash\""), "dict should have Bash key: {repr}");
+        assert!(
+            repr.contains("\"Bash\""),
+            "dict should have Bash key: {repr}"
+        );
         assert!(repr.contains("\"git\""), "should have git sub-key: {repr}");
-        assert!(repr.contains("_effect=\"allow\""), "should have allow: {repr}");
+        assert!(
+            repr.contains("_effect=\"allow\""),
+            "should have allow: {repr}"
+        );
     }
 
     #[test]
@@ -325,9 +334,18 @@ mod tests {
         let perms = PermissionSet::new().allow(Permission::prefix("Bash", "cargo build"));
         let repr = dict_repr(&perms);
         // Should produce {"Bash": {"cargo": {"build": struct(...)}}}
-        assert!(repr.contains("\"Bash\""), "dict should have Bash key: {repr}");
-        assert!(repr.contains("\"cargo\""), "should have cargo sub-key: {repr}");
-        assert!(repr.contains("\"build\""), "should have build sub-key: {repr}");
+        assert!(
+            repr.contains("\"Bash\""),
+            "dict should have Bash key: {repr}"
+        );
+        assert!(
+            repr.contains("\"cargo\""),
+            "should have cargo sub-key: {repr}"
+        );
+        assert!(
+            repr.contains("\"build\""),
+            "should have build sub-key: {repr}"
+        );
     }
 
     #[test]
@@ -335,17 +353,32 @@ mod tests {
         let perms = PermissionSet::new().deny(Permission::exact("Read", ".env"));
         let repr = dict_repr(&perms);
         // Should produce {"Read": {".env": struct(_effect = "deny", ...)}}
-        assert!(repr.contains("\"Read\""), "dict should have Read key: {repr}");
-        assert!(repr.contains("\".env\""), "should have .env sub-key: {repr}");
-        assert!(repr.contains("_effect=\"deny\""), "should have deny: {repr}");
+        assert!(
+            repr.contains("\"Read\""),
+            "dict should have Read key: {repr}"
+        );
+        assert!(
+            repr.contains("\".env\""),
+            "should have .env sub-key: {repr}"
+        );
+        assert!(
+            repr.contains("_effect=\"deny\""),
+            "should have deny: {repr}"
+        );
     }
 
     #[test]
     fn test_dict_glob_pattern() {
         let perms = PermissionSet::new().allow(Permission::glob("Read", "**/*.rs"));
         let repr = dict_repr(&perms);
-        assert!(repr.contains("\"Read\""), "dict should have Read key: {repr}");
-        assert!(repr.contains("\"**/*.rs\""), "should have glob sub-key: {repr}");
+        assert!(
+            repr.contains("\"Read\""),
+            "dict should have Read key: {repr}"
+        );
+        assert!(
+            repr.contains("\"**/*.rs\""),
+            "should have glob sub-key: {repr}"
+        );
     }
 
     #[test]
@@ -354,7 +387,10 @@ mod tests {
             .allow(Permission::for_tool("mcp__server__tool"))
             .allow(Permission::for_tool("Read"));
         let repr = dict_repr(&perms);
-        assert!(!repr.contains("mcp__"), "MCP tools should be skipped: {repr}");
+        assert!(
+            !repr.contains("mcp__"),
+            "MCP tools should be skipped: {repr}"
+        );
         assert!(repr.contains("\"Read\""), "Read should be present: {repr}");
     }
 
@@ -439,9 +475,7 @@ mod tests {
         )
         .unwrap();
 
-        let resolver = PathResolver::new()
-            .with_home(&home)
-            .with_project(&project);
+        let resolver = PathResolver::new().with_home(&home).with_project(&project);
 
         // Both user + project
         let dict = from_claude_settings_as_dict_inner(true, true, Some(resolver), &heap);

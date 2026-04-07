@@ -13,7 +13,9 @@ pub fn install(dry_run: bool) -> Result<String> {
         ));
     }
     if dry_run {
-        return Ok(format!("would run: code --install-extension {EXTENSION_ID}"));
+        return Ok(format!(
+            "would run: code --install-extension {EXTENSION_ID}"
+        ));
     }
     let status = Command::new("code")
         .args(["--install-extension", EXTENSION_ID])

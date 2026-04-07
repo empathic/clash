@@ -519,8 +519,7 @@ pub fn open_in_editor(path: &Path) -> Result<()> {
 fn validate_policy_source(path: &Path) -> Result<crate::policy::match_tree::CompiledPolicy> {
     let source = crate::settings::evaluate_policy_file(path)
         .with_context(|| format!("failed to evaluate: {}", path.display()))?;
-    crate::policy::compile::compile_to_tree(&source)
-        .with_context(|| "policy validation failed")
+    crate::policy::compile::compile_to_tree(&source).with_context(|| "policy validation failed")
 }
 
 /// Visudo-style edit loop: copy to tempfile, edit, validate, confirm, write.
@@ -731,8 +730,8 @@ fn apply_mutation_star(
     use clash_starlark::codegen::managed::{self, ManagedUpsertResult};
     use clash_starlark::codegen::mutate::Effect as StarEffect;
 
-    let mut doc = StarDocument::open(path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
+    let mut doc =
+        StarDocument::open(path).with_context(|| format!("failed to open {}", path.display()))?;
 
     let star_effect = match &mutation {
         PolicyMutation::Allow { .. } => StarEffect::Allow,
@@ -947,7 +946,9 @@ fn looks_like_hash(s: &str) -> bool {
 }
 
 /// Extract the binary name and args from an audit log entry's tool_input_summary.
-fn extract_command_from_entry(entry: &crate::debug::AuditLogEntry) -> Result<(String, Vec<String>)> {
+fn extract_command_from_entry(
+    entry: &crate::debug::AuditLogEntry,
+) -> Result<(String, Vec<String>)> {
     let summary = &entry.tool_input_summary;
     let clean = summary.trim_end_matches("...");
 
@@ -981,11 +982,7 @@ fn handle_allow(
     yes: bool,
 ) -> Result<()> {
     // Detect hash-based invocation: single positional arg that looks like a hex hash.
-    if command.len() == 1
-        && tool.is_none()
-        && bin.is_none()
-        && looks_like_hash(&command[0])
-    {
+    if command.len() == 1 && tool.is_none() && bin.is_none() && looks_like_hash(&command[0]) {
         return handle_allow_by_hash(&command[0], sandbox, scope, broad, yes);
     }
     apply_mutation(command, tool, bin, scope, PolicyMutation::Allow { sandbox })
@@ -1000,11 +997,7 @@ fn handle_deny(
     yes: bool,
 ) -> Result<()> {
     // Detect hash-based invocation: single positional arg that looks like a hex hash.
-    if command.len() == 1
-        && tool.is_none()
-        && bin.is_none()
-        && looks_like_hash(&command[0])
-    {
+    if command.len() == 1 && tool.is_none() && bin.is_none() && looks_like_hash(&command[0]) {
         return handle_deny_by_hash(&command[0], scope, broad, yes);
     }
     apply_mutation(command, tool, bin, scope, PolicyMutation::Deny)
@@ -1017,8 +1010,7 @@ fn handle_allow_by_hash(
     broad: bool,
     yes: bool,
 ) -> Result<()> {
-    let entry = crate::debug::log::find_by_hash(hash)
-        .context("failed to look up audit entry")?;
+    let entry = crate::debug::log::find_by_hash(hash).context("failed to look up audit entry")?;
 
     let (bin_name, args) = extract_command_from_entry(&entry)?;
 
@@ -1064,7 +1056,12 @@ fn handle_allow_by_hash(
         }
     }
 
-    apply_mutation_by_path(&path, &bin_name, &rule_args, PolicyMutation::Allow { sandbox })
+    apply_mutation_by_path(
+        &path,
+        &bin_name,
+        &rule_args,
+        PolicyMutation::Allow { sandbox },
+    )
 }
 
 /// Write a hash-based rule mutation using an already-resolved path.
@@ -1090,9 +1087,12 @@ fn apply_mutation_by_path(
         match mutation {
             PolicyMutation::Remove => {
                 if clash_starlark::codegen::managed::remove_exec_rule(
-                    &mut doc.stmts, bin_name, &arg_refs,
+                    &mut doc.stmts,
+                    bin_name,
+                    &arg_refs,
                 ) {
-                    doc.save().with_context(|| format!("failed to write {}", path.display()))?;
+                    doc.save()
+                        .with_context(|| format!("failed to write {}", path.display()))?;
                     println!("{} Rule removed", style::green_bold("✓"));
                 } else {
                     println!("No matching managed rule found");
@@ -1100,9 +1100,15 @@ fn apply_mutation_by_path(
             }
             _ => {
                 let result = clash_starlark::codegen::managed::upsert_exec_rule(
-                    &mut doc.stmts, bin_name, &arg_refs, star_effect, sandbox_name,
-                ).map_err(|e| anyhow::anyhow!("{e}"))?;
-                doc.save().with_context(|| format!("failed to write {}", path.display()))?;
+                    &mut doc.stmts,
+                    bin_name,
+                    &arg_refs,
+                    star_effect,
+                    sandbox_name,
+                )
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+                doc.save()
+                    .with_context(|| format!("failed to write {}", path.display()))?;
                 let result_str = match result {
                     clash_starlark::codegen::managed::ManagedUpsertResult::Inserted => "Rule added",
                     clash_starlark::codegen::managed::ManagedUpsertResult::Replaced => {
@@ -1119,7 +1125,9 @@ fn apply_mutation_by_path(
     let rule_arg_refs: Vec<&str> = rule_args.iter().map(|s| s.as_str()).collect();
     let decision = match &mutation {
         PolicyMutation::Allow { sandbox } => Decision::Allow(
-            sandbox.as_deref().map(|s| crate::policy::match_tree::SandboxRef(s.to_string())),
+            sandbox
+                .as_deref()
+                .map(|s| crate::policy::match_tree::SandboxRef(s.to_string())),
         ),
         PolicyMutation::Deny => Decision::Deny,
         PolicyMutation::Remove => Decision::Deny,
@@ -1149,14 +1157,8 @@ fn apply_mutation_by_path(
     Ok(())
 }
 
-fn handle_deny_by_hash(
-    hash: &str,
-    scope: Option<String>,
-    broad: bool,
-    yes: bool,
-) -> Result<()> {
-    let entry = crate::debug::log::find_by_hash(hash)
-        .context("failed to look up audit entry")?;
+fn handle_deny_by_hash(hash: &str, scope: Option<String>, broad: bool, yes: bool) -> Result<()> {
+    let entry = crate::debug::log::find_by_hash(hash).context("failed to look up audit entry")?;
 
     let (bin_name, args) = extract_command_from_entry(&entry)?;
 
@@ -1343,10 +1345,7 @@ fn handle_convert(file: Option<PathBuf>, replace: bool) -> Result<()> {
 fn handle_migrate(scope: Option<String>, yes: bool) -> Result<()> {
     let path = resolve_manifest_path(scope)?;
 
-    if !path
-        .extension()
-        .is_some_and(|ext| ext == "star")
-    {
+    if !path.extension().is_some_and(|ext| ext == "star") {
         anyhow::bail!(
             "policy file is not .star format: {}\nRun `clash policy convert` first to migrate from JSON.",
             path.display()
@@ -1435,11 +1434,7 @@ fn handle_migrate(scope: Option<String>, yes: bool) -> Result<()> {
 
     std::fs::write(&path, &new_source)
         .with_context(|| format!("failed to write {}", path.display()))?;
-    eprintln!(
-        "{} Migrated {}",
-        style::green_bold("✓"),
-        path.display()
-    );
+    eprintln!("{} Migrated {}", style::green_bold("✓"), path.display());
 
     Ok(())
 }

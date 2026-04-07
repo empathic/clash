@@ -31,12 +31,7 @@ pub fn tree_diff(before: &CompiledPolicy, after: &CompiledPolicy) -> Option<Stri
         let line = change.value().trim_end_matches('\n');
         match change.tag() {
             ChangeTag::Delete => {
-                output.push_str(
-                    &Style::new()
-                        .red()
-                        .apply_to(format!("- {line}"))
-                        .to_string(),
-                );
+                output.push_str(&Style::new().red().apply_to(format!("- {line}")).to_string());
                 output.push('\n');
             }
             ChangeTag::Insert => {

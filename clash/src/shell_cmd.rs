@@ -178,11 +178,7 @@ fn make_sandbox_hook(
             } else {
                 command_str.clone()
             };
-            eprintln!(
-                "{} blocked shell on {}",
-                "\x1b[1;31mclash:\x1b[0m",
-                noun,
-            );
+            eprintln!("{} blocked shell on {}", "\x1b[1;31mclash:\x1b[0m", noun,);
             eprintln!(
                 "  clash policy allow {}          # allow this exact command",
                 audit_hash,
@@ -587,9 +583,7 @@ mod tests {
             ],
         );
         let source = clash_starlark::codegen::serialize(&[
-            load_std(&[
-                "policy", "settings", "sandbox", "cwd", "allow", "deny",
-            ]),
+            load_std(&["policy", "settings", "sandbox", "cwd", "allow", "deny"]),
             Stmt::Expr(settings(deny(), None)),
             Stmt::Expr(policy(
                 "test",
@@ -694,7 +688,10 @@ mod tests {
         );
         // No sandbox → command runs unchanged.
         let result = hook("/usr/bin/git", &["push".to_string()]);
-        assert!(matches!(result, clash_brush_core::ExternalCommandAction::Passthrough));
+        assert!(matches!(
+            result,
+            clash_brush_core::ExternalCommandAction::Passthrough
+        ));
     }
 
     #[test]

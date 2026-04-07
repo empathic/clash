@@ -18,7 +18,11 @@ pub fn install(dry_run: bool) -> Result<String> {
     let serialized = toml::to_string_pretty(&merged)?;
 
     if dry_run {
-        return Ok(format!("would write to {}:\n\n{}", path.display(), serialized));
+        return Ok(format!(
+            "would write to {}:\n\n{}",
+            path.display(),
+            serialized
+        ));
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;

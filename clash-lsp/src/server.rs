@@ -1,15 +1,15 @@
 //! `tower_lsp::LanguageServer` implementation.
 
-use tower_lsp::{Client, LanguageServer, jsonrpc};
+use lsp_types::DiagnosticSeverity as Sev95;
 use tower_lsp::lsp_types::{
     self as tl, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
-    DiagnosticSeverity, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
     HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, MessageType,
     NumberOrString, OneOf, Position, Range, ServerCapabilities, ServerInfo,
     TextDocumentSyncCapability, TextDocumentSyncKind, Url,
-    DidOpenTextDocumentParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
 };
-use lsp_types::DiagnosticSeverity as Sev95;
+use tower_lsp::{Client, LanguageServer, jsonrpc};
 
 use crate::analysis::{AnalysisDiagnostic, ParsedPolicy};
 use crate::documents::DocumentStore;
@@ -22,15 +22,15 @@ pub struct Backend {
 
 impl Backend {
     pub fn new(client: Client) -> Self {
-        Self { client, docs: DocumentStore::new(), schema: crate::schema::load_builtin() }
+        Self {
+            client,
+            docs: DocumentStore::new(),
+            schema: crate::schema::load_builtin(),
+        }
     }
 
     async fn publish(&self, uri: Url, parsed: ParsedPolicy) {
-        let diags: Vec<Diagnostic> = parsed
-            .diagnostics
-            .iter()
-            .map(diag_to_tl)
-            .collect();
+        let diags: Vec<Diagnostic> = parsed.diagnostics.iter().map(diag_to_tl).collect();
         self.client.publish_diagnostics(uri, diags, None).await;
     }
 }
@@ -43,16 +43,25 @@ fn diag_to_tl(d: &AnalysisDiagnostic) -> Diagnostic {
     let r = &d.range;
     Diagnostic {
         range: Range {
-            start: Position { line: r.start.line, character: r.start.character },
-            end:   Position { line: r.end.line,   character: r.end.character   },
+            start: Position {
+                line: r.start.line,
+                character: r.start.character,
+            },
+            end: Position {
+                line: r.end.line,
+                character: r.end.character,
+            },
         },
         severity: Some(match d.severity {
-            Sev95::ERROR       => DiagnosticSeverity::ERROR,
-            Sev95::WARNING     => DiagnosticSeverity::WARNING,
+            Sev95::ERROR => DiagnosticSeverity::ERROR,
+            Sev95::WARNING => DiagnosticSeverity::WARNING,
             Sev95::INFORMATION => DiagnosticSeverity::INFORMATION,
-            _                  => DiagnosticSeverity::HINT,
+            _ => DiagnosticSeverity::HINT,
         }),
-        code: d.code.as_deref().map(|s| NumberOrString::String(s.to_owned())),
+        code: d
+            .code
+            .as_deref()
+            .map(|s| NumberOrString::String(s.to_owned())),
         source: Some("clash".into()),
         message: d.message.clone(),
         ..Default::default()
@@ -80,10 +89,14 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.client.log_message(MessageType::INFO, "clash-lsp ready").await;
+        self.client
+            .log_message(MessageType::INFO, "clash-lsp ready")
+            .await;
     }
 
-    async fn shutdown(&self) -> jsonrpc::Result<()> { Ok(()) }
+    async fn shutdown(&self) -> jsonrpc::Result<()> {
+        Ok(())
+    }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.clone();
@@ -93,7 +106,9 @@ impl LanguageServer for Backend {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.clone();
-        let Some(change) = params.content_changes.into_iter().next() else { return };
+        let Some(change) = params.content_changes.into_iter().next() else {
+            return;
+        };
         let parsed = self.docs.change(uri.clone(), change.text);
         self.publish(uri, parsed).await;
     }
@@ -104,7 +119,9 @@ impl LanguageServer for Backend {
 
     async fn hover(&self, params: HoverParams) -> jsonrpc::Result<Option<Hover>> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let Some(source) = self.docs.get_text(uri) else { return Ok(None) };
+        let Some(source) = self.docs.get_text(uri) else {
+            return Ok(None);
+        };
         Ok(crate::features::hover::hover(
             &self.schema,
             &source,
@@ -128,9 +145,17 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> jsonrpc::Result<Option<GotoDefinitionResponse>> {
-        let uri = params.text_document_position_params.text_document.uri.clone();
-        let Some(source) = self.docs.get_text(&uri) else { return Ok(None) };
-        let Some(parsed) = self.docs.get(&uri) else { return Ok(None) };
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        let Some(source) = self.docs.get_text(&uri) else {
+            return Ok(None);
+        };
+        let Some(parsed) = self.docs.get(&uri) else {
+            return Ok(None);
+        };
         Ok(crate::features::goto_definition::goto(
             &parsed,
             &source,

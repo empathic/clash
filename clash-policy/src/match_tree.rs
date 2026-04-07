@@ -24,26 +24,56 @@ struct ToolAlias {
 }
 
 const TOOL_ALIASES: &[ToolAlias] = &[
-    ToolAlias { canonical: "shell",      internal: "Bash"      },
-    ToolAlias { canonical: "read",       internal: "Read"      },
-    ToolAlias { canonical: "write",      internal: "Write"     },
-    ToolAlias { canonical: "edit",       internal: "Edit"      },
-    ToolAlias { canonical: "glob",       internal: "Glob"      },
-    ToolAlias { canonical: "grep",       internal: "Grep"      },
-    ToolAlias { canonical: "web_fetch",  internal: "WebFetch"  },
-    ToolAlias { canonical: "web_search", internal: "WebSearch" },
+    ToolAlias {
+        canonical: "shell",
+        internal: "Bash",
+    },
+    ToolAlias {
+        canonical: "read",
+        internal: "Read",
+    },
+    ToolAlias {
+        canonical: "write",
+        internal: "Write",
+    },
+    ToolAlias {
+        canonical: "edit",
+        internal: "Edit",
+    },
+    ToolAlias {
+        canonical: "glob",
+        internal: "Glob",
+    },
+    ToolAlias {
+        canonical: "grep",
+        internal: "Grep",
+    },
+    ToolAlias {
+        canonical: "web_fetch",
+        internal: "WebFetch",
+    },
+    ToolAlias {
+        canonical: "web_search",
+        internal: "WebSearch",
+    },
 ];
 
 /// Given a Clash canonical name, return the internal name.
 fn canonical_to_internal(clash_name: &str) -> Option<&'static str> {
     let lower = clash_name.to_lowercase();
-    TOOL_ALIASES.iter().find(|a| a.canonical.to_lowercase() == lower).map(|a| a.internal)
+    TOOL_ALIASES
+        .iter()
+        .find(|a| a.canonical.to_lowercase() == lower)
+        .map(|a| a.internal)
 }
 
 /// Given an internal name, return the Clash canonical name.
 fn internal_to_canonical(internal_name: &str) -> Option<&'static str> {
     let lower = internal_name.to_lowercase();
-    TOOL_ALIASES.iter().find(|a| a.internal.to_lowercase() == lower).map(|a| a.canonical)
+    TOOL_ALIASES
+        .iter()
+        .find(|a| a.internal.to_lowercase() == lower)
+        .map(|a| a.canonical)
 }
 
 // ---------------------------------------------------------------------------

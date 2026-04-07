@@ -13,6 +13,7 @@
 * `just check` for unit tests and linting
 * `just clester` for end-to-end tests (runs clester against clash binary)
 * `just ci` for full CI (check + clester)
+* ALWAYS run `cargo fmt --all` before opening or updating a PR. Every PR must be rustfmt-clean across the whole workspace, not just the files you touched.
 * End-to-end test scripts are YAML files in `clester/tests/scripts/`
 * The `clester` crate is the end-to-end test harness; see its source for script format
 

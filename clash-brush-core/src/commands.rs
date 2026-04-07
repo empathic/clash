@@ -578,15 +578,11 @@ pub(crate) fn execute_external_command(
     let cmd_arg_strings: Vec<String> = cmd_args.iter().map(|s| s.to_string()).collect();
     let (effective_exe, hooked_args) = if let Some(hook) = context.shell.external_command_hook() {
         match hook(executable_path, &cmd_arg_strings) {
-            crate::ExternalCommandAction::Replace(new_exe, new_args) => {
-                (new_exe, Some(new_args))
-            }
+            crate::ExternalCommandAction::Replace(new_exe, new_args) => (new_exe, Some(new_args)),
             crate::ExternalCommandAction::Block => {
                 return Ok(crate::ExecutionResult::new(77).into());
             }
-            crate::ExternalCommandAction::Passthrough => {
-                (executable_path.to_string(), None)
-            }
+            crate::ExternalCommandAction::Passthrough => (executable_path.to_string(), None),
         }
     } else {
         (executable_path.to_string(), None)

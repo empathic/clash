@@ -891,6 +891,7 @@ dependencies = [
  "anyhow",
  "clash-policy",
  "clash_starlark",
+ "dirs",
  "indoc",
  "lsp-types 0.95.1",
  "pretty_assertions",
@@ -898,8 +899,10 @@ dependencies = [
  "starlark",
  "thiserror 2.0.18",
  "tokio",
+ "toml",
  "tower-lsp",
  "tracing",
+ "which",
 ]
 
 [[package]]

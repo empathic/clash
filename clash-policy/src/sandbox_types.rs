@@ -1463,7 +1463,11 @@ fn detect_worktree(cwd: &Path) -> Option<WorktreeInfo> {
     match try_detect_worktree(cwd) {
         Ok(info) => info,
         Err(e) => {
-            tracing::debug!("git worktree detection failed for {}: {:#}", cwd.display(), e);
+            tracing::debug!(
+                "git worktree detection failed for {}: {:#}",
+                cwd.display(),
+                e
+            );
             None
         }
     }
@@ -1478,11 +1482,15 @@ fn try_detect_worktree(cwd: &Path) -> anyhow::Result<Option<WorktreeInfo>> {
         .map_err(|e| anyhow::anyhow!("reading {}: {e}", dot_git.display()))?;
     let git_dir = parse_gitdir_pointer(&content)
         .map_err(|e| anyhow::anyhow!("parsing gitdir in {}: {e}", dot_git.display()))?;
-    let base = dot_git.parent()
+    let base = dot_git
+        .parent()
         .ok_or_else(|| anyhow::anyhow!("{} has no parent", dot_git.display()))?;
     let git_dir = normalize_git_path(&base.join(&git_dir));
     let common_dir = resolve_common_dir(&git_dir)?;
-    Ok(Some(WorktreeInfo { git_dir, common_dir }))
+    Ok(Some(WorktreeInfo {
+        git_dir,
+        common_dir,
+    }))
 }
 
 fn find_dot_git(start: &Path) -> anyhow::Result<std::path::PathBuf> {
@@ -1499,7 +1507,9 @@ fn find_dot_git(start: &Path) -> anyhow::Result<std::path::PathBuf> {
 }
 
 fn parse_gitdir_pointer(content: &str) -> anyhow::Result<std::path::PathBuf> {
-    let line = content.lines().find(|l| l.starts_with("gitdir:"))
+    let line = content
+        .lines()
+        .find(|l| l.starts_with("gitdir:"))
         .ok_or_else(|| anyhow::anyhow!("no 'gitdir:' line found"))?;
     let path_str = line.strip_prefix("gitdir:").unwrap().trim();
     if path_str.is_empty() {
@@ -1523,7 +1533,9 @@ fn normalize_git_path(path: &Path) -> std::path::PathBuf {
     let mut components = Vec::new();
     for component in path.components() {
         match component {
-            std::path::Component::ParentDir => { components.pop(); }
+            std::path::Component::ParentDir => {
+                components.pop();
+            }
             std::path::Component::CurDir => {}
             other => components.push(other),
         }

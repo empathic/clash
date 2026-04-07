@@ -38,8 +38,14 @@ pub fn parse(filename: &str, source: &str) -> ParsedPolicy {
     let mut symbols = SymbolIndex::default();
     for sym in clash_starlark::top_level_symbols(&ast) {
         let range = Range {
-            start: Position { line: sym.start_line, character: sym.start_col },
-            end:   Position { line: sym.end_line,   character: sym.end_col   },
+            start: Position {
+                line: sym.start_line,
+                character: sym.start_col,
+            },
+            end: Position {
+                line: sym.end_line,
+                character: sym.end_col,
+            },
         };
         symbols.insert(sym.name, range);
     }
@@ -63,7 +69,10 @@ pub fn parse(filename: &str, source: &str) -> ParsedPolicy {
     // Step 3: compile the evaluated JSON through the clash-policy IR to catch
     // structural errors (unknown effects, malformed rule trees, etc.).
     match clash_policy::compile::compile_to_tree(&eval_output.json) {
-        Ok(_) => ParsedPolicy { symbols, ..Default::default() },
+        Ok(_) => ParsedPolicy {
+            symbols,
+            ..Default::default()
+        },
         Err(e) => ParsedPolicy {
             diagnostics: vec![AnalysisDiagnostic::from_validation_error(&e)],
             symbols,
@@ -82,7 +91,11 @@ mod tests {
             policy("test", {"Bash": allow()})
         "#};
         let parsed = parse("test.star", src);
-        assert!(parsed.diagnostics.is_empty(), "expected no diagnostics, got {:?}", parsed.diagnostics);
+        assert!(
+            parsed.diagnostics.is_empty(),
+            "expected no diagnostics, got {:?}",
+            parsed.diagnostics
+        );
     }
 
     #[test]
@@ -91,14 +104,22 @@ mod tests {
         let parsed = parse("bad.star", src);
         assert_eq!(parsed.diagnostics.len(), 1);
         let d = &parsed.diagnostics[0];
-        assert!(d.message.to_lowercase().contains("syntax") || d.message.to_lowercase().contains("parse") || !d.message.is_empty());
+        assert!(
+            d.message.to_lowercase().contains("syntax")
+                || d.message.to_lowercase().contains("parse")
+                || !d.message.is_empty()
+        );
     }
 
     #[test]
     fn parses_top_level_assignment_into_symbols() {
         let src = "my_rule = {}\npolicy(\"x\", my_rule)\n";
         let parsed = parse("x.star", src);
-        assert!(parsed.symbols.get("my_rule").is_some(), "expected my_rule symbol, got {:?}", parsed.symbols);
+        assert!(
+            parsed.symbols.get("my_rule").is_some(),
+            "expected my_rule symbol, got {:?}",
+            parsed.symbols
+        );
     }
 
     #[test]
@@ -110,7 +131,10 @@ mod tests {
         "#};
         let parsed = parse("bad_ir.star", src);
         assert!(
-            parsed.diagnostics.iter().any(|d| d.code.as_deref() == Some("clash/validate")),
+            parsed
+                .diagnostics
+                .iter()
+                .any(|d| d.code.as_deref() == Some("clash/validate")),
             "expected a clash/validate diagnostic, got {:?}",
             parsed.diagnostics
         );

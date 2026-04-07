@@ -6,9 +6,7 @@
 use anyhow::{Result, bail};
 
 use crate::match_tree::PolicyManifest;
-use crate::sandbox_types::{
-    Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy, SandboxRule,
-};
+use crate::sandbox_types::{Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy, SandboxRule};
 
 /// Result of an add-rule operation.
 #[derive(Debug, PartialEq, Eq)]

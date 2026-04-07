@@ -20,8 +20,7 @@ pub enum ExternalCommandAction {
 
 /// Hook called before spawning an external command. Receives the executable
 /// path and string arguments. Returns an action: passthrough, replace, or block.
-pub type ExternalCommandHook =
-    Arc<dyn Fn(&str, &[String]) -> ExternalCommandAction + Send + Sync>;
+pub type ExternalCommandHook = Arc<dyn Fn(&str, &[String]) -> ExternalCommandAction + Send + Sync>;
 
 use crate::{
     ExecutionControlFlow, ExecutionResult, builtins, env::ShellEnvironment, error, extensions,

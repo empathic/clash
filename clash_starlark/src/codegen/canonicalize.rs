@@ -169,8 +169,7 @@ impl Transform for MergeConsecutiveWhens {
         // Handle merge(...) calls: collapse consecutive plain dicts.
         let items = match expr {
             Expr::Call { func, args, kwargs }
-                if matches!(func.as_ref(), Expr::Ident(n) if n == "merge")
-                    && kwargs.is_empty() =>
+                if matches!(func.as_ref(), Expr::Ident(n) if n == "merge") && kwargs.is_empty() =>
             {
                 args
             }

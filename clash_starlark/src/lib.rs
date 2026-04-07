@@ -81,9 +81,9 @@ pub fn top_level_symbols(ast: &starlark::syntax::AstModule) -> Vec<SymbolSpan> {
                     out.push(SymbolSpan {
                         name: ident.node.ident.clone(),
                         start_line: span.begin.line as u32,
-                        start_col:  span.begin.column as u32,
-                        end_line:   span.end.line as u32,
-                        end_col:    span.end.column as u32,
+                        start_col: span.begin.column as u32,
+                        end_line: span.end.line as u32,
+                        end_col: span.end.column as u32,
                     });
                 }
             }
@@ -92,9 +92,9 @@ pub fn top_level_symbols(ast: &starlark::syntax::AstModule) -> Vec<SymbolSpan> {
                 out.push(SymbolSpan {
                     name: def.name.node.ident.clone(),
                     start_line: span.begin.line as u32,
-                    start_col:  span.begin.column as u32,
-                    end_line:   span.end.line as u32,
-                    end_col:    span.end.column as u32,
+                    start_col: span.begin.column as u32,
+                    end_line: span.end.line as u32,
+                    end_col: span.end.column as u32,
                 });
             }
             _ => {}
@@ -819,10 +819,13 @@ policy("test", {None: allow()}, default_sandbox = _box)
         let sandbox = &doc["sandboxes"]["test"];
         let rules = sandbox["rules"].as_array().unwrap();
         // First rule should have literal path match for .env
-        let env_rule = rules.iter().find(|r| {
-            r["path"].as_str().map_or(false, |p| p.contains(".env"))
-        });
-        assert!(env_rule.is_some(), "expected .env rule in sandbox, got: {rules:?}");
+        let env_rule = rules
+            .iter()
+            .find(|r| r["path"].as_str().map_or(false, |p| p.contains(".env")));
+        assert!(
+            env_rule.is_some(),
+            "expected .env rule in sandbox, got: {rules:?}"
+        );
         assert_eq!(env_rule.unwrap()["path_match"], "literal");
     }
 
@@ -928,8 +931,13 @@ policy("test", {None: allow()}, default_sandbox = _box)
         assert_eq!(doc["schema_version"], 5);
         let sandbox = &doc["sandboxes"]["test"];
         let rules = sandbox["rules"].as_array().unwrap();
-        let log_rule = rules.iter().find(|r| r["path_match"].as_str() == Some("regex"));
-        assert!(log_rule.is_some(), "expected regex path rule in sandbox, got: {rules:?}");
+        let log_rule = rules
+            .iter()
+            .find(|r| r["path_match"].as_str() == Some("regex"));
+        assert!(
+            log_rule.is_some(),
+            "expected regex path rule in sandbox, got: {rules:?}"
+        );
     }
 
     #[test]
@@ -1388,7 +1396,11 @@ policy("test", merge(a, b))
         );
         let tree = doc["tree"].as_array().unwrap();
         // One Tool("Bash") node with two children (git + npm).
-        assert_eq!(tree.len(), 1, "should merge into single tool node: {tree:?}");
+        assert_eq!(
+            tree.len(),
+            1,
+            "should merge into single tool node: {tree:?}"
+        );
         let children = tree[0]["condition"]["children"].as_array().unwrap();
         // Each nested key (git, npm) becomes a child condition node.
         assert_eq!(

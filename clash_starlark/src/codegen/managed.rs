@@ -181,11 +181,17 @@ fn insert_managed_rule(
     let insert_at = find_managed_section_end(stmts);
 
     // Insert comment and assignment
-    stmts.insert(insert_at, Stmt::Comment(format!("clash-managed:{match_key}")));
-    stmts.insert(insert_at + 1, Stmt::Assign {
-        target: var_name.to_string(),
-        value: expr,
-    });
+    stmts.insert(
+        insert_at,
+        Stmt::Comment(format!("clash-managed:{match_key}")),
+    );
+    stmts.insert(
+        insert_at + 1,
+        Stmt::Assign {
+            target: var_name.to_string(),
+            value: expr,
+        },
+    );
 
     // Add reference as last argument to policy() merge() call
     let merge_args = mutate::policy_merge_args_mut(stmts)
@@ -215,8 +221,7 @@ fn find_managed_section_end(stmts: &mut Vec<Stmt>) -> usize {
     }
 
     // No managed section yet — create one before policy()
-    let insert_at = mutate::find_policy_call(stmts)
-        .unwrap_or(stmts.len());
+    let insert_at = mutate::find_policy_call(stmts).unwrap_or(stmts.len());
 
     // Add the section header
     stmts.insert(insert_at, Stmt::Comment(MANAGED_COMMENT.to_string()));
@@ -286,13 +291,16 @@ mod tests {
     use crate::codegen::serialize::serialize;
 
     fn base_stmts() -> Vec<Stmt> {
-        parse(r#"load("@clash//claude_compat.star", "from_claude_settings")
+        parse(
+            r#"load("@clash//claude_compat.star", "from_claude_settings")
 
 policy("test", merge(
     from_claude_settings(),
     {"Read": allow()},
 ))
-"#).unwrap()
+"#,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -305,18 +313,14 @@ policy("test", merge(
         assert!(src.contains("_clash_rule_0"), "got:\n{src}");
         assert!(src.contains("\"git\""), "got:\n{src}");
         assert!(src.contains("deny()"), "got:\n{src}");
-        assert!(
-            src.contains("clash-managed:exec:git:push"),
-            "got:\n{src}"
-        );
+        assert!(src.contains("clash-managed:exec:git:push"), "got:\n{src}");
     }
 
     #[test]
     fn upsert_exec_replaces_existing() {
         let mut stmts = base_stmts();
         upsert_exec_rule(&mut stmts, "git", &[], mutate::Effect::Allow, None).unwrap();
-        let result =
-            upsert_exec_rule(&mut stmts, "git", &[], mutate::Effect::Deny, None).unwrap();
+        let result = upsert_exec_rule(&mut stmts, "git", &[], mutate::Effect::Deny, None).unwrap();
         assert_eq!(result, ManagedUpsertResult::Replaced);
         let src = serialize(&stmts);
         // Only one managed rule should exist
@@ -327,8 +331,7 @@ policy("test", merge(
     #[test]
     fn upsert_tool_inserts() {
         let mut stmts = base_stmts();
-        let result =
-            upsert_tool_rule(&mut stmts, "Write", mutate::Effect::Allow, None).unwrap();
+        let result = upsert_tool_rule(&mut stmts, "Write", mutate::Effect::Allow, None).unwrap();
         assert_eq!(result, ManagedUpsertResult::Inserted);
         let src = serialize(&stmts);
         assert!(src.contains("Tool(\"Write\"): allow()"), "got:\n{src}");

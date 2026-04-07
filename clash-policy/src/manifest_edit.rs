@@ -156,9 +156,7 @@ pub fn build_exec_rule(bin: &str, args: &[&str], decision: Decision) -> Node {
     for (i, arg) in args.iter().enumerate().rev() {
         current = Node::Condition {
             observe: Observable::PositionalArg((i + 1) as i32),
-            pattern: Pattern::Literal(crate::match_tree::Value::Literal(
-                (*arg).to_string(),
-            )),
+            pattern: Pattern::Literal(crate::match_tree::Value::Literal((*arg).to_string())),
             children: vec![current],
             doc: None,
             source: None,

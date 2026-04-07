@@ -4,7 +4,7 @@ use lsp_types::Url;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use crate::analysis::{parse, ParsedPolicy};
+use crate::analysis::{ParsedPolicy, parse};
 
 #[derive(Default)]
 pub struct DocumentStore {
@@ -24,7 +24,10 @@ impl DocumentStore {
     pub fn open(&self, uri: Url, text: String) -> ParsedPolicy {
         let parsed = parse(uri.as_str(), &text);
         let snapshot = parsed.clone();
-        self.inner.write().unwrap().insert(uri, Entry { text, parsed });
+        self.inner
+            .write()
+            .unwrap()
+            .insert(uri, Entry { text, parsed });
         snapshot
     }
 
@@ -37,7 +40,11 @@ impl DocumentStore {
     }
 
     pub fn get(&self, uri: &Url) -> Option<ParsedPolicy> {
-        self.inner.read().unwrap().get(uri).map(|e| e.parsed.clone())
+        self.inner
+            .read()
+            .unwrap()
+            .get(uri)
+            .map(|e| e.parsed.clone())
     }
 
     pub fn get_text(&self, uri: &Url) -> Option<String> {
