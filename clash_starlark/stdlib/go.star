@@ -13,6 +13,8 @@ go_safe = sandbox(
     doc = "Go safe: vet, test, build. Module cache writable, source read-only.",
 )
 
+sandbox( "hello" )
+
 go_full = sandbox(
     name = "go_full",
     default = ask(),

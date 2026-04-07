@@ -4,10 +4,11 @@ use lsp_types::DiagnosticSeverity as Sev95;
 use tower_lsp::lsp_types::{
     self as tl, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
     DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, MessageType,
-    NumberOrString, OneOf, Position, Range, ServerCapabilities, ServerInfo,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    DidOpenTextDocumentParams, DocumentFormattingParams, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
+    InitializeResult, InitializedParams, MessageType, NumberOrString, OneOf, Position, Range,
+    ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
+    Url,
 };
 use tower_lsp::{Client, LanguageServer, jsonrpc};
 
@@ -79,6 +80,7 @@ impl LanguageServer for Backend {
                 completion_provider: Some(CompletionOptions::default()),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -162,5 +164,36 @@ impl LanguageServer for Backend {
             &uri,
             params.text_document_position_params.position,
         ))
+    }
+
+    async fn formatting(
+        &self,
+        params: DocumentFormattingParams,
+    ) -> jsonrpc::Result<Option<Vec<TextEdit>>> {
+        let uri = &params.text_document.uri;
+        let Some(source) = self.docs.get_text(uri) else {
+            return Ok(None);
+        };
+        let Some(formatted) = crate::features::formatting::format(&source) else {
+            return Ok(None);
+        };
+        if formatted == source {
+            return Ok(Some(vec![]));
+        }
+        // Replace the entire document. The end position uses u32::MAX to cover
+        // any line/column the editor's view of the buffer might have.
+        Ok(Some(vec![TextEdit {
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: u32::MAX,
+                    character: u32::MAX,
+                },
+            },
+            new_text: formatted,
+        }]))
     }
 }
