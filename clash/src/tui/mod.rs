@@ -77,8 +77,8 @@ pub fn run_with_options(
         ));
     }
 
-    let doc = StarDocument::open(path)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
+    let doc =
+        StarDocument::open(path).with_context(|| format!("failed to parse {}", path.display()))?;
     let mut app = app::App::new_star(doc)?;
     if show_test_panel {
         app.show_test_panel();

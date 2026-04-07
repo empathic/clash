@@ -385,11 +385,12 @@ fn default_effect() -> Effect {
 }
 
 // ---------------------------------------------------------------------------
-// PolicyManifest — on-disk policy.json representation
+// PolicyManifest — JSON shape produced by evaluating a policy
 // ---------------------------------------------------------------------------
 
-/// On-disk `policy.json` representation. Parsed at the loader level;
-/// `includes` are resolved and merged before the inner `CompiledPolicy` is used.
+/// JSON shape produced by evaluating a `.star` policy (and by the legacy
+/// `policy.json` migrate path). Parsed at the loader level; `includes` are
+/// resolved and merged before the inner `CompiledPolicy` is used.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyManifest {
     /// Starlark files to include (evaluated and merged at load time).
@@ -400,11 +401,11 @@ pub struct PolicyManifest {
     pub policy: CompiledPolicy,
 }
 
-/// A single include directive in `policy.json`.
+/// A single include directive in a [`PolicyManifest`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IncludeEntry {
     /// Path to a `.star` file. `@clash//` prefix resolves to the embedded stdlib;
-    /// other paths are relative to the directory containing `policy.json`.
+    /// other paths are relative to the directory containing the policy file.
     pub path: String,
 }
 

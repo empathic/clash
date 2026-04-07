@@ -685,9 +685,7 @@ impl App {
                         let save_result = if let Some(ref mut doc) = self.star_doc {
                             doc.save()
                         } else {
-                            Err(anyhow::anyhow!(
-                                "TUI save requires a `.star` document"
-                            ))
+                            Err(anyhow::anyhow!("TUI save requires a `.star` document"))
                         };
                         match save_result {
                             Ok(()) => {
