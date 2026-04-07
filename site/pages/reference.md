@@ -6,7 +6,7 @@ permalink: /reference/
 ---
 
 <h1 class="page-title">Reference</h1>
-<p class="page-desc">Everything you need to write clash policies. Use Starlark (<code>.star</code>) for expressive, hand-crafted policies. Use <code>policy.json</code> for CLI-driven and tool-managed rules.</p>
+<p class="page-desc">Everything you need to write clash policies. Policies are written in Starlark (<code>.star</code>), the only source format clash loads.</p>
 
 ## Effects
 
@@ -255,26 +255,20 @@ policy("default", merge(
 
 Starlark `load()` imports values from other `.star` files. All composition (function calls, `merge()`, imports) resolves at compile time.
 
-### Two formats: `.star` for humans, `.json` for tools
+### One format: `.star` for everything
 
-Clash supports two policy formats that serve different purposes:
+Clash policies are written in Starlark. The same `.star` file is edited by humans and mutated by CLI commands like `clash policy allow`, `clash policy deny`, and `clash policy remove`, which round-trip the file using a Starlark AST formatter so hand-written structure is preserved.
 
-**Starlark (`.star`)** is for humans. Write expressive policies with functions, variables, imports, and composition. When you want to craft a nuanced policy — conditionals, shared rule sets across projects, sandbox builders — this is the format to use.
+#### Migrating from `policy.json`
 
-**JSON (`policy.json`)** is for tools. CLI commands like `clash policy allow`, `clash policy deny`, and `clash policy remove` read and write `policy.json` directly. It's a machine-readable format designed to be mutated programmatically — by the CLI, by scripts, or by agents themselves.
+Earlier versions of clash supported a JSON-based `policy.json` format. To migrate:
 
-```json
-{
-  "default_effect": "deny",
-  "includes": [
-    { "path": "@clash//builtin.star" },
-    { "path": "team-rules.star" }
-  ],
-  "tree": []
-}
+```sh
+clash policy convert            # writes policy.star alongside policy.json
+clash policy convert --replace  # also removes the old policy.json
 ```
 
-The `includes` field lets `policy.json` pull in `.star` files, so you can combine CLI-managed rules with hand-written Starlark. Included files are compiled and merged at load time, with inline `tree` rules taking precedence. When both `.json` and `.star` exist at the same level, `.json` wins.
+After conversion, only `policy.star` is loaded.
 
 ### Updating policies
 
@@ -509,7 +503,7 @@ policy("default", {
 
 ## Policy schema (JSON IR)
 
-JSON IR schema for compiled clash policies. Policies are authored as Starlark (.star) files or managed via `policy.json`, and compiled to this format.
+JSON IR schema for compiled clash policies. Policies are authored as Starlark (`.star`) files and compiled to this format.
 
 ### Document structure
 

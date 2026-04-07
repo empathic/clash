@@ -69,7 +69,7 @@ This builds the binary and launches a one-off Claude Code session with the plugi
 
 Policies are written in **Starlark** (`.star`), a Python-like configuration language that compiles to JSON IR. Clash reads policies on every tool invocation, so edits take effect immediately — no restart needed.
 
-You can also write policies directly in JSON if you prefer — see the [Policy Writing Guide](docs/policy-guide.md) for the JSON schema.
+Legacy `policy.json` files can be migrated with `clash policy convert` — see the [Policy Writing Guide](docs/policy-guide.md).
 
 ### Policy Layers
 
@@ -77,12 +77,12 @@ Clash supports three policy levels, each automatically included and evaluated in
 
 | Level | Location | Purpose |
 |-------|----------|---------|
-| **User** | `~/.clash/policy.json` (or `.star`) | Your personal defaults across all projects |
-| **Project** | `<project>/.clash/policy.json` (or `.star`) | Shared rules for a specific repository |
+| **User** | `~/.clash/policy.star` | Your personal defaults across all projects |
+| **Project** | `<project>/.clash/policy.star` | Shared rules for a specific repository |
 | **Session** | Created via `--scope session` | Temporary overrides for the current session |
 | **Harness** | Injected automatically | Agent infrastructure access (memories, settings, transcripts) |
 
-> **Note:** Both `.json` and `.star` are supported. When both exist at the same level, `.json` takes precedence. CLI commands (`clash policy allow/deny/remove`) operate on `policy.json`.
+> **Note:** Policy files use the `.star` extension. Legacy `policy.json` files are converted with `clash policy convert`.
 
 **Layer precedence:** Session > Project > User > Harness. Harness default rules are injected at the lowest priority — your rules always take precedence. They allow the agent to access its own infrastructure directories (`~/.claude/`, `<project>/.claude/`, transcript dir). Disable with `CLASH_NO_HARNESS_DEFAULTS=1` or `settings(harness_defaults=False)`. Use `clash status --verbose` to see harness rules tagged `[harness]`.
 

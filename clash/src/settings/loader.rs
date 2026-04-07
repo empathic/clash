@@ -10,9 +10,8 @@ use crate::policy::match_tree::CompiledPolicy;
 use crate::policy_loader;
 
 use super::discovery::{
-    self, PolicyLevel, compile_default_policy_to_json, find_ancestor_with, parse_audit_config,
-    parse_notification_config, prefer_json_over_star, session_policy_file, settings_dir,
-    tilde_path,
+    self, PolicyLevel, discover_star_in, find_ancestor_with, parse_audit_config,
+    parse_notification_config, session_policy_file, settings_dir, tilde_path,
 };
 use super::{ClashSettings, HookContext, LoadedPolicy};
 
@@ -27,22 +26,23 @@ impl ClashSettings {
     /// Returns the user-level policy file path.
     ///
     /// Respects `CLASH_POLICY_FILE` env var for override.
-    /// Prefers `policy.json` over `policy.star` when both exist.
+    /// Returns the path to `policy.star`. Errors if a legacy `policy.json`
+    /// is present without a sibling `.star` (use `clash policy migrate`).
     pub fn policy_file() -> Result<PathBuf> {
         discovery::policy_file()
     }
 
     /// Returns the policy file path for a specific level.
     ///
-    /// Prefers `policy.json` over `policy.star` when both exist.
-    /// For `Session`, reads the active session ID from `~/.clash/active_session`.
+    /// Returns the path to `policy.star`. For `Session`, reads the active
+    /// session ID from `~/.clash/active_session`.
     pub fn policy_file_for_level(level: PolicyLevel) -> Result<PathBuf> {
         match level {
             PolicyLevel::User => Self::policy_file(),
             PolicyLevel::Project => {
                 let root = Self::project_root()?;
                 let dir = root.join(".clash");
-                Ok(prefer_json_over_star(&dir))
+                discover_star_in(&dir)
             }
             PolicyLevel::Session => {
                 let session_id = Self::active_session_id()?;
@@ -191,25 +191,24 @@ impl ClashSettings {
     /// The created file uses the embedded `DEFAULT_POLICY` (deny-all with read access to CWD).
     pub fn ensure_user_policy_exists() -> Result<Option<PathBuf>> {
         let path = Self::policy_file().context(
-            "resolving user policy file path (~/.clash/policy.json or CLASH_POLICY_FILE)",
+            "resolving user policy file path (~/.clash/policy.star or CLASH_POLICY_FILE)",
         )?;
         Self::ensure_policy_at(path)
     }
 
     /// Write the compiled default policy JSON to `path` if no policy exists.
     ///
-    /// The path passed in may point to `policy.star` (from `prefer_json_over_star`
-    /// when no file exists yet). We always write `policy.json` instead, compiling
-    /// the embedded Starlark source to JSON at runtime.
+    /// The path passed in points to `policy.star` (from `discover_star_in`
+    /// when no file exists yet). The embedded `default_policy.star` source is
+    /// written verbatim — no JSON compilation step.
     fn ensure_policy_at(path: PathBuf) -> Result<Option<PathBuf>> {
         if path.exists() {
             return Ok(None);
         }
 
-        // Always write the compiled JSON variant, even if `path` ends in `.star`.
-        let json_path = path.with_extension("json");
+        let star_path = path.with_extension("star");
 
-        if let Some(parent) = json_path.parent() {
+        if let Some(parent) = star_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create directory {}", parent.display()))?;
 
@@ -221,21 +220,20 @@ impl ClashSettings {
             }
         }
 
-        let json = compile_default_policy_to_json()
-            .context("compiling embedded default policy (std.star) to JSON")?;
-        std::fs::write(&json_path, &json).with_context(|| {
-            format!("failed to write default policy to {}", json_path.display())
+        let source = include_str!("../default_policy.star");
+        std::fs::write(&star_path, source).with_context(|| {
+            format!("failed to write default policy to {}", star_path.display())
         })?;
 
         // Restrict file permissions on unix (owner-only read/write).
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&json_path, std::fs::Permissions::from_mode(0o600));
+            let _ = std::fs::set_permissions(&star_path, std::fs::Permissions::from_mode(0o600));
         }
 
-        info!(path = %json_path.display(), "Created default user policy");
-        Ok(Some(json_path))
+        info!(path = %star_path.display(), "Created default user policy");
+        Ok(Some(star_path))
     }
 
     /// Return the policy parse/compile error, if any.
@@ -549,23 +547,19 @@ mod test {
     }
 
     #[test]
-    fn ensure_policy_creates_json_file_when_missing() {
+    fn ensure_policy_creates_star_file_when_missing() {
         let dir = tempfile::tempdir().unwrap();
-        // Pass a .star path — ensure_policy_at should write .json instead.
         let star_path = dir.path().join(".clash").join("policy.star");
-        let json_path = dir.path().join(".clash").join("policy.json");
 
-        let result = ClashSettings::ensure_policy_at(star_path).unwrap();
+        let result = ClashSettings::ensure_policy_at(star_path.clone()).unwrap();
         assert!(result.is_some(), "should have created the file");
-        assert_eq!(result.unwrap(), json_path);
-        assert!(json_path.exists(), "policy.json should exist on disk");
+        assert_eq!(result.unwrap(), star_path);
+        assert!(star_path.exists(), "policy.star should exist on disk");
 
-        let contents = std::fs::read_to_string(&json_path).unwrap();
-        let parsed: serde_json::Value =
-            serde_json::from_str(&contents).expect("written file should be valid JSON");
+        let contents = std::fs::read_to_string(&star_path).unwrap();
         assert!(
-            parsed.get("tree").is_some(),
-            "JSON should contain a tree field"
+            contents.contains("policy("),
+            "default policy.star should contain a policy() call:\n{contents}"
         );
     }
 
@@ -594,10 +588,9 @@ mod test {
 
         let dir = tempfile::tempdir().unwrap();
         let star_path = dir.path().join(".clash").join("policy.star");
-        let json_path = dir.path().join(".clash").join("policy.json");
 
-        ClashSettings::ensure_policy_at(star_path).unwrap();
-        let mode = std::fs::metadata(&json_path).unwrap().permissions().mode() & 0o777;
+        ClashSettings::ensure_policy_at(star_path.clone()).unwrap();
+        let mode = std::fs::metadata(&star_path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "policy file should be owner-only read/write");
     }
 

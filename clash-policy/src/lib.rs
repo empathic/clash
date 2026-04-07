@@ -37,9 +37,9 @@ use serde::{Deserialize, Serialize};
 /// Higher-precedence levels override lower ones: Session > Project > User.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PolicyLevel {
-    /// User-level policy: `~/.clash/policy.json` (or `policy.star`)
+    /// User-level policy: `~/.clash/policy.star`
     User = 0,
-    /// Project-level policy: `<project_root>/.clash/policy.json` (or `policy.star`)
+    /// Project-level policy: `<project_root>/.clash/policy.star`
     Project = 1,
     /// Session-level policy: `/tmp/clash-<session_id>/policy.star`
     /// Temporary rules that last only for the current Claude Code session.

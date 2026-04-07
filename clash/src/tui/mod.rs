@@ -1,6 +1,6 @@
 //! Interactive policy editor TUI.
 //!
-//! Launches a ratatui-based terminal UI for browsing and editing policy.json.
+//! Launches a ratatui-based terminal UI for browsing and editing policy.star.
 //! Uses the Elm Architecture (TEA) pattern: `Model -> update(Msg) -> view(Model)`.
 
 pub mod app;
@@ -18,7 +18,7 @@ pub mod widgets;
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use crossterm::cursor::Show;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
@@ -30,7 +30,7 @@ use ratatui::backend::CrosstermBackend;
 
 use clash_starlark::codegen::StarDocument;
 
-use crate::policy_loader;
+use crate::policy_loader::legacy_json_error;
 
 /// Outcome of running the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,16 +67,19 @@ pub fn run_with_options(
     onboarding: bool,
 ) -> Result<TuiOutcome> {
     let is_star = path.extension().is_some_and(|ext| ext == "star");
+    if !is_star {
+        if path.file_name().and_then(|n| n.to_str()) == Some("policy.json") {
+            return Err(anyhow!(legacy_json_error(path)));
+        }
+        return Err(anyhow!(
+            "TUI only supports `.star` policies; got `{}`",
+            path.display()
+        ));
+    }
 
-    let mut app = if is_star {
-        let doc = StarDocument::open(path)
-            .with_context(|| format!("failed to parse {}", path.display()))?;
-        app::App::new_star(doc)?
-    } else {
-        let manifest = policy_loader::read_manifest(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        app::App::new(path.to_path_buf(), manifest)?
-    };
+    let doc =
+        StarDocument::open(path).with_context(|| format!("failed to parse {}", path.display()))?;
+    let mut app = app::App::new_star(doc)?;
     if show_test_panel {
         app.show_test_panel();
     }

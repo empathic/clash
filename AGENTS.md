@@ -51,7 +51,7 @@
 * Policy source: `clash-policy/src/` — parse, compile, eval, IR (extracted crate; `clash::policy` re-exports it)
 * Rules are JSON objects with an `effect` and a capability matcher, e.g. `{ "rule": { "effect": "deny", "exec": { "bin": { "literal": "git" }, "args": [{ "literal": "push" }, { "any": null }] } } }`
 * The policy speaks in capabilities, not Claude Code tool names — the eval layer maps tools to capabilities
-* Policy files use `.json` or `.star` extension (`.json` preferred when both exist)
+* Policy files use the `.star` extension. Legacy `policy.json` files are converted with `clash policy convert`.
 * The `clash-starlark` crate evaluates `.star` files → JSON using Starlark (a Python-like config language)
 * Starlark policies use top-level `settings()`, `sandbox()`, and `policy()` registration calls (no `main()` function)
 

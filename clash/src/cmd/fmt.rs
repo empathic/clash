@@ -89,6 +89,9 @@ fn validate_paths(files: &[PathBuf]) -> Result<Vec<PathBuf>> {
         if !path.exists() {
             anyhow::bail!("file not found: {}", path.display());
         }
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            return Err(crate::policy_loader::legacy_json_error(path));
+        }
         if path.extension().and_then(|e| e.to_str()) != Some("star") {
             anyhow::bail!("expected a .star file, got: {}", path.display(),);
         }
@@ -125,7 +128,10 @@ mod tests {
             .unwrap();
 
         let err = validate_paths(&[json_file]).unwrap_err();
-        assert!(err.to_string().contains(".star"), "got: {err}");
+        assert!(
+            err.to_string().contains("Legacy `policy.json`"),
+            "got: {err}"
+        );
     }
 
     #[test]

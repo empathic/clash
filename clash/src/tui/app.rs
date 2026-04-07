@@ -685,7 +685,7 @@ impl App {
                         let save_result = if let Some(ref mut doc) = self.star_doc {
                             doc.save()
                         } else {
-                            policy_loader::write_manifest(&self.path, &self.manifest)
+                            Err(anyhow::anyhow!("TUI save requires a `.star` document"))
                         };
                         match save_result {
                             Ok(()) => {

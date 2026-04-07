@@ -88,22 +88,25 @@ pub fn settings_dir() -> Result<PathBuf> {
 
 /// Returns the user-level policy file path.
 ///
-/// Respects `CLASH_POLICY_FILE` env var for override.
-/// Prefers `policy.json` over `policy.star` when both exist.
+/// Respects `CLASH_POLICY_FILE` env var for override. Returns the path to
+/// `policy.star` (the only supported format). If a legacy `policy.json` is
+/// present without a sibling `policy.star`, returns an error directing the
+/// user to `clash policy migrate`.
 pub fn policy_file() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("CLASH_POLICY_FILE") {
         return Ok(PathBuf::from(p));
     }
     let dir = settings_dir()?;
-    Ok(prefer_json_over_star(&dir))
+    discover_star_in(&dir)
 }
 
 /// Returns the project-level policy file path.
 ///
-/// Prefers `policy.json` over `policy.star` when both exist.
-pub fn project_policy_file(project_root: &std::path::Path) -> PathBuf {
+/// Returns the path to `policy.star`. If only a legacy `policy.json` exists,
+/// returns an error directing the user to `clash policy migrate`.
+pub fn project_policy_file(project_root: &std::path::Path) -> Result<PathBuf> {
     let dir = project_root.join(".clash");
-    prefer_json_over_star(&dir)
+    discover_star_in(&dir)
 }
 
 /// Returns the session-level policy file path for the given session ID.
@@ -111,14 +114,21 @@ pub fn session_policy_file(session_id: &str) -> PathBuf {
     crate::session_dir::SessionDir::new(session_id).policy()
 }
 
-/// Return `policy.json` if it exists in `dir`, otherwise `policy.star`.
-pub(crate) fn prefer_json_over_star(dir: &std::path::Path) -> PathBuf {
+/// Return `policy.star` in `dir` (whether or not it exists). If `policy.star`
+/// is absent but a legacy `policy.json` is present, return an error directing
+/// the user to `clash policy migrate`.
+pub(crate) fn discover_star_in(dir: &std::path::Path) -> Result<PathBuf> {
+    let star_path = dir.join("policy.star");
+    if star_path.exists() {
+        return Ok(star_path);
+    }
     let json_path = dir.join("policy.json");
     if json_path.exists() {
-        json_path
-    } else {
-        dir.join("policy.star")
+        return Err(crate::policy_loader::legacy_json_error(&json_path));
     }
+    // Neither exists — return the `.star` path so callers can report
+    // "not found" against the canonical name.
+    Ok(star_path)
 }
 
 /// Shorten a path by replacing the home directory prefix with `~`.
@@ -164,13 +174,13 @@ pub fn evaluate_star_policy(path: &std::path::Path) -> Result<String> {
     crate::policy_loader::evaluate_star_policy(path).map(|o| o.json)
 }
 
-/// Evaluate a policy file (`.json` or `.star`) and return the compiled JSON source.
+/// Evaluate a policy file and return the compiled JSON source.
 ///
-/// Dispatches based on file extension: `.json` → [`policy_loader::load_json_policy`],
-/// `.star` (or anything else) → [`policy_loader::evaluate_star_policy`].
+/// Only `.star` files are accepted. Legacy `.json` files are rejected with a
+/// friendly error directing the user to `clash policy migrate`.
 pub fn evaluate_policy_file(path: &std::path::Path) -> Result<String> {
     if path.extension().is_some_and(|ext| ext == "json") {
-        crate::policy_loader::load_json_policy(path)
+        Err(crate::policy_loader::legacy_json_error(path))
     } else {
         crate::policy_loader::evaluate_star_policy(path).map(|o| o.json)
     }
@@ -256,6 +266,27 @@ mod test {
             compile_default_policy_to_json_with_preset(preset.name)?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn discovery_ignores_policy_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("policy.json"), "{}").unwrap();
+        std::fs::write(tmp.path().join("policy.star"), "# star").unwrap();
+        let path = discover_star_in(tmp.path()).expect("should succeed");
+        assert_eq!(path, tmp.path().join("policy.star"));
+    }
+
+    #[test]
+    fn discovery_errors_on_lone_policy_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("policy.json"), "{}").unwrap();
+        let err = discover_star_in(tmp.path()).expect_err("should error");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("policy migrate"),
+            "expected error mentioning `policy migrate`, got: {msg}"
+        );
     }
 
     #[test]
