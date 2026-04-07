@@ -2,6 +2,8 @@
 
 pub mod analysis;
 pub mod documents;
+pub mod features;
+pub mod schema;
 pub mod server;
 
 /// Run the language server over stdio. Blocks until the client disconnects.
