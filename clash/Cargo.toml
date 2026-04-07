@@ -49,6 +49,7 @@ similar = { workspace = true }
 tempfile = { workspace = true }
 
 # from the workspace
+clash-policy = { workspace = true }
 clash_notify = { workspace = true }
 clash_starlark = { workspace = true }
 claude_settings = { workspace = true }

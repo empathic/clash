@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+clash-policy.workspace = true
 clash_starlark.workspace = true
 starlark.workspace = true
 lsp-types.workspace = true

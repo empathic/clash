@@ -3,7 +3,7 @@
 //! Provides `upsert_rule` (add-or-replace) and `remove_rule` for CLI-driven
 //! policy mutation. After every mutation the tree is compacted.
 
-use crate::policy::match_tree::{Decision, Node, Observable, Pattern, PolicyManifest};
+use crate::match_tree::{Decision, Node, Observable, Pattern, PolicyManifest};
 
 /// Result of an upsert operation.
 #[derive(Debug, PartialEq, Eq)]
@@ -156,7 +156,7 @@ pub fn build_exec_rule(bin: &str, args: &[&str], decision: Decision) -> Node {
     for (i, arg) in args.iter().enumerate().rev() {
         current = Node::Condition {
             observe: Observable::PositionalArg((i + 1) as i32),
-            pattern: Pattern::Literal(crate::policy::match_tree::Value::Literal(
+            pattern: Pattern::Literal(crate::match_tree::Value::Literal(
                 (*arg).to_string(),
             )),
             children: vec![current],
@@ -169,7 +169,7 @@ pub fn build_exec_rule(bin: &str, args: &[&str], decision: Decision) -> Node {
     // Binary is positional_arg(0).
     current = Node::Condition {
         observe: Observable::PositionalArg(0),
-        pattern: Pattern::Literal(crate::policy::match_tree::Value::Literal(bin.into())),
+        pattern: Pattern::Literal(crate::match_tree::Value::Literal(bin.into())),
         children: vec![current],
         doc: None,
         source: None,
@@ -179,7 +179,7 @@ pub fn build_exec_rule(bin: &str, args: &[&str], decision: Decision) -> Node {
     // Outermost: tool_name = "Bash".
     Node::Condition {
         observe: Observable::ToolName,
-        pattern: Pattern::Literal(crate::policy::match_tree::Value::Literal("Bash".into())),
+        pattern: Pattern::Literal(crate::match_tree::Value::Literal("Bash".into())),
         children: vec![current],
         doc: None,
         source: None,
@@ -191,7 +191,7 @@ pub fn build_exec_rule(bin: &str, args: &[&str], decision: Decision) -> Node {
 pub fn build_tool_rule(tool_name: &str, decision: Decision) -> Node {
     Node::Condition {
         observe: Observable::ToolName,
-        pattern: Pattern::Literal(crate::policy::match_tree::Value::Literal(tool_name.into())),
+        pattern: Pattern::Literal(crate::match_tree::Value::Literal(tool_name.into())),
         children: vec![Node::Decision(decision)],
         doc: None,
         source: None,
@@ -202,7 +202,7 @@ pub fn build_tool_rule(tool_name: &str, decision: Decision) -> Node {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::match_tree::*;
+    use crate::match_tree::*;
     use std::collections::HashMap;
 
     fn empty_manifest() -> PolicyManifest {
@@ -211,7 +211,7 @@ mod tests {
             policy: CompiledPolicy {
                 sandboxes: HashMap::new(),
                 tree: vec![],
-                default_effect: crate::policy::Effect::Deny,
+                default_effect: crate::Effect::Deny,
                 default_sandbox: None,
                 on_sandbox_violation: Default::default(),
                 harness_defaults: None,

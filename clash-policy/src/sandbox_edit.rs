@@ -5,8 +5,8 @@
 
 use anyhow::{Result, bail};
 
-use crate::policy::match_tree::PolicyManifest;
-use crate::policy::sandbox_types::{
+use crate::match_tree::PolicyManifest;
+use crate::sandbox_types::{
     Cap, NetworkPolicy, PathMatch, RuleEffect, SandboxPolicy, SandboxRule,
 };
 
@@ -112,7 +112,7 @@ pub fn remove_rule(manifest: &mut PolicyManifest, sandbox_name: &str, path: &str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::match_tree::*;
+    use crate::match_tree::*;
     use std::collections::HashMap;
 
     fn empty_manifest() -> PolicyManifest {
@@ -121,7 +121,7 @@ mod tests {
             policy: CompiledPolicy {
                 sandboxes: HashMap::new(),
                 tree: vec![],
-                default_effect: crate::policy::Effect::Deny,
+                default_effect: crate::Effect::Deny,
                 default_sandbox: None,
                 on_sandbox_violation: Default::default(),
                 harness_defaults: None,

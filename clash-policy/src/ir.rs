@@ -3,9 +3,9 @@
 //! These are the shared decision types used by the policy engine
 //! and the rest of the system (permissions, audit, handlers).
 
-use crate::policy::Effect;
-use crate::policy::match_tree::SandboxRef;
-use crate::policy::sandbox_types::SandboxPolicy;
+use crate::Effect;
+use crate::match_tree::SandboxRef;
+use crate::sandbox_types::SandboxPolicy;
 
 /// The result of evaluating a policy.
 #[derive(Debug, Clone)]

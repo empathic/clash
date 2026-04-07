@@ -30,8 +30,19 @@ pub fn parse(filename: &str, source: &str) -> ParsedPolicy {
         .parent()
         .unwrap_or_else(|| Path::new("."));
 
-    match clash_starlark::evaluate(source, filename, base_dir) {
-        Ok(_output) => ParsedPolicy::default(),
+    let eval_output = match clash_starlark::evaluate(source, filename, base_dir) {
+        Ok(output) => output,
+        Err(e) => {
+            return ParsedPolicy {
+                diagnostics: vec![AnalysisDiagnostic::from_validation_error(&e)],
+            };
+        }
+    };
+
+    // Step 3: compile the evaluated JSON through the clash-policy IR to catch
+    // structural errors (unknown effects, malformed rule trees, etc.).
+    match clash_policy::compile::compile_to_tree(&eval_output.json) {
+        Ok(_) => ParsedPolicy::default(),
         Err(e) => ParsedPolicy {
             diagnostics: vec![AnalysisDiagnostic::from_validation_error(&e)],
         },

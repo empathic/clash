@@ -740,6 +740,7 @@ dependencies = [
  "clash-brush-core",
  "clash-brush-interactive",
  "clash-lsp",
+ "clash-policy",
  "clash_notify",
  "clash_starlark",
  "claude_settings",
@@ -888,6 +889,7 @@ name = "clash-lsp"
 version = "0.6.2"
 dependencies = [
  "anyhow",
+ "clash-policy",
  "clash_starlark",
  "indoc",
  "lsp-types 0.95.1",
@@ -897,6 +899,25 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tower-lsp",
+ "tracing",
+]
+
+[[package]]
+name = "clash-policy"
+version = "0.6.2"
+dependencies = [
+ "anyhow",
+ "bitflags 2.11.0",
+ "console",
+ "dirs",
+ "proptest",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "similar",
+ "tempfile",
+ "thiserror 2.0.18",
  "tracing",
 ]
 

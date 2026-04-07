@@ -4,59 +4,10 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use dirs::home_dir;
-use serde::{Deserialize, Serialize};
 
-/// Policy level — where a policy file lives in the precedence hierarchy.
-///
-/// Higher-precedence levels override lower ones: Session > Project > User.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum PolicyLevel {
-    /// User-level policy: `~/.clash/policy.json` (or `policy.star`)
-    User = 0,
-    /// Project-level policy: `<project_root>/.clash/policy.json` (or `policy.star`)
-    Project = 1,
-    /// Session-level policy: `/tmp/clash-<session_id>/policy.star`
-    /// Temporary rules that last only for the current Claude Code session.
-    Session = 2,
-}
-
-impl PolicyLevel {
-    /// All persistent levels in precedence order (highest first).
-    /// Session is excluded because it requires a session_id to resolve.
-    pub fn all_by_precedence() -> &'static [PolicyLevel] {
-        &[PolicyLevel::Project, PolicyLevel::User]
-    }
-
-    /// Display name for this level.
-    pub fn name(&self) -> &'static str {
-        match self {
-            PolicyLevel::User => "user",
-            PolicyLevel::Project => "project",
-            PolicyLevel::Session => "session",
-        }
-    }
-}
-
-impl std::fmt::Display for PolicyLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name())
-    }
-}
-
-impl std::str::FromStr for PolicyLevel {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "user" => Ok(PolicyLevel::User),
-            "project" => Ok(PolicyLevel::Project),
-            "session" => Ok(PolicyLevel::Session),
-            _ => anyhow::bail!(
-                "unknown policy level: {s} (expected 'user', 'project', or 'session')"
-            ),
-        }
-    }
-}
+// PolicyLevel lives in clash-policy to break the clash-lsp circular dep.
+// Re-export it here so all existing `clash::settings::PolicyLevel` paths continue to work.
+pub use clash_policy::PolicyLevel;
 
 /// Default policy source template embedded at compile time.
 /// Contains `{preset}` placeholders for the sandbox preset name.

@@ -7,11 +7,44 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::policy::Effect;
-use crate::policy::ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
-use crate::policy::sandbox_types::{SandboxPolicy, ViolationAction};
+use crate::Effect;
+use crate::ir::{DecisionTrace, PolicyDecision, RuleMatch, RuleSkip};
+use crate::sandbox_types::{SandboxPolicy, ViolationAction};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Tool alias table — inlined from clash::agents to avoid a circular dep.
+// The canonical → internal mapping must stay in sync with clash::agents::TOOL_ALIASES.
+// ---------------------------------------------------------------------------
+
+struct ToolAlias {
+    canonical: &'static str,
+    internal: &'static str,
+}
+
+const TOOL_ALIASES: &[ToolAlias] = &[
+    ToolAlias { canonical: "shell",      internal: "Bash"      },
+    ToolAlias { canonical: "read",       internal: "Read"      },
+    ToolAlias { canonical: "write",      internal: "Write"     },
+    ToolAlias { canonical: "edit",       internal: "Edit"      },
+    ToolAlias { canonical: "glob",       internal: "Glob"      },
+    ToolAlias { canonical: "grep",       internal: "Grep"      },
+    ToolAlias { canonical: "web_fetch",  internal: "WebFetch"  },
+    ToolAlias { canonical: "web_search", internal: "WebSearch" },
+];
+
+/// Given a Clash canonical name, return the internal name.
+fn canonical_to_internal(clash_name: &str) -> Option<&'static str> {
+    let lower = clash_name.to_lowercase();
+    TOOL_ALIASES.iter().find(|a| a.canonical.to_lowercase() == lower).map(|a| a.internal)
+}
+
+/// Given an internal name, return the Clash canonical name.
+fn internal_to_canonical(internal_name: &str) -> Option<&'static str> {
+    let lower = internal_name.to_lowercase();
+    TOOL_ALIASES.iter().find(|a| a.internal.to_lowercase() == lower).map(|a| a.canonical)
+}
 
 // ---------------------------------------------------------------------------
 // Value types
@@ -809,7 +842,7 @@ fn matches_observable(
             // All of these match tool_name="Bash": "Bash", "bash", "shell", "Shell".
             let tool = &ctx.tool_name;
             let tool_lower = tool.to_lowercase();
-            let canonical = crate::agents::internal_to_canonical(tool);
+            let canonical = internal_to_canonical(tool);
 
             // Build the set of names this tool is known by.
             let mut aliases = vec![tool.clone(), tool_lower.clone()];
@@ -829,7 +862,7 @@ fn matches_observable(
                     // Direct or case-insensitive match against any alias
                     aliases.iter().any(|a| a == &pat || a.to_lowercase() == pat_lower)
                     // Or the pattern is a canonical name that resolves to this tool
-                    || crate::agents::canonical_to_internal(&pat)
+                    || canonical_to_internal(&pat)
                         .is_some_and(|resolved| resolved.eq_ignore_ascii_case(tool))
                 }
                 _ => {
@@ -925,7 +958,7 @@ impl CompiledPolicy {
                     && let Some(ref fs_path) = ctx.fs_path
                     && fs_path.starts_with('/')
                 {
-                    use crate::policy::sandbox_types::Cap;
+                    use crate::sandbox_types::Cap;
                     let required = match fs_op.as_str() {
                         "read" => Cap::READ,
                         "write" => Cap::WRITE | Cap::CREATE,
@@ -1035,7 +1068,7 @@ impl CompiledPolicy {
     /// These are non-fatal: the policy is valid but some rules behave
     /// differently on certain platforms.
     pub fn platform_warnings(&self) -> Vec<String> {
-        use crate::policy::sandbox_types::{NetworkPolicy, PathMatch};
+        use crate::sandbox_types::{NetworkPolicy, PathMatch};
 
         let mut warnings = Vec::new();
         for (name, sandbox) in &self.sandboxes {
@@ -1527,9 +1560,9 @@ mod tests {
         sandboxes.insert(
             "cwd_access".to_string(),
             SandboxPolicy {
-                default: crate::policy::sandbox_types::Cap::READ,
+                default: crate::sandbox_types::Cap::READ,
                 rules: vec![],
-                network: crate::policy::sandbox_types::NetworkPolicy::Deny,
+                network: crate::sandbox_types::NetworkPolicy::Deny,
                 doc: None,
             },
         );
@@ -2063,7 +2096,7 @@ mod tests {
 
     #[test]
     fn platform_warnings_regex_path() {
-        use crate::policy::sandbox_types::*;
+        use crate::sandbox_types::*;
 
         let policy = CompiledPolicy {
             sandboxes: HashMap::from([(
@@ -2096,7 +2129,7 @@ mod tests {
 
     #[test]
     fn platform_warnings_allow_domains() {
-        use crate::policy::sandbox_types::*;
+        use crate::sandbox_types::*;
 
         let policy = CompiledPolicy {
             sandboxes: HashMap::from([(
@@ -2122,7 +2155,7 @@ mod tests {
 
     #[test]
     fn platform_warnings_none_for_clean_policy() {
-        use crate::policy::sandbox_types::*;
+        use crate::sandbox_types::*;
 
         let policy = CompiledPolicy {
             sandboxes: HashMap::from([(

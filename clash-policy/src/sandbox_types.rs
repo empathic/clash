@@ -344,7 +344,7 @@ impl<'de> Deserialize<'de> for NetworkPolicy {
 ///
 /// Falls back to the original path if resolution fails (e.g. path does
 /// not exist on the current system).
-pub(crate) fn resolve_symlinks(path: &str) -> String {
+pub fn resolve_symlinks(path: &str) -> String {
     use std::collections::VecDeque;
     use std::ffi::OsString;
     use std::path::{Component, Path, PathBuf};
@@ -428,7 +428,7 @@ impl SandboxPolicy {
             return self.clone();
         }
 
-        let wt_paths = crate::git::worktree_sandbox_paths(cwd);
+        let wt_paths = worktree_sandbox_paths(cwd);
         if wt_paths.is_empty() {
             return self.clone();
         }
@@ -1426,4 +1426,107 @@ mod violation_action_tests {
             assert_eq!(action, back);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Git worktree detection — inlined from clash::git to avoid a circular dep.
+// Must stay in sync with clash/src/git.rs.
+// ---------------------------------------------------------------------------
+
+/// Return the git directories that need sandbox access for a worktree.
+///
+/// Returns an empty vec if `cwd` is not in a git worktree. Paths are
+/// canonicalized when possible (needed for macOS Seatbelt).
+fn worktree_sandbox_paths(cwd: &Path) -> Vec<String> {
+    let info = match detect_worktree(cwd) {
+        Some(info) => info,
+        None => return Vec::new(),
+    };
+
+    let canonicalize = |p: &std::path::Path| -> String {
+        std::fs::canonicalize(p)
+            .map(|c| c.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| p.to_string_lossy().into_owned())
+    };
+
+    let mut paths = vec![canonicalize(&info.git_dir), canonicalize(&info.common_dir)];
+    paths.dedup();
+    paths
+}
+
+struct WorktreeInfo {
+    git_dir: std::path::PathBuf,
+    common_dir: std::path::PathBuf,
+}
+
+fn detect_worktree(cwd: &Path) -> Option<WorktreeInfo> {
+    match try_detect_worktree(cwd) {
+        Ok(info) => info,
+        Err(e) => {
+            tracing::debug!("git worktree detection failed for {}: {:#}", cwd.display(), e);
+            None
+        }
+    }
+}
+
+fn try_detect_worktree(cwd: &Path) -> anyhow::Result<Option<WorktreeInfo>> {
+    let dot_git = find_dot_git(cwd)?;
+    if dot_git.is_dir() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&dot_git)
+        .map_err(|e| anyhow::anyhow!("reading {}: {e}", dot_git.display()))?;
+    let git_dir = parse_gitdir_pointer(&content)
+        .map_err(|e| anyhow::anyhow!("parsing gitdir in {}: {e}", dot_git.display()))?;
+    let base = dot_git.parent()
+        .ok_or_else(|| anyhow::anyhow!("{} has no parent", dot_git.display()))?;
+    let git_dir = normalize_git_path(&base.join(&git_dir));
+    let common_dir = resolve_common_dir(&git_dir)?;
+    Ok(Some(WorktreeInfo { git_dir, common_dir }))
+}
+
+fn find_dot_git(start: &Path) -> anyhow::Result<std::path::PathBuf> {
+    let mut current = start.to_path_buf();
+    loop {
+        let candidate = current.join(".git");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        if !current.pop() {
+            anyhow::bail!("no .git found above {}", start.display());
+        }
+    }
+}
+
+fn parse_gitdir_pointer(content: &str) -> anyhow::Result<std::path::PathBuf> {
+    let line = content.lines().find(|l| l.starts_with("gitdir:"))
+        .ok_or_else(|| anyhow::anyhow!("no 'gitdir:' line found"))?;
+    let path_str = line.strip_prefix("gitdir:").unwrap().trim();
+    if path_str.is_empty() {
+        anyhow::bail!("empty gitdir path");
+    }
+    Ok(std::path::PathBuf::from(path_str))
+}
+
+fn resolve_common_dir(git_dir: &Path) -> anyhow::Result<std::path::PathBuf> {
+    let commondir_file = git_dir.join("commondir");
+    let content = std::fs::read_to_string(&commondir_file)
+        .map_err(|e| anyhow::anyhow!("reading {}: {e}", commondir_file.display()))?;
+    let relative = content.trim();
+    if relative.is_empty() {
+        anyhow::bail!("empty commondir in {}", commondir_file.display());
+    }
+    Ok(normalize_git_path(&git_dir.join(relative)))
+}
+
+fn normalize_git_path(path: &Path) -> std::path::PathBuf {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => { components.pop(); }
+            std::path::Component::CurDir => {}
+            other => components.push(other),
+        }
+    }
+    components.iter().collect()
 }

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "clash",
+    "clash-policy",
     "clash_notify",
     "claude_settings",
     "clash_starlark",
@@ -154,6 +155,7 @@ brush-core = { path = "clash-brush-core", version = "0.6.2", package = "clash-br
 
 # Workspace crates (internal only)
 clash-lsp = { path = "clash-lsp", version = "0.6.2" }
+clash-policy = { path = "clash-policy", version = "0.6.2" }
 clash_notify = { path = "clash_notify", version = "0.6.2" }
 clash_starlark = { path = "clash_starlark", version = "0.6.2" }
 claude_settings = { path = "claude_settings", version = "0.6.2" }

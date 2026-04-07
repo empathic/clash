@@ -5,9 +5,9 @@
 
 use anyhow::{Context, Result};
 
-use crate::policy::Effect;
-use crate::policy::ir::PolicyDecision;
-use crate::policy::match_tree::CompiledPolicy;
+use crate::Effect;
+use crate::ir::PolicyDecision;
+use crate::match_tree::CompiledPolicy;
 
 /// The result of testing a tool invocation against a policy.
 #[derive(Debug, Clone)]
