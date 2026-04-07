@@ -141,15 +141,6 @@ fn evaluate_stdlib_include(include_path: &str) -> Result<String> {
     Ok(eval_output.json)
 }
 
-/// Read and parse a `policy.json` file into a [`PolicyManifest`].
-///
-/// This does NOT resolve includes — call [`migrate_load_json_policy`] for full loading.
-pub fn read_manifest(path: &Path) -> Result<PolicyManifest> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
-}
-
 /// Resolve includes and return the combined included policy plus any warnings.
 ///
 /// Evaluates each include entry and merges their rules and sandboxes.
@@ -200,13 +191,6 @@ pub fn resolve_includes(
     }
 
     Ok((merged, warnings))
-}
-
-/// Write a [`PolicyManifest`] to disk as pretty-printed JSON.
-pub fn write_manifest(path: &Path, manifest: &PolicyManifest) -> Result<()> {
-    let json =
-        serde_json::to_string_pretty(manifest).context("failed to serialize policy manifest")?;
-    std::fs::write(path, json).with_context(|| format!("failed to write {}", path.display()))
 }
 
 /// Validate a policy file's metadata (existence, type, size, permissions).
@@ -527,28 +511,4 @@ policy("include", {"Read": allow()})
         }
     }
 
-    #[test]
-    fn manifest_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let json_path = dir.path().join("policy.json");
-
-        let manifest = PolicyManifest {
-            includes: vec![crate::policy::match_tree::IncludeEntry {
-                path: "@clash//builtin.star".into(),
-            }],
-            policy: CompiledPolicy {
-                sandboxes: std::collections::HashMap::new(),
-                tree: vec![],
-                default_effect: crate::policy::Effect::Deny,
-                default_sandbox: None,
-                on_sandbox_violation: Default::default(),
-                harness_defaults: None,
-            },
-        };
-
-        write_manifest(&json_path, &manifest).unwrap();
-        let loaded = read_manifest(&json_path).unwrap();
-        assert_eq!(loaded.includes.len(), 1);
-        assert_eq!(loaded.includes[0].path, "@clash//builtin.star");
-    }
 }
