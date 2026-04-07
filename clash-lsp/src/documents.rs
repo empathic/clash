@@ -12,7 +12,6 @@ pub struct DocumentStore {
 }
 
 struct Entry {
-    #[allow(dead_code)]
     text: String,
     parsed: ParsedPolicy,
 }
@@ -39,6 +38,10 @@ impl DocumentStore {
 
     pub fn get(&self, uri: &Url) -> Option<ParsedPolicy> {
         self.inner.read().unwrap().get(uri).map(|e| e.parsed.clone())
+    }
+
+    pub fn get_text(&self, uri: &Url) -> Option<String> {
+        self.inner.read().unwrap().get(uri).map(|e| e.text.clone())
     }
 }
 

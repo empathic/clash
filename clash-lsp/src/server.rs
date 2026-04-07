@@ -3,7 +3,8 @@
 use tower_lsp::{Client, LanguageServer, jsonrpc};
 use tower_lsp::lsp_types::{
     self as tl, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
-    DiagnosticSeverity, InitializeParams, InitializeResult, InitializedParams, MessageType,
+    DiagnosticSeverity, Hover, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, InitializedParams, MessageType,
     NumberOrString, Position, Range, ServerCapabilities, ServerInfo,
     TextDocumentSyncCapability, TextDocumentSyncKind, Url,
     DidOpenTextDocumentParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
@@ -67,6 +68,7 @@ impl LanguageServer for Backend {
                     TextDocumentSyncKind::FULL,
                 )),
                 completion_provider: Some(CompletionOptions::default()),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -97,6 +99,16 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         self.docs.close(&params.text_document.uri);
+    }
+
+    async fn hover(&self, params: HoverParams) -> jsonrpc::Result<Option<Hover>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let Some(source) = self.docs.get_text(uri) else { return Ok(None) };
+        Ok(crate::features::hover::hover(
+            &self.schema,
+            &source,
+            params.text_document_position_params.position,
+        ))
     }
 
     async fn completion(
