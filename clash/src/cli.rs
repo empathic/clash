@@ -391,6 +391,9 @@ pub enum Commands {
     #[command(subcommand)]
     Statusline(StatuslineCmd),
 
+    /// Run the clash language server over stdio (LSP)
+    Lsp,
+
     /// File a bug report to the clash issue tracker
     #[command(alias = "rage", hide = true)]
     Bug {

@@ -1,4 +1,5 @@
 pub mod bug;
+pub mod lsp;
 pub mod commands;
 pub mod debug;
 pub mod doctor;

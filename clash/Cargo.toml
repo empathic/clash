@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 documentation.workspace = true
+include = ["src/**/*", "Cargo.toml", "build.rs"]
 
 [dependencies]
 clap = { workspace = true }
@@ -54,6 +55,7 @@ claude_settings = { workspace = true }
 clash-brush-builtins = { workspace = true }
 clash-brush-core = { workspace = true }
 clash-brush-interactive = { workspace = true }
+clash-lsp = { workspace = true }
 
 [features]
 default = []

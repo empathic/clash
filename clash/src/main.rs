@@ -69,6 +69,7 @@ fn main() -> Result<()> {
             } => cmd::update::run(check, yes, version),
             Commands::Statusline(cmd) => cmd::statusline::run(cmd),
             Commands::Launch { policy, args } => cmd::launch::run(policy, args),
+            Commands::Lsp => cmd::lsp::run(),
             Commands::Bug {
                 title,
                 description,
