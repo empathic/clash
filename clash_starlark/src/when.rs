@@ -107,7 +107,11 @@ fn expand_keys<'v>(key: Value<'v>) -> Vec<Value<'v>> {
 }
 
 /// Classify what kind of match key a Starlark value represents.
+#[allow(dead_code)]
 enum MatchKeyKind {
+    Default {
+        doc: Option<String>,
+    },
     Mode {
         pattern: JsonValue,
         doc: Option<String>,
@@ -116,9 +120,88 @@ enum MatchKeyKind {
         pattern: JsonValue,
         doc: Option<String>,
     },
+    Path {
+        value: JsonValue,
+        doc: Option<String>,
+    },
+    Glob {
+        value: JsonValue,
+        doc: Option<String>,
+    },
+    Domain {
+        value: JsonValue,
+        doc: Option<String>,
+    },
+    Localhost {
+        ports: JsonValue,
+        doc: Option<String>,
+    },
 }
 
-fn classify_key<'v>(key: Value<'v>, heap: &'v Heap) -> anyhow::Result<MatchKeyKind> {
+/// Classify a **root-level** key in a policy/sandbox tree. Requires a typed
+/// constructor (struct with `_match_key`). Bare strings are rejected.
+fn classify_root_key<'v>(key: Value<'v>, heap: &'v Heap) -> anyhow::Result<MatchKeyKind> {
+    if key.get_type() == "struct"
+        && let Ok(Some(mk_val)) = key.get_attr("_match_key", heap)
+        && let Some(mk) = mk_val.unpack_str()
+    {
+        let doc = key
+            .get_attr("_doc", heap)
+            .ok()
+            .flatten()
+            .filter(|v| !v.is_none())
+            .and_then(|v| v.unpack_str().map(|s| s.to_string()));
+
+        // `default()` has no _match_value.
+        if mk == "default" {
+            return Ok(MatchKeyKind::Default { doc });
+        }
+
+        let mv = key
+            .get_attr("_match_value", heap)
+            .ok()
+            .flatten()
+            .context("match key struct missing _match_value")?;
+
+        return match mk {
+            "mode" => Ok(MatchKeyKind::Mode {
+                pattern: pattern_to_json(mv, heap)?,
+                doc,
+            }),
+            "tool" => Ok(MatchKeyKind::Tool {
+                pattern: pattern_to_json(mv, heap)?,
+                doc,
+            }),
+            "path" => Ok(MatchKeyKind::Path {
+                value: pattern_to_json(mv, heap)?,
+                doc,
+            }),
+            "glob" => Ok(MatchKeyKind::Glob {
+                value: pattern_to_json(mv, heap)?,
+                doc,
+            }),
+            "domain" => Ok(MatchKeyKind::Domain {
+                value: pattern_to_json(mv, heap)?,
+                doc,
+            }),
+            "localhost" => Ok(MatchKeyKind::Localhost {
+                ports: pattern_to_json(mv, heap)?,
+                doc,
+            }),
+            other => bail!("unknown match key type: {other}"),
+        };
+    }
+    bail!(
+        "Root keys in a policy or sandbox tree must use a typed constructor \
+         (default(), mode(), tool(), path(), glob(), domain(), localhost()). \
+         Got a bare {} key. If you meant a filesystem path, use path(\"...\"). \
+         If you meant a tool name, use tool(\"...\").",
+        key.get_type()
+    )
+}
+
+#[allow(dead_code)]
+fn classify_nested_key<'v>(key: Value<'v>, heap: &'v Heap) -> anyhow::Result<MatchKeyKind> {
     // Check for typed match key struct (Mode() / Tool() / mode())
     if key.get_type() == "struct" {
         if let Ok(Some(mk_val)) = key.get_attr("_match_key", heap) {
@@ -330,7 +413,22 @@ fn process_policy_dict<'v>(
 ) -> anyhow::Result<()> {
     for (key, value) in dict.iter() {
         for k in expand_keys(key) {
-            match classify_key(k, heap)? {
+            match classify_root_key(k, heap)? {
+                MatchKeyKind::Default { .. } => {
+                    bail!("sandbox-only key default used in policy root");
+                }
+                MatchKeyKind::Path { .. } => {
+                    bail!("sandbox-only key path used in policy root");
+                }
+                MatchKeyKind::Glob { .. } => {
+                    bail!("sandbox-only key glob used in policy root");
+                }
+                MatchKeyKind::Domain { .. } => {
+                    bail!("sandbox-only key domain used in policy root");
+                }
+                MatchKeyKind::Localhost { .. } => {
+                    bail!("sandbox-only key localhost used in policy root");
+                }
                 MatchKeyKind::Mode { pattern, doc } => {
                     let cond = build_mode_condition(pattern, doc, source.clone());
                     let node = if let Some(inner_dict) = DictRef::from_value(value) {

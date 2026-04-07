@@ -84,3 +84,30 @@ pub fn load_starlark_source_for_test(source: &str) -> Result<TestModule> {
     }
     Ok(TestModule { string_lists })
 }
+
+/// Evaluate a Starlark source string as a policy file with a fresh
+/// `EvalContext`. Top-level `policy()` / `sandbox()` / `settings()` calls
+/// register into the returned context.
+///
+/// Used by integration tests that need to verify that the evaluator
+/// accepts/rejects particular root-level constructs.
+pub fn eval_policy_source_for_test(source: &str) -> Result<EvalContext> {
+    let ast = AstModule::parse("test.star", source.to_owned(), &Dialect::Standard)
+        .map_err(|e| anyhow!("{e}"))?;
+
+    let loader = ClashLoader::new(std::path::PathBuf::from("."));
+    let globals = clash_globals();
+    let ctx = EvalContext::new();
+    let module = Module::new();
+    loader
+        .inject_std(&module)
+        .map_err(|e| anyhow!("failed to load stdlib: {e}"))?;
+
+    {
+        let mut eval = Evaluator::new(&module);
+        eval.set_loader(&loader);
+        eval.extra = Some(&ctx);
+        eval.eval_module(ast, &globals).map_err(|e| anyhow!("{e}"))?;
+    }
+    Ok(ctx)
+}

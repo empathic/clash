@@ -755,7 +755,7 @@ policy("test", default = deny(), rules = [])
 
 policy("test", merge(
     from_claude_settings(),
-    {"Read": allow()},
+    {tool("Read"): allow()},
 ))
 "#,
         )
