@@ -61,6 +61,7 @@ pub mod style;
 pub mod trace;
 pub mod trace_display;
 pub mod tracing_init;
+#[cfg(feature = "tui")]
 pub mod tui;
 pub mod ui;
 pub mod version;

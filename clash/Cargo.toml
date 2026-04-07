@@ -42,8 +42,8 @@ tar = { workspace = true }
 chrono = { workspace = true }
 toolpath = { workspace = true }
 toolpath-claude = { workspace = true }
-ratatui = { workspace = true }
-crossterm = { workspace = true }
+ratatui = { workspace = true, optional = true }
+crossterm = { workspace = true, optional = true }
 similar = { workspace = true }
 tempfile = { workspace = true }
 
@@ -57,6 +57,7 @@ clash-brush-interactive = { workspace = true }
 
 [features]
 default = []
+tui = ["dep:ratatui", "dep:crossterm"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
