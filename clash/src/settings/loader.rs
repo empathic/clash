@@ -11,7 +11,7 @@ use crate::policy_loader;
 
 use super::discovery::{
     self, PolicyLevel, compile_default_policy_to_json, find_ancestor_with, parse_audit_config,
-    parse_notification_config, prefer_json_over_star, session_policy_file, settings_dir,
+    discover_star_in, parse_notification_config, session_policy_file, settings_dir,
     tilde_path,
 };
 use super::{ClashSettings, HookContext, LoadedPolicy};
@@ -27,22 +27,23 @@ impl ClashSettings {
     /// Returns the user-level policy file path.
     ///
     /// Respects `CLASH_POLICY_FILE` env var for override.
-    /// Prefers `policy.json` over `policy.star` when both exist.
+    /// Returns the path to `policy.star`. Errors if a legacy `policy.json`
+    /// is present without a sibling `.star` (use `clash policy migrate`).
     pub fn policy_file() -> Result<PathBuf> {
         discovery::policy_file()
     }
 
     /// Returns the policy file path for a specific level.
     ///
-    /// Prefers `policy.json` over `policy.star` when both exist.
-    /// For `Session`, reads the active session ID from `~/.clash/active_session`.
+    /// Returns the path to `policy.star`. For `Session`, reads the active
+    /// session ID from `~/.clash/active_session`.
     pub fn policy_file_for_level(level: PolicyLevel) -> Result<PathBuf> {
         match level {
             PolicyLevel::User => Self::policy_file(),
             PolicyLevel::Project => {
                 let root = Self::project_root()?;
                 let dir = root.join(".clash");
-                Ok(prefer_json_over_star(&dir))
+                discover_star_in(&dir)
             }
             PolicyLevel::Session => {
                 let session_id = Self::active_session_id()?;
@@ -191,14 +192,14 @@ impl ClashSettings {
     /// The created file uses the embedded `DEFAULT_POLICY` (deny-all with read access to CWD).
     pub fn ensure_user_policy_exists() -> Result<Option<PathBuf>> {
         let path = Self::policy_file().context(
-            "resolving user policy file path (~/.clash/policy.json or CLASH_POLICY_FILE)",
+            "resolving user policy file path (~/.clash/policy.star or CLASH_POLICY_FILE)",
         )?;
         Self::ensure_policy_at(path)
     }
 
     /// Write the compiled default policy JSON to `path` if no policy exists.
     ///
-    /// The path passed in may point to `policy.star` (from `prefer_json_over_star`
+    /// The path passed in may point to `policy.star` (from `discover_star_in`
     /// when no file exists yet). We always write `policy.json` instead, compiling
     /// the embedded Starlark source to JSON at runtime.
     fn ensure_policy_at(path: PathBuf) -> Result<Option<PathBuf>> {
