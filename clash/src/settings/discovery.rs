@@ -166,11 +166,12 @@ pub fn evaluate_star_policy(path: &std::path::Path) -> Result<String> {
 
 /// Evaluate a policy file (`.json` or `.star`) and return the compiled JSON source.
 ///
-/// Dispatches based on file extension: `.json` → [`policy_loader::load_json_policy`],
-/// `.star` (or anything else) → [`policy_loader::evaluate_star_policy`].
+/// Dispatches based on file extension: `.star` (or anything else) →
+/// [`policy_loader::evaluate_star_policy`]. Legacy `.json` files are rejected
+/// with a friendly error directing the user to `clash policy migrate`.
 pub fn evaluate_policy_file(path: &std::path::Path) -> Result<String> {
     if path.extension().is_some_and(|ext| ext == "json") {
-        crate::policy_loader::load_json_policy(path)
+        Err(crate::policy_loader::legacy_json_error(path))
     } else {
         crate::policy_loader::evaluate_star_policy(path).map(|o| o.json)
     }

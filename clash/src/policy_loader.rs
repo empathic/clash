@@ -49,9 +49,18 @@ pub fn evaluate_star_policy(path: &Path) -> Result<clash_starlark::EvalOutput> {
     Ok(output)
 }
 
-/// Load a `policy.json` manifest: parse the JSON, resolve includes, and return
-/// a merged JSON source string suitable for [`compile::compile_to_tree`].
-pub fn load_json_policy(path: &Path) -> Result<String> {
+/// Construct the standard "legacy `policy.json` detected" error for any
+/// non-migrate caller that encounters a `.json` policy file.
+pub fn legacy_json_error(path: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Legacy `policy.json` detected at `{}`. Run `clash policy migrate` to convert to `.star` (the only supported format).",
+        path.display()
+    )
+}
+
+/// Only call from cmd::policy::migrate. All other JSON loading paths have been removed.
+#[allow(dead_code)]
+pub(crate) fn migrate_load_json_policy(path: &Path) -> Result<String> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
 
@@ -72,6 +81,7 @@ pub fn load_json_policy(path: &Path) -> Result<String> {
 ///
 /// Inline tree nodes come first (first-match wins), followed by included
 /// policies in declaration order.
+#[allow(dead_code)]
 fn merge_manifest_with_includes(manifest: &PolicyManifest, base_dir: &Path) -> Result<String> {
     let mut merged = manifest.policy.clone();
 
@@ -133,7 +143,7 @@ fn evaluate_stdlib_include(include_path: &str) -> Result<String> {
 
 /// Read and parse a `policy.json` file into a [`PolicyManifest`].
 ///
-/// This does NOT resolve includes — call [`load_json_policy`] for full loading.
+/// This does NOT resolve includes — call [`migrate_load_json_policy`] for full loading.
 pub fn read_manifest(path: &Path) -> Result<PolicyManifest> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
@@ -312,14 +322,10 @@ pub fn try_load_policy(
 
     let is_json = path.extension().is_some_and(|ext| ext == "json");
     let (json_source, shadows) = if is_json {
-        match load_json_policy(path) {
-            Ok(json) => (json, Vec::new()),
-            Err(e) => {
-                error!(path = %path.display(), level = %level, error = %e, "Failed to evaluate JSON policy");
-                *policy_error = Some(format!("Failed to evaluate {}: {}", path.display(), e));
-                return None;
-            }
-        }
+        let e = legacy_json_error(path);
+        error!(path = %path.display(), level = %level, error = %e, "Legacy policy.json rejected");
+        *policy_error = Some(e.to_string());
+        return None;
     } else {
         match evaluate_star_policy(path) {
             Ok(output) => (output.json, output.shadows),
@@ -391,7 +397,7 @@ pub fn load_and_compile_single(
 
     let is_json = path.extension().is_some_and(|ext| ext == "json");
     let eval_result = if is_json {
-        load_json_policy(path)
+        Err(legacy_json_error(path))
     } else {
         evaluate_star_policy(path).map(|o| o.json)
     };
@@ -422,6 +428,10 @@ pub fn load_and_compile_single(
 mod tests {
     use super::*;
 
+    /// Legacy JSON parsing is still tested, but only via the migrate code path.
+    mod migrate_tests {
+        use super::*;
+
     #[test]
     fn load_json_policy_without_includes() {
         let dir = tempfile::tempdir().unwrap();
@@ -442,7 +452,7 @@ mod tests {
         )
         .unwrap();
 
-        let source = load_json_policy(&json_path).unwrap();
+        let source = migrate_load_json_policy(&json_path).unwrap();
         let policy: CompiledPolicy = serde_json::from_str(&source).unwrap();
         assert_eq!(policy.tree.len(), 1);
     }
@@ -482,7 +492,7 @@ policy("include", {"Read": allow()})
         )
         .unwrap();
 
-        let source = load_json_policy(&json_path).unwrap();
+        let source = migrate_load_json_policy(&json_path).unwrap();
         let policy: CompiledPolicy = serde_json::from_str(&source).unwrap();
         // Should have inline (Bash) + included (Read) rules.
         assert!(
@@ -507,13 +517,14 @@ policy("include", {"Read": allow()})
         )
         .unwrap();
 
-        let source = load_json_policy(&json_path).unwrap();
+        let source = migrate_load_json_policy(&json_path).unwrap();
         let policy: CompiledPolicy = serde_json::from_str(&source).unwrap();
         // builtin.star exports rules for clash commands + claude tools.
         assert!(
             !policy.tree.is_empty(),
             "builtin.star should contribute rules"
         );
+    }
     }
 
     #[test]
