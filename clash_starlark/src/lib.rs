@@ -28,6 +28,18 @@ pub struct EvalOutput {
     pub shadows: Vec<eval_context::ShadowedRule>,
 }
 
+/// Parse a Starlark source file and return the AST, or a [`starlark::Error`] on syntax failure.
+///
+/// This is a thin wrapper intended for use by tooling (e.g. the LSP) that only needs to
+/// check syntax without executing the policy.
+pub fn parse_source(
+    filename: &str,
+    source: &str,
+) -> Result<starlark::syntax::AstModule, starlark::Error> {
+    use starlark::syntax::{AstModule, Dialect};
+    AstModule::parse(filename, source.to_owned(), &Dialect::Standard)
+}
+
 /// Evaluate a Starlark policy source and return a JSON policy document.
 ///
 /// Top-level `policy()`, `sandbox()`, and `settings()` calls register into
