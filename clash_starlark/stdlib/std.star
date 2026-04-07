@@ -538,8 +538,30 @@ def _make_sandbox(name, default, fs_rules, net_policy, net_domain_names=None, do
     )
 
 
-def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
-    """Build a sandbox definition.
+def sandbox(name=None, tree=None, default="deny", fs=None, net=None, doc=None):
+    """Register a sandbox from a decision-tree dict, or (legacy) build one.
+
+    New form:
+        sandbox("rust-dev", {
+            default(): deny(),
+            path("$PWD"): allow("rwc"),
+            domain("crates.io"): allow(),
+        })
+
+    Legacy form (still supported until Task A6):
+        sandbox("name", default=deny(), fs={...}, net=allow())
+    """
+    # New tree form: positional dict tree, no fs=/net= kwargs.
+    if tree != None and type(tree) == "dict" and fs == None and net == None:
+        if type(name) != "string":
+            fail("sandbox() name must be a string")
+        _sandbox_impl(name, tree, default=_unwrap_effect(default), doc=doc)
+        return name
+    return _legacy_sandbox(name, default, fs, net, doc)
+
+
+def _legacy_sandbox(name=None, default="deny", fs=None, net=None, doc=None):
+    """Legacy builder-based sandbox(). Removed in Task A6.
 
     Usage:
         sandbox("example", default=deny(),

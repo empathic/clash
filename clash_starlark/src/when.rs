@@ -458,6 +458,263 @@ fn process_policy_dict<'v>(
 // Sandbox conversion (replaces _sandbox_to_json / _resolve_path_value)
 // ---------------------------------------------------------------------------
 
+/// Shared assembly: build the sandbox JSON from already-converted parts.
+/// Both the legacy struct path (`sandbox_to_json`) and the new tree path
+/// (`sandbox_tree_impl`) feed this function so the wire format stays in sync.
+fn build_sandbox_json(
+    name: &str,
+    default_effect: &str,
+    rules: Vec<JsonValue>,
+    network: JsonValue,
+    doc: Option<String>,
+) -> JsonValue {
+    let default_caps = if default_effect == "deny" {
+        json!(["execute"])
+    } else {
+        json!(["read", "write", "create", "delete", "execute"])
+    };
+    let mut result = json!({
+        "name": name,
+        "default": default_caps,
+        "rules": rules,
+        "network": network,
+    });
+    if let Some(d) = doc {
+        result
+            .as_object_mut()
+            .unwrap()
+            .insert("doc".to_string(), json!(d));
+    }
+    result
+}
+
+/// Extract the effect string ("allow"/"deny"/"ask") from an effect struct.
+fn effect_to_string<'v>(value: Value<'v>, heap: &'v Heap) -> anyhow::Result<String> {
+    if let Some(s) = value.unpack_str() {
+        return Ok(s.to_string());
+    }
+    if !is_effect(value, heap) {
+        bail!(
+            "expected an effect (allow()/deny()/ask()), got {}",
+            value.get_type()
+        );
+    }
+    let kind = value
+        .get_attr("_effect", heap)
+        .ok()
+        .flatten()
+        .and_then(|v| v.unpack_str().map(|s| s.to_string()))
+        .context("effect struct missing _effect")?;
+    Ok(kind)
+}
+
+/// Compute capability list from an effect struct's `_read`/`_write`/...
+/// flags. Mirrors the logic of stdlib `_caps_from_effect`.
+fn caps_from_effect<'v>(eff: Value<'v>, heap: &'v Heap) -> anyhow::Result<Vec<String>> {
+    let get_bool = |name: &str| -> Option<bool> {
+        eff.get_attr(name, heap)
+            .ok()
+            .flatten()
+            .and_then(|v| v.unpack_bool())
+    };
+    let r = get_bool("_read");
+    let w = get_bool("_write");
+    let c = get_bool("_create");
+    let d = get_bool("_delete");
+    let x = get_bool("_execute");
+    if r.is_none() && w.is_none() && c.is_none() && d.is_none() && x.is_none() {
+        return Ok(vec![
+            "read".into(),
+            "write".into(),
+            "create".into(),
+            "delete".into(),
+            "execute".into(),
+        ]);
+    }
+    let mut caps = Vec::new();
+    if r == Some(true) {
+        caps.push("read".to_string());
+    }
+    if w == Some(true) {
+        caps.push("write".to_string());
+    }
+    if c == Some(true) {
+        caps.push("create".to_string());
+    }
+    if d == Some(true) {
+        caps.push("delete".to_string());
+    }
+    if x == Some(true) {
+        caps.push("execute".to_string());
+    }
+    Ok(caps)
+}
+
+/// Build an fs rule JSON from an effect value at a typed path/glob key.
+fn fs_rule_from<'v>(
+    effect: Value<'v>,
+    path_str: String,
+    doc: Option<String>,
+    match_type: &str,
+    heap: &'v Heap,
+) -> anyhow::Result<JsonValue> {
+    if !is_effect(effect, heap) {
+        bail!(
+            "sandbox tree fs values must be effects (allow/deny/ask), got {}",
+            effect.get_type()
+        );
+    }
+    let eff_str = effect_to_string(effect, heap)?;
+    let caps = caps_from_effect(effect, heap)?;
+    let mut rule = json!({
+        "effect": eff_str,
+        "caps": caps,
+        "path": path_str,
+        "path_match": match_type,
+    });
+    if let Some(d) = doc {
+        rule.as_object_mut()
+            .unwrap()
+            .insert("doc".to_string(), json!(d));
+    }
+    Ok(rule)
+}
+
+/// Inject the system rules that the legacy `sandbox()` builder used to add:
+/// allow `read` on `/` (subpath), deny everything on the user-home root.
+fn append_system_rules(rules: &mut Vec<JsonValue>) {
+    let user_homes = if std::env::consts::OS == "macos" {
+        "/Users"
+    } else {
+        "/home"
+    };
+    rules.push(json!({
+        "effect": "allow",
+        "caps": ["read"],
+        "path": "/",
+        "path_match": "subpath",
+    }));
+    rules.push(json!({
+        "effect": "deny",
+        "caps": ["read", "write", "create", "delete", "execute"],
+        "path": user_homes,
+        "path_match": "subpath",
+    }));
+}
+
+/// Build the JSON `network` field from collected sandbox-tree net pieces.
+fn build_network_json(
+    domains: Vec<String>,
+    localhost: Option<bool>,
+    localhost_ports: Vec<i64>,
+) -> JsonValue {
+    let has_localhost = localhost == Some(true) || !localhost_ports.is_empty();
+    let has_domains = !domains.is_empty();
+    if !has_localhost && !has_domains {
+        return json!("deny");
+    }
+    if has_domains && !has_localhost {
+        return json!({ "allow_domains": domains });
+    }
+    if has_localhost && !has_domains {
+        if localhost_ports.is_empty() {
+            return json!("localhost");
+        }
+        return json!({ "localhost": localhost_ports });
+    }
+    // Both — emit allow_domains plus localhost.
+    let mut obj = serde_json::Map::new();
+    obj.insert("allow_domains".to_string(), json!(domains));
+    if localhost_ports.is_empty() {
+        obj.insert("localhost".to_string(), json!(true));
+    } else {
+        obj.insert("localhost".to_string(), json!(localhost_ports));
+    }
+    JsonValue::Object(obj)
+}
+
+/// Process a unified sandbox-tree dict into a complete sandbox JSON value.
+pub fn sandbox_tree_impl<'v>(
+    name: &str,
+    tree: Value<'v>,
+    default_effect_kwarg: &str,
+    doc: Option<String>,
+    heap: &'v Heap,
+    _source: Option<String>,
+) -> anyhow::Result<JsonValue> {
+    let dict = DictRef::from_value(tree)
+        .ok_or_else(|| anyhow::anyhow!("sandbox() tree must be a dict"))?;
+
+    let mut default_effect = default_effect_kwarg.to_string();
+    let mut fs_rules: Vec<JsonValue> = Vec::new();
+    let mut net_domains: Vec<String> = Vec::new();
+    let mut net_localhost_allow: Option<bool> = None;
+    let mut net_localhost_ports: Vec<i64> = Vec::new();
+
+    for (key, value) in dict.iter() {
+        let raw_mv = key
+            .get_attr("_match_value", heap)
+            .ok()
+            .flatten()
+            .and_then(|v| v.unpack_str().map(|s| s.to_string()));
+        let raw_ports: Vec<i64> = key
+            .get_attr("_match_value", heap)
+            .ok()
+            .flatten()
+            .and_then(|v| {
+                ListRef::from_value(v).map(|list| {
+                    list.iter()
+                        .filter_map(|item| item.unpack_i32().map(|n| n as i64))
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+        let key_doc = key
+            .get_attr("_doc", heap)
+            .ok()
+            .flatten()
+            .filter(|v| !v.is_none())
+            .and_then(|v| v.unpack_str().map(|s| s.to_string()));
+
+        match classify_root_key(key, heap)? {
+            MatchKeyKind::Default { .. } => {
+                default_effect = effect_to_string(value, heap)?;
+            }
+            MatchKeyKind::Path { .. } => {
+                let pv = raw_mv
+                    .ok_or_else(|| anyhow::anyhow!("path() key missing string value"))?;
+                fs_rules.push(fs_rule_from(value, pv, key_doc, "literal", heap)?);
+            }
+            MatchKeyKind::Glob { .. } => {
+                let pv = raw_mv
+                    .ok_or_else(|| anyhow::anyhow!("glob() key missing string value"))?;
+                fs_rules.push(fs_rule_from(value, pv, key_doc, "glob", heap)?);
+            }
+            MatchKeyKind::Domain { .. } => {
+                let dn = raw_mv
+                    .ok_or_else(|| anyhow::anyhow!("domain() key must be a string"))?;
+                let _eff = effect_to_string(value, heap)?;
+                net_domains.push(dn);
+            }
+            MatchKeyKind::Localhost { .. } => {
+                let eff = effect_to_string(value, heap)?;
+                if eff == "allow" {
+                    net_localhost_allow = Some(true);
+                }
+                net_localhost_ports.extend(raw_ports);
+            }
+            MatchKeyKind::Mode { .. } | MatchKeyKind::Tool { .. } => {
+                bail!("mode()/tool() are policy-only keys; not allowed in a sandbox tree");
+            }
+        }
+    }
+
+    append_system_rules(&mut fs_rules);
+
+    let network = build_network_json(net_domains, net_localhost_allow, net_localhost_ports);
+    Ok(build_sandbox_json(name, &default_effect, fs_rules, network, doc))
+}
+
 /// Convert a sandbox Starlark struct to JSON.
 pub fn sandbox_to_json<'v>(sb: Value<'v>, heap: &'v Heap) -> anyhow::Result<JsonValue> {
     let name = sb
@@ -488,31 +745,13 @@ pub fn sandbox_to_json<'v>(sb: Value<'v>, heap: &'v Heap) -> anyhow::Result<Json
     // Network policy
     let net = convert_net_policy(sb, heap)?;
 
-    // Default caps
-    let default_caps = if default_effect == "deny" {
-        json!(["execute"])
-    } else {
-        json!(["read", "write", "create", "delete", "execute"])
-    };
+    let doc = sb
+        .get_attr("_doc", heap)
+        .ok()
+        .flatten()
+        .and_then(|v| v.unpack_str().map(|s| s.to_string()));
 
-    let mut result = json!({
-        "name": name,
-        "default": default_caps,
-        "rules": rules,
-        "network": net,
-    });
-
-    // Optional doc
-    if let Ok(Some(doc_val)) = sb.get_attr("_doc", heap) {
-        if let Some(doc) = doc_val.unpack_str() {
-            result
-                .as_object_mut()
-                .unwrap()
-                .insert("doc".to_string(), json!(doc));
-        }
-    }
-
-    Ok(result)
+    Ok(build_sandbox_json(&name, &default_effect, rules, net, doc))
 }
 
 fn convert_fs_rule<'v>(rule: Value<'v>, heap: &'v Heap) -> anyhow::Result<JsonValue> {

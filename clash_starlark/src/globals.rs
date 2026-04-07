@@ -287,4 +287,30 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         })?;
         Ok(NoneType)
     }
+
+    // -- Rust-native sandbox() (tree form) --
+
+    /// Register a named sandbox from a decision-tree dict.
+    fn _sandbox_impl<'v>(
+        #[starlark(require = pos)] name: &str,
+        #[starlark(require = pos)] tree: Value<'v>,
+        #[starlark(require = named, default = "deny")] default: &str,
+        #[starlark(require = named, default = starlark::values::none::NoneType)] doc: Value<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<NoneType> {
+        let heap = eval.heap();
+        let ctx = eval
+            .extra
+            .and_then(|e| e.downcast_ref::<EvalContext>())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "sandbox() can only be called in a policy file, not in loaded modules"
+                )
+            })?;
+        let doc_str = doc.unpack_str().map(|s| s.to_string());
+        let source = caller_source_location(eval);
+        let sb_json = crate::when::sandbox_tree_impl(name, tree, default, doc_str, heap, source)?;
+        ctx.register_sandbox(name, sb_json)?;
+        Ok(NoneType)
+    }
 }
