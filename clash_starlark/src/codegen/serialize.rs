@@ -221,9 +221,7 @@ fn format_call(func: &Expr, args: &[Expr], kwargs: &[(String, Expr)], depth: usi
     let all_args = format_arg_list(args, kwargs, depth);
 
     // Try single line (comments force multi-line)
-    let has_commented_args = args
-        .iter()
-        .any(|e| matches!(e, Expr::Commented { .. }));
+    let has_commented_args = args.iter().any(|e| matches!(e, Expr::Commented { .. }));
     let oneline = format!("{func_str}({all_args})");
     let approx_col = depth * INDENT.len() + oneline.len();
     if !has_commented_args && approx_col <= MAX_LINE && !oneline.contains('\n') {
@@ -479,10 +477,7 @@ load(\"@clash//std.star\",
         use crate::codegen::builder::*;
 
         let stmts = vec![
-            Stmt::load(
-                "@clash//std.star",
-                &["policy", "settings", "allow", "ask"],
-            ),
+            Stmt::load("@clash//std.star", &["policy", "settings", "allow", "ask"]),
             Stmt::Blank,
             Stmt::Expr(settings(ask(), None)),
             Stmt::Blank,

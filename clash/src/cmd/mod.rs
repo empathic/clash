@@ -9,6 +9,7 @@ pub mod hooks;
 pub mod import_settings;
 pub mod init;
 pub mod launch;
+pub mod lsp;
 pub mod policy;
 pub mod schema;
 pub mod session;

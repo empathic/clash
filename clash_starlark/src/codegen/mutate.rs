@@ -143,7 +143,12 @@ pub fn policy_merge_args_mut(stmts: &mut [Stmt]) -> Option<&mut Vec<Expr>> {
     let policy_idx = find_policy_call(stmts)?;
     if let Stmt::Expr(Expr::Call { args, .. }) = &mut stmts[policy_idx] {
         if args.len() >= 2 {
-            if let Expr::Call { func, args: merge_args, .. } = &mut args[1] {
+            if let Expr::Call {
+                func,
+                args: merge_args,
+                ..
+            } = &mut args[1]
+            {
                 if matches!(func.as_ref(), Expr::Ident(n) if n == "merge") {
                     return Some(merge_args);
                 }

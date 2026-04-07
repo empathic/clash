@@ -562,7 +562,10 @@ mod tests {
         let policy = generate_starlark(&analysis);
         // Should generate a generic Bash when rule since we know bash was used
         // but total_invocations > tools count
-        assert!(policy.contains("{\"Bash\": allow(sandbox = project)}"), "expected dict syntax in:\n{policy}");
+        assert!(
+            policy.contains("{\"Bash\": allow(sandbox = project)}"),
+            "expected dict syntax in:\n{policy}"
+        );
     }
 
     #[test]

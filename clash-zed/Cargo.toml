@@ -1,0 +1,15 @@
+[workspace]
+
+[package]
+name = "clash-zed"
+version = "0.1.0"
+edition = "2021"
+description = "Zed editor extension: Starlark language + clash-lsp"
+license = "Apache-2.0"
+repository = "https://github.com/empathic/clash"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.7.0"

@@ -4,7 +4,7 @@
 //! [`Observable`], and [`Pattern`] — kept separate from the IR definitions so
 //! `match_tree.rs` stays focused on types and evaluation.
 
-use crate::policy::match_tree::{CompiledPolicy, Decision, Node, Observable, Pattern, SandboxRef};
+use crate::match_tree::{CompiledPolicy, Decision, Node, Observable, Pattern, SandboxRef};
 
 // ---------------------------------------------------------------------------
 // Public entry points

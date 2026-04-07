@@ -6,7 +6,7 @@
 
 use anyhow::{Result, bail};
 
-use crate::policy::match_tree::{CompiledPolicy, Node};
+use crate::match_tree::{CompiledPolicy, Node};
 
 /// Environment variable resolver used during compilation to expand `(env NAME)`.
 pub trait EnvResolver {
@@ -51,7 +51,7 @@ pub fn compile_to_tree(source: &str) -> Result<CompiledPolicy> {
 /// Each tuple is `(level, json_source, source_path)` where `source_path` is the
 /// display path of the file the policy was loaded from (e.g. `~/.config/clash/policy.star`).
 pub fn compile_multi_level_to_tree(
-    levels: &[(crate::settings::PolicyLevel, &str, &str)],
+    levels: &[(crate::PolicyLevel, &str, &str)],
 ) -> Result<CompiledPolicy> {
     if levels.is_empty() {
         bail!("no policy levels to compile");
@@ -62,7 +62,7 @@ pub fn compile_multi_level_to_tree(
     }
 
     // Sort by precedence (highest first) for first-match semantics.
-    let mut sorted: Vec<(crate::settings::PolicyLevel, &str, &str)> = levels.to_vec();
+    let mut sorted: Vec<(crate::PolicyLevel, &str, &str)> = levels.to_vec();
     sorted.sort_by(|a, b| b.0.cmp(&a.0));
 
     // Start with an empty merged policy using the default from the highest level.
@@ -156,7 +156,7 @@ mod tests {
         }"#;
         let policy = compile_to_tree(source).unwrap();
         assert_eq!(policy.tree.len(), 1);
-        assert_eq!(policy.default_effect, crate::policy::Effect::Deny);
+        assert_eq!(policy.default_effect, crate::Effect::Deny);
     }
 
     #[test]
@@ -240,8 +240,8 @@ mod tests {
             "sandboxes": {}, "tree": []
         }"#;
         let levels = vec![
-            (crate::settings::PolicyLevel::User, user, "user"),
-            (crate::settings::PolicyLevel::Project, project, "project"),
+            (crate::PolicyLevel::User, user, "user"),
+            (crate::PolicyLevel::Project, project, "project"),
         ];
         let merged = compile_multi_level_to_tree(&levels).unwrap();
         assert_eq!(

@@ -113,25 +113,16 @@ impl PolicySpec {
         for (tool, path) in &analysis.file_denies {
             let expr = match_rule(vec![(
                 tool.as_str().into(),
-                MatchValue::Nested(vec![(
-                    path.as_str().into(),
-                    MatchValue::Effect(deny()),
-                )]),
+                MatchValue::Nested(vec![(path.as_str().into(), MatchValue::Effect(deny()))]),
             )]);
             rules.push(PolicyRule {
-                expr: Expr::commented(
-                    &format!("deny {} on {}", tool, path),
-                    expr,
-                ),
+                expr: Expr::commented(&format!("deny {} on {}", tool, path), expr),
             });
         }
 
         // 2. Bash denies
         if !analysis.bash_denies.is_empty() {
-            let expr = match_rule(vec![build_bash_entry(
-                &analysis.bash_denies,
-                deny(),
-            )]);
+            let expr = match_rule(vec![build_bash_entry(&analysis.bash_denies, deny())]);
             rules.push(PolicyRule {
                 expr: Expr::commented("denied bash commands", expr),
             });
@@ -139,18 +130,14 @@ impl PolicySpec {
 
         // 3. Tool denies
         if !analysis.tool_denies.is_empty() {
-            let names: Vec<&str> =
-                analysis.tool_denies.iter().map(|s| s.as_str()).collect();
+            let names: Vec<&str> = analysis.tool_denies.iter().map(|s| s.as_str()).collect();
             rules.push(PolicyRule {
                 expr: match_rule(vec![tool_entry(&names, deny())]),
             });
         }
 
         // 4. Ecosystem sandbox routing
-        let eco_rules = ecosystems::ecosystem_rules(
-            ecosystems,
-            sandboxes::PROJECT_FILES_SANDBOX,
-        );
+        let eco_rules = ecosystems::ecosystem_rules(ecosystems, sandboxes::PROJECT_FILES_SANDBOX);
         for expr in eco_rules {
             rules.push(PolicyRule { expr });
         }
@@ -185,10 +172,7 @@ impl PolicySpec {
             .map(|s| s.as_str())
             .collect();
         if !other_allows.is_empty() {
-            allow_rules.push(match_rule(vec![tool_entry(
-                &other_allows,
-                allow(),
-            )]));
+            allow_rules.push(match_rule(vec![tool_entry(&other_allows, allow())]));
         }
 
         // Comment only the first allow rule; the rest stay bare for merging.
@@ -209,8 +193,7 @@ impl PolicySpec {
             )]));
         }
         if !analysis.tool_asks.is_empty() {
-            let names: Vec<&str> =
-                analysis.tool_asks.iter().map(|s| s.as_str()).collect();
+            let names: Vec<&str> = analysis.tool_asks.iter().map(|s| s.as_str()).collect();
             ask_rules.push(match_rule(vec![tool_entry(&names, ask())]));
         }
 
@@ -244,9 +227,7 @@ impl PolicySpec {
     /// spec pipeline. The caller provides a `TraceAnalysis` with observed tools and
     /// binaries; we categorize them into sandboxed FS rules, net rules, git safety
     /// denies, and binary-specific sandbox rules.
-    pub(crate) fn from_trace(
-        analysis: &crate::cmd::from_trace::TraceAnalysis,
-    ) -> Self {
+    pub(crate) fn from_trace(analysis: &crate::cmd::from_trace::TraceAnalysis) -> Self {
         use crate::policy_gen::sandboxes::PROJECT_FILES_SANDBOX;
         use crate::policy_gen::tools::{
             FS_READ_TOOLS, FS_WRITE_TOOLS, NET_TOOLS, is_categorized_tool,
@@ -336,8 +317,7 @@ impl PolicySpec {
 
         // Binary-specific rules — sandboxed to the "project" preset
         if !analysis.binaries.is_empty() {
-            let bins: Vec<&str> =
-                analysis.binaries.iter().map(|s| s.as_str()).collect();
+            let bins: Vec<&str> = analysis.binaries.iter().map(|s| s.as_str()).collect();
             let key: MatchKey = if bins.len() == 1 {
                 bins[0].into()
             } else {
@@ -472,10 +452,7 @@ impl PolicySpec {
 
     /// Build Bash routing entries for ecosystems.
     /// If `use_safe` is true, prefer `_safe` variants (plan mode).
-    fn build_bash_routing(
-        ecosystems: &[&'static EcosystemDef],
-        use_safe: bool,
-    ) -> Vec<DictEntry> {
+    fn build_bash_routing(ecosystems: &[&'static EcosystemDef], use_safe: bool) -> Vec<DictEntry> {
         let mut entries = Vec::new();
 
         for eco in ecosystems {
@@ -856,23 +833,67 @@ mod tests {
         );
 
         // Should have mode-based routing
-        assert!(code.contains("mode(\"plan\")"), "should have plan mode\n\nGenerated:\n{}", code);
-        assert!(code.contains("mode(\"edit\")"), "should have edit mode\n\nGenerated:\n{}", code);
-        assert!(code.contains("mode(\"unrestricted\")"), "should have unrestricted mode\n\nGenerated:\n{}", code);
+        assert!(
+            code.contains("mode(\"plan\")"),
+            "should have plan mode\n\nGenerated:\n{}",
+            code
+        );
+        assert!(
+            code.contains("mode(\"edit\")"),
+            "should have edit mode\n\nGenerated:\n{}",
+            code
+        );
+        assert!(
+            code.contains("mode(\"unrestricted\")"),
+            "should have unrestricted mode\n\nGenerated:\n{}",
+            code
+        );
 
         // Should have ecosystem sandboxes
-        assert!(code.contains("rust_safe"), "should have rust_safe\n\nGenerated:\n{}", code);
-        assert!(code.contains("rust_full"), "should have rust_full\n\nGenerated:\n{}", code);
-        assert!(code.contains("git_safe"), "should have git_safe\n\nGenerated:\n{}", code);
-        assert!(code.contains("git_full"), "should have git_full\n\nGenerated:\n{}", code);
+        assert!(
+            code.contains("rust_safe"),
+            "should have rust_safe\n\nGenerated:\n{}",
+            code
+        );
+        assert!(
+            code.contains("rust_full"),
+            "should have rust_full\n\nGenerated:\n{}",
+            code
+        );
+        assert!(
+            code.contains("git_safe"),
+            "should have git_safe\n\nGenerated:\n{}",
+            code
+        );
+        assert!(
+            code.contains("git_full"),
+            "should have git_full\n\nGenerated:\n{}",
+            code
+        );
 
         // Should not emit settings
-        assert!(!code.contains("settings("), "should not emit settings()\n\nGenerated:\n{}", code);
+        assert!(
+            !code.contains("settings("),
+            "should not emit settings()\n\nGenerated:\n{}",
+            code
+        );
 
         // Should have base sandbox presets
-        assert!(code.contains("readonly"), "should have readonly\n\nGenerated:\n{}", code);
-        assert!(code.contains("project"), "should have project\n\nGenerated:\n{}", code);
-        assert!(code.contains("workspace"), "should have workspace\n\nGenerated:\n{}", code);
+        assert!(
+            code.contains("readonly"),
+            "should have readonly\n\nGenerated:\n{}",
+            code
+        );
+        assert!(
+            code.contains("project"),
+            "should have project\n\nGenerated:\n{}",
+            code
+        );
+        assert!(
+            code.contains("workspace"),
+            "should have workspace\n\nGenerated:\n{}",
+            code
+        );
     }
 
     #[test]

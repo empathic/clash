@@ -112,8 +112,8 @@ pub fn compile_to_sbpl(policy: &SandboxPolicy, cwd: &str) -> String {
 
         // Collect ancestor directories for path traversal (both forms)
         if rule.path_match != PathMatch::Regex {
-            for path in [&canonical, &resolved] {
-                let mut dir = path.as_str();
+            for path in [canonical.as_str(), resolved.as_str()] {
+                let mut dir = path;
                 while let Some(pos) = dir.rfind('/') {
                     if pos == 0 {
                         break; // "/" is already handled above

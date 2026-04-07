@@ -1,0 +1,27 @@
+[package]
+name = "clash-policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Clash policy language: parsing, IR, compilation, and evaluation"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+similar = { workspace = true }
+regex = { workspace = true }
+console = { workspace = true }
+bitflags = { workspace = true }
+tracing = { workspace = true }
+dirs = { workspace = true }
+serde_yaml = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }

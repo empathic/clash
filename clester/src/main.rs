@@ -255,10 +255,7 @@ fn print_results(results: &[ScriptResult]) -> bool {
             eprintln!("  result: PASS\n");
         } else {
             eprintln!("  result: FAIL\n");
-            failed_scripts.push((
-                &sr.script_name,
-                first_failure.unwrap_or("unknown failure"),
-            ));
+            failed_scripts.push((&sr.script_name, first_failure.unwrap_or("unknown failure")));
         }
     }
 

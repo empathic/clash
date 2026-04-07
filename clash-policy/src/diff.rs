@@ -5,9 +5,10 @@
 
 use similar::{ChangeTag, TextDiff};
 
-use crate::policy::format::format_tree_with_options;
-use crate::policy::match_tree::CompiledPolicy;
-use crate::style;
+use console::Style;
+
+use crate::format::format_tree_with_options;
+use crate::match_tree::CompiledPolicy;
 
 /// Produce a unified diff between two compiled policies, rendered as tree strings.
 ///
@@ -30,11 +31,16 @@ pub fn tree_diff(before: &CompiledPolicy, after: &CompiledPolicy) -> Option<Stri
         let line = change.value().trim_end_matches('\n');
         match change.tag() {
             ChangeTag::Delete => {
-                output.push_str(&style::red(&format!("- {line}")));
+                output.push_str(&Style::new().red().apply_to(format!("- {line}")).to_string());
                 output.push('\n');
             }
             ChangeTag::Insert => {
-                output.push_str(&style::green(&format!("+ {line}")));
+                output.push_str(
+                    &Style::new()
+                        .green()
+                        .apply_to(format!("+ {line}"))
+                        .to_string(),
+                );
                 output.push('\n');
             }
             ChangeTag::Equal => {
@@ -85,14 +91,14 @@ pub fn tree_diff_plain(before: &CompiledPolicy, after: &CompiledPolicy) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::match_tree::*;
+    use crate::match_tree::*;
     use std::collections::HashMap;
 
     fn empty_policy() -> CompiledPolicy {
         CompiledPolicy {
             sandboxes: HashMap::new(),
             tree: vec![],
-            default_effect: crate::policy::Effect::Deny,
+            default_effect: crate::Effect::Deny,
             default_sandbox: None,
             on_sandbox_violation: Default::default(),
             harness_defaults: None,

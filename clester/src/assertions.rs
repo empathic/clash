@@ -230,10 +230,7 @@ fn check_leaf(
                 }
             }
             Err(e) => {
-                failures.push(format!(
-                    "stdout_regex: invalid regex /{}/ — {}",
-                    pattern, e
-                ));
+                failures.push(format!("stdout_regex: invalid regex /{}/ — {}", pattern, e));
             }
         }
     }
@@ -272,10 +269,7 @@ fn check_leaf(
                 }
             }
             Err(e) => {
-                failures.push(format!(
-                    "stderr_regex: invalid regex /{}/ — {}",
-                    pattern, e
-                ));
+                failures.push(format!("stderr_regex: invalid regex /{}/ — {}", pattern, e));
             }
         }
     }

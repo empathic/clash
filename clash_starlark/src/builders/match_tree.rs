@@ -137,4 +137,3 @@ pub fn pattern_to_json<'v>(value: Value<'v>, heap: &'v Heap) -> anyhow::Result<J
         value.to_repr()
     )
 }
-

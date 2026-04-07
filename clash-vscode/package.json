@@ -1,0 +1,57 @@
+{
+  "name": "clash-policy",
+  "displayName": "Clash Policy",
+  "description": "Language support for clash policy files (.star)",
+  "version": "0.6.2",
+  "publisher": "empathic",
+  "repository": "https://github.com/empathic/clash",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Programming Languages", "Linters"],
+  "activationEvents": [
+    "onLanguage:clash-policy"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [{
+      "id": "clash-policy",
+      "aliases": ["Clash Policy", "clash-policy"],
+      "extensions": [".star"],
+      "filenamePatterns": ["policy.star", "**/clash/**/*.star"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "clash-policy",
+      "scopeName": "source.starlark",
+      "path": "./syntaxes/starlark.tmLanguage.json"
+    }],
+    "configuration": {
+      "title": "Clash Policy",
+      "properties": {
+        "clashPolicy.binaryPath": {
+          "type": "string",
+          "default": "clash",
+          "description": "Path to the clash binary. Defaults to looking up `clash` on PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.4.0",
+    "@vscode/vsce": "^3",
+    "typescript": "^5"
+  }
+}

@@ -126,7 +126,9 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named, default = true)] project: bool,
         heap: &'v starlark::values::Heap,
     ) -> anyhow::Result<Value<'v>> {
-        Ok(crate::settings_compat::from_claude_settings_as_dict(user, project, heap))
+        Ok(crate::settings_compat::from_claude_settings_as_dict(
+            user, project, heap,
+        ))
     }
 
     // -- Deep merge primitive --
@@ -140,7 +142,10 @@ fn register_globals(builder: &mut GlobalsBuilder) {
         let heap = eval.heap();
         let items = args.content();
         if items.len() < 2 {
-            anyhow::bail!("merge() requires at least 2 dict arguments, got {}", items.len());
+            anyhow::bail!(
+                "merge() requires at least 2 dict arguments, got {}",
+                items.len()
+            );
         }
         for (i, arg) in items.iter().enumerate() {
             if DictRef::from_value(*arg).is_none() {
