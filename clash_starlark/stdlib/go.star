@@ -24,10 +24,24 @@ go_full = sandbox(
             glob("go/**"): allow(),
             glob(".cache/go-build/**"): allow(),
         },
+
+
+
+
+
+
         glob("$TMPDIR/**"): allow(),
     },
     net = allow(),
     doc = "Go full: get, mod tidy, install. Full project access, network enabled.",
 )
+
+
+
+
+
+
+
+
 
 go = {"Bash": {"go": allow(sandbox = go_full)}}

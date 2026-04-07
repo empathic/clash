@@ -18,6 +18,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "io-std", "macros", "sync"] }
 tower-lsp.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 which.workspace = true
 
 [dev-dependencies]

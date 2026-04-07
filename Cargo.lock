@@ -902,6 +902,7 @@ dependencies = [
  "toml",
  "tower-lsp",
  "tracing",
+ "tracing-subscriber",
  "which",
 ]
 

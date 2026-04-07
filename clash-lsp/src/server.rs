@@ -91,6 +91,7 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
+        tracing::info!("client initialized — clash-lsp ready");
         self.client
             .log_message(MessageType::INFO, "clash-lsp ready")
             .await;
@@ -102,7 +103,9 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.clone();
+        tracing::info!(%uri, lang = %params.text_document.language_id, "did_open");
         let parsed = self.docs.open(uri.clone(), params.text_document.text);
+        tracing::debug!(diagnostics = parsed.diagnostics.len(), "parsed on open");
         self.publish(uri, parsed).await;
     }
 
@@ -111,11 +114,13 @@ impl LanguageServer for Backend {
         let Some(change) = params.content_changes.into_iter().next() else {
             return;
         };
+        tracing::debug!(%uri, len = change.text.len(), "did_change");
         let parsed = self.docs.change(uri.clone(), change.text);
         self.publish(uri, parsed).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        tracing::info!(uri = %params.text_document.uri, "did_close");
         self.docs.close(&params.text_document.uri);
     }
 
@@ -171,10 +176,13 @@ impl LanguageServer for Backend {
         params: DocumentFormattingParams,
     ) -> jsonrpc::Result<Option<Vec<TextEdit>>> {
         let uri = &params.text_document.uri;
+        tracing::info!(%uri, "formatting");
         let Some(source) = self.docs.get_text(uri) else {
+            tracing::warn!(%uri, "formatting: document not in store");
             return Ok(None);
         };
         let Some(formatted) = crate::features::formatting::format(&source) else {
+            tracing::warn!(%uri, "formatting: parse failed, leaving buffer untouched");
             return Ok(None);
         };
         if formatted == source {
