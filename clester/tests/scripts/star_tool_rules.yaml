@@ -4,12 +4,12 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "policy", "settings", "allow", "deny")
+    load("@clash//std.star", "policy", "settings", "tool", "allow", "deny")
     settings(default=deny())
     policy("test", {
-        ("Read", "Glob", "Grep"): allow(),
-        "WebSearch": deny(),
-        "Skill": allow(),
+        tool(("Read", "Glob", "Grep")): allow(),
+        tool("WebSearch"): deny(),
+        tool("Skill"): allow(),
     })
 
 steps:

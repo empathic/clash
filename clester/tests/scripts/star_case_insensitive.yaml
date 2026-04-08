@@ -6,8 +6,8 @@ clash:
   policy_star: |
     settings(default=deny())
     policy("test", {
-        "bash": allow(),
-        "READ": allow(),
+        tool("bash"): allow(),
+        tool("READ"): allow(),
     })
 
 steps:

@@ -4,13 +4,13 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "policy", "settings", "sandbox", "allow", "deny")
+    load("@clash//std.star", "policy", "settings", "sandbox", "tool", "path", "allow", "deny")
 
     fs_box = sandbox(
         name = "fs",
         default = deny(),
         fs = {
-            "$PWD": allow("rwc"),
+            path("$PWD"): allow("rwc"),
         },
     )
 
@@ -18,8 +18,8 @@ clash:
         name = "home",
         default = deny(),
         fs = {
-            "$HOME/.cargo": allow("r"),
-            "$TMPDIR": allow(),
+            path("$HOME/.cargo"): allow("r"),
+            path("$TMPDIR"): allow(),
         },
     )
 
@@ -27,11 +27,11 @@ clash:
 
     settings(default=deny())
     policy("test", {
-        "Bash": {
+        tool("Bash"): {
             "cargo": allow(sandbox = merged),
             "git": allow(sandbox = fs_box),
         },
-        "Read": allow(sandbox = fs_box),
+        tool("Read"): allow(sandbox = fs_box),
     })
 
 steps:

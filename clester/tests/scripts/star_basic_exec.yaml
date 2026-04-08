@@ -4,16 +4,16 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "policy", "settings", "allow", "deny", "glob")
+    load("@clash//std.star", "policy", "settings", "tool", "allow", "deny", "glob")
     settings(default=deny())
     policy("test", {
-        "Bash": {
+        tool("Bash"): {
             "git": {
                 "push": deny(),
                 glob("**"): allow(),
             },
         },
-        "Read": allow(),
+        tool("Read"): allow(),
     })
 
 steps:
