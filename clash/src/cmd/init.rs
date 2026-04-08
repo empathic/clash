@@ -636,8 +636,6 @@ fn remove_clash_from_vec(opt: &mut Option<Vec<claude_settings::HookMatcher>>) ->
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn detected_policy_compiles() {
         let ecosystems: Vec<&crate::ecosystem::EcosystemDef> = crate::ecosystem::ECOSYSTEMS
