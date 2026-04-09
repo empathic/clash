@@ -1,0 +1,44 @@
+[advisories]
+version = 2
+ignore = [
+    # unmaintained transitive dependencies — not directly actionable
+    { id = "RUSTSEC-2024-0388", reason = "derivative is a transitive dep of starlark" },
+    { id = "RUSTSEC-2025-0057", reason = "fxhash is a transitive dep of starlark" },
+    { id = "RUSTSEC-2024-0436", reason = "paste is a transitive dep of starlark" },
+    # vulnerabilities in transitive dependencies — awaiting upstream fixes
+    { id = "RUSTSEC-2026-0049", reason = "rustls-webpki transitive dep, awaiting upstream update" },
+    { id = "RUSTSEC-2026-0067", reason = "tar transitive dep, awaiting upstream update" },
+    { id = "RUSTSEC-2026-0068", reason = "tar transitive dep, awaiting upstream update" },
+]
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "OpenSSL",
+    "CC0-1.0",
+    "BSL-1.0",
+    "MPL-2.0",
+    "0BSD",
+    "WTFPL",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
