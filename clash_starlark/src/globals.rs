@@ -233,14 +233,14 @@ fn register_globals(builder: &mut GlobalsBuilder) {
     /// Accepts dict form only: `policy("name", {mode("plan"): allow(), ...})`
     fn _policy_impl<'v>(
         #[starlark(require = pos)] name: &str,
-        #[starlark(require = pos, default = starlark::values::none::NoneType)] rules_or_dict: Value<
-            'v,
-        >,
-        #[starlark(require = named, default = starlark::values::none::NoneType)] default: Value<'v>,
+        #[starlark(require = pos)] tree: Value<'v>,
+        #[starlark(require = named, default = "deny")] default: &str,
         #[starlark(require = named, default = starlark::values::none::NoneType)]
         default_sandbox: Value<'v>,
+        #[starlark(require = named, default = starlark::values::none::NoneType)] doc: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<NoneType> {
+        let _ = doc; // accepted but currently unused in registration
         let heap = eval.heap();
         let ctx = eval
             .extra
@@ -251,40 +251,60 @@ fn register_globals(builder: &mut GlobalsBuilder) {
                 )
             })?;
 
-        // Reject non-dict, non-None values with a helpful error
-        if !rules_or_dict.is_none() && DictRef::from_value(rules_or_dict).is_none() {
+        // Reject non-dict values with a helpful error
+        if DictRef::from_value(tree).is_none() {
             anyhow::bail!(
-                "policy() requires a dict argument, got {}. The when()/rules= syntax has been removed — use dict syntax instead. Run 'clash policy migrate' to convert.",
-                rules_or_dict.get_type()
+                "policy() requires a dict tree argument, got {}. \
+                 Use the unified shape: policy(\"name\", {{ default(): deny(), mode(\"plan\"): allow(), tool(\"Bash\"): {{...}} }}). \
+                 Run 'clash policy migrate' to convert legacy files.",
+                tree.get_type()
             );
         }
 
-        // Unwrap default effect (reserved for future use in policy registration)
-        let _default_effect = if default.is_none() {
-            "deny".to_string()
-        } else if let Some(s) = default.unpack_str() {
-            s.to_string()
-        } else if default.get_type() == "struct" {
-            // Effect struct — extract _effect
-            default
-                .get_attr("_effect", heap)
-                .ok()
-                .flatten()
-                .and_then(|v| v.unpack_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| "deny".to_string())
-        } else {
-            "deny".to_string()
-        };
-
         let source = caller_source_location(eval);
-        let (flat_nodes, sandboxes) =
-            crate::when::policy_impl(name, rules_or_dict, default_sandbox, heap, source)?;
+        let (default_override, flat_nodes, sandboxes) =
+            crate::when::policy_impl(name, tree, default_sandbox, heap, source)?;
+
+        let default_effect = default_override.or_else(|| {
+            if default.is_empty() {
+                None
+            } else {
+                Some(default.to_string())
+            }
+        });
 
         ctx.register_policy(PolicyRegistration {
             name: name.to_string(),
+            default_effect,
             tree_nodes: flat_nodes,
             sandboxes,
         })?;
+        Ok(NoneType)
+    }
+
+    // -- Rust-native sandbox() (tree form) --
+
+    /// Register a named sandbox from a decision-tree dict.
+    fn _sandbox_impl<'v>(
+        #[starlark(require = pos)] name: &str,
+        #[starlark(require = pos)] tree: Value<'v>,
+        #[starlark(require = named, default = "deny")] default: &str,
+        #[starlark(require = named, default = starlark::values::none::NoneType)] doc: Value<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<NoneType> {
+        let heap = eval.heap();
+        let ctx = eval
+            .extra
+            .and_then(|e| e.downcast_ref::<EvalContext>())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "sandbox() can only be called in a policy file, not in loaded modules"
+                )
+            })?;
+        let doc_str = doc.unpack_str().map(|s| s.to_string());
+        let source = caller_source_location(eval);
+        let sb_json = crate::when::sandbox_tree_impl(name, tree, default, doc_str, heap, source)?;
+        ctx.register_sandbox(name, sb_json)?;
         Ok(NoneType)
     }
 }

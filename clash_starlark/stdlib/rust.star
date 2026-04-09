@@ -29,4 +29,4 @@ rust_full = sandbox(
     doc = "Rust full: add, install, update. Full project + toolchain access, network enabled.",
 )
 
-rust = {"Bash": {("cargo", "rustc", "rustup"): allow(sandbox = rust_full)}}
+rust = {tool("Bash"): {("cargo", "rustc", "rustup"): allow(sandbox = rust_full)}}

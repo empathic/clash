@@ -1,23 +1,22 @@
 # Python Development Policy
 # Allows python/pip/uv/pytest with sandboxed filesystem access.
 
-sandbox(
-    name = "python",
-    default = deny(),
-    fs = {
-        subpath("$PWD", follow_worktrees = True): allow("rwc"),
-        glob("$TMPDIR/**"): allow(),
-    },
-    net = allow(),
-)
+sandbox("python", {
+    default(): deny(),
+    path("$PWD", worktree = True): allow("rwc"),
+    glob("$TMPDIR/**"): allow(),
+    network(): allow(),
+}, doc = "Python toolchain sandbox: project read/write, network allowed.")
 
 settings(default = ask())
 
 policy("python-dev", {
-    "Bash": {
-        "git": {"push": {"--force": deny()}},
+    tool("Bash"): {
+        "git": {
+            "push": {"--force": deny()},
+            glob("**"): allow(),
+        },
         ("python", "python3", "pip", "uv", "pytest"): allow(sandbox = "python"),
-        "git": allow(),
     },
-    ("Read", "Glob", "Grep"): allow(),
-})
+    tool(("Read", "Glob", "Grep")): allow(),
+}, doc = "Python development: python/pip/uv/pytest sandboxed; git push --force denied.")

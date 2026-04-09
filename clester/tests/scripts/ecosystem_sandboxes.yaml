@@ -19,7 +19,7 @@ clash:
 
     policy("test",
         {
-            Tool("Bash"): {
+            tool("Bash"): {
                 "git": { glob("**"): allow(sandbox=git_safe) },
                 ("cargo", "rustc"): { glob("**"): allow(sandbox=rust_safe) },
                 "go": { glob("**"): allow(sandbox=go_safe) },

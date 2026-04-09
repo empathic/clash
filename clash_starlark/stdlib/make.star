@@ -9,4 +9,4 @@ make_full = sandbox(
     doc = "Make/CMake/Just full: build targets. Full project access, no network.",
 )
 
-make = {"Bash": {("make", "cmake", "just"): allow(sandbox = make_full)}}
+make = {tool("Bash"): {("make", "cmake", "just"): allow(sandbox = make_full)}}

@@ -16,4 +16,4 @@ node_full = sandbox(
     doc = "Node full: npm/bun/yarn/pnpm install, run scripts. Full project + package access.",
 )
 
-node = {"Bash": {("node", "npm", "npx", "bun", "deno", "yarn", "pnpm"): allow(sandbox = node_full)}}
+node = {tool("Bash"): {("node", "npm", "npx", "bun", "deno", "yarn", "pnpm"): allow(sandbox = node_full)}}

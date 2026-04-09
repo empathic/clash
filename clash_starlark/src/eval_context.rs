@@ -5,6 +5,7 @@
 //! after module eval completes.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 
 use serde_json::Value as JsonValue;
 use starlark::values::ProvidesStaticType;
@@ -33,6 +34,8 @@ pub struct SettingsValue {
 #[derive(Debug, Clone)]
 pub struct PolicyRegistration {
     pub name: String,
+    /// Per-policy default effect override from a `default()` root key.
+    pub default_effect: Option<String>,
     pub tree_nodes: Vec<JsonValue>,
     pub sandboxes: Vec<JsonValue>,
 }
@@ -44,6 +47,8 @@ pub struct PolicyRegistration {
 pub struct EvalContext {
     pub policy: RefCell<Option<PolicyRegistration>>,
     pub settings: RefCell<Option<SettingsValue>>,
+    /// Sandboxes registered via top-level `sandbox(name, tree, ...)` calls.
+    pub sandboxes: RefCell<BTreeMap<String, JsonValue>>,
     /// Leaf conflicts recorded by merge().
     pub shadows: RefCell<Vec<ShadowedRule>>,
 }
@@ -53,8 +58,20 @@ impl EvalContext {
         EvalContext {
             policy: RefCell::new(None),
             settings: RefCell::new(None),
+            sandboxes: RefCell::new(BTreeMap::new()),
             shadows: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Register a sandbox by name. Bails if a sandbox with the same name
+    /// has already been registered.
+    pub fn register_sandbox(&self, name: &str, sb_json: JsonValue) -> anyhow::Result<()> {
+        let mut map = self.sandboxes.borrow_mut();
+        if map.contains_key(name) {
+            anyhow::bail!("sandbox `{name}` is already registered");
+        }
+        map.insert(name.to_string(), sb_json);
+        Ok(())
     }
 
     /// Register settings.
@@ -86,9 +103,10 @@ impl EvalContext {
             .ok_or_else(|| anyhow::anyhow!("policy file must call policy()"))?;
 
         let settings = self.settings.borrow();
-        let default_effect = settings
-            .as_ref()
-            .map(|s| s.default_effect.clone())
+        let default_effect = policy
+            .default_effect
+            .clone()
+            .or_else(|| settings.as_ref().map(|s| s.default_effect.clone()))
             .unwrap_or_else(|| "deny".to_string());
 
         // Collect sandboxes from policy rules (allow(sandbox=box) references)
@@ -99,6 +117,12 @@ impl EvalContext {
                     .entry(name.to_string())
                     .or_insert_with(|| sb.clone());
             }
+        }
+        // Also include top-level sandbox(name, tree, ...) registrations.
+        for (name, sb) in self.sandboxes.borrow().iter() {
+            sandbox_map
+                .entry(name.clone())
+                .or_insert_with(|| sb.clone());
         }
 
         let mut doc = serde_json::json!({

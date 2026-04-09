@@ -506,7 +506,11 @@ load(\"@clash//std.star\",
 
                 policy(
                     "test",
-                    merge({"Bash": {("git", "cargo"): allow()}}, {"Read": allow()}, {"Write": allow()}),
+                    merge(
+                        {tool("Bash"): {("git", "cargo"): allow()}},
+                        {tool("Read"): allow()},
+                        {tool("Write"): allow()},
+                    ),
                     default = ask(),
                 )
             "#}

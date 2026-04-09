@@ -4,14 +4,14 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "policy", "settings", "sandbox", "allow", "deny", "subpath", "glob")
+    load("@clash//std.star", "policy", "settings", "sandbox", "tool", "path", "allow", "deny", "subpath", "glob")
     dev_box = sandbox(
         name = "dev",
         default = deny(),
         fs = {
             subpath("$PWD", follow_worktrees = True): allow("rwc"),
             glob("$TMPDIR/**"): allow(),
-            "$HOME": {
+            path("$HOME"): {
                 glob(".cargo/**"): allow("rwc"),
                 glob(".rustup/**"): allow("r"),
                 glob(".ssh/**"): deny(),
@@ -21,11 +21,11 @@ clash:
 
     settings(default=deny())
     policy("test", {
-        "Bash": {
+        tool("Bash"): {
             "cargo": allow(sandbox = dev_box),
             "git": allow(sandbox = dev_box),
         },
-        "Read": allow(sandbox = dev_box),
+        tool("Read"): allow(sandbox = dev_box),
     })
 
 steps:

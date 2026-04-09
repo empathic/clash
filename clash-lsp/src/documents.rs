@@ -60,7 +60,10 @@ mod tests {
     fn open_then_get_returns_parsed() {
         let store = DocumentStore::new();
         let uri: Url = "file:///x.star".parse().unwrap();
-        let _ = store.open(uri.clone(), r#"policy("test", {"Bash": allow()})"#.into());
+        let _ = store.open(
+            uri.clone(),
+            r#"policy("test", {tool("Bash"): allow()})"#.into(),
+        );
         assert!(store.get(&uri).is_some());
     }
 
@@ -68,7 +71,10 @@ mod tests {
     fn close_removes_entry() {
         let store = DocumentStore::new();
         let uri: Url = "file:///x.star".parse().unwrap();
-        store.open(uri.clone(), r#"policy("test", {"Bash": allow()})"#.into());
+        store.open(
+            uri.clone(),
+            r#"policy("test", {tool("Bash"): allow()})"#.into(),
+        );
         store.close(&uri);
         assert!(store.get(&uri).is_none());
     }

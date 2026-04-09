@@ -15,4 +15,4 @@ python_full = sandbox(
     doc = "Python full: pip install, run scripts, virtualenvs. Full project + package access.",
 )
 
-python = {"Bash": {("python", "python3", "pip", "pip3", "uv", "poetry"): allow(sandbox = python_full)}}
+python = {tool("Bash"): {("python", "python3", "pip", "pip3", "uv", "poetry"): allow(sandbox = python_full)}}

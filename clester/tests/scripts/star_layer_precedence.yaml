@@ -4,13 +4,13 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "policy", "settings", "ask", "allow")
+    load("@clash//std.star", "policy", "settings", "tool", "ask", "allow")
     settings(default=ask())
-    policy("test", {"Bash": {("git", "cargo"): allow()}})
+    policy("test", {tool("Bash"): {("git", "cargo"): allow()}})
   project_policy_star: |
-    load("@clash//std.star", "policy", "settings", "deny")
+    load("@clash//std.star", "policy", "settings", "tool", "deny")
     settings(default=deny())
-    policy("test", {"Bash": {"git": {"push": deny()}}})
+    policy("test", {tool("Bash"): {"git": {"push": deny()}}})
 
 steps:
   - name: git status allowed by user rule (not overridden by project)

@@ -107,7 +107,11 @@ fn expand_keys<'v>(key: Value<'v>) -> Vec<Value<'v>> {
 }
 
 /// Classify what kind of match key a Starlark value represents.
+#[allow(dead_code)]
 enum MatchKeyKind {
+    Default {
+        doc: Option<String>,
+    },
     Mode {
         pattern: JsonValue,
         doc: Option<String>,
@@ -116,9 +120,106 @@ enum MatchKeyKind {
         pattern: JsonValue,
         doc: Option<String>,
     },
+    Path {
+        value: JsonValue,
+        doc: Option<String>,
+        worktree: bool,
+    },
+    Glob {
+        value: JsonValue,
+        doc: Option<String>,
+        worktree: bool,
+    },
+    Domain {
+        value: JsonValue,
+        doc: Option<String>,
+    },
+    Localhost {
+        ports: JsonValue,
+        doc: Option<String>,
+    },
+    Network {
+        doc: Option<String>,
+    },
 }
 
-fn classify_key<'v>(key: Value<'v>, heap: &'v Heap) -> anyhow::Result<MatchKeyKind> {
+/// Classify a **root-level** key in a policy/sandbox tree. Requires a typed
+/// constructor (struct with `_match_key`). Bare strings are rejected.
+fn classify_root_key<'v>(key: Value<'v>, heap: &'v Heap) -> anyhow::Result<MatchKeyKind> {
+    if key.get_type() == "struct"
+        && let Ok(Some(mk_val)) = key.get_attr("_match_key", heap)
+        && let Some(mk) = mk_val.unpack_str()
+    {
+        let doc = key
+            .get_attr("_doc", heap)
+            .ok()
+            .flatten()
+            .filter(|v| !v.is_none())
+            .and_then(|v| v.unpack_str().map(|s| s.to_string()));
+
+        // `default()` has no _match_value.
+        if mk == "default" {
+            return Ok(MatchKeyKind::Default { doc });
+        }
+
+        let worktree = key
+            .get_attr("_worktree", heap)
+            .ok()
+            .flatten()
+            .and_then(|v| v.unpack_bool())
+            .unwrap_or(false);
+
+        if mk == "network" {
+            return Ok(MatchKeyKind::Network { doc });
+        }
+
+        let mv = key
+            .get_attr("_match_value", heap)
+            .ok()
+            .flatten()
+            .context("match key struct missing _match_value")?;
+
+        return match mk {
+            "mode" => Ok(MatchKeyKind::Mode {
+                pattern: pattern_to_json(mv, heap)?,
+                doc,
+            }),
+            "tool" => Ok(MatchKeyKind::Tool {
+                pattern: pattern_to_json(mv, heap)?,
+                doc,
+            }),
+            "path" => Ok(MatchKeyKind::Path {
+                value: pattern_to_json(mv, heap)?,
+                doc,
+                worktree,
+            }),
+            "glob" => Ok(MatchKeyKind::Glob {
+                value: pattern_to_json(mv, heap)?,
+                doc,
+                worktree,
+            }),
+            "domain" => Ok(MatchKeyKind::Domain {
+                value: pattern_to_json(mv, heap)?,
+                doc,
+            }),
+            "localhost" => Ok(MatchKeyKind::Localhost {
+                ports: serde_json::Value::Null,
+                doc,
+            }),
+            other => bail!("unknown match key type: {other}"),
+        };
+    }
+    bail!(
+        "Root keys in a policy or sandbox tree must use a typed constructor \
+         (default(), mode(), tool(), path(), glob(), domain(), localhost()). \
+         Got a bare {} key. If you meant a filesystem path, use path(\"...\"). \
+         If you meant a tool name, use tool(\"...\").",
+        key.get_type()
+    )
+}
+
+#[allow(dead_code)]
+fn classify_nested_key<'v>(key: Value<'v>, heap: &'v Heap) -> anyhow::Result<MatchKeyKind> {
     // Check for typed match key struct (Mode() / Tool() / mode())
     if key.get_type() == "struct" {
         if let Ok(Some(mk_val)) = key.get_attr("_match_key", heap) {
@@ -292,14 +393,22 @@ pub fn policy_impl<'v>(
     default_sandbox: Value<'v>,
     heap: &'v Heap,
     source: Option<String>,
-) -> anyhow::Result<(Vec<JsonValue>, Vec<JsonValue>)> {
+) -> anyhow::Result<(Option<String>, Vec<JsonValue>, Vec<JsonValue>)> {
     let mut flat_nodes: Vec<JsonValue> = Vec::new();
     let mut collector = SandboxCollector::new();
+    let mut default_override: Option<String> = None;
 
     // Dict form
     if !rules_or_dict.is_none() {
         if let Some(dict) = DictRef::from_value(rules_or_dict) {
-            process_policy_dict(&dict, heap, &source, &mut flat_nodes, &mut collector)?;
+            process_policy_dict(
+                &dict,
+                heap,
+                &source,
+                &mut flat_nodes,
+                &mut collector,
+                &mut default_override,
+            )?;
         }
     }
 
@@ -317,7 +426,7 @@ pub fn policy_impl<'v>(
         }
     }
 
-    Ok((flat_nodes, collector.sandboxes))
+    Ok((default_override, flat_nodes, collector.sandboxes))
 }
 
 /// Process the dict form of policy().
@@ -327,10 +436,26 @@ fn process_policy_dict<'v>(
     source: &Option<String>,
     flat_nodes: &mut Vec<JsonValue>,
     collector: &mut SandboxCollector,
+    default_override: &mut Option<String>,
 ) -> anyhow::Result<()> {
     for (key, value) in dict.iter() {
         for k in expand_keys(key) {
-            match classify_key(k, heap)? {
+            match classify_root_key(k, heap)? {
+                MatchKeyKind::Default { .. } => {
+                    let eff = effect_to_string(value, heap)?;
+                    collector.collect_from_effect(value, heap)?;
+                    *default_override = Some(eff);
+                }
+                MatchKeyKind::Path { .. }
+                | MatchKeyKind::Glob { .. }
+                | MatchKeyKind::Domain { .. }
+                | MatchKeyKind::Localhost { .. }
+                | MatchKeyKind::Network { .. } => {
+                    bail!(
+                        "path()/glob()/domain()/localhost()/network() are sandbox-only keys; \
+                         policy() trees only accept default(), mode(), and tool() at the root"
+                    );
+                }
                 MatchKeyKind::Mode { pattern, doc } => {
                     let cond = build_mode_condition(pattern, doc, source.clone());
                     let node = if let Some(inner_dict) = DictRef::from_value(value) {
@@ -359,6 +484,314 @@ fn process_policy_dict<'v>(
 // ---------------------------------------------------------------------------
 // Sandbox conversion (replaces _sandbox_to_json / _resolve_path_value)
 // ---------------------------------------------------------------------------
+
+/// Shared assembly: build the sandbox JSON from already-converted parts.
+/// Both the legacy struct path (`sandbox_to_json`) and the new tree path
+/// (`sandbox_tree_impl`) feed this function so the wire format stays in sync.
+fn build_sandbox_json(
+    name: &str,
+    default_effect: &str,
+    rules: Vec<JsonValue>,
+    network: JsonValue,
+    doc: Option<String>,
+) -> JsonValue {
+    let default_caps = if default_effect == "deny" {
+        json!(["execute"])
+    } else {
+        json!(["read", "write", "create", "delete", "execute"])
+    };
+    let mut result = json!({
+        "name": name,
+        "default": default_caps,
+        "rules": rules,
+        "network": network,
+    });
+    if let Some(d) = doc {
+        result
+            .as_object_mut()
+            .unwrap()
+            .insert("doc".to_string(), json!(d));
+    }
+    result
+}
+
+/// Extract the effect string ("allow"/"deny"/"ask") from an effect struct.
+fn effect_to_string<'v>(value: Value<'v>, heap: &'v Heap) -> anyhow::Result<String> {
+    if let Some(s) = value.unpack_str() {
+        return Ok(s.to_string());
+    }
+    if !is_effect(value, heap) {
+        bail!(
+            "expected an effect (allow()/deny()/ask()), got {}",
+            value.get_type()
+        );
+    }
+    let kind = value
+        .get_attr("_effect", heap)
+        .ok()
+        .flatten()
+        .and_then(|v| v.unpack_str().map(|s| s.to_string()))
+        .context("effect struct missing _effect")?;
+    Ok(kind)
+}
+
+/// Compute capability list from an effect struct's `_read`/`_write`/...
+/// flags. Mirrors the logic of stdlib `_caps_from_effect`.
+fn caps_from_effect<'v>(eff: Value<'v>, heap: &'v Heap) -> anyhow::Result<Vec<String>> {
+    let get_bool = |name: &str| -> Option<bool> {
+        eff.get_attr(name, heap)
+            .ok()
+            .flatten()
+            .and_then(|v| v.unpack_bool())
+    };
+    let r = get_bool("_read");
+    let w = get_bool("_write");
+    let c = get_bool("_create");
+    let d = get_bool("_delete");
+    let x = get_bool("_execute");
+    if r.is_none() && w.is_none() && c.is_none() && d.is_none() && x.is_none() {
+        return Ok(vec![
+            "read".into(),
+            "write".into(),
+            "create".into(),
+            "delete".into(),
+            "execute".into(),
+        ]);
+    }
+    let mut caps = Vec::new();
+    if r == Some(true) {
+        caps.push("read".to_string());
+    }
+    if w == Some(true) {
+        caps.push("write".to_string());
+    }
+    if c == Some(true) {
+        caps.push("create".to_string());
+    }
+    if d == Some(true) {
+        caps.push("delete".to_string());
+    }
+    if x == Some(true) {
+        caps.push("execute".to_string());
+    }
+    Ok(caps)
+}
+
+/// Build an fs rule JSON from an effect value at a typed path/glob key.
+fn fs_rule_from<'v>(
+    effect: Value<'v>,
+    path_str: String,
+    doc: Option<String>,
+    match_type: &str,
+    worktree: bool,
+    heap: &'v Heap,
+) -> anyhow::Result<JsonValue> {
+    if !is_effect(effect, heap) {
+        bail!(
+            "sandbox tree fs values must be effects (allow/deny/ask), got {}",
+            effect.get_type()
+        );
+    }
+    let eff_str = effect_to_string(effect, heap)?;
+    let caps = caps_from_effect(effect, heap)?;
+    let mut rule = json!({
+        "effect": eff_str,
+        "caps": caps,
+        "path": path_str,
+        "path_match": match_type,
+    });
+    if worktree {
+        rule.as_object_mut()
+            .unwrap()
+            .insert("follow_worktrees".to_string(), json!(true));
+    }
+    if let Some(d) = doc {
+        rule.as_object_mut()
+            .unwrap()
+            .insert("doc".to_string(), json!(d));
+    }
+    Ok(rule)
+}
+
+/// Inject the system rules that the legacy `sandbox()` builder used to add:
+/// allow `read` on `/` (subpath), deny everything on the user-home root.
+fn append_system_rules(rules: &mut Vec<JsonValue>) {
+    let user_homes = if std::env::consts::OS == "macos" {
+        "/Users"
+    } else {
+        "/home"
+    };
+    rules.push(json!({
+        "effect": "allow",
+        "caps": ["read"],
+        "path": "/",
+        "path_match": "subpath",
+    }));
+    rules.push(json!({
+        "effect": "deny",
+        "caps": ["read", "write", "create", "delete", "execute"],
+        "path": user_homes,
+        "path_match": "subpath",
+    }));
+}
+
+/// Build the JSON `network` field from collected sandbox-tree net pieces.
+fn build_network_json(
+    domains: Vec<String>,
+    localhost: Option<bool>,
+    localhost_ports: Vec<i64>,
+) -> JsonValue {
+    let has_localhost = localhost == Some(true) || !localhost_ports.is_empty();
+    let has_domains = !domains.is_empty();
+    if !has_localhost && !has_domains {
+        return json!("deny");
+    }
+    if has_domains && !has_localhost {
+        return json!({ "allow_domains": domains });
+    }
+    if has_localhost && !has_domains {
+        if localhost_ports.is_empty() {
+            return json!("localhost");
+        }
+        return json!({ "localhost": localhost_ports });
+    }
+    // Both — emit allow_domains plus localhost.
+    let mut obj = serde_json::Map::new();
+    obj.insert("allow_domains".to_string(), json!(domains));
+    if localhost_ports.is_empty() {
+        obj.insert("localhost".to_string(), json!(true));
+    } else {
+        obj.insert("localhost".to_string(), json!(localhost_ports));
+    }
+    JsonValue::Object(obj)
+}
+
+/// Process a unified sandbox-tree dict into a complete sandbox JSON value.
+pub fn sandbox_tree_impl<'v>(
+    name: &str,
+    tree: Value<'v>,
+    default_effect_kwarg: &str,
+    doc: Option<String>,
+    heap: &'v Heap,
+    _source: Option<String>,
+) -> anyhow::Result<JsonValue> {
+    let dict = DictRef::from_value(tree)
+        .ok_or_else(|| anyhow::anyhow!("sandbox() tree must be a dict"))?;
+
+    let mut default_effect = default_effect_kwarg.to_string();
+    let mut fs_rules: Vec<JsonValue> = Vec::new();
+    let mut net_domains: Vec<String> = Vec::new();
+    let mut net_localhost_allow: Option<bool> = None;
+    let mut net_localhost_ports: Vec<i64> = Vec::new();
+    let mut network_override: Option<String> = None;
+
+    for (key, value) in dict.iter() {
+        let raw_mv = key
+            .get_attr("_match_value", heap)
+            .ok()
+            .flatten()
+            .and_then(|v| v.unpack_str().map(|s| s.to_string()));
+        let raw_ports: Vec<i64> = key
+            .get_attr("_match_value", heap)
+            .ok()
+            .flatten()
+            .and_then(|v| {
+                if let Some(list) = ListRef::from_value(v) {
+                    Some(
+                        list.iter()
+                            .filter_map(|item| item.unpack_i32().map(|n| n as i64))
+                            .collect::<Vec<_>>(),
+                    )
+                } else if let Some(tup) = starlark::values::tuple::TupleRef::from_value(v) {
+                    Some(
+                        tup.iter()
+                            .filter_map(|item| item.unpack_i32().map(|n| n as i64))
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        let key_doc = key
+            .get_attr("_doc", heap)
+            .ok()
+            .flatten()
+            .filter(|v| !v.is_none())
+            .and_then(|v| v.unpack_str().map(|s| s.to_string()));
+
+        match classify_root_key(key, heap)? {
+            MatchKeyKind::Default { .. } => {
+                default_effect = effect_to_string(value, heap)?;
+            }
+            MatchKeyKind::Path { worktree, .. } => {
+                let pv =
+                    raw_mv.ok_or_else(|| anyhow::anyhow!("path() key missing string value"))?;
+                fs_rules.push(fs_rule_from(
+                    value,
+                    pv,
+                    key_doc,
+                    if worktree { "subpath" } else { "literal" },
+                    worktree,
+                    heap,
+                )?);
+            }
+            MatchKeyKind::Glob { worktree, .. } => {
+                let pv =
+                    raw_mv.ok_or_else(|| anyhow::anyhow!("glob() key missing string value"))?;
+                // Translate glob suffix to the IR's path_match enum.
+                let (final_path, mt) = if pv == "*" || pv == "**" {
+                    ("/".to_string(), "subpath")
+                } else if let Some(stripped) = pv.strip_suffix("/**/*") {
+                    (stripped.to_string(), "subpath")
+                } else if let Some(stripped) = pv.strip_suffix("/**") {
+                    (stripped.to_string(), "subpath")
+                } else if let Some(stripped) = pv.strip_suffix("/*") {
+                    (stripped.to_string(), "child_of")
+                } else {
+                    (pv, "literal")
+                };
+                fs_rules.push(fs_rule_from(
+                    value, final_path, key_doc, mt, worktree, heap,
+                )?);
+            }
+            MatchKeyKind::Network { .. } => {
+                let eff = effect_to_string(value, heap)?;
+                network_override = Some(eff);
+            }
+            MatchKeyKind::Domain { .. } => {
+                let dn = raw_mv.ok_or_else(|| anyhow::anyhow!("domain() key must be a string"))?;
+                let _eff = effect_to_string(value, heap)?;
+                net_domains.push(dn);
+            }
+            MatchKeyKind::Localhost { .. } => {
+                let eff = effect_to_string(value, heap)?;
+                if eff == "allow" {
+                    net_localhost_allow = Some(true);
+                }
+                net_localhost_ports.extend(raw_ports);
+            }
+            MatchKeyKind::Mode { .. } | MatchKeyKind::Tool { .. } => {
+                bail!("mode()/tool() are policy-only keys; not allowed in a sandbox tree");
+            }
+        }
+    }
+
+    append_system_rules(&mut fs_rules);
+
+    let network = if let Some(ov) = network_override {
+        json!(ov)
+    } else {
+        build_network_json(net_domains, net_localhost_allow, net_localhost_ports)
+    };
+    Ok(build_sandbox_json(
+        name,
+        &default_effect,
+        fs_rules,
+        network,
+        doc,
+    ))
+}
 
 /// Convert a sandbox Starlark struct to JSON.
 pub fn sandbox_to_json<'v>(sb: Value<'v>, heap: &'v Heap) -> anyhow::Result<JsonValue> {
@@ -390,31 +823,13 @@ pub fn sandbox_to_json<'v>(sb: Value<'v>, heap: &'v Heap) -> anyhow::Result<Json
     // Network policy
     let net = convert_net_policy(sb, heap)?;
 
-    // Default caps
-    let default_caps = if default_effect == "deny" {
-        json!(["execute"])
-    } else {
-        json!(["read", "write", "create", "delete", "execute"])
-    };
+    let doc = sb
+        .get_attr("_doc", heap)
+        .ok()
+        .flatten()
+        .and_then(|v| v.unpack_str().map(|s| s.to_string()));
 
-    let mut result = json!({
-        "name": name,
-        "default": default_caps,
-        "rules": rules,
-        "network": net,
-    });
-
-    // Optional doc
-    if let Ok(Some(doc_val)) = sb.get_attr("_doc", heap) {
-        if let Some(doc) = doc_val.unpack_str() {
-            result
-                .as_object_mut()
-                .unwrap()
-                .insert("doc".to_string(), json!(doc));
-        }
-    }
-
-    Ok(result)
+    Ok(build_sandbox_json(&name, &default_effect, rules, net, doc))
 }
 
 fn convert_fs_rule<'v>(rule: Value<'v>, heap: &'v Heap) -> anyhow::Result<JsonValue> {
@@ -490,11 +905,24 @@ fn convert_net_policy<'v>(sb: Value<'v>, heap: &'v Heap) -> anyhow::Result<JsonV
             let dict = DictRef::from_value(v).unwrap();
             let key = heap.alloc_str("_localhost_ports");
             if let Ok(Some(ports_val)) = dict.get(key.to_value()) {
-                if let Some(ports_list) = ListRef::from_value(ports_val) {
-                    let ports: Vec<u16> = ports_list
-                        .iter()
-                        .filter_map(|item| item.unpack_i32().map(|n| n as u16))
-                        .collect();
+                let ports_iter: Option<Vec<u16>> = if let Some(list) =
+                    ListRef::from_value(ports_val)
+                {
+                    Some(
+                        list.iter()
+                            .filter_map(|item| item.unpack_i32().map(|n| n as u16))
+                            .collect(),
+                    )
+                } else if let Some(tup) = starlark::values::tuple::TupleRef::from_value(ports_val) {
+                    Some(
+                        tup.iter()
+                            .filter_map(|item| item.unpack_i32().map(|n| n as u16))
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
+                if let Some(ports) = ports_iter {
                     if ports.is_empty() {
                         return Ok(json!("localhost"));
                     }

@@ -151,7 +151,7 @@ mod tests {
             "Bash" => allow(),
         };
         let src = serialize(&[Stmt::Expr(expr)]);
-        assert_eq!(src, "{\"Bash\": allow()}\n");
+        assert_eq!(src, "{tool(\"Bash\"): allow()}\n");
     }
 
     #[test]
@@ -256,7 +256,7 @@ mod tests {
         ];
         let src = serialize(&stmts);
         assert!(src.contains("(\"git\", \"cargo\"): allow()"));
-        assert!(src.contains("\"Read\": allow()"));
+        assert!(src.contains("tool(\"Read\"): allow()"));
     }
 
     #[test]
@@ -269,8 +269,8 @@ mod tests {
         };
         let src = serialize(&[Stmt::Expr(expr)]);
         assert!(src.contains("Mode(\"plan\")"));
-        assert!(src.contains("Tool(\"Read\"): allow()"));
-        assert!(src.contains("Tool(\"ExitPlanMode\"): allow()"));
+        assert!(src.contains("tool(\"Read\"): allow()"));
+        assert!(src.contains("tool(\"ExitPlanMode\"): allow()"));
     }
 
     #[test]

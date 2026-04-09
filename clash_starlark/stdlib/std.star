@@ -72,14 +72,23 @@ def regex(pattern):
     return struct(_regex=pattern)
 
 
-def glob(pattern):
-    """Create a glob pattern for matching.
+def glob(pattern, doc=None, worktree=False):
+    """Filesystem glob-path key.
 
-    - glob("*")            → wildcard (match anything)
-    - glob("$HOME/*")      → direct children of $HOME
-    - glob("$HOME/**/*")   → $HOME and all descendants (recursive)
-    - glob("$HOME/**")     → same as /**/*
+    Usage:
+        sandbox("x", {glob("$HOME/**"): allow("r")})
     """
+    if type(pattern) != "string":
+        fail("glob() takes a string; got " + type(pattern))
+    if pattern not in ("*", "**") and not (
+        pattern.endswith("/*") or pattern.endswith("/**") or pattern.endswith("/**/*")
+    ):
+        fail("glob() pattern must end with /*, /**, or /**/* (got: " + pattern + ")")
+    return struct(_match_key="glob", _match_value=pattern, _doc=doc, _worktree=worktree)
+
+
+def _legacy_glob(pattern):
+    """Legacy glob builder used by the sandbox migration emitter only."""
     if pattern in ("*", "**"):
         return struct(_glob="*", _glob_type="wildcard")
     if pattern.endswith("/**/*"):
@@ -124,13 +133,26 @@ def Mode(name):
     return struct(_match_key="mode", _match_value=name)
 
 
-def Tool(name):
-    """Typed key for policy dicts — matches tool name (explicit alternative to raw strings).
+def tool(name, doc=None):
+    """Tool selector root key (policy trees).
 
     Usage:
-        policy("name", {Tool("Bash"): {"git": allow()}})
+        policy("x", {mode("plan"): {tool("Bash"): {"git push": deny()}}})
     """
-    return struct(_match_key="tool", _match_value=name)
+    return struct(_match_key="tool", _match_value=name, _doc=doc)
+
+
+def Tool(name):
+    fail("Tool() has been renamed to tool(). See docs/superpowers/specs/2026-04-06-unify-policy-and-sandbox-design.md")
+
+
+def default(doc=None):
+    """Sentinel root key representing the fallback effect for a tree.
+
+    Usage:
+        policy("x", {default(): deny(), mode("plan"): allow()})
+    """
+    return struct(_match_key="default", _match_value=None, _doc=doc)
 
 
 # ---------------------------------------------------------------------------
@@ -143,21 +165,24 @@ def merge(*dicts):
     return _merge(*dicts)
 
 
-def policy(name, rules_or_dict=None, default="deny", default_sandbox=None):
-    """Register a named policy.
+def policy(name, tree, default=None, default_sandbox=None, doc=None):
+    """Register a named policy from a decision-tree dict.
+
+    When `default` is omitted the policy inherits the default effect from
+    settings().  Pass an explicit `default=deny()` to override.
 
     Usage:
         policy("default", {
+            default(): deny(sandbox=plan_box),
             mode("plan"): allow(sandbox=plan_box),
-            mode("edit"): allow(sandbox=edit_box),
+            tool("Bash"): {"git push": deny()},
         })
-
-        policy("default", merge(
-            {mode("plan"): allow(sandbox=plan_box)},
-            from_claude_settings(),
-        ))
     """
-    _policy_impl(name, rules_or_dict, default=_unwrap_effect(default), default_sandbox=default_sandbox)
+    if type(name) != "string":
+        fail("policy() name must be a string")
+    if type(tree) != "dict":
+        fail("policy() tree must be a dict. Run `clash policy migrate` to convert legacy files.")
+    _policy_impl(name, tree, default=_unwrap_effect(default) if default != None else "", default_sandbox=default_sandbox, doc=doc)
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +267,28 @@ def _process_fs_dict(fs_dict, parent_path=None):
     rules = []
     for key, value in fs_dict.items():
         # Determine path, match_type, follow_worktrees from key type
-        if hasattr(key, "_is_sandbox_matcher"):
+        if hasattr(key, "_match_key"):
+            mk = key._match_key
+            if mk == "path":
+                key_path = key._match_value
+                explicit_type = "literal"
+                follow_wt = False
+            elif mk == "glob":
+                key = _legacy_glob(key._match_value)
+                key_path = key._glob
+                if key._glob_type == "wildcard":
+                    key_path = "/"
+                    explicit_type = "subpath"
+                elif key._glob_type == "recursive":
+                    explicit_type = "subpath"
+                elif key._glob_type == "children":
+                    explicit_type = "child_of"
+                else:
+                    fail("unknown glob type: " + key._glob_type)
+                follow_wt = False
+            else:
+                fail("sandbox fs key constructor not supported here: " + mk)
+        elif hasattr(key, "_is_sandbox_matcher"):
             key_path = key._path
             explicit_type = key._matcher_type
             follow_wt = hasattr(key, "_follow_worktrees") and key._follow_worktrees
@@ -397,13 +443,33 @@ def tempdir():
     return _path_match(struct(_env="TMPDIR"), False)
 
 
-def path(path_str=None, env=None):
-    """Build a path match for an arbitrary path or env var.
+def path(path_str, doc=None, worktree=False):
+    """Filesystem literal-path key.
+
+    When `worktree=True`, the path is treated as a recursive subpath match and
+    follows git worktrees.
 
     Usage:
-        path("/usr/local/bin").allow(read=True, execute=True)
-        path(env="CARGO_HOME").allow(read=True, write=True)
+        sandbox("x", {path("$PWD"): allow("rwc")})
+        sandbox("x", {path("$PWD", worktree=True): allow("rwc")})
     """
+    if type(path_str) != "string":
+        fail("path() takes a string; got " + type(path_str))
+    return struct(_match_key="path", _match_value=path_str, _doc=doc, _worktree=worktree)
+
+
+def network(doc=None):
+    """Top-level network effect key.
+
+    Usage:
+        sandbox("x", {network(): allow()})   # allow all network
+        sandbox("x", {network(): deny()})    # deny all network (default)
+    """
+    return struct(_match_key="network", _match_value=None, _doc=doc)
+
+
+def _legacy_path_match(path_str=None, env=None):
+    """Legacy builder-style path() — used internally by sandbox migration until Task A6."""
     if path_str != None and env != None:
         fail("path() takes either a path string or env=, not both")
     if path_str == None and env == None:
@@ -429,30 +495,29 @@ def domains(mapping):
     return entries
 
 
-def domain(name, effect):
-    """Build a single net rule.
+def domain(name, doc=None):
+    """Network domain key.
 
     Usage:
-        domain("github.com", allow)
+        sandbox("x", {domain("github.com"): allow()})
     """
-    return [struct(_domain_name=name)]
+    return struct(_match_key="domain", _match_value=name, _doc=doc)
 
 
-def localhost(ports = None):
-    """Build a localhost network specifier, optionally restricted to specific ports.
+def localhost(ports=None, doc=None):
+    """Localhost network key. Optionally restricted to specific ports.
 
     Usage:
-        net = localhost()              # all ports (same as net = "localhost")
-        net = localhost(ports=[8080])  # only port 8080
+        sandbox("x", {localhost(): allow(), localhost(ports=[8080]): allow()})
     """
-    if ports == None or len(ports) == 0:
-        return struct(_is_localhost=True, _ports=[])
-    for p in ports:
-        if type(p) != "int":
-            fail("localhost() ports must be integers, got: " + type(p))
-        if p < 1 or p > 65535:
-            fail("localhost() port out of range (1-65535): " + str(p))
-    return struct(_is_localhost=True, _ports=ports)
+    if ports != None:
+        for p in ports:
+            if type(p) != "int":
+                fail("localhost() ports must be integers; got " + type(p))
+            if p < 1 or p > 65535:
+                fail("localhost() port out of range (1-65535): " + str(p))
+        ports = tuple(ports)
+    return struct(_match_key="localhost", _match_value=ports, _doc=doc)
 
 
 # ---------------------------------------------------------------------------
@@ -491,8 +556,30 @@ def _make_sandbox(name, default, fs_rules, net_policy, net_domain_names=None, do
     )
 
 
-def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
-    """Build a sandbox definition.
+def sandbox(name=None, tree=None, default="deny", fs=None, net=None, doc=None):
+    """Register a sandbox from a decision-tree dict, or (legacy) build one.
+
+    New form:
+        sandbox("rust-dev", {
+            default(): deny(),
+            path("$PWD"): allow("rwc"),
+            domain("crates.io"): allow(),
+        })
+
+    Legacy form (still supported until Task A6):
+        sandbox("name", default=deny(), fs={...}, net=allow())
+    """
+    # New tree form: positional dict tree, no fs=/net= kwargs.
+    if tree != None and type(tree) == "dict" and fs == None and net == None:
+        if type(name) != "string":
+            fail("sandbox() name must be a string")
+        _sandbox_impl(name, tree, default=_unwrap_effect(default), doc=doc)
+        return name
+    return _legacy_sandbox(name, default, fs, net, doc)
+
+
+def _legacy_sandbox(name=None, default="deny", fs=None, net=None, doc=None):
+    """Legacy builder-based sandbox(). Removed in Task A6.
 
     Usage:
         sandbox("example", default=deny(),
@@ -524,7 +611,7 @@ def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
         fs_rules = _process_fs_dict(fs) + _system_rules
     elif type(fs) == "list":
         # Legacy builder-based API
-        fs += [path("/").recurse().allow(read=True), path(_user_homes).recurse().deny()]
+        fs += [_legacy_path_match("/").recurse().allow(read=True), _legacy_path_match(_user_homes).recurse().deny()]
         for entry in fs:
             if hasattr(entry, "_is_path"):
                 if hasattr(entry, "_sandbox_rules"):
@@ -537,7 +624,16 @@ def sandbox(name=None, default="deny", fs=None, net=None, doc=None):
     net_policy = None
     net_domain_names = []
     if net != None:
-        if hasattr(net, "_is_localhost"):
+        if hasattr(net, "_match_key") and net._match_key == "localhost":
+            ports = net._match_value
+            if ports != None and len(ports) > 0:
+                net_policy = {"_localhost_ports": ports}
+            else:
+                net_policy = "localhost"
+        elif hasattr(net, "_match_key") and net._match_key == "domain":
+            net_domain_names.append(net._match_value)
+            net_policy = net_domain_names
+        elif hasattr(net, "_is_localhost"):
             if len(net._ports) > 0:
                 net_policy = {"_localhost_ports": net._ports}
             else:

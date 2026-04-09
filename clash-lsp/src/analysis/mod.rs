@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn parses_valid_policy_with_no_diagnostics() {
         let src = indoc! {r#"
-            policy("test", {"Bash": allow()})
+            policy("test", {tool("Bash"): allow()})
         "#};
         let parsed = parse("test.star", src);
         assert!(

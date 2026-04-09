@@ -4,13 +4,13 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "policy", "settings", "allow", "deny")
+    load("@clash//std.star", "policy", "settings", "tool", "allow", "deny")
     settings(default=allow())
-    policy("user-policy", {"Bash": allow()})
+    policy("user-policy", {tool("Bash"): allow()})
   project_policy_star: |
-    load("@clash//std.star", "policy", "settings", "allow", "deny")
+    load("@clash//std.star", "policy", "settings", "tool", "allow", "deny")
     settings(default=deny())
-    policy("project-policy", {"Bash": deny()})
+    policy("project-policy", {tool("Bash"): deny()})
 
 steps:
   - name: project deny overrides user allow

@@ -15,21 +15,21 @@ policy("default", merge(
     {
         mode("plan"): {
             glob("**"): allow(sandbox=readonly),
-            Tool("Bash"): {
+            tool("Bash"): {
                 "git": {
-                    glob("**"): allow(sandbox=git_safe)
-                }
-            }
+                    glob("**"): allow(sandbox=git_safe),
+                },
+            },
         },
         (mode("edit"), mode("default")): {
-            Tool("Bash"): {
+            tool("Bash"): {
                 "git": {
-                    glob("**"): allow(sandbox=git_full)
-                }
-            }
+                    glob("**"): allow(sandbox=git_full),
+                },
+            },
         },
         mode("unrestricted"): {
             glob("**"): allow(sandbox=workspace),
         },
     },
-))
+), doc="Default clash policy: mode-aware sandboxes for plan/edit/unrestricted modes.")

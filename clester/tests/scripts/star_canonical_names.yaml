@@ -6,7 +6,7 @@ clash:
   policy_star: |
     settings(default=deny())
     policy("test", {
-        ("shell", "read", "write", "edit", "glob", "grep", "web_fetch", "web_search"): allow(),
+        tool(("shell", "read", "write", "edit", "glob", "grep", "web_fetch", "web_search")): allow(),
     })
 
 steps:

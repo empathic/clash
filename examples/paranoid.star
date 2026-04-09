@@ -5,8 +5,8 @@
 settings(default = deny())
 
 policy("paranoid", {
-    "Bash": {
+    tool("Bash"): {
         "git": {("status", "diff", "log"): allow()},
     },
-    ("Read", "Glob", "Grep"): allow(),
-})
+    tool(("Read", "Glob", "Grep")): allow(),
+}, doc = "Maximum security: deny-all default, only read-only git and file reading tools allowed.")

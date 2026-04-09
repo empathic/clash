@@ -118,7 +118,7 @@ policy("test", default = ask(), rules = [tool(["Read"]).allow()])
 
 settings(default = ask())
 
-policy("test", {"Read": allow()}, default = ask())
+policy("test", {tool("Read"): allow()}, default = ask())
 "#;
         let doc = doc_from_str(src);
         let json = doc.evaluate_to_json().unwrap();

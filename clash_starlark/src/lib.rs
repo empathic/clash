@@ -11,6 +11,8 @@ mod globals;
 mod loader;
 pub mod settings_compat;
 pub mod stdlib;
+pub mod test_support;
+pub use test_support::{TestModule, eval_policy_source_for_test, load_starlark_source_for_test};
 mod when;
 
 use std::path::Path;
@@ -170,7 +172,7 @@ mod tests {
 load("@clash//std.star", "deny", "policy", "settings")
 
 settings(default = deny())
-policy("test", {None: allow()})
+policy("test", {tool(None): allow()})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -187,7 +189,7 @@ policy("test", {None: allow()})
         let doc = eval_to_doc(
             r#"
 settings(default = deny())
-policy("test", {None: allow()})
+policy("test", {tool(None): allow()})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -320,8 +322,8 @@ _box = sandbox(
 settings(default = deny())
 
 policy("test", merge(
-    {"Bash": {"git": allow(sandbox=_box)}},
-    {None: allow()},
+    {tool("Bash"): {"git": allow(sandbox=_box)}},
+    {tool(None): allow()},
 ))
 "#;
         let doc = eval_to_doc(source);
@@ -350,7 +352,7 @@ policy("test", merge(
 load("@clash//std.star", "deny", "policy", "settings")
 
 settings(default = deny())
-policy("test", {"WebSearch": allow(), "Bash": deny()})
+policy("test", {tool("WebSearch"): allow(), tool("Bash"): deny()})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -376,7 +378,7 @@ load("@clash//std.star", "allow", "deny", "policy", "settings", "sandbox", "cwd"
 _box = sandbox(name = "test", default = deny(), fs = [cwd().allow(read = True)])
 
 settings(default = deny())
-policy("test", {"Bash": {("rustc", "cargo", "cargo-clippy"): allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {("rustc", "cargo", "cargo-clippy"): allow(sandbox=_box)}})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -406,7 +408,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {"Bash": {"cargo": allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {"cargo": allow(sandbox=_box)}})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -428,7 +430,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {"Bash": {"git": allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {"git": allow(sandbox=_box)}})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -450,7 +452,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {"Bash": {"npm": allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {"npm": allow(sandbox=_box)}})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -470,7 +472,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {"Bash": {"git": allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {"git": allow(sandbox=_box)}})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -497,7 +499,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {"Bash": {"git": allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {"git": allow(sandbox=_box)}})
 "#,
         );
         let sandboxes = doc["sandboxes"].as_object().unwrap();
@@ -516,7 +518,7 @@ load("@clash//std.star", "allow", "deny", "policy", "settings", "sandbox", "temp
 _box = sandbox(name = "test", default = deny(), fs = [tempdir().allow()])
 
 settings(default = deny())
-policy("test", {"Bash": {"test": allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {"test": allow(sandbox=_box)}})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -527,16 +529,14 @@ policy("test", {"Bash": {"test": allow(sandbox=_box)}})
     fn test_path_static() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "policy", "settings", "sandbox", "path")
-
 _box = sandbox(
     name = "test",
     default = deny(),
-    fs = [path("/usr/local/bin").allow(read = True, execute = True)],
+    fs = {path("/usr/local/bin"): allow("rx")},
 )
 
 settings(default = deny())
-policy("test", {"Bash": {"test": allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {"test": allow(sandbox=_box)}})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -547,16 +547,14 @@ policy("test", {"Bash": {"test": allow(sandbox=_box)}})
     fn test_path_env() {
         let doc = eval_to_doc(
             r#"
-load("@clash//std.star", "allow", "deny", "policy", "settings", "sandbox", "path")
-
 _box = sandbox(
     name = "test",
     default = deny(),
-    fs = [path(env = "CARGO_HOME").allow(read = True, write = True)],
+    fs = {path("$CARGO_HOME"): allow("rwc")},
 )
 
 settings(default = deny())
-policy("test", {"Bash": {"cargo": allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {"cargo": allow(sandbox=_box)}})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -570,7 +568,7 @@ load("@clash//std.star", "allow", "deny", "policy", "settings", "sandbox", "cwd"
 
 _box = sandbox(name = "test", default = deny(), fs = [cwd()])
 settings(default = deny())
-policy("test", {"Bash": {"test": allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {"test": allow(sandbox=_box)}})
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from("."));
         assert!(result.is_err());
@@ -584,7 +582,7 @@ load("@clash//rust.star", "rust_full")
 load("@clash//std.star", "allow", "deny", "policy", "settings")
 
 settings(default = deny())
-policy("test", {"Bash": {("rustc", "cargo"): allow(sandbox=rust_full)}})
+policy("test", {tool("Bash"): {("rustc", "cargo"): allow(sandbox=rust_full)}})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -605,7 +603,7 @@ policy("test", {"Bash": {("rustc", "cargo"): allow(sandbox=rust_full)}})
 load("@clash//std.star", "allow", "deny", "policy", "settings")
 
 settings(default = deny())
-policy("test", {{"Bash": {{"test": allow(sandbox={sandbox_name})}}}})
+policy("test", {{tool("Bash"): {{"test": allow(sandbox={sandbox_name})}}}})
 "#
             );
             let result = evaluate(&source, "test.star", &PathBuf::from("."))
@@ -634,7 +632,7 @@ load("helpers.star", "my_sandbox")
 load("@clash//std.star", "allow", "deny", "policy", "settings")
 
 settings(default = deny())
-policy("test", {"Bash": {"test": allow(sandbox=my_sandbox)}})
+policy("test", {tool("Bash"): {"test": allow(sandbox=my_sandbox)}})
 "#;
         let result = evaluate(source, "policy.star", dir.path()).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&result.json).unwrap();
@@ -663,11 +661,11 @@ _box = sandbox(
 settings(default = deny())
 
 policy("test", merge(
-    {"Bash": {
+    {tool("Bash"): {
         "git": allow(sandbox=_box),
         ("rustc", "cargo"): allow(sandbox=rust_full),
     }},
-    {None: allow()},
+    {tool(None): allow()},
 ))
 "#,
         );
@@ -689,7 +687,7 @@ load("@clash//std.star", "allow", "deny", "regex", "policy", "settings")
 
 settings(default = deny())
 policy("test", {
-    "Bash": {regex("cargo.*"): allow()},
+    tool("Bash"): {regex("cargo.*"): allow()},
 })
 "#,
         );
@@ -709,7 +707,7 @@ load("@clash//std.star", "deny", "policy", "settings")
 
 settings(default = deny())
 policy("test", {
-    "Bash": deny(),
+    tool("Bash"): deny(),
 })
 "#,
         );
@@ -732,7 +730,7 @@ load("@clash//std.star", "deny", "regex", "policy", "settings")
 
 settings(default = deny())
 policy("test", {
-    regex("mcp__.*"): ask(),
+    tool(regex("mcp__.*")): ask(),
 })
 "#,
         );
@@ -756,7 +754,7 @@ load("@clash//std.star", "allow", "deny", "regex", "policy", "settings")
 
 settings(default = deny())
 policy("test", {
-    "Bash": {("git", regex("gh.*")): allow()},
+    tool("Bash"): {("git", regex("gh.*")): allow()},
 })
 "#,
         );
@@ -778,8 +776,8 @@ load("@clash//std.star", "allow", "deny", "policy", "settings")
 
 settings(default = deny())
 policy("test", {
-    "Bash": {"git": {"push": deny()}},
-    "Read": allow(),
+    tool("Bash"): {"git": {"push": deny()}},
+    tool("Read"): allow(),
 })
 "#,
         );
@@ -812,7 +810,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {None: allow()}, default_sandbox = _box)
+policy("test", {tool(None): allow()}, default_sandbox = _box)
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -845,7 +843,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {"Bash": {"test": allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {"test": allow(sandbox=_box)}})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -869,7 +867,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {"Glob": allow(sandbox=_box)})
+policy("test", {tool("Glob"): allow(sandbox=_box)})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -898,7 +896,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {"Read": allow()}, default_sandbox = _box)
+policy("test", {tool("Read"): allow()}, default_sandbox = _box)
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -925,7 +923,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {None: allow()}, default_sandbox = _box)
+policy("test", {tool(None): allow()}, default_sandbox = _box)
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -957,7 +955,7 @@ _box = sandbox(
 
 settings(default = deny(), default_sandbox = _box)
 policy("test", {
-    "WebSearch": deny(),
+    tool("WebSearch"): deny(),
 }, default_sandbox = _box)
 "#,
         );
@@ -1015,7 +1013,7 @@ extra_fs = sandbox(
 merged = fs_box.update(net_box).update(extra_fs)
 
 settings(default = deny())
-policy("test", {"Bash": {"cargo": allow(sandbox=merged)}})
+policy("test", {tool("Bash"): {"cargo": allow(sandbox=merged)}})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -1055,7 +1053,7 @@ def _check():
 _check()
 
 settings(default = deny())
-policy("test", {None: allow()})
+policy("test", {tool(None): allow()})
 "#,
         );
         assert_eq!(doc["schema_version"], 5);
@@ -1075,7 +1073,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {"Bash": {"test": allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {"test": allow(sandbox=_box)}})
 "#,
         );
         let sandbox = &doc["sandboxes"]["test"];
@@ -1099,7 +1097,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {"Bash": {"test": allow(sandbox=_box)}})
+policy("test", {tool("Bash"): {"test": allow(sandbox=_box)}})
 "#,
         );
         let sandbox = &doc["sandboxes"]["test"];
@@ -1142,7 +1140,7 @@ load("@clash//std.star", "allow", "deny", "policy", "settings", "sandbox")
 
 _box = sandbox(name="box", default=deny())
 settings(default=deny(), on_sandbox_violation="workaround")
-policy("test", {"Bash": allow(sandbox=_box)})
+policy("test", {tool("Bash"): allow(sandbox=_box)})
 "#,
         );
         assert_eq!(doc["on_sandbox_violation"], "workaround");
@@ -1155,7 +1153,7 @@ policy("test", {"Bash": allow(sandbox=_box)})
 load("@clash//std.star", "deny", "policy", "settings")
 
 settings(default=deny())
-policy("test", {"Bash": deny()})
+policy("test", {tool("Bash"): deny()})
 "#,
         );
         assert!(doc.get("on_sandbox_violation").is_none());
@@ -1167,7 +1165,7 @@ policy("test", {"Bash": deny()})
 load("@clash//std.star", "deny", "policy", "settings")
 
 settings(default=deny(), on_sandbox_violation="invalid")
-policy("test", {"Bash": deny()})
+policy("test", {tool("Bash"): deny()})
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from("."));
         assert!(result.is_err());
@@ -1216,7 +1214,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {"Bash": {"curl": allow(sandbox = _box)}})
+policy("test", {tool("Bash"): {"curl": allow(sandbox = _box)}})
 "#,
         );
         let sandboxes = doc["sandboxes"].as_object().unwrap();
@@ -1238,7 +1236,7 @@ _box = sandbox(
 )
 
 settings(default = deny())
-policy("test", {"Bash": {"curl": allow(sandbox = _box)}})
+policy("test", {tool("Bash"): {"curl": allow(sandbox = _box)}})
 "#,
         );
         let sandboxes = doc["sandboxes"].as_object().unwrap();
@@ -1256,7 +1254,7 @@ load("@clash//claude_compat.star", "from_claude_settings")
 
 settings(default = deny())
 policy("test", merge(
-    {None: allow()},
+    {tool(None): allow()},
     from_claude_settings(user = False, project = False),
 ))
 "#,
@@ -1276,7 +1274,7 @@ load("@clash//claude_compat.star", "from_claude_settings")
 
 settings(default = deny())
 policy("test", merge(
-    {None: deny()},
+    {tool(None): deny()},
     from_claude_settings(),
 ))
 "#,
@@ -1291,7 +1289,7 @@ policy("test", merge(
             r#"
 settings(default = deny())
 policy("test", merge(
-    {None: allow()},
+    {tool(None): allow()},
     _from_claude_settings(user = False, project = False),
 ))
 "#,
@@ -1307,7 +1305,7 @@ load("@clash//sandboxes.star", "git_safe")
 load("@clash//std.star", "allow", "deny", "policy", "settings")
 
 settings(default = deny())
-policy("test", {"Bash": {"git": allow(sandbox=git_safe)}})
+policy("test", {tool("Bash"): {"git": allow(sandbox=git_safe)}})
 "#,
         );
         let sandboxes = doc["sandboxes"].as_object().unwrap();
@@ -1332,7 +1330,7 @@ load("@clash//sandboxes.star", "git_full")
 load("@clash//std.star", "allow", "deny", "policy", "settings")
 
 settings(default = deny())
-policy("test", {"Bash": {"git": allow(sandbox=git_full)}})
+policy("test", {tool("Bash"): {"git": allow(sandbox=git_full)}})
 "#,
         );
         let sandboxes = doc["sandboxes"].as_object().unwrap();
@@ -1358,8 +1356,8 @@ policy("test", {"Bash": {"git": allow(sandbox=git_full)}})
         let doc = eval_to_doc(
             r#"
 settings(default = deny())
-a = {Tool("Bash"): allow()}
-b = {Tool("Read"): allow()}
+a = {tool("Bash"): allow()}
+b = {tool("Read"): allow()}
 policy("test", merge(a, b))
 "#,
         );
@@ -1372,8 +1370,8 @@ policy("test", merge(a, b))
         let doc = eval_to_doc(
             r#"
 settings(default = deny())
-a = {Tool("Bash"): deny()}
-b = {Tool("Bash"): allow()}
+a = {tool("Bash"): deny()}
+b = {tool("Bash"): allow()}
 policy("test", merge(a, b))
 "#,
         );
@@ -1389,13 +1387,13 @@ policy("test", merge(a, b))
         let doc = eval_to_doc(
             r#"
 settings(default = deny())
-a = {Tool("Bash"): {"git": deny()}}
-b = {Tool("Bash"): {"npm": allow()}}
+a = {tool("Bash"): {"git": deny()}}
+b = {tool("Bash"): {"npm": allow()}}
 policy("test", merge(a, b))
 "#,
         );
         let tree = doc["tree"].as_array().unwrap();
-        // One Tool("Bash") node with two children (git + npm).
+        // One tool("Bash") node with two children (git + npm).
         assert_eq!(
             tree.len(),
             1,
@@ -1415,9 +1413,9 @@ policy("test", merge(a, b))
         let doc = eval_to_doc(
             r#"
 settings(default = deny())
-a = {Tool("Bash"): deny()}
-b = {Tool("Bash"): ask()}
-c = {Tool("Bash"): allow()}
+a = {tool("Bash"): deny()}
+b = {tool("Bash"): ask()}
+c = {tool("Bash"): allow()}
 policy("test", merge(a, b, c))
 "#,
         );
@@ -1432,7 +1430,7 @@ policy("test", merge(a, b, c))
     fn merge_rejects_single_arg() {
         let source = r#"
 settings(default = deny())
-policy("test", merge({Tool("Bash"): allow()}))
+policy("test", merge({tool("Bash"): allow()}))
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from("."));
         assert!(result.is_err());
@@ -1442,7 +1440,7 @@ policy("test", merge({Tool("Bash"): allow()}))
     fn merge_rejects_non_dict() {
         let source = r#"
 settings(default = deny())
-policy("test", merge("not a dict", {Tool("Bash"): allow()}))
+policy("test", merge("not a dict", {tool("Bash"): allow()}))
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from("."));
         assert!(result.is_err());
@@ -1452,8 +1450,8 @@ policy("test", merge("not a dict", {Tool("Bash"): allow()}))
     fn merge_records_shadows() {
         let source = r#"
 settings(default = deny())
-a = {Tool("Bash"): deny()}
-b = {Tool("Bash"): allow()}
+a = {tool("Bash"): deny()}
+b = {tool("Bash"): allow()}
 policy("test", merge(a, b))
 "#;
         let result = evaluate(source, "test.star", &PathBuf::from(".")).unwrap();
@@ -1463,7 +1461,7 @@ policy("test", merge(a, b))
         );
         let shadow = &result.shadows[0];
         assert_eq!(shadow.path.len(), 1);
-        // The key path should contain the Tool("Bash") representation.
+        // The key path should contain the tool("Bash") representation.
         assert!(
             shadow.path[0].contains("Bash"),
             "path should mention Bash: {:?}",

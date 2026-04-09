@@ -4,13 +4,13 @@ meta:
 
 clash:
   policy_star: |
-    load("@clash//std.star", "policy", "settings", "allow", "deny", "ask", "glob")
+    load("@clash//std.star", "policy", "settings", "tool", "allow", "deny", "ask", "glob")
     load("@clash//sandboxes.star", "readonly", "project", "workspace", "unrestricted")
     settings(default=ask(), default_sandbox=project)
     policy("test", {
-        "Bash": {"git": {glob("**"): allow(sandbox=project)}},
-        ("Read", "Glob", "Grep"): allow(),
-    })
+        tool("Bash"): {"git": {glob("**"): allow(sandbox=project)}},
+        tool(("Read", "Glob", "Grep")): allow(),
+    }, default=ask())
 
 steps:
   - name: git status allowed with project sandbox

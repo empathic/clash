@@ -516,11 +516,11 @@ mod tests {
         assert!(policy.contains("load(\"@clash//sandboxes.star\""));
 
         // Should contain tool rules
-        assert!(policy.contains("(\"Read\", \"Grep\"): allow(sandbox = project_files)"));
-        assert!(policy.contains("\"Write\": allow(sandbox = project_files)"));
+        assert!(policy.contains("tool((\"Read\", \"Grep\")): allow(sandbox = project_files)"));
+        assert!(policy.contains("tool(\"Write\"): allow(sandbox = project_files)"));
 
         // Should contain when rules for binaries
-        assert!(policy.contains("\"Bash\":"));
+        assert!(policy.contains("tool(\"Bash\")"));
         assert!(policy.contains("allow(sandbox = project)"));
 
         // Should contain git safety rules
@@ -544,8 +544,8 @@ mod tests {
         };
 
         let policy = generate_starlark(&analysis);
-        assert!(policy.contains("\"Read\": allow(sandbox = project_files)"));
-        assert!(policy.contains("\"Edit\": allow(sandbox = project_files)"));
+        assert!(policy.contains("tool(\"Read\"): allow(sandbox = project_files)"));
+        assert!(policy.contains("tool(\"Edit\"): allow(sandbox = project_files)"));
         // No binary-specific rules (no "git", "cargo" etc.)
         assert!(!policy.contains("# Observed binaries"));
     }
@@ -563,7 +563,7 @@ mod tests {
         // Should generate a generic Bash when rule since we know bash was used
         // but total_invocations > tools count
         assert!(
-            policy.contains("{\"Bash\": allow(sandbox = project)}"),
+            policy.contains("{tool(\"Bash\"): allow(sandbox = project)}"),
             "expected dict syntax in:\n{policy}"
         );
     }
@@ -610,6 +610,6 @@ mod tests {
 
         let policy = generate_starlark(&analysis);
         // Network tools should use ask(), not allow()
-        assert!(policy.contains("(\"WebFetch\", \"WebSearch\"): ask()"));
+        assert!(policy.contains("tool((\"WebFetch\", \"WebSearch\")): ask()"));
     }
 }
