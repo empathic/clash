@@ -10,7 +10,7 @@ clash:
     policy("test", {
         tool("Bash"): {"git": {glob("**"): allow(sandbox=project)}},
         tool(("Read", "Glob", "Grep")): allow(),
-    })
+    }, default=ask())
 
 steps:
   - name: git status allowed with project sandbox

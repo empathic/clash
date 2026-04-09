@@ -165,8 +165,11 @@ def merge(*dicts):
     return _merge(*dicts)
 
 
-def policy(name, tree, default="deny", default_sandbox=None, doc=None):
+def policy(name, tree, default=None, default_sandbox=None, doc=None):
     """Register a named policy from a decision-tree dict.
+
+    When `default` is omitted the policy inherits the default effect from
+    settings().  Pass an explicit `default=deny()` to override.
 
     Usage:
         policy("default", {
@@ -179,7 +182,7 @@ def policy(name, tree, default="deny", default_sandbox=None, doc=None):
         fail("policy() name must be a string")
     if type(tree) != "dict":
         fail("policy() tree must be a dict. Run `clash policy migrate` to convert legacy files.")
-    _policy_impl(name, tree, default=_unwrap_effect(default), default_sandbox=default_sandbox, doc=doc)
+    _policy_impl(name, tree, default=_unwrap_effect(default) if default != None else "", default_sandbox=default_sandbox, doc=doc)
 
 
 # ---------------------------------------------------------------------------
