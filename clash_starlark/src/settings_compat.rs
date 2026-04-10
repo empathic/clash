@@ -225,7 +225,11 @@ pub fn build_policy_dict<'v>(perms: &PermissionSet, heap: &'v Heap) -> Value<'v>
         .iter()
         .map(|tool| {
             let tree = tool_trees.get(tool).unwrap();
-            (heap.alloc_str(tool).to_value(), tree.to_starlark(heap))
+            let typed_key = heap.alloc(AllocStruct([
+                ("_match_key", heap.alloc_str("tool").to_value()),
+                ("_match_value", heap.alloc_str(tool).to_value()),
+            ]));
+            (typed_key, tree.to_starlark(heap))
         })
         .collect();
 
