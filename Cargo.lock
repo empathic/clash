@@ -728,7 +728,7 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 
 [[package]]
 name = "clash"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "clash-brush-builtins"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "clash-brush-core"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-recursion",
@@ -845,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "clash-brush-interactive"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "bon",
  "clash-brush-core",
@@ -863,7 +863,7 @@ dependencies = [
 
 [[package]]
 name = "clash-brush-parser"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "arbitrary",
@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "clash-lsp"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clash-policy",
@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "clash-policy"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "bitflags 2.11.0",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "clash_notify"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "mac-notification-sys",
  "notify-rust",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "clash_starlark"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "allocative",
  "anyhow",
@@ -957,7 +957,7 @@ dependencies = [
 
 [[package]]
 name = "claude_settings"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "figment",
@@ -971,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "clester"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",
