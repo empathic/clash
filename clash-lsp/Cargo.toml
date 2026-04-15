@@ -3,6 +3,9 @@ name = "clash-lsp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+homepage.workspace = true
+description = "lsp for clash policy files"
+
 
 [dependencies]
 anyhow.workspace = true
