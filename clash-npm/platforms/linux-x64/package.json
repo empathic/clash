@@ -1,13 +1,19 @@
 {
   "name": "@empathic/clash-linux-x64",
-  "version": "0.6.2",
+  "version": "0.7.1",
   "description": "Clash binary for Linux x86_64",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/empathic/clash"
   },
-  "os": ["linux"],
-  "cpu": ["x64"],
-  "files": ["clash"]
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "clash"
+  ]
 }
