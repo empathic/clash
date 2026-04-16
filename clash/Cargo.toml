@@ -53,6 +53,7 @@ clash-policy = { workspace = true }
 clash_notify = { workspace = true }
 clash_starlark = { workspace = true }
 claude_settings = { workspace = true }
+coding-agent-hooks = { workspace = true }
 clash-brush-builtins = { workspace = true }
 clash-brush-core = { workspace = true }
 clash-brush-interactive = { workspace = true }

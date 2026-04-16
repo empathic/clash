@@ -240,18 +240,12 @@ impl TestEnvironment {
 
 /// Extract the permission decision [`Effect`] from a [`HookOutput`].
 pub fn get_effect(output: &HookOutput) -> Option<Effect> {
-    match &output.hook_specific_output {
-        Some(HookSpecificOutput::PreToolUse(pre)) => {
-            pre.permission_decision
-                .as_ref()
-                .and_then(|rule| match rule {
-                    claude_settings::PermissionRule::Allow => Some(Effect::Allow),
-                    claude_settings::PermissionRule::Deny => Some(Effect::Deny),
-                    claude_settings::PermissionRule::Ask => Some(Effect::Ask),
-                    _ => None,
-                })
-        }
-        _ => None,
+    use coding_agent_hooks::output::Effect as HookEffect;
+    match output.effect() {
+        Some(HookEffect::Allow) => Some(Effect::Allow),
+        Some(HookEffect::Deny) => Some(Effect::Deny),
+        Some(HookEffect::Ask) => Some(Effect::Ask),
+        None => None,
     }
 }
 

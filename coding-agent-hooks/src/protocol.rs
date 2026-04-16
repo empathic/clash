@@ -3,7 +3,7 @@
 //! Each coding agent sends/receives hook JSON in a different format.
 //! The [`HookProtocol`] trait encapsulates these differences so the
 //! core permission logic works identically regardless of which agent
-//! is calling Clash.
+//! is calling.
 //!
 //! Most methods have default implementations that handle the common case.
 //! Adding a new agent typically requires overriding only [`HookProtocol::agent`]
@@ -13,14 +13,14 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::AgentKind;
-use crate::hooks::{SessionStartHookInput, StopHookInput, ToolUseHookInput};
+use crate::agents::{AgentKind, resolve_permission_mode};
+use crate::input::{SessionStartHookInput, StopHookInput, ToolUseHookInput};
 
 /// Abstraction over agent-specific hook JSON formats.
 ///
 /// Each agent (Claude Code, Gemini CLI, etc.) implements this trait to handle:
-/// - Parsing its native JSON stdin into Clash's internal types
-/// - Formatting Clash decisions back into the agent's expected JSON output
+/// - Parsing its native JSON stdin into normalized internal types
+/// - Formatting decisions back into the agent's expected JSON output
 /// - Rewriting tool inputs for sandbox enforcement
 ///
 /// # Adding a New Agent
@@ -36,8 +36,8 @@ pub trait HookProtocol {
     /// Parse the agent's PreToolUse JSON into a `ToolUseHookInput`. **Required.**
     ///
     /// The returned `tool_name` MUST be the internal (Claude-style) name,
-    /// translated via [`super::resolve_tool_name`]. The original agent-native
-    /// name is preserved in `original_tool_name`.
+    /// translated via [`resolve_tool_name`](crate::agents::resolve_tool_name).
+    /// The original agent-native name is preserved in `original_tool_name`.
     fn parse_tool_use(&self, raw: &Value) -> Result<ToolUseHookInput>;
 
     /// Parse the agent's PostToolUse JSON into a `ToolUseHookInput`.
@@ -58,7 +58,7 @@ pub trait HookProtocol {
             permission_mode: raw
                 .get("permission_mode")
                 .and_then(|v| v.as_str())
-                .map(|m| super::resolve_permission_mode(self.agent(), m).to_string()),
+                .map(|m| resolve_permission_mode(self.agent(), m).to_string()),
             hook_event_name: json_str_or(raw, "hook_event_name", "SessionStart").to_string(),
             source: raw.get("source").and_then(|v| v.as_str()).map(String::from),
             model: raw.get("model").and_then(|v| v.as_str()).map(String::from),
@@ -124,7 +124,7 @@ pub trait HookProtocol {
         output
     }
 
-    /// Rewrite a shell command's tool_input to run through `clash shell`.
+    /// Rewrite a shell command's tool_input to run through a sandbox.
     ///
     /// Default: rewrites the `command` field for tools with internal name "Bash".
     fn rewrite_for_sandbox(&self, input: &ToolUseHookInput, sandbox_cmd: &str) -> Option<Value> {
@@ -147,10 +147,9 @@ pub trait HookProtocol {
 
     /// Context string injected into the agent's session at startup.
     ///
-    /// Default: standard Clash session context.
+    /// Default: generic hook-active context.
     fn session_context(&self) -> &str {
-        "Clash is active and enforcing policy on this session.\n\
-         Run `clash commands` to see the full command hierarchy for managing policies, sandboxes, and debugging."
+        "Agent hooks are active and enforcing policy on this session."
     }
 }
 
@@ -159,17 +158,17 @@ pub trait HookProtocol {
 // ---------------------------------------------------------------------------
 
 /// Extract a string field from JSON, returning "" if missing.
-pub(crate) fn json_str<'a>(raw: &'a Value, field: &str) -> &'a str {
+pub fn json_str<'a>(raw: &'a Value, field: &str) -> &'a str {
     raw.get(field).and_then(|v| v.as_str()).unwrap_or("")
 }
 
 /// Extract a string field from JSON with a default value.
-pub(crate) fn json_str_or<'a>(raw: &'a Value, field: &str, default: &'a str) -> &'a str {
+pub fn json_str_or<'a>(raw: &'a Value, field: &str, default: &'a str) -> &'a str {
     raw.get(field).and_then(|v| v.as_str()).unwrap_or(default)
 }
 
 /// Extract a string from one of several possible field names.
-pub(crate) fn json_str_any<'a>(raw: &'a Value, fields: &[&str]) -> &'a str {
+pub fn json_str_any<'a>(raw: &'a Value, fields: &[&str]) -> &'a str {
     for field in fields {
         if let Some(s) = raw.get(*field).and_then(|v| v.as_str()) {
             return s;
@@ -179,7 +178,7 @@ pub(crate) fn json_str_any<'a>(raw: &'a Value, fields: &[&str]) -> &'a str {
 }
 
 /// Extract an optional Value from one of several possible field names.
-pub(crate) fn json_value_any(raw: &Value, fields: &[&str]) -> Option<Value> {
+pub fn json_value_any(raw: &Value, fields: &[&str]) -> Option<Value> {
     for field in fields {
         if let Some(v) = raw.get(*field) {
             return Some(v.clone());
@@ -188,18 +187,19 @@ pub(crate) fn json_value_any(raw: &Value, fields: &[&str]) -> Option<Value> {
     None
 }
 
-pub(crate) fn shell_escape(s: &str) -> String {
+/// Shell-escape a string for safe inclusion in a shell command.
+pub fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Construct the appropriate protocol implementation for an agent.
 pub fn get_protocol(agent: AgentKind) -> Box<dyn HookProtocol> {
     match agent {
-        AgentKind::Claude => Box::new(super::claude::ClaudeProtocol),
-        AgentKind::Gemini => Box::new(super::gemini::GeminiProtocol),
-        AgentKind::Codex => Box::new(super::codex::CodexProtocol),
-        AgentKind::AmazonQ => Box::new(super::amazonq::AmazonQProtocol),
-        AgentKind::OpenCode => Box::new(super::opencode::OpenCodeProtocol),
-        AgentKind::Copilot => Box::new(super::copilot::CopilotProtocol),
+        AgentKind::Claude => Box::new(crate::agents::claude::ClaudeProtocol),
+        AgentKind::Gemini => Box::new(crate::agents::gemini::GeminiProtocol),
+        AgentKind::Codex => Box::new(crate::agents::codex::CodexProtocol),
+        AgentKind::AmazonQ => Box::new(crate::agents::amazonq::AmazonQProtocol),
+        AgentKind::OpenCode => Box::new(crate::agents::opencode::OpenCodeProtocol),
+        AgentKind::Copilot => Box::new(crate::agents::copilot::CopilotProtocol),
     }
 }

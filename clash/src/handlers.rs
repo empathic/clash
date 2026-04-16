@@ -7,13 +7,12 @@
 use tracing::{Level, info, instrument, warn};
 
 use crate::hooks::{
-    HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput, is_interactive_tool,
+    Effect, HookOutput, HookSpecificOutput, SessionStartHookInput, ToolUseHookInput,
+    is_interactive_tool,
 };
 use crate::notifications;
 use crate::permissions::check_permission;
 use crate::settings::ClashSettings;
-
-use claude_settings::PermissionRule;
 
 /// Handle a permission request — decide whether to approve or deny on behalf of user.
 ///
@@ -34,12 +33,12 @@ pub fn handle_permission_request(
         let is_deny = matches!(
             pre_tool_result.hook_specific_output,
             Some(HookSpecificOutput::PreToolUse(ref pre))
-                if matches!(pre.permission_decision, Some(PermissionRule::Deny))
+                if matches!(pre.permission_decision, Some(Effect::Deny))
         );
         let is_allow = matches!(
             pre_tool_result.hook_specific_output,
             Some(HookSpecificOutput::PreToolUse(ref pre))
-                if matches!(pre.permission_decision, Some(PermissionRule::Allow))
+                if matches!(pre.permission_decision, Some(Effect::Allow))
         );
         if is_deny {
             let reason = match &pre_tool_result.hook_specific_output {
@@ -65,8 +64,8 @@ pub fn handle_permission_request(
     // Claude Code validates that hookEventName matches the event type.
     Ok(match pre_tool_result.hook_specific_output {
         Some(HookSpecificOutput::PreToolUse(ref pre)) => match pre.permission_decision {
-            Some(PermissionRule::Allow) => HookOutput::approve_permission(None),
-            Some(PermissionRule::Deny) => {
+            Some(Effect::Allow) => HookOutput::approve_permission(None),
+            Some(Effect::Deny) => {
                 let reason = pre
                     .permission_decision_reason
                     .clone()

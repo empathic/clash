@@ -6,6 +6,7 @@ members = [
     "claude_settings",
     "clash_starlark",
     "clash-lsp",
+    "coding-agent-hooks",
     "clester",
     "clash-brush-parser",
     "clash-brush-core",
@@ -160,3 +161,4 @@ clash-policy = { path = "clash-policy", version = "0.7.1" }
 clash_notify = { path = "clash_notify", version = "0.7.1" }
 clash_starlark = { path = "clash_starlark", version = "0.7.1" }
 claude_settings = { path = "claude_settings", version = "0.7.1" }
+coding-agent-hooks = { path = "coding-agent-hooks", version = "0.7.1", features = ["clap"] }

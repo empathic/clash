@@ -1,0 +1,22 @@
+[package]
+name = "coding-agent-hooks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Agent-agnostic hook protocol types and adapters for AI coding agents"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+include = ["src/**/*", "Cargo.toml"]
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+clap = ["dep:clap"]

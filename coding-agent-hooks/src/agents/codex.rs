@@ -5,9 +5,9 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::protocol::{HookProtocol, json_str, json_str_any, json_value_any};
 use super::{AgentKind, resolve_tool_name};
-use crate::hooks::ToolUseHookInput;
+use crate::input::ToolUseHookInput;
+use crate::protocol::{HookProtocol, json_str, json_str_any, json_value_any};
 
 pub struct CodexProtocol;
 

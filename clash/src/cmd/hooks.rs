@@ -8,10 +8,12 @@ use crate::agents::protocol::{HookProtocol, get_protocol};
 use crate::cli::{HookCmd, HookSubcommand};
 use crate::hooks::{HookOutput, HookSpecificOutput, ToolUseHookInput, is_interactive_tool};
 use crate::permissions::check_permission;
-use crate::policy::Effect;
 use crate::session_policy;
 use crate::settings::{ClashSettings, HookContext};
 use crate::trace;
+
+// Re-import the hook Effect (from coding-agent-hooks) and the policy Effect.
+use coding_agent_hooks::output::Effect as HookEffect;
 
 /// Generate a fallback session ID when the agent doesn't provide one.
 ///
@@ -21,8 +23,6 @@ fn fallback_session_id(agent: AgentKind) -> String {
     let ppid = std::os::unix::process::parent_id();
     format!("{agent}-{ppid}")
 }
-
-use claude_settings::PermissionRule;
 
 impl HookCmd {
     /// Handle hook when clash is disabled — drain stdin and return pass-through.
@@ -98,7 +98,7 @@ impl HookCmd {
                     } else {
                         // Update session stats for the status line (only here, not in
                         // log_decision, to avoid double-counting PermissionRequest).
-                        if let Some(effect) = extract_effect(&output) {
+                        if let Some(effect) = hook_effect_to_policy(output.effect()) {
                             crate::audit::update_session_stats(
                                 &input.session_id,
                                 &input.tool_name,
@@ -124,7 +124,7 @@ impl HookCmd {
 
                         // Sync trace with the policy decision for this tool use.
                         let decision = input.tool_use_id.as_ref().and_then(|id| {
-                            let effect = extract_effect(&output)?;
+                            let effect = hook_effect_to_policy(output.effect())?;
                             Some(trace::PolicyDecision {
                                 tool_use_id: id.clone(),
                                 tool_name: Some(input.tool_name.clone()),
@@ -300,24 +300,22 @@ impl HookCmd {
     }
 }
 
-fn extract_effect(output: &HookOutput) -> Option<Effect> {
-    match &output.hook_specific_output {
-        Some(HookSpecificOutput::PreToolUse(pre)) => match pre.permission_decision {
-            Some(PermissionRule::Allow) => Some(Effect::Allow),
-            Some(PermissionRule::Deny) => Some(Effect::Deny),
-            Some(PermissionRule::Ask) => Some(Effect::Ask),
-            Some(PermissionRule::Unset) | None => None,
-        },
-        _ => None,
+/// Convert a hook-level Effect to a policy-level Effect.
+fn hook_effect_to_policy(effect: Option<HookEffect>) -> Option<crate::policy::Effect> {
+    match effect {
+        Some(HookEffect::Allow) => Some(crate::policy::Effect::Allow),
+        Some(HookEffect::Deny) => Some(crate::policy::Effect::Deny),
+        Some(HookEffect::Ask) => Some(crate::policy::Effect::Ask),
+        None => None,
     }
 }
 
 fn is_ask_decision(output: &HookOutput) -> bool {
-    matches!(extract_effect(output), Some(Effect::Ask))
+    matches!(output.effect(), Some(HookEffect::Ask))
 }
 
 fn is_deny_decision(output: &HookOutput) -> bool {
-    matches!(extract_effect(output), Some(Effect::Deny))
+    matches!(output.effect(), Some(HookEffect::Deny))
 }
 
 /// Convert a Claude-format HookOutput into the agent's protocol format.
@@ -342,10 +340,10 @@ fn hook_output_to_protocol(protocol: &dyn HookProtocol, output: &HookOutput) -> 
         _ => (None, None, None),
     };
 
-    match extract_effect(output) {
-        Some(Effect::Allow) => protocol.format_allow(reason, context, updated_input),
-        Some(Effect::Deny) => protocol.format_deny(reason.unwrap_or("policy: denied"), context),
-        Some(Effect::Ask) => protocol.format_ask(reason, context),
+    match output.effect() {
+        Some(HookEffect::Allow) => protocol.format_allow(reason, context, updated_input),
+        Some(HookEffect::Deny) => protocol.format_deny(reason.unwrap_or("policy: denied"), context),
+        Some(HookEffect::Ask) => protocol.format_ask(reason, context),
         None => {
             // No decision (e.g., continue_execution) — allow passthrough
             protocol.format_allow(None, None, None)

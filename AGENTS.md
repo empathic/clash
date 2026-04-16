@@ -64,7 +64,8 @@
 
 ## Layout
 
-* *clash* Clash binary + library (includes `src/agents/` for multi-agent protocol adapters, `src/policy_gen/` for shared policy generation definitions)
+* *clash* Clash binary + library (includes `src/policy_gen/` for shared policy generation definitions)
+* *coding-agent-hooks* Agent-agnostic hook protocol types, agent adapters (Claude, Gemini, Codex, AmazonQ, OpenCode, Copilot), and tool name normalization
 * *clash-policy* Policy language: parsing, IR, compilation, and evaluation (extracted from `clash` to break circular dep with `clash-lsp`)
 * *clash_starlark* Starlark policy evaluator — compiles `.star` files to JSON policy format
 * *clash-plugin* Claude Code plugin (hooks.json, .claude-plugin definitions)

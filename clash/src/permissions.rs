@@ -1,7 +1,7 @@
 use crate::policy::Effect;
 use tracing::{Level, info, instrument, warn};
 
-use crate::hooks::{HookOutput, ToolInput, ToolUseHookInput};
+use crate::hooks::{HookOutput, ToolInput, ToolUseHookInput, ToolUseHookInputExt};
 use crate::settings::ClashSettings;
 
 /// Check if a tool invocation should be allowed, denied, or require user confirmation.

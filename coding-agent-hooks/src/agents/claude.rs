@@ -7,9 +7,10 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::protocol::HookProtocol;
 use super::{AgentKind, resolve_permission_mode, resolve_tool_name};
-use crate::hooks::{HookOutput, SessionStartHookInput, StopHookInput, ToolUseHookInput};
+use crate::input::{SessionStartHookInput, StopHookInput, ToolUseHookInput};
+use crate::output::HookOutput;
+use crate::protocol::HookProtocol;
 
 pub struct ClaudeProtocol;
 
@@ -70,10 +71,6 @@ impl HookProtocol for ClaudeProtocol {
     fn format_session_start(&self, context: Option<&str>) -> Value {
         let output = HookOutput::session_start(context.map(String::from));
         serde_json::to_value(output).expect("HookOutput serialization cannot fail")
-    }
-
-    fn session_context(&self) -> &str {
-        include_str!("../../docs/session-context.md")
     }
 
     // parse_post_tool_use — uses default (delegates to parse_tool_use)
