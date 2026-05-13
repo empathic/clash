@@ -4,14 +4,14 @@ Clash supports 6 coding agents: Claude Code, Gemini CLI, Codex CLI, Amazon Q CLI
 
 ## Supported Agents
 
-| Agent | Hook Command | Extension Package |
-|-------|-------------|-------------------|
+| Agent | Hook Command | Install Assets |
+|-------|-------------|----------------|
 | Claude Code | `clash hook pre-tool-use` (default) | `clash-plugin/` |
-| Gemini CLI | `clash hook --agent gemini pre-tool-use` | `clash-gemini-ext/` |
-| Codex CLI | `clash hook --agent codex pre-tool-use` | `clash-codex/` |
-| Amazon Q CLI | `clash hook --agent amazonq pre-tool-use` | `clash-amazonq/` |
-| OpenCode | `clash hook --agent opencode pre-tool-use` | `clash-opencode/` |
-| Copilot CLI | `clash hook --agent copilot pre-tool-use` | `clash-copilot/` |
+| Gemini CLI | `clash hook --agent gemini pre-tool-use` | `clash/src/agent_templates/gemini/` |
+| Codex CLI | `clash hook --agent codex pre-tool-use` | `clash/src/agent_templates/codex/` |
+| Amazon Q CLI | `clash hook --agent amazonq pre-tool-use` | `clash/src/agent_templates/amazonq/` |
+| OpenCode | `clash hook --agent opencode pre-tool-use` | `clash/src/agent_templates/opencode/` |
+| Copilot CLI | `clash hook --agent copilot pre-tool-use` | `clash/src/agent_templates/copilot/` |
 
 ## Setup
 

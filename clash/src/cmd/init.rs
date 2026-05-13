@@ -22,13 +22,12 @@ const HOOK_CMD_PREFIX: &str = "clash hook";
 
 /// Embedded agent plugin files — compiled into the binary so `clash init --agent <name>`
 /// can install them without needing the source repo.
-const OPENCODE_PLUGIN_TS: &str = include_str!("../../clash-opencode/plugin.ts");
-const COPILOT_HOOKS_JSON: &str =
-    include_str!("../../clash-copilot/.github/hooks/pre-tool-use.json");
-const CODEX_HOOKS_TOML: &str = include_str!("../../clash-codex/hooks.toml");
-const AMAZONQ_AGENT_JSON: &str = include_str!("../../clash-amazonq/agent.json");
-const GEMINI_EXTENSION_JSON: &str = include_str!("../../clash-gemini-ext/gemini-extension.json");
-const GEMINI_HOOKS_JSON: &str = include_str!("../../clash-gemini-ext/hooks/hooks.json");
+const OPENCODE_PLUGIN_TS: &str = include_str!("../agent_templates/opencode/plugin.ts");
+const COPILOT_HOOKS_JSON: &str = include_str!("../agent_templates/copilot/pre-tool-use.json");
+const CODEX_HOOKS_TOML: &str = include_str!("../agent_templates/codex/hooks.toml");
+const AMAZONQ_AGENT_JSON: &str = include_str!("../agent_templates/amazonq/agent.json");
+const GEMINI_EXTENSION_JSON: &str = include_str!("../agent_templates/gemini/gemini-extension.json");
+const GEMINI_HOOKS_JSON: &str = include_str!("../agent_templates/gemini/hooks.json");
 
 /// Initialize clash at the chosen scope.
 ///

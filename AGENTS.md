@@ -69,11 +69,7 @@
 * *clash-policy* Policy language: parsing, IR, compilation, and evaluation (extracted from `clash` to break circular dep with `clash-lsp`)
 * *clash_starlark* Starlark policy evaluator — compiles `.star` files to JSON policy format
 * *clash-plugin* Claude Code plugin (hooks.json, .claude-plugin definitions)
-* *clash-gemini-ext* Gemini CLI extension package
-* *clash-codex* Codex CLI hook configuration
-* *clash-amazonq* Amazon Q CLI agent hook configuration
-* *clash-opencode* OpenCode TypeScript plugin
-* *clash-copilot* Copilot CLI hook configuration
+* *clash/src/agent_templates* Embedded per-agent install assets (Gemini extension, Codex/Amazon Q/Copilot hooks, OpenCode plugin) — shipped inside the `clash` binary and written out by `clash init --agent <name>`
 * *clash_notify* Helper crate for extended notifications outside of the terminal
 * *claude_settings* Helper crate for interacting with a user's ".claude" settings directories
 * *clash-brush-parser* Shell command parser

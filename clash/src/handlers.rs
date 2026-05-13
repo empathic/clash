@@ -261,7 +261,7 @@ pub fn handle_session_start(
 /// This text is returned as `additional_context` in the SessionStart hook response,
 /// giving Claude the knowledge it needs to use clash skills and manage policies.
 fn clash_session_context() -> &'static str {
-    include_str!("../docs/session-context.md")
+    include_str!("session-context.md")
 }
 
 /// Check sandbox support, init session, and symlink — shared by both paths.
