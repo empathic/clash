@@ -1,6 +1,6 @@
 {
   "name": "@empathic/clash-pi",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Clash policy enforcement extension for the Pi agent framework",
   "license": "Apache-2.0",
   "repository": {
@@ -8,7 +8,7 @@
     "url": "https://github.com/empathic/clash"
   },
   "dependencies": {
-    "@empathic/clash": "0.7.1"
+    "@empathic/clash": "0.7.2"
   },
   "pi": {
     "extensions": [
