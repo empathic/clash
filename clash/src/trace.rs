@@ -13,6 +13,11 @@
 //! - `trace.json`  — session metadata + byte offset + last step ID
 //! - `trace.jsonl` — append-only toolpath Steps (conversation + policy)
 
+// This module defines `init_trace` and `sync_trace`, which are on the
+// `disallowed_methods` list for handler code (use `Env::session` instead).
+// In-module tests legitimately exercise them directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};

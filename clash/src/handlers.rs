@@ -220,20 +220,19 @@ fn resolve_via_zulip_or_continue(input: &ToolUseHookInput, settings: &ClashSetti
 }
 
 /// Handle a session start event — validate policy/settings and report status to Claude.
-#[instrument(level = Level::TRACE, skip(input))]
+#[instrument(level = Level::TRACE, skip(env, input))]
 pub fn handle_session_start(
+    env: &crate::env::Env,
     input: &SessionStartHookInput,
     agent: Option<crate::agents::AgentKind>,
 ) -> anyhow::Result<HookOutput> {
-    // Ensure the user has a policy file — create one with safe defaults if not.
-    let created_policy = ClashSettings::ensure_user_policy_exists()?;
+    let created_policy = env.policy.ensure_user_policy()?;
 
     let mut hook_ctx = crate::settings::HookContext::from_transcript_path(&input.transcript_path);
     if let Some(a) = agent {
         hook_ctx = hook_ctx.with_agent(a);
     }
-    let _settings =
-        ClashSettings::load_or_create_with_session(Some(&input.session_id), Some(&hook_ctx))?;
+    env.policy.validate_session(&input.session_id, &hook_ctx)?;
 
     let mut lines = Vec::new();
 
@@ -246,12 +245,10 @@ pub fn handle_session_start(
         ));
     }
 
-    // Inject clash usage context so Claude understands how to use skills and policies.
     lines.push(clash_session_context().into());
-
     lines.push("Clash is managing permissions via hooks.".into());
 
-    check_sandbox_and_session(&mut lines, input);
+    check_sandbox_and_session(env, &mut lines, input);
 
     finish_session_start(lines)
 }
@@ -264,11 +261,12 @@ fn clash_session_context() -> &'static str {
     include_str!("session-context.md")
 }
 
-/// Check sandbox support, init session, and symlink — shared by both paths.
-fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookInput) {
-    // 3. Check sandbox support
-    let support = crate::sandbox::check_support();
-    match support {
+fn check_sandbox_and_session(
+    env: &crate::env::Env,
+    lines: &mut Vec<String>,
+    input: &SessionStartHookInput,
+) {
+    match env.sandbox.check_support() {
         crate::sandbox::SupportLevel::Full => {
             lines.push("sandbox: fully supported".into());
         }
@@ -283,13 +281,7 @@ fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookIn
         }
     }
 
-    // 4. Initialize per-session history directory
-    match crate::audit::init_session(
-        &input.session_id,
-        &input.cwd,
-        input.source.as_deref(),
-        input.model.as_deref(),
-    ) {
+    match env.session.init_audit_session(input) {
         Ok(session_dir) => {
             lines.push(format!("session history: {}", session_dir.display()));
         }
@@ -298,23 +290,14 @@ fn check_sandbox_and_session(lines: &mut Vec<String>, input: &SessionStartHookIn
         }
     }
 
-    // 4b. Write active session marker so CLI commands can find this session.
-    if let Err(e) = ClashSettings::set_active_session(&input.session_id) {
+    if let Err(e) = env.session.set_active_session(&input.session_id) {
         warn!(error = %e, "Failed to write active session marker");
     }
 
-    // 4c. Initialize toolpath tracing for this session.
-    if let Err(e) = crate::trace::init_trace(
-        &input.session_id,
-        &input.transcript_path,
-        &input.cwd,
-        input.model.as_deref(),
-        input.source.as_deref(),
-    ) {
+    if let Err(e) = env.session.init_trace(input) {
         warn!(error = %e, "Failed to initialize session trace");
     }
 
-    // 5. Session metadata
     if let Some(ref source) = input.source {
         lines.push(format!("session source: {}", source));
     }
@@ -340,7 +323,9 @@ mod tests {
     use super::*;
 
     fn session_start_context(input: &SessionStartHookInput) -> String {
-        let output = handle_session_start(input, None).expect("session start should succeed");
+        let test_env = crate::env::TestEnv::new();
+        let output = handle_session_start(&test_env.env(), input, None)
+            .expect("session start should succeed");
         match &output.hook_specific_output {
             Some(HookSpecificOutput::SessionStart(s)) => {
                 s.additional_context.clone().expect("should have context")
@@ -365,8 +350,8 @@ mod tests {
     fn test_session_start_reports_sandbox_support() {
         let ctx = session_start_context(&default_session_start_input());
         assert!(
-            ctx.contains("sandbox:"),
-            "should report sandbox status, got: {ctx}"
+            ctx.contains("sandbox: fully supported"),
+            "expected canned Full support, got: {ctx}"
         );
     }
 

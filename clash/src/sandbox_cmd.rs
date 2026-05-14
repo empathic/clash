@@ -227,6 +227,8 @@ pub fn run_sandbox(cmd: SandboxCmd) -> Result<()> {
             run_sandboxed_command(&sandbox_policy, &cwd_path, &command, None, None)
         }
         SandboxCmd::Check => {
+            // CLI diagnostic, not on the env-injected handler path.
+            #[allow(clippy::disallowed_methods)]
             let support = sandbox::check_support();
             match support {
                 sandbox::SupportLevel::Full => {

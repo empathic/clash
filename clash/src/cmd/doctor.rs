@@ -661,6 +661,8 @@ fn check_file_permissions() -> CheckResult {
 
 /// Check 6: Does the platform support sandboxing?
 fn check_sandbox_support() -> CheckResult {
+    // Diagnostic command, not on the env-injected handler path.
+    #[allow(clippy::disallowed_methods)]
     match sandbox::check_support() {
         sandbox::SupportLevel::Full => {
             let backend = if cfg!(target_os = "macos") {

@@ -1,0 +1,17 @@
+# Methods deferred to `clash::env` capability traits. Direct calls outside
+# `clash/src/env.rs` (which has `#![allow(clippy::disallowed_methods)]`)
+# bypass the abstraction and re-introduce the testability gap that `env.rs`
+# exists to close. Add new entries here when new env-dependent functions
+# are introduced.
+
+disallowed-methods = [
+    { path = "clash::sandbox::check_support", reason = "use Env::sandbox.check_support()" },
+    { path = "clash::settings::ClashSettings::ensure_user_policy_exists", reason = "use Env::policy.ensure_user_policy()" },
+    { path = "clash::settings::ClashSettings::set_active_session", reason = "use Env::session.set_active_session()" },
+    { path = "clash::audit::init_session", reason = "use Env::session.init_audit_session()" },
+    { path = "clash::audit::update_session_stats", reason = "use Env::session.update_session_stats()" },
+    { path = "clash::trace::init_trace", reason = "use Env::session.init_trace()" },
+    { path = "clash::trace::sync_trace", reason = "use Env::session.sync_trace()" },
+    { path = "clash::session_policy::record_pending_ask", reason = "use Env::session.record_pending_ask()" },
+    { path = "clash::session_policy::process_post_tool_use", reason = "use Env::session.consume_pending_ask()" },
+]

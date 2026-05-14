@@ -314,6 +314,8 @@ pub fn run_shell(
         now.as_secs() & 0xFFFF_FFFF,
         now.subsec_millis()
     );
+    // Interactive shell, not on the env-injected hook handler path.
+    #[allow(clippy::disallowed_methods)]
     let _ = crate::audit::init_session(&session_id, &cwd, Some("clash-shell"), None);
 
     let last_decision: SharedDecision = Arc::new(std::sync::Mutex::new(None));

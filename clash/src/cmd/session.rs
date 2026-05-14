@@ -401,6 +401,8 @@ fn run_show(session: Option<String>, json: bool) -> Result<()> {
     let stats = audit::read_session_stats(&session_id).ok();
 
     // Sync trace so we pick up recent conversation entries.
+    // CLI command, not on the env-injected handler path.
+    #[allow(clippy::disallowed_methods)]
     let _ = crate::trace::sync_trace(&session_id, None);
     let last_message = crate::trace::last_user_message(&session_id);
 

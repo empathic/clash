@@ -4,6 +4,11 @@
 //! If they accept, PostToolUse fires and we suggest a session-scoped allow rule
 //! for Claude to offer the user.
 
+// `record_pending_ask` and `process_post_tool_use` are on the
+// `disallowed_methods` list for handler code (use `Env::session` instead).
+// In-module tests legitimately exercise them directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 use std::path::PathBuf;
 
 use tracing::{debug, info, warn};

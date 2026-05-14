@@ -38,6 +38,7 @@ pub mod debug;
 pub mod dialog;
 pub mod display;
 pub mod ecosystem;
+pub mod env;
 pub mod errors;
 pub mod git;
 pub mod handlers;

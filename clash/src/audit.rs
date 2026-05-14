@@ -3,6 +3,11 @@
 //! Writes JSON Lines entries to `~/.clash/audit.jsonl` (configurable via settings).
 //! Each entry records the tool invocation and the policy decision.
 
+// `init_session` and `update_session_stats` are on the `disallowed_methods`
+// list for handler code (use `Env::session` instead). In-module tests
+// legitimately exercise them directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
