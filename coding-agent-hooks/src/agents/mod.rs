@@ -161,6 +161,7 @@ const TOOL_ALIASES: &[ToolAlias] = &[
             (AgentKind::Gemini, "write_file"),
             (AgentKind::AmazonQ, "fs_write"),
             (AgentKind::OpenCode, "write"),
+            (AgentKind::Copilot, "create"),
         ],
     },
     ToolAlias {
@@ -180,6 +181,7 @@ const TOOL_ALIASES: &[ToolAlias] = &[
             (AgentKind::Claude, "Glob"),
             (AgentKind::Gemini, "glob"),
             (AgentKind::OpenCode, "glob"),
+            (AgentKind::Copilot, "glob"),
         ],
     },
     ToolAlias {
@@ -189,6 +191,7 @@ const TOOL_ALIASES: &[ToolAlias] = &[
             (AgentKind::Claude, "Grep"),
             (AgentKind::Gemini, "grep_search"),
             (AgentKind::OpenCode, "grep"),
+            (AgentKind::Copilot, "grep"),
         ],
     },
     ToolAlias {
@@ -198,6 +201,7 @@ const TOOL_ALIASES: &[ToolAlias] = &[
             (AgentKind::Claude, "WebFetch"),
             (AgentKind::Gemini, "web_fetch"),
             (AgentKind::OpenCode, "webfetch"),
+            (AgentKind::Copilot, "web_fetch"),
         ],
     },
     ToolAlias {
@@ -208,6 +212,65 @@ const TOOL_ALIASES: &[ToolAlias] = &[
             (AgentKind::Gemini, "google_web_search"),
             (AgentKind::Codex, "web_search"),
             (AgentKind::OpenCode, "websearch"),
+            (AgentKind::Copilot, "web_search"),
+        ],
+    },
+    ToolAlias {
+        canonical: "ask",
+        internal: "AskUserQuestion",
+        agent_names: &[
+            (AgentKind::Claude, "AskUserQuestion"),
+            (AgentKind::Copilot, "ask_user"),
+        ],
+    },
+    ToolAlias {
+        canonical: "report_intent",
+        internal: "ReportIntent",
+        agent_names: &[(AgentKind::Copilot, "report_intent")],
+    },
+    ToolAlias {
+        canonical: "task_output",
+        internal: "TaskOutput",
+        agent_names: &[
+            (AgentKind::Claude, "TaskOutput"),
+            (AgentKind::Copilot, "task_complete"),
+        ],
+    },
+    ToolAlias {
+        canonical: "task_create",
+        internal: "TaskCreate",
+        agent_names: &[
+            (AgentKind::Claude, "TaskCreate"),
+            (AgentKind::Copilot, "task"),
+        ],
+    },
+    ToolAlias {
+        canonical: "task_get",
+        internal: "TaskGet",
+        agent_names: &[
+            (AgentKind::Claude, "TaskGet"),
+            (AgentKind::Copilot, "read_agent"),
+        ],
+    },
+    ToolAlias {
+        canonical: "task_list",
+        internal: "TaskList",
+        agent_names: &[
+            (AgentKind::Claude, "TaskList"),
+            (AgentKind::Copilot, "list_agents"),
+        ],
+    },
+    ToolAlias {
+        canonical: "task_stop",
+        internal: "TaskStop",
+        agent_names: &[(AgentKind::Claude, "TaskStop")],
+    },
+    ToolAlias {
+        canonical: "task_update",
+        internal: "TaskUpdate",
+        agent_names: &[
+            (AgentKind::Claude, "TaskUpdate"),
+            (AgentKind::Copilot, "write_agent"),
         ],
     },
 ];
@@ -460,6 +523,15 @@ mod tests {
             .map(|(_, name)| *name)
             .collect();
         for alias in TOOL_ALIASES {
+            let has_claude_entry = alias
+                .agent_names
+                .iter()
+                .any(|(ak, _)| *ak == AgentKind::Claude);
+            // Aliases that don't have a Claude entry are agent-specific
+            // (e.g. ReportIntent is Copilot-only) and don't need this check.
+            if !has_claude_entry {
+                continue;
+            }
             assert!(
                 claude_names.contains(&alias.internal),
                 "internal name '{}' for canonical '{}' is not a Claude tool name",

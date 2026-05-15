@@ -36,6 +36,7 @@ claude = {
         "AskUserQuestion",
         "EnterPlanMode",
         "ExitPlanMode",
+        "ReportIntent",
         "Skill",
         "ToolSearch",
         "EnterWorktree",
