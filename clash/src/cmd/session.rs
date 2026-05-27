@@ -59,25 +59,31 @@ struct SessionInfo {
     stats: Option<SessionStats>,
 }
 
-/// Scan $TMPDIR for `clash-*` directories with valid metadata.json.
+/// Scan `~/.clash/sessions/` for directories with a valid `metadata.json`.
 fn discover_sessions() -> Vec<SessionInfo> {
-    let tmp = std::env::temp_dir();
     let mut sessions = Vec::new();
 
-    let readdir = match std::fs::read_dir(&tmp) {
+    let sessions_root = match ClashSettings::settings_dir() {
+        Ok(dir) => dir.join("sessions"),
+        Err(_) => return sessions,
+    };
+
+    let readdir = match std::fs::read_dir(&sessions_root) {
         Ok(rd) => rd,
         Err(_) => return sessions,
     };
 
     for entry in readdir.flatten() {
         let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let session_id = match name.strip_prefix("clash-") {
-            Some(id) if !id.is_empty() => id.to_string(),
+        let session_id = match name.to_str() {
+            Some(id) if !id.is_empty() && !id.starts_with('.') => id.to_string(),
             _ => continue,
         };
 
         let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
         let meta_path = dir.join("metadata.json");
         let meta_str = match std::fs::read_to_string(&meta_path) {
             Ok(s) => s,
